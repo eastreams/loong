@@ -16233,6 +16233,166 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn spawn_background_delegate_with_runtime_creates_missing_root_session_scope() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-background-task", "create-root")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+
+    let spawner = Arc::new(FakeAsyncDelegateSpawner::default());
+    let runtime = FakeRuntime::with_turns_and_completions(vec![], vec![], vec![])
+        .with_async_delegate_spawner(spawner.clone())
+        .with_durable_memory_config(memory_config.clone());
+
+    let outcome = crate::conversation::spawn_background_delegate_with_runtime(
+        &config,
+        &runtime,
+        "task-root",
+        "collect repo health",
+        Some("health-check".to_owned()),
+        Some(42),
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("background task should queue successfully");
+
+    let child_session_id = outcome.payload["child_session_id"]
+        .as_str()
+        .expect("child session id")
+        .to_owned();
+    let root_session = repo
+        .load_session("task-root")
+        .expect("load root session")
+        .expect("root session record");
+    assert_eq!(
+        root_session.kind,
+        crate::session::repository::SessionKind::Root
+    );
+    assert_eq!(root_session.parent_session_id, None);
+
+    let child_session = repo
+        .load_session(&child_session_id)
+        .expect("load child session")
+        .expect("child session record");
+    assert_eq!(
+        child_session.kind,
+        crate::session::repository::SessionKind::DelegateChild
+    );
+    assert_eq!(
+        child_session.parent_session_id.as_deref(),
+        Some("task-root")
+    );
+    assert_eq!(child_session.label.as_deref(), Some("health-check"));
+    assert_eq!(
+        child_session.state,
+        crate::session::repository::SessionState::Ready
+    );
+
+    for _ in 0..10 {
+        let request_count = spawner
+            .requests
+            .lock()
+            .expect("async delegate requests lock")
+            .len();
+        if request_count == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let requests = spawner
+        .requests
+        .lock()
+        .expect("async delegate requests lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].parent_session_id, "task-root");
+    assert_eq!(requests[0].task, "collect repo health");
+    assert_eq!(requests[0].label.as_deref(), Some("health-check"));
+    assert_eq!(requests[0].timeout_seconds, 42);
+
+    let events = repo
+        .list_delegate_lifecycle_events(&child_session_id)
+        .expect("delegate lifecycle events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_kind == "delegate_queued"),
+        "queued child should persist a delegate_queued event"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitted() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-background-task", "default-timeout")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.timeout_seconds = 77;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "task-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let spawner = Arc::new(FakeAsyncDelegateSpawner::default());
+    let runtime = FakeRuntime::with_turns_and_completions(vec![], vec![], vec![])
+        .with_async_delegate_spawner(spawner.clone())
+        .with_durable_memory_config(memory_config.clone());
+
+    let outcome = crate::conversation::spawn_background_delegate_with_runtime(
+        &config,
+        &runtime,
+        "task-root",
+        "sync release checklist",
+        None,
+        None,
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("background task should queue successfully");
+
+    assert_eq!(outcome.payload["timeout_seconds"], 77);
+
+    for _ in 0..10 {
+        let request_count = spawner
+            .requests
+            .lock()
+            .expect("async delegate requests lock")
+            .len();
+        if request_count == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    let requests = spawner
+        .requests
+        .lock()
+        .expect("async delegate requests lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].timeout_seconds, 77);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_creation() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",

@@ -255,6 +255,20 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Tasks {
+            config,
+            json,
+            session,
+            command,
+        } => {
+            tasks_cli::run_tasks_cli(tasks_cli::TasksCommandOptions {
+                config,
+                json,
+                session,
+                command,
+            })
+            .await
+        }
         Commands::Plugins { json, command } => {
             plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
         }

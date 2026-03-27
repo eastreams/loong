@@ -3983,11 +3983,13 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 }
 
 #[cfg(feature = "memory-sqlite")]
-async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
+async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
     session_context: &SessionContext,
-    payload: Value,
+    task: String,
+    label: Option<String>,
+    timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
@@ -3999,14 +4001,13 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
-    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-        &payload,
-        config.tools.delegate.timeout_seconds,
-    )?;
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
-    let child_label = delegate_request.label.clone();
+    let child_label = label.clone();
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
+
+    ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
+
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4018,53 +4019,113 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
                 config,
                 binding,
                 ConstrainedSubagentMode::Async,
-                delegate_request.timeout_seconds,
+                timeout_seconds,
                 next_child_depth,
                 active_children,
             );
-            Ok((
-                CreateSessionWithEventRequest {
-                    session: NewSessionRecord {
-                        session_id: child_session_id.clone(),
-                        kind: SessionKind::DelegateChild,
-                        parent_session_id: Some(session_context.session_id.clone()),
-                        label: child_label.clone(),
-                        state: SessionState::Ready,
-                    },
-                    event_kind: "delegate_queued".to_owned(),
-                    actor_session_id: Some(session_context.session_id.clone()),
-                    event_payload_json: execution.spawn_payload_with_runtime_self_continuity(
-                        &delegate_request.task,
-                        child_label.as_deref(),
-                        runtime_self_continuity.as_ref(),
-                    ),
-                },
-                execution,
-            ))
+            let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
+                &task,
+                child_label.as_deref(),
+                runtime_self_continuity.as_ref(),
+            );
+            let session = NewSessionRecord {
+                session_id: child_session_id.clone(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some(session_context.session_id.clone()),
+                label: child_label.clone(),
+                state: SessionState::Ready,
+            };
+            let request = CreateSessionWithEventRequest {
+                session,
+                event_kind: "delegate_queued".to_owned(),
+                actor_session_id: Some(session_context.session_id.clone()),
+                event_payload_json,
+            };
+            Ok((request, execution))
         },
     )?;
 
-    spawn_async_delegate_detached(
-        runtime_handle,
-        memory_config,
-        spawner,
-        AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label,
-            execution,
-            runtime_self_continuity,
-            timeout_seconds: delegate_request.timeout_seconds,
-            kernel_context: binding.kernel_context().cloned(),
-        },
-    );
+    let kernel_context = binding.kernel_context().cloned();
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id: child_session_id.clone(),
+        parent_session_id: session_context.session_id.clone(),
+        task,
+        label: child_label,
+        execution,
+        runtime_self_continuity,
+        timeout_seconds,
+        kernel_context,
+    };
+    spawn_async_delegate_detached(runtime_handle, memory_config, spawner, request);
 
     Ok(crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
+        label,
+        timeout_seconds,
+    ))
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_id: &str,
+    task: &str,
+    label: Option<String>,
+    timeout_seconds: Option<u64>,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    let session_context = runtime.session_context(config, session_id, binding)?;
+    let effective_timeout_seconds =
+        timeout_seconds.unwrap_or(config.tools.delegate.timeout_seconds);
+    let task_text = task.to_owned();
+    enqueue_delegate_async_with_runtime(
+        config,
+        runtime,
+        &session_context,
+        task_text,
+        label,
+        effective_timeout_seconds,
+        binding,
+    )
+    .await
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
+    _config: &LoongClawConfig,
+    _runtime: &R,
+    _session_id: &str,
+    _task: &str,
+    _label: Option<String>,
+    _timeout_seconds: Option<u64>,
+    _binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    payload: Value,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
+        &payload,
+        config.tools.delegate.timeout_seconds,
+    )?;
+    enqueue_delegate_async_with_runtime(
+        config,
+        runtime,
+        session_context,
+        delegate_request.task,
         delegate_request.label,
         delegate_request.timeout_seconds,
-    ))
+        binding,
+    )
+    .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]

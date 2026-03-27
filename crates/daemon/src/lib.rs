@@ -114,6 +114,7 @@ pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
 mod tlon_cli;
+pub mod tasks_cli;
 
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{
@@ -547,6 +548,17 @@ pub enum Commands {
         json: bool,
         #[command(subcommand)]
         command: skills_cli::SkillsCommands,
+    },
+    /// Manage async background tasks on top of the current session runtime
+    Tasks {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: tasks_cli::TasksCommands,
     },
     #[command(
         visible_alias = "plugin",

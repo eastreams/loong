@@ -104,6 +104,7 @@ mod runtime_snapshot_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
+mod tasks_cli;
 
 #[test]
 fn cli_uses_loongclaw_program_name() {
