@@ -108,9 +108,8 @@ pub use turn_observer::{
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
 };
 pub use turn_shared::{
-    ApprovalPromptActionId, ApprovalPromptActionView, ApprovalPromptLocale,
-    ApprovalPromptMarker, ApprovalPromptView, parse_approval_prompt_action_input,
-    parse_approval_prompt_view,
+    ApprovalPromptActionId, ApprovalPromptActionView, ApprovalPromptLocale, ApprovalPromptMarker,
+    ApprovalPromptView, parse_approval_prompt_action_input, parse_approval_prompt_view,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

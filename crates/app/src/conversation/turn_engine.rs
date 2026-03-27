@@ -2451,23 +2451,21 @@ mod tests {
             )
             .await;
 
-        let approval_request_id = match result {
-            TurnResult::NeedsApproval(requirement) => {
-                assert_eq!(requirement.tool_name.as_deref(), Some("provider.switch"));
-                assert_eq!(
-                    requirement.approval_key.as_deref(),
-                    Some("tool:provider.switch")
-                );
-                assert_eq!(
-                    requirement.rule_id.as_str(),
-                    "session_tool_consent_auto_blocked"
-                );
-                requirement
-                    .approval_request_id
-                    .expect("approval request id should be present")
-            }
-            other => panic!("expected NeedsApproval, got {other:?}"),
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
         };
+        assert_eq!(requirement.tool_name.as_deref(), Some("provider.switch"));
+        assert_eq!(
+            requirement.approval_key.as_deref(),
+            Some("tool:provider.switch")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_auto_blocked"
+        );
+        let approval_request_id = requirement
+            .approval_request_id
+            .expect("approval request id should be present");
 
         let stored = repo
             .load_approval_request(&approval_request_id)
@@ -2521,15 +2519,15 @@ mod tests {
             )
             .await;
 
-        match result {
-            TurnResult::ToolError(failure) => {
-                assert!(
-                    failure.reason.contains("provider.switch requires a resolved runtime config path"),
-                    "expected execution to reach the core tool, got: {failure:?}"
-                );
-            }
-            other => panic!("expected direct tool execution, got {other:?}"),
-        }
+        let TurnResult::ToolError(failure) = result else {
+            panic!("expected direct tool execution, got {result:?}");
+        };
+        assert!(
+            failure
+                .reason
+                .contains("provider.switch requires a resolved runtime config path"),
+            "expected execution to reach the core tool, got: {failure:?}"
+        );
     }
 
     #[tokio::test]

@@ -718,6 +718,7 @@ pub(super) fn is_known_feishu_tool_name(raw: &str) -> bool {
     canonical_feishu_tool_name(raw).is_some()
 }
 
+#[cfg(test)]
 pub(super) fn feishu_tool_registry_entries() -> Vec<super::ToolRegistryEntry> {
     let mut entries = Vec::new();
     push_feishu_registry_entry(
@@ -1415,6 +1416,19 @@ pub(super) fn feishu_provider_tool_definitions() -> Vec<Value> {
         feishu_provider_tool_function_name(left).cmp(feishu_provider_tool_function_name(right))
     });
     tools
+}
+
+pub(super) fn feishu_provider_tool_definition(tool_name: &str) -> Option<Value> {
+    feishu_provider_tool_definitions()
+        .into_iter()
+        .find(|definition| {
+            definition
+                .get("function")
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .map(super::canonical_tool_name)
+                == Some(tool_name)
+        })
 }
 
 pub(super) fn feishu_shape_examples() -> BTreeMap<&'static str, Value> {
@@ -3244,6 +3258,7 @@ fn search_chat_scope(payload: &FeishuMessagesSearchPayload) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn push_feishu_registry_entry(
     entries: &mut Vec<super::ToolRegistryEntry>,
     name: &'static str,

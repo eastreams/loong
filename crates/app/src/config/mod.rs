@@ -109,13 +109,13 @@ pub use tools::{
     MAX_RUNTIME_SELF_MAX_TOTAL_CHARS, MAX_WEB_FETCH_MAX_BYTES, RuntimeSelfToolConfig,
     SessionVisibility, ToolConfig, ToolConsentConfig, ToolConsentMode,
     WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_JINA_API_KEY_ENV,
-    WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
-    WEB_SEARCH_PROVIDER_BRAVE, WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA,
-    WEB_SEARCH_PROVIDER_JINA, WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY,
-    WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor,
-    WebSearchToolConfig, WebToolConfig, normalize_web_search_provider, parse_autonomy_profile,
-    web_search_provider_api_key_env_names, web_search_provider_default_api_key_env,
-    web_search_provider_descriptor, web_search_provider_descriptors,
+    WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_BRAVE,
+    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA, WEB_SEARCH_PROVIDER_JINA,
+    WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY, WEB_SEARCH_PROVIDER_VALID_VALUES,
+    WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor, WebSearchToolConfig, WebToolConfig,
+    normalize_web_search_provider, parse_autonomy_profile, web_search_provider_api_key_env_names,
+    web_search_provider_default_api_key_env, web_search_provider_descriptor,
+    web_search_provider_descriptors,
 };
 pub(crate) use tools::{MIN_RUNTIME_SELF_MAX_SOURCE_CHARS, MIN_RUNTIME_SELF_MAX_TOTAL_CHARS};
 #[cfg(feature = "tool-websearch")]

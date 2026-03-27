@@ -31,8 +31,7 @@ use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
-    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view,
-    resolve_context_engine_selection,
+    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view, resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -1116,7 +1115,11 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
 fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
     let parsed = parse_approval_prompt_view(assistant_text)?;
     let mut intro_lines = Vec::new();
-    if let Some(preface) = parsed.preface.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(preface) = parsed
+        .preface
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         intro_lines.extend(preface.lines().map(|line| line.to_owned()));
     }
 
@@ -5845,7 +5848,9 @@ allowed_decisions: yes / auto / full / esc";
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
         assert!(
-            lines.iter().any(|line| line.contains("准备调用 provider.switch")),
+            lines
+                .iter()
+                .any(|line| line.contains("准备调用 provider.switch")),
             "approval replies should render as a dedicated screen title: {lines:#?}"
         );
         assert!(

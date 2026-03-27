@@ -32,7 +32,6 @@ use crate::runtime_self_continuity;
 use crate::tools::ToolExecutionKind;
 
 use super::super::config::LoongClawConfig;
-use crate::config::ToolConsentMode;
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
@@ -103,6 +102,8 @@ use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
     ConversationTurnToolEvent, build_observer_streaming_token_callback,
 };
+#[cfg(feature = "memory-sqlite")]
+use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
@@ -112,10 +113,9 @@ use super::turn_shared::{
     tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
     user_requested_raw_tool_output,
 };
-#[cfg(feature = "memory-sqlite")]
-use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
+use crate::config::ToolConsentMode;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
@@ -1902,7 +1902,9 @@ impl ConversationTurnCoordinator {
 
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
         let session_context = runtime.session_context(config, session_id, binding)?;
-        let assembled_context = runtime.build_context(config, session_id, true, binding).await?;
+        let assembled_context = runtime
+            .build_context(config, session_id, true, binding)
+            .await?;
         let turn_id = next_conversation_turn_id();
         let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
             config,
@@ -3729,35 +3731,35 @@ where
                     .ok_or_else(|| "approval_request_replay_missing_kernel_context".to_owned())?;
                 crate::tools::execute_tool(replay_request, kernel_ctx).await
             }
-            ToolExecutionKind::App => match crate::tools::canonical_tool_name(
-                replay_request.tool_name.as_str(),
-            ) {
-                "delegate" => {
-                    execute_delegate_tool(
-                        self.config,
-                        self.runtime,
-                        &session_context,
-                        replay_request.payload,
-                        self.binding,
-                    )
-                    .await
-                }
-                "delegate_async" => {
-                    execute_delegate_async_tool(
-                        self.config,
-                        self.runtime,
-                        &session_context,
-                        replay_request.payload,
-                        self.binding,
-                    )
-                    .await
-                }
-                _ => {
-                    self.fallback
-                        .execute_app_tool(&session_context, replay_request, self.binding)
+            ToolExecutionKind::App => {
+                match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
+                    "delegate" => {
+                        execute_delegate_tool(
+                            self.config,
+                            self.runtime,
+                            &session_context,
+                            replay_request.payload,
+                            self.binding,
+                        )
                         .await
+                    }
+                    "delegate_async" => {
+                        execute_delegate_async_tool(
+                            self.config,
+                            self.runtime,
+                            &session_context,
+                            replay_request.payload,
+                            self.binding,
+                        )
+                        .await
+                    }
+                    _ => {
+                        self.fallback
+                            .execute_app_tool(&session_context, replay_request, self.binding)
+                            .await
+                    }
                 }
-            },
+            }
         }
     }
 

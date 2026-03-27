@@ -293,8 +293,7 @@ impl ApprovalPromptActionId {
         match self {
             Self::Yes => matches!(
                 normalized,
-                "1"
-                    | "y"
+                "1" | "y"
                     | "yes"
                     | "run"
                     | "once"
@@ -311,8 +310,7 @@ impl ApprovalPromptActionId {
             ),
             Self::Full => matches!(
                 normalized,
-                "3"
-                    | "full"
+                "3" | "full"
                     | "full auto"
                     | "session full"
                     | "session full auto"
@@ -321,8 +319,7 @@ impl ApprovalPromptActionId {
             ),
             Self::Esc => matches!(
                 normalized,
-                "4"
-                    | "esc"
+                "4" | "esc"
                     | "cancel"
                     | "skip"
                     | "skip call"
@@ -577,15 +574,24 @@ impl<'a> ToolDrivenReplyKernel<'a> {
 
 pub fn user_requested_raw_tool_output(user_input: &str) -> bool {
     let normalized = user_input.to_ascii_lowercase();
+    if normalized.contains("[ok]") {
+        return true;
+    }
+
     [
-        "raw",
-        "json",
-        "payload",
-        "verbatim",
+        "raw tool output",
+        "tool output",
         "exact output",
         "full output",
-        "tool output",
-        "[ok]",
+        "verbatim",
+        "raw json",
+        "json output",
+        "return json",
+        "as json",
+        "in json",
+        "raw payload",
+        "full payload",
+        "exact payload",
     ]
     .iter()
     .any(|signal| normalized.contains(signal))
@@ -672,8 +678,7 @@ pub fn normalize_approval_prompt_control_input(input: &str) -> String {
         character.is_whitespace()
             || matches!(
                 character,
-                '`'
-                    | '"'
+                '`' | '"'
                     | '\''
                     | '.'
                     | ','
@@ -743,11 +748,9 @@ fn approval_prompt_view_from_requirement(
         ApprovalRequirementKind::GovernedTool => ApprovalPromptMarker::ToolApprovalRequired,
         ApprovalRequirementKind::KernelContextRequired => ApprovalPromptMarker::ApprovalRequired,
     };
-    let locale = approval_prompt_locale_from_text(join_non_empty_lines(&[
-        assistant_preface,
-        requirement.reason.as_str(),
-    ])
-    .as_str());
+    let locale = approval_prompt_locale_from_text(
+        join_non_empty_lines(&[assistant_preface, requirement.reason.as_str()]).as_str(),
+    );
 
     ApprovalPromptView {
         marker,
@@ -819,7 +822,10 @@ fn approval_prompt_actions(
             "Session auto",
             "本会话自动",
             "session auto mode",
-            &["后续低风险工具自动运行", "写文件、执行 shell、切换 provider 等仍会停下来"],
+            &[
+                "后续低风险工具自动运行",
+                "写文件、执行 shell、切换 provider 等仍会停下来",
+            ],
             &[
                 "Low-risk tools continue automatically",
                 "Writes, shell exec, provider switching, and similar actions still pause",
@@ -1557,6 +1563,19 @@ mod tests {
         assert!(user_requested_raw_tool_output("give exact output as JSON"));
         assert!(!user_requested_raw_tool_output(
             "summarize the result briefly"
+        ));
+    }
+
+    #[test]
+    fn raw_tool_output_detection_ignores_payload_mentions_without_output_request() {
+        assert!(!user_requested_raw_tool_output(
+            "Callback hints mention the payload JSON, but just summarize the action."
+        ));
+        assert!(!user_requested_raw_tool_output(
+            "The card callback token stays in internal payload context."
+        ));
+        assert!(user_requested_raw_tool_output(
+            "Return the payload as JSON."
         ));
     }
 

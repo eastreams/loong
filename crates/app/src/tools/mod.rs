@@ -14,9 +14,11 @@ use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{
     RankedSearchableToolEntry, SearchableToolEntry, rank_searchable_entries,
-    searchable_entry_from_descriptor, searchable_entry_from_provider_definition,
+    searchable_entry_from_descriptor,
 };
 
 use crate::KernelContext;
@@ -606,20 +608,7 @@ pub fn runtime_tool_view_from_loongclaw_config(
 fn build_runtime_tool_view_for_runtime_config(
     runtime_config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
-    let catalog = tool_catalog();
-    let mut names = runtime_tool_view_for_runtime_config(runtime_config)
-        .iter(catalog)
-        .map(|descriptor| descriptor.name)
-        .collect::<Vec<_>>();
-    #[cfg(feature = "feishu-integration")]
-    if runtime_config.feishu.is_some() {
-        names.extend(
-            feishu::feishu_tool_registry_entries()
-                .into_iter()
-                .map(|entry| entry.name),
-        );
-    }
-    ToolView::from_tool_names(names)
+    runtime_tool_view_for_runtime_config(runtime_config)
 }
 
 pub(crate) fn runtime_tool_view_with_runtime_config(
@@ -919,14 +908,6 @@ pub(crate) fn tool_registry_with_config(
             description: entry.summary,
         })
         .collect();
-    #[cfg(feature = "feishu-integration")]
-    if config.feishu.is_some() {
-        entries.extend(
-            feishu::feishu_tool_registry_entries()
-                .into_iter()
-                .filter(|entry| runtime_visible_tool_view.contains(entry.name)),
-        );
-    }
     entries.sort_by_key(|entry| entry.name);
     entries
 }
@@ -991,7 +972,7 @@ fn provider_tool_definitions_for_view(_view: &ToolView) -> Vec<Value> {
     tools
 }
 
-#[cfg(feature = "feishu-integration")]
+#[cfg(all(test, feature = "feishu-integration"))]
 fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
     feishu::feishu_provider_tool_definitions()
         .into_iter()
@@ -1065,23 +1046,14 @@ fn runtime_discoverable_tool_entries(
         }
         None => &runtime_view,
     };
-    let mut entries = catalog::tool_catalog()
+    catalog::tool_catalog()
         .descriptors()
         .iter()
         .filter(|descriptor| descriptor.is_discoverable())
         .filter(|descriptor| visible_tool_view.contains(descriptor.name))
         .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
         .map(searchable_entry_from_descriptor)
-        .collect::<Vec<_>>();
-    #[cfg(feature = "feishu-integration")]
-    if config.feishu.is_some() {
-        entries.extend(
-            feishu_searchable_entries()
-                .into_iter()
-                .filter(|entry| visible_tool_view.contains(entry.canonical_name.as_str())),
-        );
-    }
-    entries
+        .collect::<Vec<_>>()
 }
 
 pub fn tool_parameter_schema_types() -> BTreeMap<String, BTreeMap<String, &'static str>> {
