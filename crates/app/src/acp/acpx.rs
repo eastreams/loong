@@ -1484,6 +1484,27 @@ where
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+fn retry_executable_file_busy_blocking<T, F>(mut operation: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
+            {
+                std::thread::sleep(ACPX_SPAWN_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn should_retry_spawn_error(error: &std::io::Error) -> bool {
     error.kind() == ErrorKind::ExecutableFileBusy
 }
@@ -1872,14 +1893,15 @@ exit 0
 "#,
         );
 
-        let mut child = Command::new(&script_path)
+        let mut command = Command::new(&script_path);
+        command
             .args(["prompt", "--session", "sess-builtins", "--file", "-"])
             .current_dir(&temp_dir)
             .env("PATH", "")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut child = retry_executable_file_busy_blocking(|| command.spawn())
             .expect("spawn fake acpx script");
         let mut stdin = child.stdin.take().expect("fake acpx stdin");
         stdin
@@ -1944,6 +1966,52 @@ exit 0
             Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
         })
         .await
+        .expect_err("persistent executable-file-busy errors should stop after the retry budget");
+
+        assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
+        assert_eq!(attempts.load(Ordering::Relaxed), ACPX_SPAWN_RETRY_ATTEMPTS);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_retries_until_success() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = retry_executable_file_busy_blocking(|| {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+            if attempt < 2 {
+                Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        })
+        .expect("retry should recover once the executable is no longer busy");
+
+        assert_eq!(result, "spawned");
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_surfaces_non_retryable_error_immediately() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy_blocking::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::other("boom"))
+        })
+        .expect_err("non-retryable spawn errors should surface immediately");
+
+        assert_eq!(error.kind(), ErrorKind::Other);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_stops_after_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy_blocking::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+        })
         .expect_err("persistent executable-file-busy errors should stop after the retry budget");
 
         assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
