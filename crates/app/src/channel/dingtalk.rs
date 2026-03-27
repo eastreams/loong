@@ -6,7 +6,10 @@ use crate::{CliResult, config::ResolvedDingtalkChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{build_outbound_http_client, read_json_or_text_response, response_body_detail},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, read_json_or_text_response,
+        response_body_detail, validate_outbound_http_target,
+    },
 };
 
 type DingtalkHmacSha256 = hmac::Hmac<sha2::Sha256>;
@@ -16,6 +19,7 @@ pub(super) async fn run_dingtalk_send(
     target_kind: ChannelOutboundTargetKind,
     endpoint_url: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Endpoint {
         return Err(format!(
@@ -24,13 +28,8 @@ pub(super) async fn run_dingtalk_send(
         ));
     }
 
-    let trimmed_endpoint_url = endpoint_url.trim();
-    if trimmed_endpoint_url.is_empty() {
-        return Err("dingtalk outbound target endpoint is empty".to_owned());
-    }
-
     let secret = resolved.secret();
-    let request_url = build_dingtalk_request_url(trimmed_endpoint_url, secret.as_deref())?;
+    let request_url = build_dingtalk_request_url(endpoint_url, secret.as_deref(), policy)?;
     let request_body = json!({
         "msgtype": "text",
         "text": {
@@ -38,7 +37,7 @@ pub(super) async fn run_dingtalk_send(
         },
     });
 
-    let client = build_outbound_http_client("dingtalk send")?;
+    let client = build_outbound_http_client("dingtalk send", policy)?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
@@ -61,9 +60,12 @@ pub(super) async fn run_dingtalk_send(
     Ok(())
 }
 
-fn build_dingtalk_request_url(endpoint_url: &str, secret: Option<&str>) -> CliResult<String> {
-    let mut url = reqwest::Url::parse(endpoint_url)
-        .map_err(|error| format!("dingtalk webhook url is invalid: {error}"))?;
+fn build_dingtalk_request_url(
+    endpoint_url: &str,
+    secret: Option<&str>,
+    policy: ChannelOutboundHttpPolicy,
+) -> CliResult<String> {
+    let mut url = validate_outbound_http_target("dingtalk webhook url", endpoint_url, policy)?;
 
     let secret = secret
         .map(str::trim)

@@ -4,6 +4,7 @@ mod conversation;
 mod feishu_integration;
 mod irc;
 mod memory;
+mod outbound_http;
 mod provider;
 mod runtime;
 mod shared;
@@ -66,6 +67,8 @@ pub(crate) use irc::{
 pub use memory::{
     MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
 };
+#[allow(unused_imports)]
+pub use outbound_http::OutboundHttpConfig;
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily,

@@ -3474,26 +3474,16 @@ fn channel_status_snapshots_with_now(
     snapshots
 }
 
-fn validate_http_url(field: &str, value: &str, issues: &mut Vec<String>) {
-    let parsed_url = reqwest::Url::parse(value);
-    let url = match parsed_url {
-        Ok(url) => url,
-        Err(error) => {
-            let issue = format!("{field} is invalid: {error}");
-            issues.push(issue);
-            return;
-        }
-    };
-
-    let scheme = url.scheme();
-    let is_http = scheme == "http";
-    let is_https = scheme == "https";
-    if is_http || is_https {
-        return;
+fn validate_http_url(
+    field: &str,
+    value: &str,
+    policy: super::http::ChannelOutboundHttpPolicy,
+    issues: &mut Vec<String>,
+) {
+    let validation = super::http::validate_outbound_http_target(field, value, policy);
+    if let Err(error) = validation {
+        issues.push(error);
     }
-
-    let issue = format!("{field} must use http or https, got {scheme}");
-    issues.push(issue);
 }
 
 #[cfg(test)]
@@ -3792,6 +3782,7 @@ fn build_discord_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-discord");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.discord.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -3811,6 +3802,7 @@ fn build_discord_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_discord_snapshot(
                     descriptor,
@@ -3832,6 +3824,7 @@ fn build_slack_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-slack");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.slack.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -3851,6 +3844,7 @@ fn build_slack_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_slack_snapshot(
                     descriptor,
@@ -3872,6 +3866,7 @@ fn build_line_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-line");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.line.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -3891,6 +3886,7 @@ fn build_line_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_line_snapshot(
                     descriptor,
@@ -3912,6 +3908,7 @@ fn build_dingtalk_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-dingtalk");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.dingtalk.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -3931,6 +3928,7 @@ fn build_dingtalk_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_dingtalk_snapshot(
                     descriptor,
@@ -3952,6 +3950,7 @@ fn build_whatsapp_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-whatsapp");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.whatsapp.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -3971,6 +3970,7 @@ fn build_whatsapp_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_whatsapp_snapshot(
                     descriptor,
@@ -4032,6 +4032,7 @@ fn build_webhook_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-webhook");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.webhook.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4051,6 +4052,7 @@ fn build_webhook_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_webhook_snapshot(
                     descriptor,
@@ -4072,6 +4074,7 @@ fn build_google_chat_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-google-chat");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.google_chat.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4091,6 +4094,7 @@ fn build_google_chat_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_google_chat_snapshot(
                     descriptor,
@@ -4112,6 +4116,7 @@ fn build_signal_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-signal");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.signal.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4131,6 +4136,7 @@ fn build_signal_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_signal_snapshot(
                     descriptor,
@@ -4152,6 +4158,7 @@ fn build_teams_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-teams");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.teams.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4171,6 +4178,7 @@ fn build_teams_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_teams_snapshot(
                     descriptor,
@@ -4192,6 +4200,7 @@ fn build_mattermost_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-mattermost");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.mattermost.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4211,6 +4220,7 @@ fn build_mattermost_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_mattermost_snapshot(
                     descriptor,
@@ -4232,6 +4242,7 @@ fn build_nextcloud_talk_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-nextcloud-talk");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.nextcloud_talk.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4251,6 +4262,7 @@ fn build_nextcloud_talk_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_nextcloud_talk_snapshot(
                     descriptor,
@@ -4272,6 +4284,7 @@ fn build_synology_chat_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-synology-chat");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.synology_chat.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4291,6 +4304,7 @@ fn build_synology_chat_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_synology_chat_snapshot(
                     descriptor,
@@ -4352,6 +4366,7 @@ fn build_imessage_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-imessage");
+    let http_policy = super::http::outbound_http_policy_from_config(config);
     let default_selection = config.imessage.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -4371,6 +4386,7 @@ fn build_imessage_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
+                    http_policy,
                 ),
                 Err(error) => build_invalid_imessage_snapshot(
                     descriptor,
@@ -4414,6 +4430,7 @@ fn build_dingtalk_snapshot_for_account(
     resolved: ResolvedDingtalkChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -4421,9 +4438,8 @@ fn build_dingtalk_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    let parsed_webhook_url = webhook_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_webhook_url {
-        send_issues.push(format!("webhook_url is invalid: {error}"));
+    if let Some(webhook_url) = webhook_url.as_deref() {
+        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -4494,6 +4510,7 @@ fn build_discord_snapshot_for_account(
     resolved: ResolvedDiscordChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.bot_token().is_none() {
@@ -4501,7 +4518,12 @@ fn build_discord_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
+    validate_http_url(
+        "api_base_url",
+        api_base_url.as_str(),
+        http_policy,
+        &mut send_issues,
+    );
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4568,6 +4590,7 @@ fn build_slack_snapshot_for_account(
     resolved: ResolvedSlackChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.bot_token().is_none() {
@@ -4575,7 +4598,12 @@ fn build_slack_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
+    validate_http_url(
+        "api_base_url",
+        api_base_url.as_str(),
+        http_policy,
+        &mut send_issues,
+    );
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4642,6 +4670,7 @@ fn build_line_snapshot_for_account(
     resolved: ResolvedLineChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.channel_access_token().is_none() {
@@ -4649,10 +4678,12 @@ fn build_line_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    let api_base_url_parse = reqwest::Url::parse(api_base_url.as_str());
-    if let Err(error) = api_base_url_parse {
-        send_issues.push(format!("api_base_url is invalid: {error}"));
-    }
+    validate_http_url(
+        "api_base_url",
+        api_base_url.as_str(),
+        http_policy,
+        &mut send_issues,
+    );
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4719,6 +4750,7 @@ fn build_whatsapp_snapshot_for_account(
     resolved: ResolvedWhatsappChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.access_token().is_none() {
@@ -4729,7 +4761,12 @@ fn build_whatsapp_snapshot_for_account(
     }
 
     let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url("api_base_url", api_base_url.as_str(), &mut send_issues);
+    validate_http_url(
+        "api_base_url",
+        api_base_url.as_str(),
+        http_policy,
+        &mut send_issues,
+    );
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4933,6 +4970,7 @@ fn build_webhook_snapshot_for_account(
     resolved: ResolvedWebhookChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -4941,7 +4979,7 @@ fn build_webhook_snapshot_for_account(
         send_issues.push("endpoint_url is missing".to_owned());
     }
     if let Some(endpoint_url) = endpoint_url.as_deref() {
-        validate_http_url("endpoint_url", endpoint_url, &mut send_issues);
+        validate_http_url("endpoint_url", endpoint_url, http_policy, &mut send_issues);
     }
 
     let auth_token = resolved.auth_token();
@@ -5042,6 +5080,7 @@ fn build_google_chat_snapshot_for_account(
     resolved: ResolvedGoogleChatChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5049,9 +5088,8 @@ fn build_google_chat_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    let parsed_webhook_url = webhook_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_webhook_url {
-        send_issues.push(format!("webhook_url is invalid: {error}"));
+    if let Some(webhook_url) = webhook_url.as_deref() {
+        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -5119,6 +5157,7 @@ fn build_mattermost_snapshot_for_account(
     resolved: ResolvedMattermostChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5126,9 +5165,8 @@ fn build_mattermost_snapshot_for_account(
     if server_url.is_none() {
         send_issues.push("server_url is missing".to_owned());
     }
-    let parsed_server_url = server_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_server_url {
-        send_issues.push(format!("server_url is invalid: {error}"));
+    if let Some(server_url) = server_url.as_deref() {
+        validate_http_url("server_url", server_url, http_policy, &mut send_issues);
     }
     if resolved.bot_token().is_none() {
         send_issues.push("bot_token is missing".to_owned());
@@ -5199,6 +5237,7 @@ fn build_nextcloud_talk_snapshot_for_account(
     resolved: ResolvedNextcloudTalkChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5206,9 +5245,8 @@ fn build_nextcloud_talk_snapshot_for_account(
     if server_url.is_none() {
         send_issues.push("server_url is missing".to_owned());
     }
-    let parsed_server_url = server_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_server_url {
-        send_issues.push(format!("server_url is invalid: {error}"));
+    if let Some(server_url) = server_url.as_deref() {
+        validate_http_url("server_url", server_url, http_policy, &mut send_issues);
     }
     if resolved.shared_secret().is_none() {
         send_issues.push("shared_secret is missing".to_owned());
@@ -5279,6 +5317,7 @@ fn build_synology_chat_snapshot_for_account(
     resolved: ResolvedSynologyChatChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5286,9 +5325,8 @@ fn build_synology_chat_snapshot_for_account(
     if incoming_url.is_none() {
         send_issues.push("incoming_url is missing".to_owned());
     }
-    let parsed_incoming_url = incoming_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_incoming_url {
-        send_issues.push(format!("incoming_url is invalid: {error}"));
+    if let Some(incoming_url) = incoming_url.as_deref() {
+        validate_http_url("incoming_url", incoming_url, http_policy, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -5367,6 +5405,7 @@ fn build_signal_snapshot_for_account(
     resolved: ResolvedSignalChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.signal_account().is_none() {
@@ -5378,7 +5417,7 @@ fn build_signal_snapshot_for_account(
         send_issues.push("service_url is missing".to_owned());
     }
     if let Some(service_url) = service_url.as_deref() {
-        validate_http_url("service_url", service_url, &mut send_issues);
+        validate_http_url("service_url", service_url, http_policy, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -5449,6 +5488,7 @@ fn build_teams_snapshot_for_account(
     resolved: ResolvedTeamsChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5456,9 +5496,8 @@ fn build_teams_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    let parsed_webhook_url = webhook_url.as_deref().map(reqwest::Url::parse).transpose();
-    if let Err(error) = parsed_webhook_url {
-        send_issues.push(format!("webhook_url is invalid: {error}"));
+    if let Some(webhook_url) = webhook_url.as_deref() {
+        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
     }
 
     let send_operation = if !compiled {
@@ -5538,6 +5577,7 @@ fn build_imessage_snapshot_for_account(
     resolved: ResolvedImessageChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    http_policy: super::http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -5546,7 +5586,7 @@ fn build_imessage_snapshot_for_account(
         send_issues.push("bridge_url is missing".to_owned());
     }
     if let Some(bridge_url) = bridge_url.as_deref() {
-        validate_http_url("bridge_url", bridge_url, &mut send_issues);
+        validate_http_url("bridge_url", bridge_url, http_policy, &mut send_issues);
     }
     if resolved.bridge_token().is_none() {
         send_issues.push("bridge_token is missing".to_owned());
@@ -9165,7 +9205,7 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("api_base_url must use http or https")),
+                .any(|issue| issue.contains("requires http or https")),
             "send issues should reject non-http discord api base urls"
         );
     }
@@ -9220,7 +9260,7 @@ mod tests {
     }
 
     #[test]
-    fn signal_status_requires_account_for_send() {
+    fn signal_status_blocks_default_private_service_url_without_override() {
         let mut config = LoongClawConfig::default();
         config.signal.enabled = true;
 
@@ -9242,8 +9282,8 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .all(|issue| !issue.contains("service_url is missing")),
-            "default signal service URL should satisfy the service endpoint requirement"
+                .any(|issue| issue.contains("private or special-use")),
+            "default signal service URL should be blocked until the operator widens outbound_http"
         );
         assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
         assert_eq!(
@@ -9271,8 +9311,55 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("service_url must use http or https")),
+                .any(|issue| issue.contains("requires http or https")),
             "send issues should reject non-http signal service urls"
+        );
+    }
+
+    #[test]
+    fn signal_status_allows_private_service_url_when_outbound_http_override_is_enabled() {
+        let mut config = LoongClawConfig::default();
+        config.signal.enabled = true;
+        config.signal.signal_account = Some("+15550001111".to_owned());
+        config.outbound_http.allow_private_hosts = true;
+
+        let snapshots = channel_status_snapshots(&config);
+        let signal = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "signal")
+            .expect("signal snapshot");
+        let send = signal.operation("send").expect("signal send operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Ready);
+        assert!(
+            send.issues.is_empty(),
+            "widened outbound_http policy should allow the default local signal bridge"
+        );
+    }
+
+    #[test]
+    fn google_chat_status_rejects_credential_bearing_webhook_url() {
+        let mut config = LoongClawConfig::default();
+        config.google_chat.enabled = true;
+        config.google_chat.webhook_url = Some(loongclaw_contracts::SecretRef::Inline(
+            "https://user:pass@chat.googleapis.com/v1/spaces/AAAA/messages".to_owned(),
+        ));
+
+        let snapshots = channel_status_snapshots(&config);
+        let google_chat = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "google-chat")
+            .expect("google chat snapshot");
+        let send = google_chat
+            .operation("send")
+            .expect("google chat send operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues
+                .iter()
+                .any(|issue| issue.contains("must not embed credentials")),
+            "send issues should reject credential-bearing google chat webhook urls"
         );
     }
 

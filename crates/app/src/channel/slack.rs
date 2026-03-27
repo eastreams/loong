@@ -2,13 +2,17 @@ use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedSlackChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 pub(super) async fn run_slack_send(
     resolved: &ResolvedSlackChannelConfig,
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Conversation {
         return Err(format!(
@@ -27,14 +31,16 @@ pub(super) async fn run_slack_send(
 
     let api_base_url = resolved.resolved_api_base_url();
     let request_url = format!("{}/chat.postMessage", api_base_url.trim_end_matches('/'));
+    let request_url =
+        validate_outbound_http_target("slack api_base_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "channel": channel_id,
         "text": text,
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("slack send", policy)?;
     let request = client
-        .post(request_url.as_str())
+        .post(request_url)
         .bearer_auth(bot_token)
         .json(&request_body);
     let response = request

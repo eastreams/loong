@@ -423,6 +423,12 @@ fn execute_browser_companion_request(
     }
 
     let command = browser_companion_command(policy)?;
+    validate_browser_companion_request_target(
+        request.tool_name.as_str(),
+        operation,
+        payload,
+        policy,
+    )?;
     let session_id = if operation.requires_existing_session() {
         let session_id =
             required_payload_string(payload, "session_id", request.tool_name.as_str())?;
@@ -445,6 +451,7 @@ fn execute_browser_companion_request(
             arguments: browser_companion_arguments(payload),
         },
     )?;
+    validate_browser_companion_result_target(request.tool_name.as_str(), &result, policy)?;
 
     match operation {
         BrowserCompanionOperation::SessionStart => {
@@ -513,6 +520,67 @@ fn browser_companion_arguments(payload: &Map<String, Value>) -> Value {
     arguments.remove(super::BROWSER_SESSION_SCOPE_FIELD);
     arguments.remove("session_id");
     Value::Object(arguments)
+}
+
+fn validate_browser_companion_request_target(
+    tool_name: &str,
+    operation: BrowserCompanionOperation,
+    payload: &Map<String, Value>,
+    policy: &super::runtime_config::BrowserCompanionRuntimePolicy,
+) -> Result<(), String> {
+    let starts_session = operation == BrowserCompanionOperation::SessionStart;
+    let navigates = operation == BrowserCompanionOperation::Navigate;
+    if !starts_session && !navigates {
+        return Ok(());
+    }
+
+    let raw_url = required_payload_string(payload, "url", tool_name)?;
+    validate_browser_companion_target_url(
+        raw_url.as_str(),
+        policy,
+        format!("{tool_name} payload.url").as_str(),
+    )
+}
+
+fn validate_browser_companion_result_target(
+    tool_name: &str,
+    result: &Value,
+    policy: &super::runtime_config::BrowserCompanionRuntimePolicy,
+) -> Result<(), String> {
+    let page_url = result
+        .get("page_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(page_url) = page_url else {
+        return Ok(());
+    };
+
+    validate_browser_companion_target_url(
+        page_url,
+        policy,
+        format!("{tool_name} result.page_url").as_str(),
+    )
+}
+
+fn validate_browser_companion_target_url(
+    raw_url: &str,
+    policy: &super::runtime_config::BrowserCompanionRuntimePolicy,
+    surface_name: &str,
+) -> Result<(), String> {
+    let parsed_url = reqwest::Url::parse(raw_url)
+        .map_err(|error| format!("{surface_name} is invalid: {error}"))?;
+    let options = super::web_http::HttpTargetValidationOptions {
+        allow_private_hosts: policy.allow_private_hosts,
+        reject_userinfo: false,
+        resolve_dns: false,
+        enforce_allowed_domains: policy.enforce_allowed_domains,
+        allowed_domains: policy
+            .enforce_allowed_domains
+            .then_some(&policy.allowed_domains),
+        blocked_domains: Some(&policy.blocked_domains),
+    };
+    super::web_http::validate_http_target(&parsed_url, &options, surface_name).map(|_| ())
 }
 
 fn required_payload_string(
@@ -740,11 +808,28 @@ mod tests {
         }
     }
 
+    struct ResultRunner {
+        calls: AtomicUsize,
+        result: Value,
+    }
+
+    impl super::BrowserCompanionRunner for ResultRunner {
+        fn invoke(
+            &self,
+            _command: &str,
+            _timeout_seconds: u64,
+            _request: &super::BrowserCompanionProtocolRequest,
+        ) -> Result<Value, String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            Ok(self.result.clone())
+        }
+    }
+
     #[test]
     fn browser_companion_session_start_reports_balanced_execution_tier() {
         let request = ToolCoreRequest {
             tool_name: "browser.companion.session.start".to_owned(),
-            payload: json!({}),
+            payload: json!({"url": "http://127.0.0.1/start"}),
         };
         let payload = request
             .payload
@@ -757,6 +842,10 @@ mod tests {
             command: Some("browser-companion".to_owned()),
             expected_version: Some("1.5.0".to_owned()),
             timeout_seconds: 5,
+            allow_private_hosts: true,
+            enforce_allowed_domains: false,
+            allowed_domains: std::collections::BTreeSet::new(),
+            blocked_domains: std::collections::BTreeSet::new(),
         };
 
         let outcome = super::execute_browser_companion_request(
@@ -797,5 +886,93 @@ mod tests {
 
         assert_eq!(stopped.payload["session_id"], json!(session_id));
         assert_eq!(stopped.payload["operation"], json!("session.stop"));
+    }
+
+    #[test]
+    fn browser_companion_session_start_rejects_blocked_payload_url_before_spawn() {
+        let request = ToolCoreRequest {
+            tool_name: "browser.companion.session.start".to_owned(),
+            payload: json!({"url": "https://blocked.example.com"}),
+        };
+        let payload = request
+            .payload
+            .as_object()
+            .expect("browser companion payload object")
+            .clone();
+        let policy = super::super::runtime_config::BrowserCompanionRuntimePolicy {
+            enabled: true,
+            ready: true,
+            command: Some("browser-companion".to_owned()),
+            expected_version: None,
+            timeout_seconds: 5,
+            allow_private_hosts: false,
+            enforce_allowed_domains: false,
+            allowed_domains: std::collections::BTreeSet::new(),
+            blocked_domains: std::collections::BTreeSet::from(["blocked.example.com".to_owned()]),
+        };
+        let runner = ResultRunner {
+            calls: AtomicUsize::new(0),
+            result: json!({"page_url": "https://blocked.example.com"}),
+        };
+
+        let error = super::execute_browser_companion_request(
+            request,
+            &payload,
+            "test-scope",
+            &policy,
+            &runner,
+            true,
+        )
+        .expect_err("blocked url should fail before companion spawn");
+
+        assert!(
+            error.contains("blocked host"),
+            "expected blocked-host error, got {error}"
+        );
+        assert_eq!(runner.calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn browser_companion_revalidates_returned_page_url() {
+        let request = ToolCoreRequest {
+            tool_name: "browser.companion.session.start".to_owned(),
+            payload: json!({"url": "http://127.0.0.1/start"}),
+        };
+        let payload = request
+            .payload
+            .as_object()
+            .expect("browser companion payload object")
+            .clone();
+        let policy = super::super::runtime_config::BrowserCompanionRuntimePolicy {
+            enabled: true,
+            ready: true,
+            command: Some("browser-companion".to_owned()),
+            expected_version: None,
+            timeout_seconds: 5,
+            allow_private_hosts: true,
+            enforce_allowed_domains: false,
+            allowed_domains: std::collections::BTreeSet::new(),
+            blocked_domains: std::collections::BTreeSet::from(["internal.example".to_owned()]),
+        };
+        let runner = ResultRunner {
+            calls: AtomicUsize::new(0),
+            result: json!({"page_url": "https://internal.example"}),
+        };
+
+        let error = super::execute_browser_companion_request(
+            request,
+            &payload,
+            "test-scope",
+            &policy,
+            &runner,
+            true,
+        )
+        .expect_err("returned page_url outside policy should fail closed");
+
+        assert!(
+            error.contains("blocked host"),
+            "expected returned page_url revalidation, got {error}"
+        );
+        assert_eq!(runner.calls.load(Ordering::Relaxed), 1);
     }
 }

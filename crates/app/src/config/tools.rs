@@ -235,6 +235,12 @@ pub struct BrowserCompanionToolConfig {
     pub expected_version: Option<String>,
     #[serde(default = "default_browser_companion_timeout_seconds")]
     pub timeout_seconds: u64,
+    #[serde(default)]
+    pub allow_private_hosts: bool,
+    #[serde(default)]
+    pub allowed_domains: Vec<String>,
+    #[serde(default)]
+    pub blocked_domains: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -469,6 +475,9 @@ impl Default for BrowserCompanionToolConfig {
             command: None,
             expected_version: None,
             timeout_seconds: default_browser_companion_timeout_seconds(),
+            allow_private_hosts: false,
+            allowed_domains: Vec::new(),
+            blocked_domains: Vec::new(),
         }
     }
 }
@@ -839,6 +848,16 @@ pub(crate) fn web_search_provider_parameter_description() -> String {
     format!(
         "Search provider. Defaults to '{DEFAULT_WEB_SEARCH_PROVIDER}'. Supported providers: {WEB_SEARCH_PROVIDER_VALID_VALUES}. DuckDuckGo works without a key. Brave, Tavily, Perplexity, Exa, and Jina use tools.web_search.brave_api_key / tools.web_search.tavily_api_key / tools.web_search.perplexity_api_key / tools.web_search.exa_api_key / tools.web_search.jina_api_key or the {WEB_SEARCH_BRAVE_API_KEY_ENV} / {WEB_SEARCH_TAVILY_API_KEY_ENV} / {WEB_SEARCH_PERPLEXITY_API_KEY_ENV} / {WEB_SEARCH_EXA_API_KEY_ENV} / {WEB_SEARCH_JINA_API_KEY_ENV} / {WEB_SEARCH_JINA_AUTH_TOKEN_ENV} environment variable fallbacks."
     )
+}
+
+impl BrowserCompanionToolConfig {
+    pub fn normalized_allowed_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.allowed_domains)
+    }
+
+    pub fn normalized_blocked_domains(&self) -> Vec<String> {
+        normalize_domain_entries(&self.blocked_domains)
+    }
 }
 
 impl ExternalSkillsConfig {
@@ -1502,6 +1521,9 @@ enabled = true
 command = "loongclaw-browser-companion"
 expected_version = "1.2.3"
 timeout_seconds = 7
+allow_private_hosts = true
+allowed_domains = ["Docs.Example.com", "docs.example.com", " api.example.com "]
+blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 "#;
         let parsed =
             toml::from_str::<crate::config::LoongClawConfig>(raw).expect("parse tool config");
@@ -1516,6 +1538,28 @@ timeout_seconds = 7
             Some("1.2.3")
         );
         assert_eq!(parsed.tools.browser_companion.timeout_seconds, 7);
+        assert!(parsed.tools.browser_companion.allow_private_hosts);
+        assert_eq!(
+            parsed.tools.browser_companion.normalized_allowed_domains(),
+            vec!["api.example.com".to_owned(), "docs.example.com".to_owned()]
+        );
+        assert_eq!(
+            parsed.tools.browser_companion.normalized_blocked_domains(),
+            vec!["internal.example".to_owned()]
+        );
+    }
+
+    #[test]
+    fn browser_companion_defaults_to_safe_public_mode() {
+        let config = BrowserCompanionToolConfig::default();
+        assert!(!config.enabled);
+        assert!(!config.allow_private_hosts);
+        assert!(config.allowed_domains.is_empty());
+        assert!(config.blocked_domains.is_empty());
+        assert_eq!(
+            config.timeout_seconds,
+            default_browser_companion_timeout_seconds()
+        );
     }
 
     /// When `shell_deny` is absent, it must default to empty — users start

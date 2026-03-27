@@ -2,13 +2,17 @@ use serde_json::json;
 
 use crate::{CliResult, config::ResolvedSignalChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 pub(super) async fn run_signal_send(
     resolved: &ResolvedSignalChannelConfig,
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Address {
         return Err(format!(
@@ -29,14 +33,16 @@ pub(super) async fn run_signal_send(
     }
 
     let request_url = format!("{}/v2/send", service_url.trim_end_matches('/'));
+    let request_url =
+        validate_outbound_http_target("signal service_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "message": text,
         "number": account,
         "recipients": [recipient],
     });
 
-    let client = reqwest::Client::new();
-    let request = client.post(request_url.as_str()).json(&request_body);
+    let client = build_outbound_http_client("signal send", policy)?;
+    let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
         .await

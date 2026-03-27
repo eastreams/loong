@@ -4,7 +4,10 @@ use crate::{CliResult, config::ResolvedMattermostChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{build_outbound_http_client, read_json_or_text_response, response_body_detail},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, read_json_or_text_response,
+        response_body_detail, validate_outbound_http_target,
+    },
 };
 
 pub(super) async fn run_mattermost_send(
@@ -12,6 +15,7 @@ pub(super) async fn run_mattermost_send(
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Conversation {
         return Err(format!(
@@ -33,14 +37,16 @@ pub(super) async fn run_mattermost_send(
 
     let trimmed_server_url = server_url.trim_end_matches('/');
     let request_url = format!("{trimmed_server_url}/api/v4/posts");
+    let request_url =
+        validate_outbound_http_target("mattermost server_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "channel_id": channel_id,
         "message": text,
     });
 
-    let client = build_outbound_http_client("mattermost send")?;
+    let client = build_outbound_http_client("mattermost send", policy)?;
     let request = client
-        .post(request_url.as_str())
+        .post(request_url)
         .bearer_auth(bot_token)
         .json(&request_body);
     let response = request

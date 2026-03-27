@@ -4,7 +4,10 @@ use crate::{CliResult, config::ResolvedGoogleChatChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{build_outbound_http_client, read_json_or_text_response, response_body_detail},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, read_json_or_text_response,
+        response_body_detail, validate_outbound_http_target,
+    },
 };
 
 pub(super) async fn run_google_chat_send(
@@ -12,6 +15,7 @@ pub(super) async fn run_google_chat_send(
     target_kind: ChannelOutboundTargetKind,
     endpoint_url: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Endpoint {
         return Err(format!(
@@ -20,17 +24,18 @@ pub(super) async fn run_google_chat_send(
         ));
     }
 
-    let trimmed_endpoint_url = endpoint_url.trim();
-    if trimmed_endpoint_url.is_empty() {
-        return Err("google chat outbound target endpoint is empty".to_owned());
-    }
+    let request_url = validate_outbound_http_target(
+        "google chat outbound target endpoint",
+        endpoint_url,
+        policy,
+    )?;
 
     let request_body = json!({
         "text": text,
     });
 
-    let client = build_outbound_http_client("google chat send")?;
-    let request = client.post(trimmed_endpoint_url).json(&request_body);
+    let client = build_outbound_http_client("google chat send", policy)?;
+    let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
         .await

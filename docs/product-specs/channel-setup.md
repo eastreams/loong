@@ -166,6 +166,12 @@ surfaces:
   reply-loop runtime
 - their `serve` metadata remains planned or unsupported until the gateway layer
   and the underlying inbound transport contract are implemented
+- their HTTP targets must use `http` or `https`, must not embed credentials,
+  block private or special-use hosts by default, and do not auto-follow
+  redirects
+- operators who intentionally send through a private bridge, loopback service,
+  or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
+  at the top level of `loongclaw.toml`
 
 ### Webhook
 
@@ -184,6 +190,19 @@ Generic Webhook is shipped as a minimal config-backed outbound POST surface:
   override the endpoint with `--target` for one-off delivery
 - `webhook.public_base_url` and `webhook.signing_secret` remain reserved for
   the planned inbound serve contract and are not required for send readiness
+
+### Signal
+
+Signal is shipped through a `signal-cli` REST bridge send surface:
+
+- configure `signal.account`
+- use `signal.service_url` to point at the bridge; when unset, LoongClaw
+  defaults to `http://127.0.0.1:8080`
+- because outbound HTTP delivery defaults to public-only mode, the default
+  local bridge requires `[outbound_http] allow_private_hosts = true`
+- use `signal-send` with a Signal account target such as an E.164 number
+- `signal-serve` remains planned until LoongClaw owns a real inbound listener
+  contract
 
 ### Email
 

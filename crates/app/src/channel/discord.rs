@@ -2,13 +2,17 @@ use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedDiscordChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 pub(super) async fn run_discord_send(
     resolved: &ResolvedDiscordChannelConfig,
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Conversation {
         return Err(format!(
@@ -30,13 +34,15 @@ pub(super) async fn run_discord_send(
         "{}/channels/{channel_id}/messages",
         api_base_url.trim_end_matches('/')
     );
+    let request_url =
+        validate_outbound_http_target("discord api_base_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "content": text,
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("discord send", policy)?;
     let request = client
-        .post(request_url.as_str())
+        .post(request_url)
         .header(reqwest::header::AUTHORIZATION, format!("Bot {bot_token}"))
         .json(&request_body);
     let response = request

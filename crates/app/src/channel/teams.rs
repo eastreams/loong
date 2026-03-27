@@ -2,7 +2,10 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedTeamsChannelConfig};
 
-use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 const TEAMS_ADAPTIVE_CARD_SCHEMA: &str = "http://adaptivecards.io/schemas/adaptive-card.json";
 const TEAMS_ADAPTIVE_CARD_CONTENT_TYPE: &str = "application/vnd.microsoft.card.adaptive";
@@ -44,12 +47,13 @@ pub(super) async fn run_teams_send(
     target_kind: ChannelOutboundTargetKind,
     endpoint_url: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     ensure_teams_target_kind(target_kind)?;
-    let request_url = parse_teams_endpoint_url(endpoint_url)?;
+    let request_url = parse_teams_endpoint_url(endpoint_url, policy)?;
     let request_body = build_teams_webhook_payload(text);
 
-    let client = build_outbound_http_client("teams send")?;
+    let client = build_outbound_http_client("teams send", policy)?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
@@ -70,14 +74,11 @@ fn ensure_teams_target_kind(target_kind: ChannelOutboundTargetKind) -> CliResult
     ))
 }
 
-fn parse_teams_endpoint_url(endpoint_url: &str) -> CliResult<reqwest::Url> {
-    let trimmed_endpoint_url = endpoint_url.trim();
-    if trimmed_endpoint_url.is_empty() {
-        return Err("teams outbound target endpoint is empty".to_owned());
-    }
-
-    reqwest::Url::parse(trimmed_endpoint_url)
-        .map_err(|error| format!("teams outbound target endpoint is invalid: {error}"))
+fn parse_teams_endpoint_url(
+    endpoint_url: &str,
+    policy: ChannelOutboundHttpPolicy,
+) -> CliResult<reqwest::Url> {
+    validate_outbound_http_target("teams outbound target endpoint", endpoint_url, policy)
 }
 
 fn build_teams_webhook_payload(text: &str) -> TeamsWebhookPayload {

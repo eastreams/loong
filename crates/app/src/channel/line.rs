@@ -2,13 +2,17 @@ use serde_json::json;
 
 use crate::{CliResult, config::ResolvedLineChannelConfig};
 
-use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 pub(super) async fn run_line_send(
     resolved: &ResolvedLineChannelConfig,
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Address {
         return Err(format!(
@@ -28,6 +32,8 @@ pub(super) async fn run_line_send(
     let api_base_url = resolved.resolved_api_base_url();
     let trimmed_api_base_url = api_base_url.trim_end_matches('/');
     let request_url = format!("{trimmed_api_base_url}/message/push");
+    let request_url =
+        validate_outbound_http_target("line api_base_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "to": recipient,
         "messages": [
@@ -38,9 +44,9 @@ pub(super) async fn run_line_send(
         ],
     });
 
-    let client = build_outbound_http_client("line send")?;
+    let client = build_outbound_http_client("line send", policy)?;
     let request = client
-        .post(request_url.as_str())
+        .post(request_url)
         .bearer_auth(channel_access_token)
         .json(&request_body);
     let response = request

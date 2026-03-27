@@ -22,6 +22,7 @@ use super::{
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
     memory::MemoryConfig,
+    outbound_http::OutboundHttpConfig,
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
@@ -135,6 +136,8 @@ pub struct LoongClawConfig {
     pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]
     pub conversation: ConversationConfig,
+    #[serde(default, skip_serializing_if = "OutboundHttpConfig::is_default")]
+    pub outbound_http: OutboundHttpConfig,
     #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
@@ -3486,5 +3489,17 @@ model = "gpt-5"
         let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
 
         assert_eq!(parsed.audit, config.audit);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn outbound_http_config_round_trips_private_host_override() {
+        let mut config = LoongClawConfig::default();
+        config.outbound_http.allow_private_hosts = true;
+
+        let encoded = encode_toml_config(&config).expect("encode config");
+        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+
+        assert!(parsed.outbound_http.allow_private_hosts);
     }
 }

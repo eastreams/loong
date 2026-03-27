@@ -2,7 +2,10 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedSynologyChatChannelConfig};
 
-use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 #[derive(Debug, Serialize)]
 struct SynologyChatWebhookPayload {
@@ -16,6 +19,7 @@ pub(super) async fn run_synology_chat_send(
     target_kind: ChannelOutboundTargetKind,
     target_id: Option<&str>,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Address {
         return Err(format!(
@@ -27,12 +31,12 @@ pub(super) async fn run_synology_chat_send(
     let incoming_url = resolved.incoming_url().ok_or_else(|| {
         "synology_chat incoming_url missing (set synology_chat.incoming_url or env)".to_owned()
     })?;
-    let request_url = reqwest::Url::parse(incoming_url.as_str())
-        .map_err(|error| format!("synology chat incoming_url is invalid: {error}"))?;
+    let request_url =
+        validate_outbound_http_target("synology chat incoming_url", incoming_url.as_str(), policy)?;
     let target_user_id = parse_synology_chat_target_user_id(target_id)?;
     let request_payload_json = build_synology_chat_payload_json(text, target_user_id)?;
 
-    let client = build_outbound_http_client("synology chat send")?;
+    let client = build_outbound_http_client("synology chat send", policy)?;
     let request = client
         .post(request_url)
         .form(&[("payload", request_payload_json)]);
