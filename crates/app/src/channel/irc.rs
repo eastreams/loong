@@ -23,6 +23,8 @@ impl<T> IrcIo for T where T: AsyncRead + AsyncWrite + Send + Unpin {}
 const IRC_CHANNEL_PREFIXES: [char; 4] = ['#', '&', '+', '!'];
 const IRC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const IRC_SESSION_READY_TIMEOUT: Duration = Duration::from_secs(30);
+const IRC_MAX_FRAME_BYTES: usize = 512;
+const IRC_MAX_COMMAND_BYTES: usize = IRC_MAX_FRAME_BYTES - 2;
 
 pub(super) async fn run_irc_send(
     resolved: &ResolvedIrcChannelConfig,
@@ -112,8 +114,9 @@ fn normalize_irc_atom(label: &str, raw: &str) -> CliResult<String> {
     if trimmed.is_empty() {
         return Err(format!("irc {label} is empty"));
     }
-    if trimmed.contains(' ') {
-        return Err(format!("irc {label} must not contain spaces"));
+    let contains_whitespace = trimmed.chars().any(char::is_whitespace);
+    if contains_whitespace {
+        return Err(format!("irc {label} must not contain whitespace"));
     }
     if trimmed.contains('\r') || trimmed.contains('\n') || trimmed.contains('\0') {
         return Err(format!("irc {label} contains forbidden control characters"));
@@ -334,8 +337,16 @@ async fn send_irc_command<W>(writer: &mut W, command: &str, context: &str) -> Cl
 where
     W: AsyncWrite + Unpin,
 {
+    let command_bytes = command.as_bytes();
+    let command_length = command_bytes.len();
+    if command_length > IRC_MAX_COMMAND_BYTES {
+        return Err(format!(
+            "{context} failed: irc command exceeds the {IRC_MAX_COMMAND_BYTES}-byte limit before CRLF"
+        ));
+    }
+
     writer
-        .write_all(command.as_bytes())
+        .write_all(command_bytes)
         .await
         .map_err(|error| format!("{context} failed: {error}"))?;
     writer
@@ -393,17 +404,9 @@ where
     W: AsyncWrite + Unpin,
 {
     loop {
-        let mut line = String::new();
-        let byte_count = reader
-            .read_line(&mut line)
-            .await
+        let line_bytes = read_bounded_irc_line_bytes(reader, context).await?;
+        let line = String::from_utf8(line_bytes)
             .map_err(|error| format!("read irc {context} line failed: {error}"))?;
-        if byte_count == 0 {
-            return Err(format!(
-                "irc server closed connection while waiting for {context}"
-            ));
-        }
-
         let trimmed_line = line.trim_end_matches(['\r', '\n']).to_owned();
         if let Some(payload) = parse_irc_ping_payload(trimmed_line.as_str()) {
             let pong_command = format!("PONG :{payload}");
@@ -412,6 +415,53 @@ where
         }
 
         return Ok(trimmed_line);
+    }
+}
+
+async fn read_bounded_irc_line_bytes<R>(
+    reader: &mut BufReader<R>,
+    context: &str,
+) -> CliResult<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
+    let mut line_bytes = Vec::new();
+
+    loop {
+        let available = reader
+            .fill_buf()
+            .await
+            .map_err(|error| format!("read irc {context} line failed: {error}"))?;
+        if available.is_empty() {
+            if line_bytes.is_empty() {
+                return Err(format!(
+                    "irc server closed connection while waiting for {context}"
+                ));
+            }
+            return Ok(line_bytes);
+        }
+
+        let newline_position = available.iter().position(|byte| *byte == b'\n');
+        let consume_count = match newline_position {
+            Some(position) => position + 1,
+            None => available.len(),
+        };
+        let next_line_length = line_bytes.len() + consume_count;
+        if next_line_length > IRC_MAX_FRAME_BYTES {
+            return Err(format!(
+                "irc server sent a line longer than {IRC_MAX_FRAME_BYTES} bytes while waiting for {context}"
+            ));
+        }
+
+        let chunk = available
+            .get(..consume_count)
+            .ok_or_else(|| format!("read irc {context} line failed: internal framing error"))?;
+        line_bytes.extend_from_slice(chunk);
+        reader.consume(consume_count);
+
+        if newline_position.is_some() {
+            return Ok(line_bytes);
+        }
     }
 }
 
@@ -546,6 +596,17 @@ mod tests {
     }
 
     #[test]
+    fn normalize_irc_atom_rejects_tab_whitespace() {
+        let error = normalize_irc_atom("nickname", "loong\tclaw")
+            .expect_err("nickname containing a tab should be rejected");
+
+        assert!(
+            error.contains("must not contain whitespace"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn normalize_irc_message_lines_rejects_blank_message() {
         let error =
             normalize_irc_message_lines(" \n\t").expect_err("blank irc message should be rejected");
@@ -562,6 +623,57 @@ mod tests {
             error.contains("forbidden control characters"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn parse_irc_server_endpoint_rejects_zero_port() {
+        let error = parse_irc_server_endpoint("irc://irc.example.test:0")
+            .expect_err("port zero should be rejected");
+
+        assert!(
+            error.contains("between 1 and 65535"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_irc_command_rejects_command_longer_than_limit() {
+        let mut sink = tokio::io::sink();
+        let long_command = "x".repeat(IRC_MAX_COMMAND_BYTES + 1);
+
+        let error = send_irc_command(&mut sink, long_command.as_str(), "irc test")
+            .await
+            .expect_err("oversized command should be rejected");
+
+        assert!(
+            error.contains("510-byte limit"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_irc_line_rejects_line_longer_than_limit() {
+        let (mut client, server) = tokio::io::duplex(2048);
+        let long_line = format!("{}\r\n", "x".repeat(IRC_MAX_FRAME_BYTES));
+        let write_task = tokio::spawn(async move {
+            client
+                .write_all(long_line.as_bytes())
+                .await
+                .expect("write oversized irc line");
+        });
+        let mut reader = BufReader::new(server);
+        let mut writer = tokio::io::sink();
+
+        let error = read_irc_line(&mut reader, &mut writer, "welcome")
+            .await
+            .expect_err("oversized inbound line should be rejected");
+
+        assert!(
+            error.contains("longer than 512 bytes"),
+            "unexpected error: {error}"
+        );
+
+        write_task.await.expect("join oversized line writer");
     }
 
     #[tokio::test]
