@@ -110,6 +110,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
         session,
         spec.surfaces.len(),
     )?);
+    let owner_token = tracker.owner_token().to_owned();
 
     let mut runtime_hooks = hooks.clone();
     let original_wait_for_shutdown = hooks.wait_for_shutdown.clone();
@@ -117,10 +118,11 @@ async fn run_gateway_runtime_with_hooks_for_test(
     runtime_hooks.wait_for_shutdown = Arc::new(move || {
         let original_wait_for_shutdown = original_wait_for_shutdown.clone();
         let runtime_dir = runtime_dir_for_shutdown.clone();
+        let owner_token = owner_token.clone();
         Box::pin(async move {
             tokio::select! {
                 result = (original_wait_for_shutdown)() => result,
-                result = wait_for_gateway_stop_request(runtime_dir.as_path()) => {
+                result = wait_for_gateway_stop_request(runtime_dir.as_path(), owner_token.as_str()) => {
                     result?;
                     Ok("gateway stop requested".to_owned())
                 }
