@@ -4,8 +4,11 @@ use serde::{Deserialize, Serialize};
 use super::super::{ChannelOutboundTarget, ChannelSession};
 use super::error::ApiResult;
 
+const MIN_PAGINATION_LIMIT: usize = 1;
+const MAX_PAGINATION_LIMIT: usize = 1000;
+
 /// Content types for messages
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageContent {
     /// Plain text message
@@ -41,7 +44,7 @@ impl MessageContent {
 }
 
 /// Pagination parameters for list operations
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pagination {
     /// Maximum number of items to return
     pub limit: Option<usize>,
@@ -54,15 +57,17 @@ pub struct Pagination {
 impl Pagination {
     /// Create pagination with limit
     pub fn with_limit(limit: usize) -> Self {
+        let normalized_limit = limit.clamp(MIN_PAGINATION_LIMIT, MAX_PAGINATION_LIMIT);
+
         Self {
-            limit: Some(limit),
+            limit: Some(normalized_limit),
             ..Default::default()
         }
     }
 }
 
 /// Options for sending messages
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SendOptions {
     /// Whether to send as a silent message (no notification)
     pub silent: bool,
@@ -73,7 +78,7 @@ pub struct SendOptions {
 }
 
 /// Message metadata returned by API operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     /// Platform-specific message ID
     pub id: String,
@@ -163,4 +168,23 @@ pub trait RichMessagingApi: MessagingApi {
 
     /// Update an existing card message
     async fn update_card(&self, message_id: &str, card: serde_json::Value) -> ApiResult<Message>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Pagination;
+
+    #[test]
+    fn pagination_with_limit_clamps_to_supported_minimum() {
+        let pagination = Pagination::with_limit(0);
+
+        assert_eq!(pagination.limit, Some(1));
+    }
+
+    #[test]
+    fn pagination_with_limit_clamps_to_supported_maximum() {
+        let pagination = Pagination::with_limit(1001);
+
+        assert_eq!(pagination.limit, Some(1000));
+    }
 }

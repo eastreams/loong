@@ -4,7 +4,7 @@ use std::fmt;
 ///
 /// This error type abstracts platform-specific errors into a uniform
 /// interface that tools can handle without knowing implementation details.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
     /// Authentication or authorization failure
     Auth(String),
