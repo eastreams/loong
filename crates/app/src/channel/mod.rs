@@ -23,15 +23,17 @@ use std::time::Duration;
 use std::{
     collections::BTreeSet,
     future::Future,
-    path::PathBuf,
     pin::Pin,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use std::{fmt, str::FromStr};
+use std::{
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
 };
-use std::{fmt, str::FromStr};
 
 #[cfg(any(
     feature = "channel-telegram",
@@ -54,19 +56,11 @@ use serde::Serialize;
     feature = "channel-wecom"
 ))]
 use serde_json::Value;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-discord",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-signal",
-    feature = "channel-slack",
-    feature = "channel-wecom"
-))]
 use tokio::sync::Notify;
 #[cfg(feature = "channel-telegram")]
 use tokio::time::sleep;
 
+use super::config::LoongClawConfig;
 use crate::CliResult;
 #[cfg(any(
     feature = "channel-telegram",
@@ -188,7 +182,7 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-whatsapp",
     feature = "channel-imessage"
 ))]
-use super::config::{ChannelResolvedAccountRoute, LoongClawConfig, normalize_channel_account_id};
+use super::config::{ChannelResolvedAccountRoute, normalize_channel_account_id};
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -2018,6 +2012,7 @@ fn build_imessage_command_context(
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-slack",
+    feature = "channel-synology-chat",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-teams",
@@ -2053,24 +2048,12 @@ struct ChannelServeCommandSpec {
     family: ChannelCommandFamilyDescriptor,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 #[derive(Debug, Clone)]
 pub struct ChannelServeStopHandle {
     requested: Arc<AtomicBool>,
     stop: Arc<Notify>,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 impl ChannelServeStopHandle {
     pub fn new() -> Self {
         Self {
@@ -2088,6 +2071,12 @@ impl ChannelServeStopHandle {
         self.requested.load(Ordering::SeqCst)
     }
 
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix",
+        feature = "channel-wecom"
+    ))]
     async fn wait(&self) {
         if self.is_requested() {
             return;
@@ -3853,12 +3842,6 @@ pub async fn run_wecom_channel_with_stop(
     run_wecom_channel_with_context(context, stop, initialize_runtime_environment).await
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 pub async fn run_background_channel_with_stop(
     channel_id: &str,
     resolved_path: PathBuf,
