@@ -63,7 +63,7 @@ fn render_tlon_route_notice(route: &ChannelResolvedAccountRoute) -> Option<Strin
 
     Some(format!(
         "tlon omitted --account and routed to configured account `{}` via fallback default selection; set tlon.default_account or pass --account to avoid routing surprises",
-        route.configured_account_id
+        route.selected_configured_account_id
     ))
 }
 

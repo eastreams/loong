@@ -8843,6 +8843,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn catalog_only_channel_entries_skip_platforms_that_already_have_status_snapshots() {
         let catalog = vec![
             ChannelCatalogEntry {
