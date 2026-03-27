@@ -78,9 +78,13 @@ pub struct ToolExecutionToolConfig {
     pub per_tool_timeout: BTreeMap<String, u64>,
 }
 
+const AUTONOMY_PROFILE_IDS: [&str; 3] =
+    ["discovery_only", "guided_acquisition", "bounded_autonomous"];
+
 pub const AUTONOMY_PROFILE_VALID_VALUES: &str =
     "discovery_only, guided_acquisition, bounded_autonomous";
 
+#[repr(usize)]
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AutonomyProfile {
@@ -91,11 +95,20 @@ pub enum AutonomyProfile {
 }
 
 impl AutonomyProfile {
+    const fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::DiscoveryOnly),
+            1 => Some(Self::GuidedAcquisition),
+            2 => Some(Self::BoundedAutonomous),
+            _ => None,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::DiscoveryOnly => "discovery_only",
-            Self::GuidedAcquisition => "guided_acquisition",
-            Self::BoundedAutonomous => "bounded_autonomous",
+            Self::DiscoveryOnly => AUTONOMY_PROFILE_IDS[0],
+            Self::GuidedAcquisition => AUTONOMY_PROFILE_IDS[1],
+            Self::BoundedAutonomous => AUTONOMY_PROFILE_IDS[2],
         }
     }
 }
@@ -814,13 +827,11 @@ pub fn web_search_provider_api_key_env_names(raw: &str) -> &'static [&'static st
 
 pub fn parse_autonomy_profile(raw: &str) -> Option<AutonomyProfile> {
     let normalized = raw.trim().to_ascii_lowercase();
+    let matched_index = AUTONOMY_PROFILE_IDS
+        .iter()
+        .position(|value| *value == normalized)?;
 
-    match normalized.as_str() {
-        "discovery_only" => Some(AutonomyProfile::DiscoveryOnly),
-        "guided_acquisition" => Some(AutonomyProfile::GuidedAcquisition),
-        "bounded_autonomous" => Some(AutonomyProfile::BoundedAutonomous),
-        _ => None,
-    }
+    AutonomyProfile::from_index(matched_index)
 }
 
 #[cfg(feature = "tool-websearch")]
@@ -1066,6 +1077,18 @@ mod tests {
             Some(AutonomyProfile::BoundedAutonomous)
         );
         assert_eq!(parse_autonomy_profile("unknown"), None);
+    }
+
+    #[test]
+    fn autonomy_profile_valid_values_stays_in_sync_with_profile_ids() {
+        let valid_values = [
+            AutonomyProfile::DiscoveryOnly.as_str(),
+            AutonomyProfile::GuidedAcquisition.as_str(),
+            AutonomyProfile::BoundedAutonomous.as_str(),
+        ]
+        .join(", ");
+
+        assert_eq!(AUTONOMY_PROFILE_VALID_VALUES, valid_values);
     }
 
     #[test]

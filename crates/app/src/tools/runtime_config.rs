@@ -651,10 +651,7 @@ impl ToolRuntimeConfig {
         let web_search_max_results = parse_env_usize("LOONGCLAW_WEB_SEARCH_MAX_RESULTS")
             .map(|count| count.clamp(1, 10))
             .unwrap_or(crate::config::DEFAULT_WEB_SEARCH_MAX_RESULTS);
-        let autonomy_profile = parse_env_string("LOONGCLAW_AUTONOMY_PROFILE")
-            .as_deref()
-            .and_then(crate::config::parse_autonomy_profile)
-            .unwrap_or_default();
+        let autonomy_profile = resolve_autonomy_profile_from_env();
         let enabled = parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_ENABLED").unwrap_or(false);
         let require_download_approval =
             parse_env_bool("LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL").unwrap_or(true);
@@ -1066,6 +1063,30 @@ fn parse_env_domain_list(key: &str) -> BTreeSet<String> {
         .collect()
 }
 
+fn resolve_autonomy_profile_from_env() -> AutonomyProfile {
+    let raw_profile = parse_env_string("LOONGCLAW_AUTONOMY_PROFILE");
+    let Some(raw_profile) = raw_profile else {
+        return AutonomyProfile::default();
+    };
+
+    let parsed_profile = crate::config::parse_autonomy_profile(raw_profile.as_str());
+    let Some(profile) = parsed_profile else {
+        let default_profile = AutonomyProfile::default();
+        let default_profile_id = default_profile.as_str();
+        let valid_values = crate::config::AUTONOMY_PROFILE_VALID_VALUES;
+
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!(
+                "warning: invalid LOONGCLAW_AUTONOMY_PROFILE `{raw_profile}`; falling back to `{default_profile_id}`. supported values: {valid_values}"
+            );
+        }
+        return default_profile;
+    };
+
+    profile
+}
+
 #[cfg(feature = "feishu-integration")]
 fn has_enabled_feishu_runtime_credentials(config: &FeishuChannelConfig) -> bool {
     if !config.enabled {
@@ -1360,6 +1381,19 @@ mod tests {
 
         assert_eq!(runtime.autonomy_profile, AutonomyProfile::DiscoveryOnly);
         assert_eq!(snapshot.profile, AutonomyProfile::DiscoveryOnly);
+    }
+
+    #[test]
+    fn autonomy_profile_runtime_config_from_env_uses_valid_value() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONGCLAW_AUTONOMY_PROFILE", "guided_acquisition");
+
+        let runtime = ToolRuntimeConfig::from_env();
+        let snapshot = runtime.autonomy_policy_snapshot();
+
+        assert_eq!(runtime.autonomy_profile, AutonomyProfile::GuidedAcquisition);
+        assert_eq!(snapshot.profile, AutonomyProfile::GuidedAcquisition);
     }
 
     /// Deny starts empty so users are not forced to carry
