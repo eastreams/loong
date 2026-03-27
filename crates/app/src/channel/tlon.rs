@@ -7,7 +7,10 @@ use crate::{CliResult, config::ResolvedTlonChannelConfig};
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{build_outbound_http_client, response_body_detail},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, response_body_detail,
+        validate_outbound_http_target,
+    },
 };
 
 const TLON_LOGIN_PATH: &str = "/~/login";
@@ -37,6 +40,7 @@ pub(super) async fn run_tlon_send(
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     ensure_tlon_target_kind(target_kind)?;
 
@@ -48,7 +52,10 @@ pub(super) async fn run_tlon_send(
     let url_value = resolved
         .url()
         .ok_or_else(|| "tlon url missing (set tlon.url or env)".to_owned())?;
-    let base_url = normalize_tlon_base_url(url_value.as_str())?;
+    let normalized_base_url = normalize_tlon_base_url(url_value.as_str())?;
+    let validated_base_url =
+        validate_outbound_http_target("tlon.url", normalized_base_url.as_str(), policy)?;
+    let base_url = validated_base_url.to_string();
 
     let code = resolved
         .code()
@@ -56,7 +63,7 @@ pub(super) async fn run_tlon_send(
     let target = parse_tlon_send_target(target_id)?;
     let text = normalize_tlon_text(text)?;
 
-    let client = build_outbound_http_client("tlon send")?;
+    let client = build_outbound_http_client("tlon send", policy)?;
     let cookie = login_tlon_ship(&client, base_url.as_str(), code.as_str()).await?;
     let channel_id = build_tlon_channel_id()?;
     let ship_name = from_ship.trim_start_matches('~');
@@ -660,6 +667,7 @@ mod tests {
             ChannelOutboundTargetKind::Conversation,
             "~nec",
             "hello\nworld",
+            allow_private_hosts_policy(),
         )
         .await;
 
@@ -716,6 +724,7 @@ mod tests {
             ChannelOutboundTargetKind::Conversation,
             "group:~bus/chat-room",
             "hello group",
+            allow_private_hosts_policy(),
         )
         .await;
 
@@ -759,6 +768,7 @@ mod tests {
             ChannelOutboundTargetKind::Conversation,
             "~nec",
             "hello",
+            allow_private_hosts_policy(),
         )
         .await;
 
@@ -786,6 +796,7 @@ mod tests {
             ChannelOutboundTargetKind::Conversation,
             "~nec",
             "hello",
+            allow_private_hosts_policy(),
         )
         .await
         .expect_err("missing login cookie should fail");
@@ -825,6 +836,22 @@ mod tests {
             fragment_error,
             "tlon url must not include a path, query, or fragment"
         );
+    }
+
+    #[tokio::test]
+    async fn run_tlon_send_rejects_private_hosts_by_default() {
+        let resolved = build_resolved_tlon_config("http://127.0.0.1:8080");
+        let error = run_tlon_send(
+            &resolved,
+            ChannelOutboundTargetKind::Conversation,
+            "~nec",
+            "hello",
+            ChannelOutboundHttpPolicy::default(),
+        )
+        .await
+        .expect_err("private hosts should be blocked by default");
+
+        assert!(error.contains("private or special-use"));
     }
 
     #[test]
@@ -916,6 +943,12 @@ mod tests {
             url_env: None,
             code: Some(SecretRef::Inline("lidlut-tabwed-pillex-ridrup".to_owned())),
             code_env: None,
+        }
+    }
+
+    fn allow_private_hosts_policy() -> ChannelOutboundHttpPolicy {
+        ChannelOutboundHttpPolicy {
+            allow_private_hosts: true,
         }
     }
 }
