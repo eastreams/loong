@@ -8811,6 +8811,32 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "synology-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "imessage"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "nostr"));
+        let inventory = channel_inventory(&config);
+        let nostr = inventory
+            .channel_catalog
+            .iter()
+            .find(|entry| entry.id == "nostr")
+            .expect("nostr catalog entry");
+
+        assert_eq!(
+            nostr.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(
+            nostr.capabilities,
+            vec![ChannelCapability::MultiAccount, ChannelCapability::Send]
+        );
+        assert_eq!(
+            nostr
+                .operations
+                .iter()
+                .map(|operation| operation.availability)
+                .collect::<Vec<_>>(),
+            vec![
+                ChannelCatalogOperationAvailability::Implemented,
+                ChannelCatalogOperationAvailability::Stub,
+            ]
+        );
         assert_eq!(tlon.operations[0].command, "tlon-send");
         assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
@@ -8889,6 +8915,31 @@ mod tests {
                 "zalo",
                 "zalo-personal",
                 "webchat",
+            ]
+        );
+        let nostr = inventory
+            .channel_catalog
+            .iter()
+            .find(|entry| entry.id == "nostr")
+            .expect("nostr catalog entry");
+
+        assert_eq!(
+            nostr.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(
+            nostr.capabilities,
+            vec![ChannelCapability::MultiAccount, ChannelCapability::Send]
+        );
+        assert_eq!(
+            nostr
+                .operations
+                .iter()
+                .map(|operation| operation.availability)
+                .collect::<Vec<_>>(),
+            vec![
+                ChannelCatalogOperationAvailability::Implemented,
+                ChannelCatalogOperationAvailability::Stub,
             ]
         );
     }
@@ -9355,6 +9406,22 @@ mod tests {
             Some("default")
         );
         assert_eq!(imessage.configured_accounts[0].id, "imessage");
+
+        let nostr = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "nostr")
+            .expect("nostr surface");
+        assert_eq!(
+            nostr.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(nostr.configured_accounts.len(), 1);
+        assert_eq!(
+            nostr.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(nostr.configured_accounts[0].id, "nostr");
 
         let webchat = inventory
             .channel_surfaces

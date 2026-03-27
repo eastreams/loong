@@ -183,26 +183,37 @@ fn build_nostr_snapshot_for_account(
     if relay_urls.is_empty() {
         send_issues.push("relay_urls is empty".to_owned());
     }
-    for relay_url in &relay_urls {
-        validate_websocket_url("relay_urls", relay_url.as_str(), &mut send_issues);
+    for (relay_url_index, relay_url) in relay_urls.iter().enumerate() {
+        let relay_url_field = format!("relay_urls[{relay_url_index}]");
+        validate_websocket_url(
+            relay_url_field.as_str(),
+            relay_url.as_str(),
+            &mut send_issues,
+        );
     }
 
-    let private_key_hex = resolved.normalized_private_key_hex();
-    let private_key_hex = match private_key_hex {
+    let normalized_private_key_hex = resolved.normalized_private_key_hex();
+    let mut private_key_invalid = false;
+    let private_key_hex = match normalized_private_key_hex {
         Ok(value) => value,
         Err(error) => {
             send_issues.push(format!("private_key is invalid: {error}"));
+            private_key_invalid = true;
             None
         }
     };
-    let public_key_hex = match resolved.public_key_hex() {
-        Ok(value) => value,
-        Err(error) => {
-            send_issues.push(format!("private_key is invalid: {error}"));
-            None
+    let public_key_hex = if private_key_invalid || private_key_hex.is_none() {
+        None
+    } else {
+        match resolved.public_key_hex() {
+            Ok(value) => value,
+            Err(error) => {
+                send_issues.push(format!("private_key is invalid: {error}"));
+                None
+            }
         }
     };
-    if private_key_hex.is_none() {
+    if private_key_hex.is_none() && !private_key_invalid {
         send_issues.push("private_key is missing".to_owned());
     }
 
@@ -414,8 +425,38 @@ mod tests {
         assert!(
             send.issues
                 .iter()
-                .any(|issue| issue.contains("relay_urls must use ws or wss")),
+                .any(|issue| issue.contains("relay_urls[0] must use ws or wss")),
             "send issues should reject non-websocket relay urls"
         );
+    }
+
+    #[test]
+    fn nostr_status_reports_invalid_private_key_without_missing_duplication() {
+        let mut config = LoongClawConfig::default();
+        config.nostr.enabled = true;
+        config.nostr.relay_urls = vec!["wss://relay.example.test".to_owned()];
+        config.nostr.private_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "invalid-private-key".to_owned(),
+        ));
+
+        let snapshots = channel_status_snapshots(&config);
+        let nostr = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "nostr")
+            .expect("nostr snapshot");
+        let send = nostr.operation("send").expect("nostr send operation");
+        let invalid_issue_count = send
+            .issues
+            .iter()
+            .filter(|issue| issue.contains("private_key is invalid"))
+            .count();
+        let has_missing_issue = send
+            .issues
+            .iter()
+            .any(|issue| issue.contains("private_key is missing"));
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert_eq!(invalid_issue_count, 1);
+        assert!(!has_missing_issue);
     }
 }
