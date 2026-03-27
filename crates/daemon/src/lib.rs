@@ -972,6 +972,23 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Send one Twitch chat message
+    TwitchSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_twitch_send_target_kind(),
+            value_parser = parse_twitch_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Send one Mattermost channel post
     MattermostSend {
         #[arg(long)]
@@ -4275,6 +4292,11 @@ pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_signal_send_cli_impl,
 };
 
+pub const TWITCH_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_twitch_send_cli_impl,
+};
+
 pub const MATTERMOST_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_mattermost_send_cli_impl,
@@ -4657,6 +4679,21 @@ pub fn run_signal_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComma
     })
 }
 
+pub fn run_twitch_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("twitch-send", args.target)?;
+        mvp::channel::run_twitch_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
 pub fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = (args.bind_override, args.path_override);
@@ -4838,6 +4875,16 @@ pub fn parse_signal_send_target_kind(
     parse_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC, raw)
 }
 
+pub fn default_twitch_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(TWITCH_SEND_CLI_SPEC)
+}
+
+pub fn parse_twitch_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(TWITCH_SEND_CLI_SPEC, raw)
+}
+
 pub fn default_mattermost_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(MATTERMOST_SEND_CLI_SPEC)
 }
@@ -5004,6 +5051,21 @@ mod channel_send_cli_tests {
     }
 
     #[test]
+    fn twitch_send_cli_accepts_conversation_target_kind() {
+        let target_kind = parse_twitch_send_target_kind("conversation")
+            .expect("conversation target kind should be accepted");
+
+        assert_eq!(
+            default_twitch_send_target_kind(),
+            mvp::channel::ChannelOutboundTargetKind::Conversation
+        );
+        assert_eq!(
+            target_kind,
+            mvp::channel::ChannelOutboundTargetKind::Conversation
+        );
+    }
+
+    #[test]
     fn nostr_send_cli_rejects_non_address_target_kind() {
         let error = parse_nostr_send_target_kind("conversation")
             .expect_err("conversation targets must be rejected");
@@ -5012,6 +5074,35 @@ mod channel_send_cli_tests {
             error,
             "nostr --target-kind does not support `conversation`; use `address`"
         );
+    }
+
+    #[test]
+    fn twitch_send_cli_rejects_non_conversation_target_kind() {
+        let error = parse_twitch_send_target_kind("address")
+            .expect_err("address target kind should be rejected");
+
+        assert_eq!(
+            error,
+            "twitch --target-kind does not support `address`; use `conversation`"
+        );
+    }
+
+    #[tokio::test]
+    async fn twitch_send_cli_requires_target() {
+        let args = ChannelSendCliArgs {
+            config_path: None,
+            account: None,
+            target: None,
+            target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
+            text: "hello",
+            as_card: false,
+        };
+
+        let error = run_twitch_send_cli_impl(args)
+            .await
+            .expect_err("missing target should fail");
+
+        assert_eq!(error, "twitch-send requires --target");
     }
 }
 

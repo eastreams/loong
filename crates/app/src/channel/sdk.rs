@@ -161,6 +161,14 @@ const SIGNAL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const TWITCH_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "twitch",
+    label: "twitch",
+    surface_label: "twitch channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "teams",
     label: "teams",
@@ -358,6 +366,14 @@ const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     background_surface_is_enabled: None,
 };
 
+const TWITCH_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &TWITCH_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: twitch_channel_is_enabled,
+    collect_validation_issues: collect_twitch_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const TEAMS_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &TEAMS_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -431,6 +447,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     WEBHOOK_CHANNEL_INTEGRATION,
     GOOGLE_CHAT_CHANNEL_INTEGRATION,
     SIGNAL_CHANNEL_INTEGRATION,
+    TWITCH_CHANNEL_INTEGRATION,
     TEAMS_CHANNEL_INTEGRATION,
     MATTERMOST_CHANNEL_INTEGRATION,
     NEXTCLOUD_TALK_CHANNEL_INTEGRATION,
@@ -588,6 +605,10 @@ fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.signal.enabled
 }
 
+fn twitch_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.twitch.enabled
+}
+
 fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.teams.enabled
 }
@@ -688,6 +709,12 @@ fn collect_signal_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.signal.validate()
+}
+
+fn collect_twitch_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.twitch.validate()
 }
 
 fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
