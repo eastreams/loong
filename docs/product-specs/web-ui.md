@@ -18,7 +18,10 @@ The Web UI is expected to include:
 - dashboard
 - onboarding
 - a lightweight debug console
+<<<<<<< HEAD
 - a client path through the local product control plane
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 - localhost-only by default in the current slice
 - same-origin local product-mode serving in the current slice
 - shared read models and APIs with CLI and gateway-owned operator surfaces

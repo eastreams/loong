@@ -53,10 +53,14 @@ Run:
 LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh
 ```
 
+<<<<<<< HEAD
 Expected: PASS once repository-wide release-doc governance gaps are already
 clean. If this command fails only on pre-existing release artifacts outside the
 gateway slice, record that blocker explicitly and continue validating the
 touched gateway docs for internal consistency.
+=======
+Expected: PASS.
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
 ## Task 2: Extract daemon operator payloads into gateway service read models
 

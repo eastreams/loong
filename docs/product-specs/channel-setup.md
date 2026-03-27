@@ -165,12 +165,15 @@ surfaces:
   reply-loop runtime
 - their `serve` metadata remains planned or unsupported until the gateway layer
   and the underlying inbound transport contract are implemented
+<<<<<<< HEAD
 - their HTTP targets must use `http` or `https`, must not embed credentials,
   block private or special-use hosts by default, and do not auto-follow
   redirects
 - operators who intentionally send through a private bridge, loopback service,
   or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
   at the top level of `loongclaw.toml`
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
 ### Webhook
 
@@ -353,6 +356,7 @@ iMessage is shipped through a BlueBubbles bridge send surface:
 - `imessage-serve` remains planned until LoongClaw owns the inbound bridge
   synchronization contract
 
+<<<<<<< HEAD
 ### Nostr
 
 Nostr is shipped as a signed relay-publish surface:
@@ -370,6 +374,10 @@ Nostr is shipped as a signed relay-publish surface:
 
 ### Multi-Channel Serve And Gateway Direction
 
+=======
+### Multi-Channel Serve And Gateway Direction
+
+>>>>>>> d6c1196b (feat: extract gateway read models)
 `multi-channel-serve` is the current attached runtime owner for the shipped
 service-channel subset. It is also the first precursor to the planned explicit
 gateway service rather than the long-term product noun:
@@ -380,12 +388,20 @@ gateway service rather than the long-term product noun:
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
+<<<<<<< HEAD
   Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat, Tlon,
   Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage / BlueBubbles
   into runtime supervision until those adapters grow real serve ownership
 - it never promotes catalog-only planned surfaces such as Twitch, Zalo, Zalo
   Personal, or WebChat into runtime supervision until those adapters are
   implemented
+=======
+  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat,
+  Mattermost, Nextcloud Talk, Synology Chat, or iMessage / BlueBubbles into
+  runtime supervision until those adapters grow real serve ownership
+- it never promotes catalog-only planned surfaces such as Tlon into runtime
+  supervision until those adapters are implemented
+>>>>>>> d6c1196b (feat: extract gateway read models)
 - the later gateway service should absorb this runtime ownership model, then
   add detached service lifecycle, route mounting, status/log surfaces, pairing,
   and richer gateway-native channel runtimes on top of the same registry-driven

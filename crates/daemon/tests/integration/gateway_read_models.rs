@@ -25,6 +25,7 @@ fn write_gateway_test_config(root: &std::path::Path) -> PathBuf {
     config_path
 }
 
+<<<<<<< HEAD
 fn legacy_channel_inventory_json(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
@@ -91,6 +92,8 @@ fn legacy_acp_dispatch_payload_json(
     })
 }
 
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 #[test]
 fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
     let config = mvp::config::LoongClawConfig::default();
@@ -98,7 +101,10 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
     let payload =
         gateway::read_models::build_channel_inventory_read_model("/tmp/loongclaw.toml", &inventory);
     let encoded = serde_json::to_value(&payload).expect("serialize channel inventory read model");
+<<<<<<< HEAD
     let legacy = legacy_channel_inventory_json("/tmp/loongclaw.toml", &inventory);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
     assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.schema.version, CHANNELS_CLI_JSON_SCHEMA_VERSION);
@@ -108,7 +114,10 @@ fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
         payload.schema.legacy_channel_views,
         CHANNELS_CLI_JSON_LEGACY_VIEWS
     );
+<<<<<<< HEAD
     assert_eq!(encoded, legacy);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
     assert_eq!(
         encoded["channel_surfaces"].as_array().map(Vec::len),
         Some(inventory.channel_surfaces.len())
@@ -157,6 +166,7 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
         &status,
     );
     let encoded = serde_json::to_value(&payload).expect("serialize ACP status read model");
+<<<<<<< HEAD
     let legacy = legacy_acp_status_payload_json(
         "/tmp/loongclaw.toml",
         Some("agent:codex:telegram:42"),
@@ -165,12 +175,17 @@ fn gateway_read_model_acp_status_keeps_requested_and_resolved_session_fields() {
         "agent:codex:telegram:42",
         &status,
     );
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
     assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.resolved_session_key, "agent:codex:telegram:42");
     assert_eq!(payload.status.state, "busy");
     assert_eq!(payload.status.mode, Some("interactive"));
+<<<<<<< HEAD
     assert_eq!(encoded, legacy);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
     assert_eq!(
         encoded["status"]["provenance"]["surface"],
         "session_activation"
@@ -225,13 +240,19 @@ fn gateway_read_model_acp_observability_keeps_rollups_and_provenance() {
     let payload =
         gateway::read_models::build_acp_observability_read_model("/tmp/loongclaw.toml", &snapshot);
     let encoded = serde_json::to_value(&payload).expect("serialize ACP observability read model");
+<<<<<<< HEAD
     let legacy = legacy_acp_observability_payload_json("/tmp/loongclaw.toml", &snapshot);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
     assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.snapshot.runtime_cache.active_sessions, 2);
     assert_eq!(payload.snapshot.sessions.bound, 1);
     assert_eq!(payload.snapshot.turns.completed, 8);
+<<<<<<< HEAD
     assert_eq!(encoded, legacy);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
     assert_eq!(
         encoded["snapshot"]["sessions"]["provenance"]["surface"],
         "session_activation_aggregate"
@@ -276,18 +297,24 @@ fn gateway_read_model_acp_dispatch_keeps_structured_address_and_target() {
         &decision,
     );
     let encoded = serde_json::to_value(&payload).expect("serialize ACP dispatch read model");
+<<<<<<< HEAD
     let legacy = legacy_acp_dispatch_payload_json(
         "/tmp/loongclaw.toml",
         &address,
         "opaque-session",
         &decision,
     );
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
     assert_eq!(payload.config, "/tmp/loongclaw.toml");
     assert_eq!(payload.address.channel_id.as_deref(), Some("feishu"));
     assert_eq!(payload.dispatch.session, "opaque-session");
     assert_eq!(payload.dispatch.decision.reason, "allowed");
+<<<<<<< HEAD
     assert_eq!(encoded, legacy);
+=======
+>>>>>>> d6c1196b (feat: extract gateway read models)
     assert_eq!(
         encoded["dispatch"]["decision"]["provenance"]["surface"],
         "dispatch_prediction"

@@ -1,6 +1,10 @@
 # LoongClaw Roadmap
 
+<<<<<<< HEAD
 Last updated: 2026-03-29
+=======
+Last updated: 2026-03-27
+>>>>>>> d6c1196b (feat: extract gateway read models)
 
 This roadmap is execution-focused. Every stage has:
 
@@ -414,7 +418,12 @@ Remaining deliverables:
   - still add isolated browser profile lifecycle and release packaging around the companion runtime
   - keep richer browser automation exposed only through truthful runtime-visible tool advertising and governed tool contracts
 - browser-facing product surface:
+<<<<<<< HEAD
   - Web UI implementation as a thin shell over the local product control plane plus existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
+=======
+  - Web UI implementation as a thin shell over existing ask/chat, onboarding,
+    dashboard, and browser semantics, not a separate assistant runtime
+>>>>>>> d6c1196b (feat: extract gateway read models)
   - current product mode stays same-origin and localhost-only by default, but
     that operating boundary is not the long-term architecture endpoint
 - gateway service foundation:
