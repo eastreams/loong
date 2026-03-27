@@ -574,7 +574,7 @@ fn build_tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
-            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_resolve_definition,
         },
@@ -3097,6 +3097,7 @@ mod tests {
             ("tool.search", CapabilityActionClass::Discover),
             ("tool_search", CapabilityActionClass::Discover),
             ("tool.invoke", CapabilityActionClass::ExecuteExisting),
+            ("claw.migrate", CapabilityActionClass::ExecuteExisting),
             (
                 "external_skills.fetch",
                 CapabilityActionClass::CapabilityFetch,
@@ -3113,11 +3114,16 @@ mod tests {
             ("delegate", CapabilityActionClass::TopologyExpand),
             ("delegate_async", CapabilityActionClass::TopologyExpand),
             (
+                "approval_request_resolve",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            (
                 "external_skills.policy",
                 CapabilityActionClass::PolicyMutation,
             ),
             ("session_archive", CapabilityActionClass::SessionMutation),
             ("session_cancel", CapabilityActionClass::SessionMutation),
+            ("session_events", CapabilityActionClass::ExecuteExisting),
             ("session_recover", CapabilityActionClass::SessionMutation),
         ];
 
