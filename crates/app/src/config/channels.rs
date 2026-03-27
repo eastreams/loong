@@ -72,6 +72,9 @@ pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
 pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
 pub(crate) const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
 pub(crate) const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
+pub(crate) const TLON_SHIP_ENV: &str = "TLON_SHIP";
+pub(crate) const TLON_URL_ENV: &str = "TLON_URL";
+pub(crate) const TLON_CODE_ENV: &str = "TLON_CODE";
 pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
 pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
@@ -1424,6 +1427,54 @@ impl ResolvedWhatsappChannelConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlonAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub ship: Option<String>,
+    #[serde(default = "default_tlon_ship_env")]
+    pub ship_env: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_tlon_url_env")]
+    pub url_env: Option<String>,
+    #[serde(default)]
+    pub code: Option<SecretRef>,
+    #[serde(default = "default_tlon_code_env")]
+    pub code_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTlonChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub ship: Option<String>,
+    pub ship_env: Option<String>,
+    pub url: Option<String>,
+    pub url_env: Option<String>,
+    pub code: Option<SecretRef>,
+    pub code_env: Option<String>,
+}
+
+impl ResolvedTlonChannelConfig {
+    pub fn ship(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.ship.as_deref(), self.ship_env.as_deref())
+    }
+
+    pub fn url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.url.as_deref(), self.url_env.as_deref())
+    }
+
+    pub fn code(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.code.as_ref(), self.code_env.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DiscordChannelConfig {
@@ -1793,6 +1844,31 @@ pub struct WhatsappChannelConfig {
     pub api_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, WhatsappAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TlonChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub ship: Option<String>,
+    #[serde(default = "default_tlon_ship_env")]
+    pub ship_env: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_tlon_url_env")]
+    pub url_env: Option<String>,
+    #[serde(default)]
+    pub code: Option<SecretRef>,
+    #[serde(default = "default_tlon_code_env")]
+    pub code_env: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, TlonAccountConfig>,
 }
 
 impl Default for CliChannelConfig {
@@ -2356,6 +2432,23 @@ impl Default for WhatsappChannelConfig {
             app_secret: None,
             app_secret_env: Some(WHATSAPP_APP_SECRET_ENV.to_owned()),
             api_base_url: Some(default_whatsapp_api_base_url()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TlonChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            ship: None,
+            ship_env: Some(TLON_SHIP_ENV.to_owned()),
+            url: None,
+            url_env: Some(TLON_URL_ENV.to_owned()),
+            code: None,
+            code_env: Some(TLON_CODE_ENV.to_owned()),
             accounts: BTreeMap::new(),
         }
     }
@@ -6057,6 +6150,231 @@ impl WhatsappChannelConfig {
     }
 }
 
+impl TlonChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "tlon",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.ship_env",
+            self.ship_env.as_deref(),
+            "tlon.ship",
+        );
+        validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.url_env",
+            self.url_env.as_deref(),
+            "tlon.url",
+        );
+        validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.code_env",
+            self.code_env.as_deref(),
+            "tlon.code",
+        );
+        validate_tlon_secret_ref_env_pointer(&mut issues, "tlon.code", self.code.as_ref());
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let ship_field_path = format!("tlon.accounts.{account_id}.ship");
+            let ship_env_field_path = format!("{ship_field_path}_env");
+            validate_tlon_env_pointer(
+                &mut issues,
+                ship_env_field_path.as_str(),
+                account.ship_env.as_deref(),
+                ship_field_path.as_str(),
+            );
+
+            let url_field_path = format!("tlon.accounts.{account_id}.url");
+            let url_env_field_path = format!("{url_field_path}_env");
+            validate_tlon_env_pointer(
+                &mut issues,
+                url_env_field_path.as_str(),
+                account.url_env.as_deref(),
+                url_field_path.as_str(),
+            );
+
+            let code_field_path = format!("tlon.accounts.{account_id}.code");
+            let code_env_field_path = format!("{code_field_path}_env");
+            validate_tlon_env_pointer(
+                &mut issues,
+                code_env_field_path.as_str(),
+                account.code_env.as_deref(),
+                code_field_path.as_str(),
+            );
+            validate_tlon_secret_ref_env_pointer(
+                &mut issues,
+                code_field_path.as_str(),
+                account.code.as_ref(),
+            );
+        }
+
+        issues
+    }
+
+    pub fn ship(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.ship.as_deref(), self.ship_env.as_deref())
+    }
+
+    pub fn url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.url.as_deref(), self.url_env.as_deref())
+    }
+
+    pub fn code(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.code.as_ref(), self.code_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        let selection = self.default_configured_account_selection();
+        selection.id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTlonChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = TlonChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            ship: account_override
+                .and_then(|account| account.ship.clone())
+                .or_else(|| self.ship.clone()),
+            ship_env: account_override
+                .and_then(|account| account.ship_env.clone())
+                .or_else(|| self.ship_env.clone()),
+            url: account_override
+                .and_then(|account| account.url.clone())
+                .or_else(|| self.url.clone()),
+            url_env: account_override
+                .and_then(|account| account.url_env.clone())
+                .or_else(|| self.url_env.clone()),
+            code: account_override
+                .and_then(|account| account.code.clone())
+                .or_else(|| self.code.clone()),
+            code_env: account_override
+                .and_then(|account| account.code_env.clone())
+                .or_else(|| self.code_env.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedTlonChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            ship: merged.ship,
+            ship_env: merged.ship_env,
+            url: merged.url,
+            url_env: merged.url_env,
+            code: merged.code,
+            code_env: merged.code_env,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTlonChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let ship = self.ship();
+        let ship = ship
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(ship) = ship {
+            let trimmed_ship = ship.trim_start_matches('~');
+            let normalized_ship = normalize_channel_account_id(trimmed_ship);
+            let account_id = format!("tlon_{normalized_ship}");
+            let account_label = format!("ship:{ship}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 fn default_telegram_base_url() -> String {
     "https://api.telegram.org".to_owned()
 }
@@ -6173,6 +6491,17 @@ fn default_imessage_bridge_token_env() -> Option<String> {
     Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
 }
 
+fn default_tlon_ship_env() -> Option<String> {
+    Some(TLON_SHIP_ENV.to_owned())
+}
+
+fn default_tlon_url_env() -> Option<String> {
+    Some(TLON_URL_ENV.to_owned())
+}
+
+fn default_tlon_code_env() -> Option<String> {
+    Some(TLON_CODE_ENV.to_owned())
+}
 fn default_slack_api_base_url() -> String {
     "https://slack.com/api".to_owned()
 }
@@ -7064,6 +7393,50 @@ fn validate_signal_env_pointer(
         EnvPointerValidationHint {
             inline_field_path,
             example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_tlon_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    env_key: Option<&str>,
+    inline_field_path: &str,
+) {
+    let example_env_name = if field_path.ends_with("ship_env") {
+        TLON_SHIP_ENV
+    } else if field_path.ends_with("url_env") {
+        TLON_URL_ENV
+    } else {
+        TLON_CODE_ENV
+    };
+    if let Err(issue) = validate_env_pointer_field(
+        field_path,
+        env_key,
+        EnvPointerValidationHint {
+            inline_field_path,
+            example_env_name,
+            detect_telegram_token_shape: false,
+        },
+    ) {
+        issues.push(*issue);
+    }
+}
+
+fn validate_tlon_secret_ref_env_pointer(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+) {
+    if let Err(issue) = validate_secret_ref_env_pointer_field(
+        field_path,
+        secret_ref,
+        EnvPointerValidationHint {
+            inline_field_path: field_path,
+            example_env_name: TLON_CODE_ENV,
             detect_telegram_token_shape: false,
         },
     ) {
@@ -9428,6 +9801,99 @@ mod tests {
             backup.resolved_api_base_url(),
             "https://graph.facebook.com/v26.0"
         );
+    }
+
+    #[test]
+    fn tlon_partial_deserialization_keeps_default_env_pointers() {
+        let config: TlonChannelConfig = serde_json::from_value(json!({
+            "enabled": true
+        }))
+        .expect("deserialize tlon config");
+
+        assert_eq!(config.ship_env.as_deref(), Some(TLON_SHIP_ENV));
+        assert_eq!(config.url_env.as_deref(), Some(TLON_URL_ENV));
+        assert_eq!(config.code_env.as_deref(), Some(TLON_CODE_ENV));
+    }
+
+    #[test]
+    fn tlon_resolves_credentials_from_env_pointers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("TEST_TLON_SHIP", "~zod");
+        env.set("TEST_TLON_URL", "ship.example.test");
+        env.set("TEST_TLON_CODE", "lidlut-tabwed-pillex-ridrup");
+
+        let config: TlonChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ship_env": "TEST_TLON_SHIP",
+            "url_env": "TEST_TLON_URL",
+            "code_env": "TEST_TLON_CODE"
+        }))
+        .expect("deserialize tlon config");
+
+        let resolved = config
+            .resolve_account(None)
+            .expect("resolve default tlon account");
+        let ship = resolved.ship();
+        let url = resolved.url();
+        let code = resolved.code();
+
+        assert_eq!(ship.as_deref(), Some("~zod"));
+        assert_eq!(url.as_deref(), Some("ship.example.test"));
+        assert_eq!(code.as_deref(), Some("lidlut-tabwed-pillex-ridrup"));
+    }
+
+    #[test]
+    fn tlon_multi_account_resolution_merges_base_and_account_overrides() {
+        let config: TlonChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "ship": "~zod",
+            "url": "ship.example.test",
+            "code": "base-code",
+            "default_account": "Primary",
+            "accounts": {
+                "Primary": {
+                    "account_id": "Tlon-Ops",
+                    "code": "primary-code"
+                },
+                "Backup": {
+                    "enabled": false,
+                    "ship": "~bus"
+                }
+            }
+        }))
+        .expect("deserialize tlon multi-account config");
+
+        assert_eq!(config.configured_account_ids(), vec!["backup", "primary"]);
+        assert_eq!(config.default_configured_account_id(), "primary");
+
+        let primary = config
+            .resolve_account(None)
+            .expect("resolve default tlon account");
+        let primary_ship = primary.ship();
+        let primary_url = primary.url();
+        let primary_code = primary.code();
+
+        assert_eq!(primary.configured_account_id, "primary");
+        assert_eq!(primary.account.id, "tlon-ops");
+        assert_eq!(primary.account.label, "Tlon-Ops");
+        assert_eq!(primary_ship.as_deref(), Some("~zod"));
+        assert_eq!(primary_url.as_deref(), Some("ship.example.test"));
+        assert_eq!(primary_code.as_deref(), Some("primary-code"));
+
+        let backup = config
+            .resolve_account(Some("Backup"))
+            .expect("resolve explicit tlon account");
+        let backup_ship = backup.ship();
+        let backup_url = backup.url();
+        let backup_code = backup.code();
+
+        assert_eq!(backup.configured_account_id, "backup");
+        assert!(!backup.enabled);
+        assert_eq!(backup.account.id, "tlon_bus");
+        assert_eq!(backup.account.label, "ship:~bus");
+        assert_eq!(backup_ship.as_deref(), Some("~bus"));
+        assert_eq!(backup_url.as_deref(), Some("ship.example.test"));
+        assert_eq!(backup_code.as_deref(), Some("base-code"));
     }
 
     #[test]

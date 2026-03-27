@@ -961,6 +961,23 @@ pub enum Commands {
         #[arg(long)]
         text: String,
     },
+    /// Send one Tlon direct message or group post
+    TlonSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_tlon_send_target_kind(),
+            value_parser = parse_tlon_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
     /// Send one Signal direct message
     SignalSend {
         #[arg(long)]
@@ -4293,6 +4310,11 @@ pub const TEAMS_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     run: run_teams_send_cli_impl,
 };
 
+pub const TLON_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_tlon_send_cli_impl,
+};
+
 pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
     family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_signal_send_cli_impl,
@@ -4571,6 +4593,21 @@ pub fn run_teams_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComman
             args.config_path,
             args.account,
             args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_tlon_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("tlon-send", args.target)?;
+        mvp::channel::run_tlon_send(
+            args.config_path,
+            args.account,
+            target,
             args.target_kind,
             args.text,
         )
@@ -4869,6 +4906,16 @@ pub fn parse_teams_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(TEAMS_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_tlon_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(TLON_SEND_CLI_SPEC)
+}
+
+pub fn parse_tlon_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(TLON_SEND_CLI_SPEC, raw)
 }
 
 pub fn default_signal_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
