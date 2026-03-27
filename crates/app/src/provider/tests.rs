@@ -467,6 +467,26 @@ fn missing_auth_configuration_message_mentions_current_process_for_explicit_env_
 }
 
 #[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_oauth_env_secret_ref() {
+    let mut env = ScopedEnv::new();
+    env.remove("OPENAI_CODEX_OAUTH_TOKEN");
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        oauth_access_token: Some(SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        }),
+        ..ProviderConfig::default()
+    };
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("oauth access token"));
+    assert!(message.contains("OPENAI_CODEX_OAUTH_TOKEN"));
+    assert!(message.contains("current process"));
+}
+
+#[test]
 fn missing_auth_configuration_message_mentions_current_process_for_explicit_api_key_env_field() {
     let mut env = ScopedEnv::new();
     env.remove("DEEPSEEK_API_KEY");
@@ -482,6 +502,26 @@ api_key_env = "DEEPSEEK_API_KEY"
 
     assert!(message.contains("provider credentials are missing"));
     assert!(message.contains("DEEPSEEK_API_KEY"));
+    assert!(message.contains("current process"));
+}
+
+#[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_oauth_env_field() {
+    let mut env = ScopedEnv::new();
+    env.remove("OPENAI_CODEX_OAUTH_TOKEN");
+    let provider: ProviderConfig = toml::from_str(
+        r#"
+kind = "openai"
+oauth_access_token_env = "OPENAI_CODEX_OAUTH_TOKEN"
+"#,
+    )
+    .expect("deserialize provider config");
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("oauth access token"));
+    assert!(message.contains("OPENAI_CODEX_OAUTH_TOKEN"));
     assert!(message.contains("current process"));
 }
 
