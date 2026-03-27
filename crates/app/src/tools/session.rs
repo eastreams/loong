@@ -2379,6 +2379,14 @@ fn ensure_policy_target_session_exists(
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn session_tool_policy_root_tool_view(
+    tool_config: &ToolConfig,
+    runtime_config: &crate::tools::runtime_config::ToolRuntimeConfig,
+) -> ToolView {
+    crate::tools::runtime_tool_view_with_runtime_config(tool_config, runtime_config)
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn session_tool_policy_base_tool_view(
     repo: &SessionRepository,
     session_id: &str,
@@ -2417,9 +2425,8 @@ fn session_tool_policy_base_tool_view(
     }
 
     let runtime_config = crate::tools::runtime_config::get_tool_runtime_config();
-    Ok(crate::tools::runtime_tool_view_for_runtime_config(
-        runtime_config,
-    ))
+    let root_tool_view = session_tool_policy_root_tool_view(tool_config, runtime_config);
+    Ok(root_tool_view)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -3854,6 +3861,32 @@ mod tests {
             policy.requested_tool_ids,
             vec!["session_status".to_owned(), "tool.search".to_owned()]
         );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn session_tool_policy_root_tool_view_includes_runtime_discovered_feishu_tools() {
+        let runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
+            feishu: Some(crate::tools::runtime_config::FeishuToolRuntimeConfig {
+                channel: crate::config::FeishuChannelConfig {
+                    enabled: true,
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "test-feishu-app-id".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "test-feishu-app-secret".to_owned(),
+                    )),
+                    ..crate::config::FeishuChannelConfig::default()
+                },
+                integration: crate::config::FeishuIntegrationConfig::default(),
+            }),
+            ..crate::tools::runtime_config::ToolRuntimeConfig::default()
+        };
+        let tool_config = ToolConfig::default();
+        let tool_view = super::session_tool_policy_root_tool_view(&tool_config, &runtime_config);
+
+        assert!(tool_view.contains("feishu.whoami"));
+        assert!(tool_view.contains("feishu.messages.send"));
     }
 
     #[test]

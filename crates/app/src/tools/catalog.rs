@@ -678,6 +678,7 @@ fn build_tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_tool_policy_status_definition,
         },
@@ -690,6 +691,7 @@ fn build_tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_tool_policy_set_definition,
         },
@@ -702,6 +704,7 @@ fn build_tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_tool_policy_clear_definition,
         },
@@ -3320,6 +3323,18 @@ mod tests {
             ("session_archive", CapabilityActionClass::SessionMutation),
             ("session_cancel", CapabilityActionClass::SessionMutation),
             ("session_events", CapabilityActionClass::ExecuteExisting),
+            (
+                "session_tool_policy_status",
+                CapabilityActionClass::ExecuteExisting,
+            ),
+            (
+                "session_tool_policy_set",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            (
+                "session_tool_policy_clear",
+                CapabilityActionClass::PolicyMutation,
+            ),
             ("session_recover", CapabilityActionClass::SessionMutation),
         ];
 
