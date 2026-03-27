@@ -177,6 +177,14 @@ const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const TLON_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "tlon",
+    label: "tlon",
+    surface_label: "tlon channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const MATTERMOST_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "mattermost",
     label: "mattermost",
@@ -424,6 +432,14 @@ const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+const TLON_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &TLON_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: tlon_channel_is_enabled,
+    collect_validation_issues: collect_tlon_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const NOSTR_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &NOSTR_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -449,6 +465,7 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     SIGNAL_CHANNEL_INTEGRATION,
     TWITCH_CHANNEL_INTEGRATION,
     TEAMS_CHANNEL_INTEGRATION,
+    TLON_CHANNEL_INTEGRATION,
     MATTERMOST_CHANNEL_INTEGRATION,
     NEXTCLOUD_TALK_CHANNEL_INTEGRATION,
     SYNOLOGY_CHAT_CHANNEL_INTEGRATION,
@@ -613,6 +630,10 @@ fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.teams.enabled
 }
 
+fn tlon_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.tlon.enabled
+}
+
 fn mattermost_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.mattermost.enabled
 }
@@ -719,6 +740,10 @@ fn collect_twitch_channel_validation_issues(
 
 fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     config.teams.validate()
+}
+
+fn collect_tlon_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.tlon.validate()
 }
 
 fn collect_mattermost_channel_validation_issues(

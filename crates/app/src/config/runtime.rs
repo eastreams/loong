@@ -16,8 +16,8 @@ use super::{
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
         LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
         NextcloudTalkChannelConfig, NostrChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TwitchChannelConfig,
-        WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
+        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TlonChannelConfig,
+        TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -121,6 +121,8 @@ pub struct LoongClawConfig {
     pub twitch: TwitchChannelConfig,
     #[serde(default)]
     pub teams: TeamsChannelConfig,
+    #[serde(default)]
+    pub tlon: TlonChannelConfig,
     #[serde(default)]
     pub imessage: ImessageChannelConfig,
     #[serde(default)]
@@ -1039,6 +1041,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_slack_channel_for_encoding(&mut config.slack);
     canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
     canonicalize_teams_channel_for_encoding(&mut config.teams);
+    canonicalize_tlon_channel_for_encoding(&mut config.tlon);
     canonicalize_imessage_channel_for_encoding(&mut config.imessage);
     canonicalize_nostr_channel_for_encoding(&mut config.nostr);
     canonicalize_whatsapp_channel_for_encoding(&mut config.whatsapp);
@@ -1196,6 +1199,18 @@ fn canonicalize_teams_channel_for_encoding(config: &mut TeamsChannelConfig) {
         canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
         canonicalize_env_secret_reference(&mut account.app_id, &mut account.app_id_env);
         canonicalize_env_secret_reference(&mut account.app_password, &mut account.app_password_env);
+    }
+}
+
+fn canonicalize_tlon_channel_for_encoding(config: &mut TlonChannelConfig) {
+    canonicalize_optional_env_name(&mut config.ship_env);
+    canonicalize_optional_env_name(&mut config.url_env);
+    canonicalize_env_secret_reference(&mut config.code, &mut config.code_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_optional_env_name(&mut account.ship_env);
+        canonicalize_optional_env_name(&mut account.url_env);
+        canonicalize_env_secret_reference(&mut account.code, &mut account.code_env);
     }
 }
 
