@@ -87,6 +87,9 @@ pub(crate) fn parse_irc_server_endpoint(raw: &str) -> CliResult<IrcServerEndpoin
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "irc server url is missing a host".to_owned())?;
         let port = url.port().unwrap_or_else(|| transport.default_port());
+        if port == 0 {
+            return Err("irc server port must be between 1 and 65535".to_owned());
+        }
         return Ok(IrcServerEndpoint {
             transport,
             host: host.to_owned(),
@@ -143,6 +146,44 @@ pub(super) fn validate_irc_server_field(
         field_path: field_path.to_owned(),
         inline_field_path: field_path.to_owned(),
         example_env_name: IRC_SERVER_ENV.to_owned(),
+        suggested_env_name: None,
+        extra_message_variables,
+    });
+}
+
+pub(super) fn validate_irc_nickname_field(
+    issues: &mut Vec<ConfigValidationIssue>,
+    field_path: &str,
+    nickname: Option<String>,
+) {
+    let Some(nickname) = nickname else {
+        return;
+    };
+
+    let contains_whitespace = nickname.chars().any(char::is_whitespace);
+    let contains_null = nickname.contains('\0');
+    let invalid_reason = if contains_whitespace {
+        Some("nickname must not contain whitespace")
+    } else if contains_null {
+        Some("nickname contains forbidden control characters")
+    } else {
+        None
+    };
+    let Some(invalid_reason) = invalid_reason else {
+        return;
+    };
+
+    let suggested_fix = "use a single-token IRC nickname (for example: `loongclaw_bot`)";
+    let mut extra_message_variables = BTreeMap::new();
+    extra_message_variables.insert("invalid_reason".to_owned(), invalid_reason.to_owned());
+    extra_message_variables.insert("suggested_fix".to_owned(), suggested_fix.to_owned());
+
+    issues.push(ConfigValidationIssue {
+        severity: ConfigValidationSeverity::Error,
+        code: ConfigValidationCode::InvalidValue,
+        field_path: field_path.to_owned(),
+        inline_field_path: field_path.to_owned(),
+        example_env_name: IRC_NICKNAME_ENV.to_owned(),
         suggested_env_name: None,
         extra_message_variables,
     });

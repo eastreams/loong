@@ -69,6 +69,8 @@ impl IrcChannelConfig {
             self.nickname_env.as_deref(),
             "irc.nickname",
         );
+        let resolved_nickname = self.nickname();
+        validate_irc_nickname_field(&mut issues, "irc.nickname", resolved_nickname);
         validate_irc_env_pointer(
             &mut issues,
             "irc.password_env",
@@ -103,6 +105,11 @@ impl IrcChannelConfig {
                 account.nickname_env.as_deref(),
                 nickname_field_path.as_str(),
             );
+            let nickname = resolve_string_with_legacy_env(
+                account.nickname.as_deref(),
+                account.nickname_env.as_deref(),
+            );
+            validate_irc_nickname_field(&mut issues, nickname_field_path.as_str(), nickname);
 
             let password_field_path = format!("irc.accounts.{account_id}.password");
             let password_env_field_path = format!("{password_field_path}_env");
@@ -286,5 +293,63 @@ impl IrcChannelConfig {
             self.default_account.as_deref(),
             self.resolved_account_identity().id.as_str(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn validate_reports_whitespace_in_top_level_irc_nickname() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("TEST_IRC_NICKNAME", "loong\tclaw");
+
+        let config = IrcChannelConfig {
+            nickname_env: Some("TEST_IRC_NICKNAME".to_owned()),
+            ..IrcChannelConfig::default()
+        };
+
+        let issues = config.validate();
+        let nickname_issue = issues
+            .iter()
+            .find(|issue| issue.field_path == "irc.nickname")
+            .expect("nickname validation issue");
+        let invalid_reason = nickname_issue
+            .extra_message_variables
+            .get("invalid_reason")
+            .expect("invalid reason");
+
+        assert_eq!(invalid_reason, "nickname must not contain whitespace");
+    }
+
+    #[test]
+    fn validate_reports_whitespace_in_account_irc_nickname() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("TEST_ACCOUNT_IRC_NICKNAME", "ops\tbot");
+
+        let config_value = json!({
+            "accounts": {
+                "Ops": {
+                    "nickname_env": "TEST_ACCOUNT_IRC_NICKNAME"
+                }
+            }
+        });
+        let config: IrcChannelConfig =
+            serde_json::from_value(config_value).expect("deserialize irc config");
+
+        let issues = config.validate();
+        let nickname_issue = issues
+            .iter()
+            .find(|issue| issue.field_path == "irc.accounts.ops.nickname")
+            .expect("account nickname validation issue");
+        let invalid_reason = nickname_issue
+            .extra_message_variables
+            .get("invalid_reason")
+            .expect("invalid reason");
+
+        assert_eq!(invalid_reason, "nickname must not contain whitespace");
     }
 }

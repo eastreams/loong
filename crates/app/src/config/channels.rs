@@ -14,7 +14,7 @@ use crate::prompt::{
 use super::irc::{
     IRC_NICKNAME_ENV, IRC_PASSWORD_ENV, IRC_SERVER_ENV, default_irc_nickname_env,
     default_irc_password_env, default_irc_server_env, validate_irc_env_pointer,
-    validate_irc_secret_ref_env_pointer, validate_irc_server_field,
+    validate_irc_nickname_field, validate_irc_secret_ref_env_pointer, validate_irc_server_field,
 };
 use super::runtime::LoongClawConfig;
 use super::shared::{
