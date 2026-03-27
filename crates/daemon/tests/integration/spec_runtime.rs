@@ -2191,6 +2191,10 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
         "lib::invoke"
     );
     assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["circuit_breaker"]["phase_after"],
+        "closed"
+    );
+    assert_eq!(
         report
             .integration_catalog
             .provider("ffi-provider")
@@ -2200,6 +2204,19 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             .cloned(),
         Some("native_ffi".to_owned())
     );
+    let runtime_health_json = report
+        .integration_catalog
+        .provider("ffi-provider")
+        .expect("provider should exist")
+        .metadata
+        .get("plugin_runtime_health_json")
+        .cloned()
+        .expect("provider metadata should carry runtime health");
+    let runtime_health: Value =
+        serde_json::from_str(runtime_health_json.as_str()).expect("runtime health should decode");
+    assert_eq!(runtime_health["status"], "healthy");
+    assert_eq!(runtime_health["circuit_phase"], "closed");
+    assert_eq!(runtime_health["consecutive_failures"], 0);
 }
 
 #[tokio::test]

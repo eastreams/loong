@@ -993,6 +993,7 @@ pub(crate) const PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY: &str =
     "plugin_activation_contract_json";
 pub(crate) const PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY: &str =
     "plugin_activation_contract_checksum";
+pub(crate) const PLUGIN_RUNTIME_HEALTH_METADATA_KEY: &str = "plugin_runtime_health_json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginActivationRuntimeContract {
@@ -1021,6 +1022,95 @@ pub struct PluginActivationAttestationResult {
     pub computed_checksum: Option<String>,
     #[serde(default)]
     pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginRuntimeHealthResult {
+    pub status: String,
+    pub circuit_enabled: bool,
+    pub circuit_phase: String,
+    pub consecutive_failures: usize,
+    pub half_open_remaining_calls: usize,
+    pub half_open_successes: usize,
+    #[serde(default)]
+    pub last_failure_reason: Option<String>,
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+fn invalid_plugin_runtime_health_result(reason: String) -> PluginRuntimeHealthResult {
+    PluginRuntimeHealthResult {
+        status: "unknown".to_owned(),
+        circuit_enabled: false,
+        circuit_phase: "unknown".to_owned(),
+        consecutive_failures: 0,
+        half_open_remaining_calls: 0,
+        half_open_successes: 0,
+        last_failure_reason: None,
+        issue: Some(reason),
+    }
+}
+
+fn plugin_runtime_health_status(
+    circuit_enabled: bool,
+    circuit_phase: &str,
+    consecutive_failures: usize,
+) -> String {
+    if !circuit_enabled || circuit_phase == "disabled" {
+        return "disabled".to_owned();
+    }
+
+    if circuit_phase == "open" {
+        return "quarantined".to_owned();
+    }
+
+    if circuit_phase == "half_open" {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" && consecutive_failures > 0 {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" {
+        return "healthy".to_owned();
+    }
+
+    "unknown".to_owned()
+}
+
+fn build_plugin_runtime_health_result(
+    policy: &ConnectorCircuitBreakerPolicy,
+    circuit_phase: String,
+    consecutive_failures: usize,
+    half_open_remaining_calls: usize,
+    half_open_successes: usize,
+    last_failure_reason: Option<String>,
+) -> PluginRuntimeHealthResult {
+    let circuit_enabled = policy.enabled;
+    let status = plugin_runtime_health_status(
+        circuit_enabled,
+        circuit_phase.as_str(),
+        consecutive_failures,
+    );
+
+    PluginRuntimeHealthResult {
+        status,
+        circuit_enabled,
+        circuit_phase,
+        consecutive_failures,
+        half_open_remaining_calls,
+        half_open_successes,
+        last_failure_reason,
+        issue: None,
+    }
+}
+
+fn encode_plugin_runtime_health_result(
+    health: &PluginRuntimeHealthResult,
+) -> Result<String, String> {
+    serde_json::to_string(health)
+        .map_err(|error| format!("serialize plugin runtime health failed: {error}"))
 }
 
 pub(crate) fn activation_runtime_contract_checksum_hex(bytes: &[u8]) -> String {
@@ -1291,6 +1381,45 @@ pub(crate) fn provider_plugin_activation_attestation_result(
         computed_checksum: state.computed_checksum,
         issue,
     })
+}
+
+pub(crate) fn provider_plugin_runtime_health_result(
+    metadata: &BTreeMap<String, String>,
+) -> Option<PluginRuntimeHealthResult> {
+    let raw = metadata.get(PLUGIN_RUNTIME_HEALTH_METADATA_KEY)?;
+    let parsed = serde_json::from_str::<PluginRuntimeHealthResult>(raw);
+
+    match parsed {
+        Ok(health) => {
+            let status = health.status.trim().to_owned();
+            let circuit_phase = health.circuit_phase.trim().to_owned();
+            if status.is_empty() {
+                let reason =
+                    "plugin runtime health metadata is invalid: `status` must not be empty";
+                return Some(invalid_plugin_runtime_health_result(reason.to_owned()));
+            }
+            if circuit_phase.is_empty() {
+                let reason =
+                    "plugin runtime health metadata is invalid: `circuit_phase` must not be empty";
+                return Some(invalid_plugin_runtime_health_result(reason.to_owned()));
+            }
+
+            Some(PluginRuntimeHealthResult {
+                status,
+                circuit_enabled: health.circuit_enabled,
+                circuit_phase,
+                consecutive_failures: health.consecutive_failures,
+                half_open_remaining_calls: health.half_open_remaining_calls,
+                half_open_successes: health.half_open_successes,
+                last_failure_reason: health.last_failure_reason,
+                issue: None,
+            })
+        }
+        Err(error) => {
+            let reason = format!("plugin runtime health metadata is invalid: {error}");
+            Some(invalid_plugin_runtime_health_result(reason))
+        }
+    }
 }
 
 impl BridgeRuntimePolicy {
@@ -2201,6 +2330,7 @@ pub struct PluginInventoryEntry {
     pub activation_status: Option<String>,
     pub activation_reason: Option<String>,
     pub activation_attestation: Option<PluginActivationAttestationResult>,
+    pub runtime_health: Option<PluginRuntimeHealthResult>,
     pub bootstrap_hint: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
@@ -2245,6 +2375,7 @@ pub struct PluginInventoryResult {
     pub activation_status: Option<String>,
     pub activation_reason: Option<String>,
     pub activation_attestation: Option<PluginActivationAttestationResult>,
+    pub runtime_health: Option<PluginRuntimeHealthResult>,
     pub bootstrap_hint: Option<String>,
     pub summary: Option<String>,
     pub tags: Vec<String>,
@@ -2569,15 +2700,65 @@ impl DynamicCatalogConnector {
             Ok(phase) => Ok(phase.to_owned()),
             Err(ConnectorCircuitAcquireError::Open {
                 remaining_cooldown_ms,
-            }) => Err(ConnectorError::Execution(format!(
-                "plugin connector {} is circuit-open (remaining_cooldown_ms={remaining_cooldown_ms})",
-                self.connector_name
-            ))),
+            }) => {
+                let reason = format!(
+                    "plugin connector {} is circuit-open (remaining_cooldown_ms={remaining_cooldown_ms})",
+                    self.connector_name
+                );
+                let circuit_phase = connector_circuit_phase_label(state.phase).to_owned();
+                let consecutive_failures = state.consecutive_failures;
+                let half_open_remaining_calls = state.half_open_remaining_calls;
+                let half_open_successes = state.half_open_successes;
+                let last_failure_reason = Some(reason.clone());
+                drop(state);
+
+                let persist_result = self
+                    .persist_plugin_runtime_health(
+                        policy,
+                        circuit_phase,
+                        consecutive_failures,
+                        half_open_remaining_calls,
+                        half_open_successes,
+                        last_failure_reason,
+                    )
+                    .await;
+                if let Err(error) = persist_result {
+                    let combined_reason =
+                        format!("{reason}; failed to persist plugin runtime health: {error}");
+                    return Err(ConnectorError::Execution(combined_reason));
+                }
+
+                Err(ConnectorError::Execution(reason))
+            }
             Err(ConnectorCircuitAcquireError::HalfOpenReopened) => {
-                Err(ConnectorError::Execution(format!(
+                let reason = format!(
                     "plugin connector {} half-open window exhausted and re-opened",
                     self.connector_name
-                )))
+                );
+                let circuit_phase = connector_circuit_phase_label(state.phase).to_owned();
+                let consecutive_failures = state.consecutive_failures;
+                let half_open_remaining_calls = state.half_open_remaining_calls;
+                let half_open_successes = state.half_open_successes;
+                let last_failure_reason = Some(reason.clone());
+                drop(state);
+
+                let persist_result = self
+                    .persist_plugin_runtime_health(
+                        policy,
+                        circuit_phase,
+                        consecutive_failures,
+                        half_open_remaining_calls,
+                        half_open_successes,
+                        last_failure_reason,
+                    )
+                    .await;
+                if let Err(error) = persist_result {
+                    let combined_reason =
+                        format!("{reason}; failed to persist plugin runtime health: {error}");
+                    return Err(ConnectorError::Execution(combined_reason));
+                }
+
+                Err(ConnectorError::Execution(reason))
             }
         }
     }
@@ -2606,6 +2787,50 @@ impl DynamicCatalogConnector {
             half_open_successes: state.half_open_successes,
             remaining_cooldown_ms,
         }
+    }
+
+    async fn persist_plugin_runtime_health(
+        &self,
+        policy: &ConnectorCircuitBreakerPolicy,
+        circuit_phase: String,
+        consecutive_failures: usize,
+        half_open_remaining_calls: usize,
+        half_open_successes: usize,
+        last_failure_reason: Option<String>,
+    ) -> Result<(), String> {
+        let health = build_plugin_runtime_health_result(
+            policy,
+            circuit_phase,
+            consecutive_failures,
+            half_open_remaining_calls,
+            half_open_successes,
+            last_failure_reason,
+        );
+        let encoded = encode_plugin_runtime_health_result(&health)?;
+        let metadata_key = PLUGIN_RUNTIME_HEALTH_METADATA_KEY.to_owned();
+        let mut catalog = self
+            .catalog
+            .lock()
+            .map_err(|_err| "integration catalog mutex poisoned".to_owned())?;
+        let provider = catalog
+            .provider(&self.provider_id)
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "provider {} is not registered in integration catalog",
+                    self.provider_id
+                )
+            })?;
+        let is_plugin_backed = provider_is_plugin_backed(&provider.metadata);
+        if !is_plugin_backed {
+            return Ok(());
+        }
+
+        let mut updated_provider = provider;
+        updated_provider.metadata.insert(metadata_key, encoded);
+        catalog.upsert_provider(updated_provider);
+
+        Ok(())
     }
 }
 
@@ -2681,6 +2906,13 @@ fn attach_bridge_circuit_breaker_runtime(
 
     let runtime_value = bridge_circuit_breaker_runtime_value(policy, observation);
     bridge_execution_object.insert("circuit_breaker".to_owned(), runtime_value);
+}
+
+fn bridge_execution_reason(bridge_execution: &Value) -> Option<String> {
+    bridge_execution
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
 }
 
 fn format_bridge_execution_failure_reason(
@@ -2791,6 +3023,25 @@ impl CoreConnectorAdapter for DynamicCatalogConnector {
             &self.bridge_runtime_policy.bridge_circuit_breaker,
             &circuit_observation,
         );
+        let last_failure_reason = if bridge_execution_success {
+            None
+        } else {
+            bridge_execution_reason(&bridge_execution)
+        };
+        let persist_result = self
+            .persist_plugin_runtime_health(
+                &self.bridge_runtime_policy.bridge_circuit_breaker,
+                circuit_observation.phase_after.clone(),
+                circuit_observation.consecutive_failures,
+                circuit_observation.half_open_remaining_calls,
+                circuit_observation.half_open_successes,
+                last_failure_reason,
+            )
+            .await;
+        if let Err(error) = persist_result {
+            let reason = format!("failed to persist plugin runtime health: {error}");
+            return Err(ConnectorError::Execution(reason));
+        }
 
         if bridge_execution
             .get("block_class")
@@ -5275,9 +5526,10 @@ mod tests {
         CoreToolRuntime, DynamicCatalogConnector,
         PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY,
         PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY, PluginActivationRuntimeContract,
-        WasmModuleCache, activation_runtime_contract_checksum_hex, build_wasm_module_cache_key,
-        compile_wasm_module, normalize_sha256_pin, plugin_activation_runtime_contract_json,
-        process_stdio_runtime_evidence, resolve_expected_wasm_sha256,
+        PluginRuntimeHealthResult, WasmModuleCache, activation_runtime_contract_checksum_hex,
+        build_wasm_module_cache_key, compile_wasm_module, normalize_sha256_pin,
+        plugin_activation_runtime_contract_json, process_stdio_runtime_evidence,
+        provider_plugin_runtime_health_result, resolve_expected_wasm_sha256,
     };
     use kernel::{
         BridgeSupportMatrix, CoreConnectorAdapter, CoreToolAdapter, IntegrationCatalog,
@@ -5429,13 +5681,12 @@ mod tests {
         }
     }
 
-    fn process_stdio_provider_with_command(
+    fn openclaw_process_stdio_provider_with_command(
         command: &str,
         args: Vec<String>,
     ) -> kernel::ProviderConfig {
-        let mut metadata = BTreeMap::new();
+        let mut metadata = openclaw_process_stdio_metadata();
 
-        metadata.insert("bridge_kind".to_owned(), "process_stdio".to_owned());
         metadata.insert("command".to_owned(), command.to_owned());
         if !args.is_empty() {
             let args_json = serde_json::to_string(&args).expect("encode process args");
@@ -5466,6 +5717,19 @@ mod tests {
             "{}:{}:{operation}",
             provider.provider_id, channel.channel_id
         )
+    }
+
+    fn provider_runtime_health_from_catalog(
+        catalog: &Arc<Mutex<IntegrationCatalog>>,
+        provider_id: &str,
+    ) -> PluginRuntimeHealthResult {
+        let guard = catalog.lock().expect("catalog mutex poisoned");
+        let provider = guard
+            .provider(provider_id)
+            .expect("provider should exist in catalog");
+        let health = provider_plugin_runtime_health_result(&provider.metadata);
+
+        health.expect("provider metadata should carry runtime health")
     }
 
     fn process_stdio_success_args(request_id: &str) -> Vec<String> {
@@ -5837,11 +6101,11 @@ mod tests {
 
     #[tokio::test]
     async fn dynamic_catalog_connector_circuit_breaker_isolates_repeated_bridge_failures() {
-        let provider = process_stdio_provider_with_command("false", Vec::new());
+        let provider = openclaw_process_stdio_provider_with_command("false", Vec::new());
         let channel = process_stdio_channel_for_provider(&provider);
         let request_id = process_stdio_request_id(&provider, &channel, "invoke");
         let recovery_args = process_stdio_success_args(&request_id);
-        let recovery_provider = process_stdio_provider_with_command("sh", recovery_args);
+        let recovery_provider = openclaw_process_stdio_provider_with_command("sh", recovery_args);
         let mut catalog = IntegrationCatalog::new();
 
         catalog.upsert_provider(provider.clone());
@@ -5862,6 +6126,7 @@ mod tests {
                     success_threshold: 1,
                 },
                 enforce_execution_success: true,
+                compatibility_matrix: openclaw_runtime_matrix(&["javascript"]),
                 ..BridgeRuntimePolicy::default()
             },
         );
@@ -5880,6 +6145,12 @@ mod tests {
         let first_error_text = first_error.to_string();
         assert!(first_error_text.contains("bridge_circuit_phase_before=closed"));
         assert!(first_error_text.contains("bridge_circuit_phase_after=closed"));
+        let first_health =
+            provider_runtime_health_from_catalog(&connector.catalog, &provider.provider_id);
+        assert_eq!(first_health.status, "degraded");
+        assert_eq!(first_health.circuit_phase, "closed");
+        assert_eq!(first_health.consecutive_failures, 1);
+        assert!(first_health.last_failure_reason.is_some());
 
         let second_error = connector
             .invoke_core(command.clone())
@@ -5888,6 +6159,11 @@ mod tests {
         let second_error_text = second_error.to_string();
         assert!(second_error_text.contains("bridge_circuit_phase_before=closed"));
         assert!(second_error_text.contains("bridge_circuit_phase_after=open"));
+        let second_health =
+            provider_runtime_health_from_catalog(&connector.catalog, &provider.provider_id);
+        assert_eq!(second_health.status, "quarantined");
+        assert_eq!(second_health.circuit_phase, "open");
+        assert_eq!(second_health.consecutive_failures, 2);
 
         {
             let mut catalog = connector.catalog.lock().expect("catalog mutex poisoned");
@@ -5901,6 +6177,17 @@ mod tests {
             .expect_err("open circuit should short-circuit before re-execution");
         let open_error_text = open_error.to_string();
         assert!(open_error_text.contains("circuit-open"));
+        let open_health =
+            provider_runtime_health_from_catalog(&connector.catalog, &provider.provider_id);
+        assert_eq!(open_health.status, "quarantined");
+        assert_eq!(open_health.circuit_phase, "open");
+        assert!(
+            open_health
+                .last_failure_reason
+                .as_deref()
+                .map(|reason| reason.contains("circuit-open"))
+                .unwrap_or(false)
+        );
 
         sleep(Duration::from_millis(30)).await;
 
@@ -5920,6 +6207,12 @@ mod tests {
             recovered.payload["bridge_execution"]["circuit_breaker"]["phase_after"],
             json!("closed")
         );
+        let recovered_health =
+            provider_runtime_health_from_catalog(&connector.catalog, &provider.provider_id);
+        assert_eq!(recovered_health.status, "healthy");
+        assert_eq!(recovered_health.circuit_phase, "closed");
+        assert_eq!(recovered_health.consecutive_failures, 0);
+        assert!(recovered_health.last_failure_reason.is_none());
     }
 
     #[test]

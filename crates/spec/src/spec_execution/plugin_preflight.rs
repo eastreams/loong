@@ -2160,6 +2160,7 @@ mod tests {
             activation_status: Some("ready".to_owned()),
             activation_reason: None,
             activation_attestation: None,
+            runtime_health: None,
             bootstrap_hint: None,
             summary: None,
             tags: Vec::new(),

@@ -8,6 +8,7 @@ use kernel::{
 
 use crate::spec_runtime::{
     PluginInventoryEntry, PluginInventoryResult, provider_plugin_activation_attestation_result,
+    provider_plugin_runtime_health_result,
 };
 
 pub(super) fn execute_plugin_inventory(
@@ -259,6 +260,9 @@ pub(super) fn collect_plugin_inventory_results(
                 activation_attestation: loaded_provider_metadata_by_key
                     .get(&key)
                     .and_then(provider_plugin_activation_attestation_result),
+                runtime_health: loaded_provider_metadata_by_key
+                    .get(&key)
+                    .and_then(provider_plugin_runtime_health_result),
                 bootstrap_hint: activation
                     .and_then(|entry| entry.bootstrap_hint.clone())
                     .or_else(|| {
@@ -354,6 +358,7 @@ pub(super) fn collect_plugin_inventory_results(
             activation_status: entry.activation_status,
             activation_reason: entry.activation_reason,
             activation_attestation: entry.activation_attestation,
+            runtime_health: entry.runtime_health,
             bootstrap_hint: entry.bootstrap_hint,
             summary: entry.summary,
             tags: entry.tags,
@@ -1016,6 +1021,19 @@ mod tests {
                     "plugin_source_path".to_owned(),
                     "/tmp/tavily/loongclaw.plugin.json".to_owned(),
                 ),
+                (
+                    crate::spec_runtime::PLUGIN_RUNTIME_HEALTH_METADATA_KEY.to_owned(),
+                    serde_json::json!({
+                        "status": "quarantined",
+                        "circuit_enabled": true,
+                        "circuit_phase": "open",
+                        "consecutive_failures": 3,
+                        "half_open_remaining_calls": 0,
+                        "half_open_successes": 0,
+                        "last_failure_reason": "plugin connector tavily-http is circuit-open"
+                    })
+                    .to_string(),
+                ),
             ]),
         });
 
@@ -1077,6 +1095,27 @@ mod tests {
                 .as_ref()
                 .and_then(|attestation| attestation.issue.as_deref())
                 .is_some_and(|issue| issue.contains("missing activation attestation"))
+        );
+        assert_eq!(
+            results[0]
+                .runtime_health
+                .as_ref()
+                .map(|health| health.status.as_str()),
+            Some("quarantined")
+        );
+        assert_eq!(
+            results[0]
+                .runtime_health
+                .as_ref()
+                .map(|health| health.circuit_phase.as_str()),
+            Some("open")
+        );
+        assert_eq!(
+            results[0]
+                .runtime_health
+                .as_ref()
+                .map(|health| health.consecutive_failures),
+            Some(3)
         );
         assert!(
             results[0]

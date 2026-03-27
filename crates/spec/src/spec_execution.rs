@@ -481,10 +481,21 @@ pub async fn execute_spec_with_native_tool_executor(
             );
         }
     };
-    register_dynamic_catalog_connectors(&mut kernel, shared_catalog, bridge_runtime_policy);
+    register_dynamic_catalog_connectors(&mut kernel, shared_catalog.clone(), bridge_runtime_policy);
 
     if let Err(error) = kernel.register_pack(pack.clone()) {
-        let reason = format!("spec pack registration failed: {error}");
+        let base_reason = format!("spec pack registration failed: {error}");
+        let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+        let (integration_catalog, reason) = match snapshot_result {
+            Ok(catalog) => (catalog, base_reason),
+            Err(error) => {
+                let fallback_catalog = integration_catalog.clone();
+                let reason = format!(
+                    "{base_reason}; failed to snapshot runtime integration catalog: {error}"
+                );
+                (fallback_catalog, reason)
+            }
+        };
         return build_blocked_spec_run_report(
             pack.pack_id.clone(),
             spec.agent_id.clone(),
@@ -508,10 +519,21 @@ pub async fn execute_spec_with_native_tool_executor(
         );
     }
     if let Err(error) = apply_default_selection(&mut kernel, spec.defaults.as_ref()) {
+        let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+        let (integration_catalog, reason) = match snapshot_result {
+            Ok(catalog) => (catalog, error),
+            Err(snapshot_error) => {
+                let fallback_catalog = integration_catalog.clone();
+                let reason = format!(
+                    "{error}; failed to snapshot runtime integration catalog: {snapshot_error}"
+                );
+                (fallback_catalog, reason)
+            }
+        };
         return build_blocked_spec_run_report(
             pack.pack_id.clone(),
             spec.agent_id.clone(),
-            error,
+            reason,
             approval_guard,
             bridge_support_checksum,
             bridge_support_sha256,
@@ -534,7 +556,18 @@ pub async fn execute_spec_with_native_tool_executor(
     let token = match kernel.issue_token(&pack.pack_id, &spec.agent_id, spec.ttl_s) {
         Ok(token) => token,
         Err(error) => {
-            let reason = format!("token issue for spec failed: {error}");
+            let base_reason = format!("token issue for spec failed: {error}");
+            let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+            let (integration_catalog, reason) = match snapshot_result {
+                Ok(catalog) => (catalog, base_reason),
+                Err(error) => {
+                    let fallback_catalog = integration_catalog.clone();
+                    let reason = format!(
+                        "{base_reason}; failed to snapshot runtime integration catalog: {error}"
+                    );
+                    (fallback_catalog, reason)
+                }
+            };
             return build_blocked_spec_run_report(
                 pack.pack_id.clone(),
                 spec.agent_id.clone(),
@@ -575,10 +608,49 @@ pub async fn execute_spec_with_native_tool_executor(
     {
         Ok(result) => result,
         Err(error) => {
+            let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+            let (integration_catalog, reason) = match snapshot_result {
+                Ok(catalog) => (catalog, error),
+                Err(snapshot_error) => {
+                    let fallback_catalog = integration_catalog.clone();
+                    let reason = format!(
+                        "{error}; failed to snapshot runtime integration catalog: {snapshot_error}"
+                    );
+                    (fallback_catalog, reason)
+                }
+            };
             return build_blocked_spec_run_report(
                 pack.pack_id.clone(),
                 spec.agent_id.clone(),
-                error,
+                reason,
+                approval_guard,
+                bridge_support_checksum,
+                bridge_support_sha256,
+                self_awareness,
+                architecture_guard,
+                plugin_scan_reports,
+                plugin_translation_reports,
+                plugin_activation_plans,
+                plugin_bootstrap_reports,
+                plugin_bootstrap_queue,
+                plugin_absorb_reports,
+                security_scan_report,
+                auto_provision_plan,
+                integration_catalog,
+                include_audit,
+                &audit_sink,
+            );
+        }
+    };
+
+    let integration_catalog = match snapshot_runtime_integration_catalog(&shared_catalog) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let reason = format!("snapshotting runtime integration catalog failed: {error}");
+            return build_blocked_spec_run_report(
+                pack.pack_id.clone(),
+                spec.agent_id.clone(),
+                reason,
                 approval_guard,
                 bridge_support_checksum,
                 bridge_support_sha256,
@@ -1538,6 +1610,17 @@ fn register_dynamic_catalog_connectors(
 
         kernel.register_core_connector_adapter(connector);
     }
+}
+
+fn snapshot_runtime_integration_catalog(
+    catalog: &Arc<Mutex<IntegrationCatalog>>,
+) -> Result<IntegrationCatalog, String> {
+    let guard = catalog
+        .lock()
+        .map_err(|_err| "integration catalog mutex poisoned".to_owned())?;
+    let snapshot = guard.clone();
+
+    Ok(snapshot)
 }
 
 fn operation_connector_name(operation: &OperationSpec) -> Option<String> {
