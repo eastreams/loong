@@ -27,6 +27,11 @@ one of two bad outcomes:
 
 This document defines the smaller LoongClaw-native path.
 
+It intentionally keeps the public repository artifact scoped to the
+implementation-facing contract. The fuller comparative analysis, provenance
+trail, and extended references for this design are archived in
+`lc-knowledge-base`.
+
 ## Design Goals
 
 1. Keep the kernel as the authority for governance, policy, approvals, and
