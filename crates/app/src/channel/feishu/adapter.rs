@@ -201,7 +201,8 @@ pub(super) fn outbound_reply_message_from_text(text: String) -> ChannelOutboundM
 
     let reply_fits_markdown_card = reply_text_fits_markdown_card(trimmed_text);
     if reply_fits_markdown_card {
-        return ChannelOutboundMessage::MarkdownCard(text);
+        let markdown_card_text = trimmed_text.to_owned();
+        return ChannelOutboundMessage::MarkdownCard(markdown_card_text);
     }
 
     ChannelOutboundMessage::Text(text)
@@ -653,10 +654,40 @@ mod tests {
     }
 
     #[test]
-    fn outbound_reply_message_from_text_falls_back_to_text_past_card_limit() {
-        let oversized_reply = "a".repeat(FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES);
-        let reply_message = outbound_reply_message_from_text(oversized_reply.clone());
+    fn outbound_reply_message_from_text_trims_markdown_cards_before_returning() {
+        let reply_message =
+            outbound_reply_message_from_text("  ## done\n\n- rendered  ".to_owned());
 
-        assert_eq!(reply_message, ChannelOutboundMessage::Text(oversized_reply));
+        assert_eq!(
+            reply_message,
+            ChannelOutboundMessage::MarkdownCard("## done\n\n- rendered".to_owned())
+        );
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_respects_card_limit_boundary() {
+        let fitting_reply_len = max_reply_text_len_for_markdown_card();
+        let fitting_reply = "a".repeat(fitting_reply_len);
+        let overflowing_reply = format!("{fitting_reply}a");
+        let fitting_message = outbound_reply_message_from_text(fitting_reply.clone());
+        let overflowing_message = outbound_reply_message_from_text(overflowing_reply.clone());
+
+        assert_eq!(
+            fitting_message,
+            ChannelOutboundMessage::MarkdownCard(fitting_reply)
+        );
+        assert_eq!(
+            overflowing_message,
+            ChannelOutboundMessage::Text(overflowing_reply)
+        );
+    }
+
+    fn max_reply_text_len_for_markdown_card() -> usize {
+        let empty_card = crate::feishu::resources::cards::build_markdown_card("");
+        let encoded_empty_card =
+            serde_json::to_string(&empty_card).expect("encode empty markdown card");
+        let empty_card_len = encoded_empty_card.len();
+
+        FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES.saturating_sub(empty_card_len)
     }
 }
