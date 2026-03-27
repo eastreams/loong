@@ -23,15 +23,14 @@ use tokio::sync::Mutex;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
-    ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
-    ChannelTurnFeedbackPolicy, process_inbound_with_provider,
-    runtime_state::ChannelOperationRuntimeTracker,
+    ChannelAdapter, ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
+    process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
 use crate::feishu::{FeishuClient, resources::cards};
 
-use super::adapter::FeishuAdapter;
+use super::adapter::{FeishuAdapter, outbound_reply_message_from_text};
 use super::payload::{FeishuCardCallbackEvent, FeishuWebhookAction};
 
 const FEISHU_CALLBACK_RESPONSE_MARKER: &str = "[feishu_callback_response]";
@@ -615,7 +614,7 @@ async fn handle_feishu_inbound_event(
             )
         })?;
         let reply_target = channel_message.reply_target.clone();
-        let outbound = ChannelOutboundMessage::Text(reply);
+        let outbound = outbound_reply_message_from_text(reply);
 
         let mut adapter = state.adapter.lock().await;
         if let Err(first_error) = adapter.send_message(&reply_target, &outbound).await {
@@ -906,6 +905,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::Mutex;
 
+    const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockRequest {
         path: String,
@@ -1038,7 +1039,7 @@ mod tests {
                         Json(json!({
                             "choices": [{
                                 "message": {
-                                    "content": "structured inbound ack"
+                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
                                 }
                             }]
                         }))
@@ -1120,7 +1121,7 @@ mod tests {
                         Json(json!({
                             "choices": [{
                                 "message": {
-                                    "content": "structured inbound ack"
+                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
                                 }
                             }]
                         }))
@@ -1702,14 +1703,22 @@ mod tests {
             Some("Bearer t-token-webhook")
         );
         assert!(
-            feishu_requests[1].body.contains("\"msg_type\":\"text\""),
-            "webhook reply should still go out as text"
+            feishu_requests[1]
+                .body
+                .contains("\"msg_type\":\"interactive\""),
+            "webhook reply should send markdown-capable interactive cards"
         );
         assert!(
             feishu_requests[1]
                 .body
-                .contains("\\\"text\\\":\\\"structured inbound ack\\\""),
-            "reply body should include provider text"
+                .contains("\\\"tag\\\":\\\"markdown\\\""),
+            "reply body should wrap the provider reply in a markdown card"
+        );
+        assert!(
+            feishu_requests[1]
+                .body
+                .contains("\\\"content\\\":\\\"## structured inbound ack\\\\n\\\\n- rendered\\\""),
+            "reply body should preserve provider markdown content"
         );
 
         provider_server.abort();

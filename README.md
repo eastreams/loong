@@ -454,6 +454,8 @@ loongclaw feishu-serve --config ~/.loongclaw/config.toml
 
 Webhook secrets are not required in websocket mode. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
 
+Assistant replies sent through `loongclaw feishu-serve` use Feishu markdown cards when the reply fits the platform card payload limit, so Markdown renders natively in chat; oversized replies automatically fall back to plain text.
+
 Matrix channel example:
 
 ```bash

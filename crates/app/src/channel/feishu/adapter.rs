@@ -10,6 +10,8 @@ use crate::feishu::FeishuClient;
 use crate::feishu::resources::messages::{self, FeishuOutboundMessageBody};
 use crate::feishu::{FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body};
 
+const FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES: usize = 30 * 1024;
+
 pub(super) struct FeishuAdapter {
     client: FeishuClient,
     receive_id_type: String,
@@ -189,6 +191,30 @@ fn channel_outbound_message_from_body(body: FeishuOutboundMessageBody) -> Channe
         FeishuOutboundMessageBody::Image(image_key) => ChannelOutboundMessage::Image { image_key },
         FeishuOutboundMessageBody::File(file_key) => ChannelOutboundMessage::File { file_key },
     }
+}
+
+pub(super) fn outbound_reply_message_from_text(text: String) -> ChannelOutboundMessage {
+    let trimmed_text = text.trim();
+    if trimmed_text.is_empty() {
+        return ChannelOutboundMessage::Text(text);
+    }
+
+    let reply_fits_markdown_card = reply_text_fits_markdown_card(trimmed_text);
+    if reply_fits_markdown_card {
+        return ChannelOutboundMessage::MarkdownCard(text);
+    }
+
+    ChannelOutboundMessage::Text(text)
+}
+
+fn reply_text_fits_markdown_card(text: &str) -> bool {
+    let card = crate::feishu::resources::cards::build_markdown_card(text);
+    let encoded_card = match serde_json::to_string(&card) {
+        Ok(encoded_card) => encoded_card,
+        Err(_) => return false,
+    };
+    let encoded_card_len = encoded_card.len();
+    encoded_card_len <= FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES
 }
 
 #[async_trait]
@@ -614,5 +640,23 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_prefers_markdown_cards_within_limit() {
+        let reply_message = outbound_reply_message_from_text("## done\n\n- rendered".to_owned());
+
+        assert_eq!(
+            reply_message,
+            ChannelOutboundMessage::MarkdownCard("## done\n\n- rendered".to_owned())
+        );
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_falls_back_to_text_past_card_limit() {
+        let oversized_reply = "a".repeat(FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES);
+        let reply_message = outbound_reply_message_from_text(oversized_reply.clone());
+
+        assert_eq!(reply_message, ChannelOutboundMessage::Text(oversized_reply));
     }
 }
