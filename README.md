@@ -545,15 +545,35 @@ By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs ofte
 
 ### Multi-Channel Serve
 
-Use `multi-channel-serve` when you want one process to keep an interactive CLI
-session in the foreground while supervising every enabled runtime-backed
-service channel in the same runtime.
+Use `gateway run` when you want LoongClaw to claim the explicit gateway owner
+slot and supervise the enabled runtime-backed service-channel subset.
 
-Today this command is the attached runtime-owner precursor to a broader
-daemon-owned gateway service surface. The current slice keeps CLI in the
-foreground, but the longer-term direction is to decouple CLI lifecycle from
-service lifecycle and let one service host own routes, status, logs, pairing,
-and richer channel runtimes.
+The current gateway slice now includes:
+
+- `loongclaw gateway run` for the owner lifecycle
+- `loongclaw gateway status` for cross-process owner inspection
+- `loongclaw gateway stop` for cooperative shutdown
+
+`gateway run` starts headless by default. Pass `--session` when you want the
+concurrent CLI host attached to the same runtime owner.
+
+```bash
+loongclaw gateway run --config ~/.loongclaw/config.toml
+```
+
+```bash
+loongclaw gateway status --json
+```
+
+```bash
+loongclaw gateway stop
+```
+
+`multi-channel-serve` still works as the attached compatibility wrapper when
+you want one process to keep an interactive CLI session in the foreground while
+supervising every enabled runtime-backed service channel in the same runtime.
+It now rides on the same gateway owner contract rather than remaining the
+long-term product noun.
 
 ```bash
 loong multi-channel-serve \
@@ -566,6 +586,10 @@ loong multi-channel-serve \
 ```
 
 `--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
+
+The longer-term direction remains to let one gateway-owned service host
+decouple CLI lifecycle from service lifecycle and own routes, status, logs,
+pairing, and richer channel runtimes.
 
 `loong channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
 

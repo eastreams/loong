@@ -1244,6 +1244,11 @@ pub enum Commands {
         #[arg(long = "channel-account", value_name = "CHANNEL=ACCOUNT")]
         channel_account: Vec<MultiChannelServeChannelAccount>,
     },
+    /// Run the gateway lifecycle namespace
+    Gateway {
+        #[command(subcommand)]
+        command: gateway::service::GatewayCommand,
+    },
     /// Run the Feishu integration namespace
     Feishu {
         #[command(subcommand)]
@@ -4419,12 +4424,12 @@ where
 {
     tokio::select! {
         result = serve_future => result,
-        result = wait_for_shutdown_signal() => result,
+        result = wait_for_shutdown_reason() => result.map(|_| ()),
     }
 }
 
 #[cfg(unix)]
-pub async fn wait_for_shutdown_signal() -> CliResult<()> {
+pub async fn wait_for_shutdown_reason() -> CliResult<String> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| format!("failed to register SIGTERM handler: {error}"))?;
 
@@ -4432,22 +4437,26 @@ pub async fn wait_for_shutdown_signal() -> CliResult<()> {
         result = tokio::signal::ctrl_c() => {
             result.map_err(|error| format!("failed to register Ctrl-C handler: {error}"))?;
             eprintln!("\nReceived Ctrl-C, shutting down gracefully...");
-            Ok(())
+            Ok("ctrl-c received".to_owned())
         }
         _ = sigterm.recv() => {
             eprintln!("\nReceived SIGTERM, shutting down gracefully...");
-            Ok(())
+            Ok("sigterm received".to_owned())
         }
     }
 }
 
 #[cfg(not(unix))]
-pub async fn wait_for_shutdown_signal() -> CliResult<()> {
+pub async fn wait_for_shutdown_reason() -> CliResult<String> {
     tokio::signal::ctrl_c()
         .await
         .map_err(|error| format!("failed to register Ctrl-C handler: {error}"))?;
     eprintln!("\nReceived Ctrl-C, shutting down gracefully...");
-    Ok(())
+    Ok("ctrl-c received".to_owned())
+}
+
+pub async fn wait_for_shutdown_signal() -> CliResult<()> {
+    wait_for_shutdown_reason().await.map(|_| ())
 }
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
@@ -5207,7 +5216,12 @@ pub async fn run_multi_channel_serve_cli(
     session: &str,
     channel_accounts: Vec<MultiChannelServeChannelAccount>,
 ) -> CliResult<()> {
-    supervisor::run_multi_channel_serve(config_path, session, channel_accounts).await
+    gateway::service::run_multi_channel_serve_gateway_compat_cli(
+        config_path,
+        session,
+        channel_accounts,
+    )
+    .await
 }
 
 pub fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
