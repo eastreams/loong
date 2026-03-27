@@ -8369,6 +8369,13 @@ mod tests {
             twitch.operations[0].requirements[1].default_env_var,
             Some("TWITCH_ACCESS_TOKEN")
         );
+        assert_eq!(
+            twitch.operations[0].requirements[1].env_pointer_paths,
+            &[
+                "twitch.access_token_env",
+                "twitch.accounts.<account>.access_token_env",
+            ]
+        );
 
         assert_eq!(
             synology_chat.operations[0]
