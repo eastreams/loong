@@ -103,6 +103,7 @@ struct PersistedGatewayOwnerState {
 struct PersistedGatewayStopRequest {
     requested_at_ms: u64,
     requested_by_pid: u32,
+    target_owner_token: String,
 }
 
 pub struct GatewayOwnerTracker {
@@ -127,7 +128,6 @@ impl GatewayOwnerTracker {
         let active_owner_path = active_gateway_owner_path(runtime_dir);
         let status_snapshot_path = gateway_status_snapshot_path(runtime_dir);
         let stop_request_path = gateway_stop_request_path(runtime_dir);
-        remove_stop_request_file(stop_request_path.as_path())?;
 
         let process_id = std::process::id();
         let owner_token = new_gateway_owner_token(process_id);
@@ -202,6 +202,10 @@ impl GatewayOwnerTracker {
             heartbeat_stopped,
             heartbeat_task: Mutex::new(Some(heartbeat_task)),
         })
+    }
+
+    pub fn owner_token(&self) -> &str {
+        self.owner_token.as_str()
     }
 
     pub fn sync_from_supervisor(&self, supervisor: &SupervisorState) -> CliResult<()> {
@@ -383,13 +387,19 @@ pub fn request_gateway_stop(runtime_dir: &Path) -> CliResult<GatewayStopRequestO
     if !active_owner_status.running || active_owner_status.stale {
         return Ok(GatewayStopRequestOutcome::AlreadyStopped);
     }
-    if stop_request_path.exists() {
+    let existing_stop_request = read_persisted_gateway_stop_request(stop_request_path.as_path());
+    let stop_request_already_targets_active_owner = existing_stop_request
+        .as_ref()
+        .map(|stop_request| stop_request.target_owner_token == active_owner.owner_token)
+        .unwrap_or(false);
+    if stop_request_already_targets_active_owner {
         return Ok(GatewayStopRequestOutcome::AlreadyRequested);
     }
 
     let stop_request = PersistedGatewayStopRequest {
         requested_at_ms: now_ms,
         requested_by_pid: std::process::id(),
+        target_owner_token: active_owner.owner_token,
     };
     write_json_path(
         stop_request_path.as_path(),
@@ -399,10 +409,15 @@ pub fn request_gateway_stop(runtime_dir: &Path) -> CliResult<GatewayStopRequestO
     Ok(GatewayStopRequestOutcome::Requested)
 }
 
-pub async fn wait_for_gateway_stop_request(runtime_dir: &Path) -> CliResult<()> {
+pub async fn wait_for_gateway_stop_request(runtime_dir: &Path, owner_token: &str) -> CliResult<()> {
     let stop_request_path = gateway_stop_request_path(runtime_dir);
     loop {
-        if stop_request_path.exists() {
+        let stop_request = read_persisted_gateway_stop_request(stop_request_path.as_path());
+        let stop_request_targets_owner = stop_request
+            .as_ref()
+            .map(|stop_request| stop_request.target_owner_token == owner_token)
+            .unwrap_or(false);
+        if stop_request_targets_owner {
             return Ok(());
         }
         sleep(Duration::from_millis(GATEWAY_STOP_REQUEST_POLL_MS)).await;
@@ -520,6 +535,11 @@ pub fn gateway_control_token_path(runtime_dir: &Path) -> PathBuf {
 fn read_persisted_gateway_owner_state(path: &Path) -> Option<PersistedGatewayOwnerState> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str::<PersistedGatewayOwnerState>(&raw).ok()
+}
+
+fn read_persisted_gateway_stop_request(path: &Path) -> Option<PersistedGatewayStopRequest> {
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<PersistedGatewayStopRequest>(&raw).ok()
 }
 
 fn persisted_gateway_owner_is_stale(

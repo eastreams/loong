@@ -111,6 +111,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
         session,
         spec.surfaces.len(),
     )?);
+    let owner_token = tracker.owner_token().to_owned();
     let control_surface_result = start_gateway_control_surface(runtime_dir, &loaded_config).await;
     let control_surface = match control_surface_result {
         Ok(control_surface) => control_surface,
@@ -135,10 +136,11 @@ async fn run_gateway_runtime_with_hooks_for_test(
         let original_wait_for_shutdown = original_wait_for_shutdown.clone();
         let runtime_dir = runtime_dir_for_shutdown.clone();
         let control_surface = control_surface_for_shutdown.clone();
+        let owner_token = owner_token.clone();
         Box::pin(async move {
             tokio::select! {
                 result = (original_wait_for_shutdown)() => result,
-                result = wait_for_gateway_stop_request(runtime_dir.as_path()) => {
+                result = wait_for_gateway_stop_request(runtime_dir.as_path(), owner_token.as_str()) => {
                     result?;
                     Ok("gateway stop requested".to_owned())
                 }
