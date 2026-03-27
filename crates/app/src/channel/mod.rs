@@ -129,6 +129,9 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-imessage"
 ))]
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
+use crate::conversation::{
+    ConversationSessionAddress, encode_route_session_segment, parse_route_session_id,
+};
 
 #[cfg(feature = "channel-dingtalk")]
 use super::config::ResolvedDingtalkChannelConfig;
@@ -200,8 +203,7 @@ use super::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
     ConversationIngressPrivateContext, ConversationRuntime, ConversationRuntimeBinding,
-    ConversationSessionAddress, DefaultConversationRuntime, encode_route_session_segment,
-    parse_route_session_id,
+    DefaultConversationRuntime,
 };
 #[cfg(any(
     feature = "channel-telegram",
@@ -372,13 +374,6 @@ impl ChannelPlatform {
     }
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-irc"
-))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelSession {
     pub platform: ChannelPlatform,
@@ -389,13 +384,6 @@ pub struct ChannelSession {
     pub thread_id: Option<String>,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-irc"
-))]
 impl ChannelSession {
     pub fn new(platform: ChannelPlatform, conversation_id: impl Into<String>) -> Self {
         Self {
@@ -572,13 +560,6 @@ impl FromStr for ChannelOutboundTargetKind {
 
 pub use self::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-irc"
-))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChannelOutboundDeliveryOptions {
     pub idempotency_key: Option<String>,
@@ -586,13 +567,6 @@ pub struct ChannelOutboundDeliveryOptions {
     pub feishu_reply_in_thread: Option<bool>,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-irc"
-))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelOutboundTarget {
     pub platform: ChannelPlatform,
@@ -601,13 +575,6 @@ pub struct ChannelOutboundTarget {
     pub options: ChannelOutboundDeliveryOptions,
 }
 
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-irc"
-))]
 impl ChannelOutboundTarget {
     pub fn new(
         platform: ChannelPlatform,

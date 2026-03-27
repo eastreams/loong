@@ -25,6 +25,8 @@
 //! 3. **Async-first**: All operations are async for I/O-bound channel operations
 //! 4. **Error uniformity**: Standardized error types across all platforms
 //! 5. **Send + Sync**: All trait objects are thread-safe for runtime use
+//! 6. **Routing reuse**: Messaging traits reuse normalized channel targets and sessions
+//!    instead of introducing a second routing vocabulary
 
 pub mod calendar;
 pub mod documents;

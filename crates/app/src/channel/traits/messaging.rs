@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use super::super::{ChannelOutboundTarget, ChannelSession};
 use super::error::ApiResult;
 
 /// Content types for messages
@@ -76,16 +77,14 @@ pub struct SendOptions {
 pub struct Message {
     /// Platform-specific message ID
     pub id: String,
-    /// Conversation/chat ID where the message was sent
-    pub conversation_id: String,
+    /// Normalized channel session describing where this message belongs
+    pub session: ChannelSession,
     /// Sender identifier
     pub sender_id: String,
     /// Message content
     pub content: MessageContent,
     /// Timestamp when the message was sent
     pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// Optional thread/reply ID
-    pub thread_id: Option<String>,
     /// Optional parent message ID (for replies)
     pub parent_id: Option<String>,
     /// Platform-specific raw data
@@ -98,10 +97,10 @@ pub struct Message {
 /// This is a core capability expected to be implemented by most channel platforms.
 #[async_trait]
 pub trait MessagingApi: Send + Sync {
-    /// Send a message to a target conversation/user
+    /// Send a message to a normalized channel target
     ///
     /// # Arguments
-    /// * `target` - Target identifier (conversation ID, user ID, etc.)
+    /// * `target` - Normalized delivery target with target kind and routing options
     /// * `content` - Message content
     /// * `options` - Optional send options
     ///
@@ -109,7 +108,7 @@ pub trait MessagingApi: Send + Sync {
     /// The sent message with platform-assigned ID
     async fn send_message(
         &self,
-        target: &str,
+        target: &ChannelOutboundTarget,
         content: &MessageContent,
         options: Option<SendOptions>,
     ) -> ApiResult<Message>;
@@ -117,12 +116,12 @@ pub trait MessagingApi: Send + Sync {
     /// Reply to an existing message
     ///
     /// # Arguments
-    /// * `parent_id` - ID of the message being replied to
+    /// * `target` - Normalized reply target, typically using `message_reply`
     /// * `content` - Reply content
     /// * `options` - Optional send options
     async fn reply(
         &self,
-        parent_id: &str,
+        target: &ChannelOutboundTarget,
         content: &MessageContent,
         options: Option<SendOptions>,
     ) -> ApiResult<Message>;
@@ -130,10 +129,10 @@ pub trait MessagingApi: Send + Sync {
     /// Get a message by ID
     async fn get_message(&self, id: &str) -> ApiResult<Option<Message>>;
 
-    /// List messages in a conversation
+    /// List messages for a normalized channel session
     async fn list_messages(
         &self,
-        conversation_id: &str,
+        session: &ChannelSession,
         pagination: Option<Pagination>,
     ) -> ApiResult<Vec<Message>>;
 
@@ -157,7 +156,7 @@ pub trait RichMessagingApi: MessagingApi {
     /// Send a card/interactive message
     async fn send_card(
         &self,
-        target: &str,
+        target: &ChannelOutboundTarget,
         card: serde_json::Value,
         options: Option<SendOptions>,
     ) -> ApiResult<Message>;
