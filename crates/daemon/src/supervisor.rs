@@ -11,9 +11,10 @@ use std::{
 use loongclaw_spec::CliResult;
 use tokio::task::{Id, JoinSet};
 
-use crate::{MultiChannelServeChannelAccount, mvp, wait_for_shutdown_signal};
+use crate::{MultiChannelServeChannelAccount, mvp};
 
 type BoxedSupervisorFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
+type BoxedShutdownFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send + 'static>>;
 type BackgroundChannelRunner =
     Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedSupervisorFuture + Send + Sync + 'static>;
 type BackgroundChannelRunnerRegistry = BTreeMap<&'static str, BackgroundChannelRunner>;
@@ -79,6 +80,35 @@ fn collect_multi_channel_account_overrides(
     }
 
     Ok(collected_accounts)
+}
+
+pub fn collect_loaded_background_surfaces(
+    config: &mvp::config::LoongClawConfig,
+    channel_accounts: &[MultiChannelServeChannelAccount],
+) -> Result<Vec<BackgroundChannelSurface>, String> {
+    let account_overrides = collect_multi_channel_account_overrides(channel_accounts)?;
+    let mut surfaces = Vec::new();
+
+    let runtime_descriptors = mvp::channel::background_channel_runtime_descriptors();
+
+    for runtime_descriptor in runtime_descriptors {
+        let selected_account_id = account_overrides
+            .get(runtime_descriptor.channel_id)
+            .map(String::as_str);
+        let surface_is_enabled = mvp::channel::is_background_channel_surface_enabled(
+            runtime_descriptor.channel_id,
+            config,
+            selected_account_id,
+        )?;
+        if !surface_is_enabled {
+            continue;
+        }
+
+        let surface = BackgroundChannelSurface::new(runtime_descriptor, selected_account_id);
+        surfaces.push(surface);
+    }
+
+    Ok(surfaces)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +188,8 @@ impl fmt::Display for SupervisorShutdownReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeOwnerMode {
     MultiChannelServe { cli_session: String },
+    GatewayAttachedCli { cli_session: String },
+    GatewayHeadless,
 }
 
 impl RuntimeOwnerMode {
@@ -169,6 +201,28 @@ impl RuntimeOwnerMode {
                 }
                 Ok(())
             }
+            Self::GatewayAttachedCli { cli_session } => {
+                if cli_session.trim().is_empty() {
+                    return Err("gateway attached mode requires a non-empty CLI session".into());
+                }
+                Ok(())
+            }
+            Self::GatewayHeadless => Ok(()),
+        }
+    }
+
+    fn attached_cli_session(&self) -> Option<&str> {
+        match self {
+            Self::MultiChannelServe { cli_session } => Some(cli_session.as_str()),
+            Self::GatewayAttachedCli { cli_session } => Some(cli_session.as_str()),
+            Self::GatewayHeadless => None,
+        }
+    }
+
+    fn owner_label(&self) -> &'static str {
+        match self {
+            Self::MultiChannelServe { .. } => "multi-channel supervisor",
+            Self::GatewayAttachedCli { .. } | Self::GatewayHeadless => "gateway service",
         }
     }
 }
@@ -185,9 +239,6 @@ impl SupervisorSpec {
         surfaces: Vec<BackgroundChannelSurface>,
     ) -> Result<Self, String> {
         mode.validate()?;
-        if surfaces.is_empty() {
-            return Err("supervisor requires at least one background surface".to_owned());
-        }
 
         let mut seen = BTreeSet::new();
         for surface in &surfaces {
@@ -206,26 +257,13 @@ impl SupervisorSpec {
         config: &mvp::config::LoongClawConfig,
         channel_accounts: &[MultiChannelServeChannelAccount],
     ) -> Result<Self, String> {
-        let account_overrides = collect_multi_channel_account_overrides(channel_accounts)?;
-        let mut surfaces = Vec::new();
+        let surfaces = collect_loaded_background_surfaces(config, channel_accounts)?;
 
-        let runtime_descriptors = mvp::channel::background_channel_runtime_descriptors();
-
-        for runtime_descriptor in runtime_descriptors {
-            let selected_account_id = account_overrides
-                .get(runtime_descriptor.channel_id)
-                .map(String::as_str);
-            let surface_is_enabled = mvp::channel::is_background_channel_surface_enabled(
-                runtime_descriptor.channel_id,
-                config,
-                selected_account_id,
-            )?;
-            if !surface_is_enabled {
-                continue;
-            }
-
-            let surface = BackgroundChannelSurface::new(runtime_descriptor, selected_account_id);
-            surfaces.push(surface);
+        if surfaces.is_empty() {
+            return Err(
+                "multi-channel supervisor requires at least one enabled runtime-backed service channel"
+                    .to_owned(),
+            );
         }
 
         Self::new(
@@ -257,9 +295,15 @@ impl SupervisorState {
             })
             .collect();
 
+        let initial_phase = if spec.surfaces.is_empty() {
+            RuntimeOwnerPhase::Running
+        } else {
+            RuntimeOwnerPhase::Starting
+        };
+
         Self {
             spec,
-            phase: RuntimeOwnerPhase::Starting,
+            phase: initial_phase,
             surfaces,
             shutdown_reason: None,
         }
@@ -450,9 +494,10 @@ impl SupervisorState {
     }
 
     pub fn failure_summary(&self) -> Option<String> {
+        let owner_label = self.spec.mode.owner_label();
         match self.shutdown_reason() {
             Some(SupervisorShutdownReason::SurfaceFailed { surface, error }) => Some(format!(
-                "multi-channel supervisor failed because {surface} exited unexpectedly: {error}"
+                "{owner_label} failed because {surface} exited unexpectedly: {error}"
             )),
             _ => self
                 .surfaces
@@ -464,14 +509,15 @@ impl SupervisorState {
                         .as_deref()
                         .unwrap_or("unknown background surface failure");
                     format!(
-                        "multi-channel supervisor failed because {} exited unexpectedly: {error}",
-                        state.surface
+                        "{owner_label} failed because {} exited unexpectedly: {error}",
+                        state.surface,
                     )
                 }),
         }
     }
 
     pub fn final_exit_summary(&self) -> String {
+        let owner_label = self.spec.mode.owner_label();
         if let Some(summary) = self.failure_summary() {
             return summary;
         }
@@ -485,7 +531,7 @@ impl SupervisorState {
                 .collect::<Vec<_>>()
                 .join(", ");
             return format!(
-                "multi-channel supervisor failed because surfaces stopped without a shutdown request: {surfaces}"
+                "{owner_label} failed because surfaces stopped without a shutdown request: {surfaces}"
             );
         }
 
@@ -497,10 +543,10 @@ impl SupervisorState {
             .collect::<Vec<_>>()
             .join(", ");
         match self.shutdown_reason() {
-            Some(reason) => format!(
-                "multi-channel supervisor exited cleanly after {reason}; surfaces: {surfaces}"
-            ),
-            None => format!("multi-channel supervisor is still active for surfaces: {surfaces}"),
+            Some(reason) => {
+                format!("{owner_label} exited cleanly after {reason}; surfaces: {surfaces}")
+            }
+            None => format!("{owner_label} is still active for surfaces: {surfaces}"),
         }
     }
 
@@ -517,6 +563,18 @@ impl SupervisorState {
         }
 
         Err(self.final_exit_summary())
+    }
+
+    pub fn finalize_after_runtime_exit(&mut self) {
+        if matches!(
+            self.phase,
+            RuntimeOwnerPhase::Failed | RuntimeOwnerPhase::Stopped
+        ) {
+            return;
+        }
+        if self.shutdown_reason.is_some() && self.all_surfaces_terminal() {
+            self.phase = RuntimeOwnerPhase::Stopped;
+        }
     }
 
     fn surface_state_mut(
@@ -567,7 +625,8 @@ pub struct SupervisorRuntimeHooks {
             + 'static,
     >,
     pub background_channel_runners: BackgroundChannelRunnerRegistry,
-    pub wait_for_shutdown: Arc<dyn Fn() -> BoxedSupervisorFuture + Send + Sync + 'static>,
+    pub wait_for_shutdown: Arc<dyn Fn() -> BoxedShutdownFuture + Send + Sync + 'static>,
+    pub observe_state: Arc<dyn Fn(&SupervisorState) -> CliResult<()> + Send + Sync + 'static>,
 }
 
 impl SupervisorRuntimeHooks {
@@ -599,7 +658,7 @@ impl SupervisorRuntimeHooks {
         runners
     }
 
-    fn production() -> Self {
+    pub fn production() -> Self {
         Self {
             load_config: Arc::new(|config_path| {
                 let (resolved_path, config) = mvp::config::load(config_path)?;
@@ -624,7 +683,10 @@ impl SupervisorRuntimeHooks {
                 })
             }),
             background_channel_runners: Self::production_background_channel_runners(),
-            wait_for_shutdown: Arc::new(|| Box::pin(async { wait_for_shutdown_signal().await })),
+            wait_for_shutdown: Arc::new(|| {
+                Box::pin(async { crate::wait_for_shutdown_reason().await })
+            }),
+            observe_state: Arc::new(|_| Ok(())),
         }
     }
 }
@@ -665,21 +727,17 @@ fn forward_root_shutdown(
 }
 
 #[doc(hidden)]
-pub async fn run_multi_channel_serve_with_hooks_for_test(
-    config_path: Option<&str>,
-    session: &str,
-    channel_accounts: Vec<MultiChannelServeChannelAccount>,
+pub async fn run_supervisor_with_loaded_config_for_test(
+    loaded_config: LoadedSupervisorConfig,
+    spec: SupervisorSpec,
     hooks: SupervisorRuntimeHooks,
 ) -> CliResult<SupervisorState> {
-    let loaded_config = (hooks.load_config)(config_path)?;
-    (hooks.initialize_runtime_environment)(&loaded_config);
     let LoadedSupervisorConfig {
         resolved_path,
         config,
     } = loaded_config;
-    let spec =
-        SupervisorSpec::from_loaded_multi_channel_serve(session, &config, &channel_accounts)?;
     let mut supervisor = SupervisorState::new(spec.clone());
+    (hooks.observe_state)(&supervisor)?;
 
     let cli_shutdown = mvp::chat::ConcurrentCliShutdown::new();
     let mut stop_handles = Vec::new();
@@ -723,24 +781,32 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
             .id();
         background_task_surfaces.insert(task_id, tracked_surface);
     }
+    (hooks.observe_state)(&supervisor)?;
 
-    let mut cli_host = Box::pin((hooks.run_cli_host)(mvp::chat::ConcurrentCliHostOptions {
-        resolved_path: resolved_path.clone(),
-        config: config.clone(),
-        session_id: session.to_owned(),
-        shutdown: cli_shutdown.clone(),
-        initialize_runtime_environment: false,
-    }));
-    let mut cli_active = true;
+    let mut cli_host = spec.mode.attached_cli_session().map(|session_id| {
+        Box::pin((hooks.run_cli_host)(mvp::chat::ConcurrentCliHostOptions {
+            resolved_path: resolved_path.clone(),
+            config: config.clone(),
+            session_id: session_id.to_owned(),
+            shutdown: cli_shutdown.clone(),
+            initialize_runtime_environment: false,
+        }))
+    });
+    let mut cli_active = cli_host.is_some();
 
     let mut shutdown_signal = Box::pin((hooks.wait_for_shutdown)());
     let mut signal_active = true;
 
     let mut foreground_failure: Option<String> = None;
 
-    while cli_active || !background_tasks.is_empty() {
+    while cli_active || signal_active || !background_tasks.is_empty() {
         tokio::select! {
-            cli_result = &mut cli_host, if cli_active => {
+            cli_result = async {
+                let cli_host = cli_host
+                    .as_mut()
+                    .expect("cli host future should exist");
+                cli_host.await
+            }, if cli_active => {
                 cli_active = false;
                 match cli_result {
                     Ok(()) => {
@@ -748,6 +814,7 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                             supervisor.request_shutdown("foreground CLI host exited".to_owned())?;
                         }
                         forward_root_shutdown(&mut supervisor, &cli_shutdown, &stop_handles, &mut signal_active);
+                        (hooks.observe_state)(&supervisor)?;
                     }
                     Err(error) => {
                         foreground_failure = Some(error.clone());
@@ -755,16 +822,18 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                             supervisor.request_shutdown(format!("foreground CLI host failed: {error}"))?;
                         }
                         forward_root_shutdown(&mut supervisor, &cli_shutdown, &stop_handles, &mut signal_active);
+                        (hooks.observe_state)(&supervisor)?;
                     }
                 }
             }
             signal_result = &mut shutdown_signal, if signal_active => {
                 signal_active = false;
-                signal_result?;
+                let shutdown_reason = signal_result?;
                 if !supervisor.shutdown_requested() {
-                    supervisor.request_shutdown("ctrl-c received".to_owned())?;
+                    supervisor.request_shutdown(shutdown_reason)?;
                 }
                 forward_root_shutdown(&mut supervisor, &cli_shutdown, &stop_handles, &mut signal_active);
+                (hooks.observe_state)(&supervisor)?;
             }
             Some(joined) = background_tasks.join_next_with_id(), if !background_tasks.is_empty() => {
                 match joined {
@@ -796,17 +865,39 @@ pub async fn run_multi_channel_serve_with_hooks_for_test(
                 if supervisor.shutdown_requested() {
                     forward_root_shutdown(&mut supervisor, &cli_shutdown, &stop_handles, &mut signal_active);
                 }
+                (hooks.observe_state)(&supervisor)?;
             }
         }
     }
 
+    supervisor.finalize_after_runtime_exit();
+    (hooks.observe_state)(&supervisor)?;
+
     if let Some(error) = foreground_failure {
+        let owner_label = spec.mode.owner_label();
         return Err(format!(
-            "multi-channel supervisor failed because foreground CLI host exited unexpectedly: {error}"
+            "{owner_label} failed because foreground CLI host exited unexpectedly: {error}"
         ));
     }
 
     Ok(supervisor)
+}
+
+#[doc(hidden)]
+pub async fn run_multi_channel_serve_with_hooks_for_test(
+    config_path: Option<&str>,
+    session: &str,
+    channel_accounts: Vec<MultiChannelServeChannelAccount>,
+    hooks: SupervisorRuntimeHooks,
+) -> CliResult<SupervisorState> {
+    let loaded_config = (hooks.load_config)(config_path)?;
+    (hooks.initialize_runtime_environment)(&loaded_config);
+    let spec = SupervisorSpec::from_loaded_multi_channel_serve(
+        session,
+        &loaded_config.config,
+        &channel_accounts,
+    )?;
+    run_supervisor_with_loaded_config_for_test(loaded_config, spec, hooks).await
 }
 
 pub async fn run_multi_channel_serve(

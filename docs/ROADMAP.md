@@ -334,9 +334,10 @@ Remaining deliverables:
   - current product mode stays same-origin and localhost-only by default, but
     that operating boundary is not the long-term architecture endpoint
 - gateway service foundation:
-  - promote today's attached runtime owner (`multi-channel-serve`) into an
-    explicit daemon-owned gateway service rather than leaving service ownership
-    fragmented across `chat`, `*-serve`, Web UI, and future paired clients
+  - land the first explicit daemon-owned gateway owner contract through
+    `gateway run`, `gateway status`, and `gateway stop`, while keeping
+    `multi-channel-serve` as the attached compatibility wrapper instead of the
+    long-term runtime-owner noun
   - extract channel, ACP, and runtime-snapshot payload builders into shared
     service read models that can feed CLI, dashboard, Web UI, and future
     paired/browser/mobile clients

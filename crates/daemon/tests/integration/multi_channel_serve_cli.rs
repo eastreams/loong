@@ -20,6 +20,7 @@ use loongclaw_daemon::supervisor::{
 use tokio::{sync::Notify, time::sleep};
 
 type BoxedCliFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
+type BoxedShutdownFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send + 'static>>;
 type TestBackgroundChannelRunner =
     Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static>;
 const MULTI_CHANNEL_TEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -46,10 +47,16 @@ fn boxed_cli_result(f: impl Future<Output = CliResult<()>> + Send + 'static) -> 
     Box::pin(f)
 }
 
-fn pending_shutdown_future() -> BoxedCliFuture {
+fn boxed_shutdown_result(
+    f: impl Future<Output = CliResult<String>> + Send + 'static,
+) -> BoxedShutdownFuture {
+    Box::pin(f)
+}
+
+fn pending_shutdown_future() -> BoxedShutdownFuture {
     Box::pin(async move {
         std::future::pending::<()>().await;
-        Ok(())
+        Ok(String::new())
     })
 }
 
@@ -106,7 +113,7 @@ fn hooks(
     run_cli_host: impl Fn(mvp::chat::ConcurrentCliHostOptions) -> BoxedCliFuture + Send + Sync + 'static,
     run_telegram: impl Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static,
     run_feishu: impl Fn(BackgroundChannelRunnerRequest) -> BoxedCliFuture + Send + Sync + 'static,
-    wait_for_shutdown: impl Fn() -> BoxedCliFuture + Send + Sync + 'static,
+    wait_for_shutdown: impl Fn() -> BoxedShutdownFuture + Send + Sync + 'static,
 ) -> SupervisorRuntimeHooks {
     let telegram_runner = Arc::new(run_telegram);
     let feishu_runner = Arc::new(run_feishu);
@@ -134,6 +141,7 @@ fn hooks(
         run_cli_host: Arc::new(run_cli_host),
         background_channel_runners,
         wait_for_shutdown: Arc::new(wait_for_shutdown),
+        observe_state: Arc::new(|_| Ok(())),
     }
 }
 
@@ -333,6 +341,7 @@ async fn multi_channel_serve_starts_all_enabled_runtime_backed_service_channels(
             },
             background_channel_runners,
             wait_for_shutdown: Arc::new(pending_shutdown_future),
+            observe_state: Arc::new(|_| Ok(())),
         },
     )
     .await
@@ -1065,6 +1074,7 @@ async fn multi_channel_serve_initializes_runtime_environment_before_spawning_chi
             }),
             background_channel_runners,
             wait_for_shutdown: Arc::new(pending_shutdown_future),
+            observe_state: Arc::new(|_| Ok(())),
         },
     )
     .await
@@ -1137,10 +1147,10 @@ async fn multi_channel_serve_ctrl_c_waits_for_background_joins_and_reports_shutd
                         move || {
                             let ctrl_c = ctrl_c.clone();
                             let log = log.clone();
-                            boxed_cli_result(async move {
+                            boxed_shutdown_result(async move {
                                 ctrl_c.notified().await;
                                 log.push("ctrl-c");
-                                Ok(())
+                                Ok("ctrl-c received".to_owned())
                             })
                         },
                     ),
@@ -1231,9 +1241,9 @@ async fn multi_channel_serve_cooperative_stop_clears_channel_runtime_running_sta
                     },
                     move || {
                         let ctrl_c = ctrl_c.clone();
-                        boxed_cli_result(async move {
+                        boxed_shutdown_result(async move {
                             ctrl_c.notified().await;
-                            Ok(())
+                            Ok("ctrl-c received".to_owned())
                         })
                     },
                 ),
