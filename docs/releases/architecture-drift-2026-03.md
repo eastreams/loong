@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-27T08:17:01Z
+- Generated at: 2026-03-27T08:28:49Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -21,7 +21,7 @@
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10448 | 10500 | 52 | 90 | 90 | 0 | 100.0% | TIGHT |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9446 | 9800 | 354 | 90 | 90 | 0 | 100.0% | TIGHT |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6821 | 7300 | 479 | 145 | 160 | 15 | 93.4% | WATCH |
-| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 6286 | 6400 | 114 | 103 | 110 | 7 | 98.2% | TIGHT |
+| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 6325 | 6400 | 75 | 103 | 110 | 7 | 98.8% | TIGHT |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 9964 | 11200 | 1236 | 92 | 120 | 28 | 89.0% | WATCH |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14113 | 15000 | 887 | 54 | 70 | 16 | 94.1% | WATCH |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5792 | 6000 | 208 | 179 | 190 | 11 | 96.5% | TIGHT |
@@ -29,7 +29,7 @@
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): channel_registry (100.0%), channel_config (100.0%), channel_mod (98.2%), daemon_lib (96.5%)
+- TIGHT hotspots (>=95% of any tracked budget): channel_registry (100.0%), channel_config (100.0%), channel_mod (98.8%), daemon_lib (96.5%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): spec_runtime (91.4%), memory_mod (87.5%), acp_manager (92.4%), acpx_runtime (92.0%), chat_runtime (93.4%), turn_coordinator (89.0%), tools_mod (94.1%), onboard_cli (94.4%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -66,7 +66,7 @@
 <!-- arch-hotspot key=channel_registry lines=10448 functions=90 -->
 <!-- arch-hotspot key=channel_config lines=9446 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6821 functions=145 -->
-<!-- arch-hotspot key=channel_mod lines=6286 functions=103 -->
+<!-- arch-hotspot key=channel_mod lines=6325 functions=103 -->
 <!-- arch-hotspot key=turn_coordinator lines=9964 functions=92 -->
 <!-- arch-hotspot key=tools_mod lines=14113 functions=54 -->
 <!-- arch-hotspot key=daemon_lib lines=5792 functions=179 -->
