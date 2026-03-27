@@ -555,13 +555,9 @@ fn format_turn_checkpoint_progress_status(status: TurnCheckpointProgressStatus) 
 fn format_analytics_turn_checkpoint_progress_status(
     status: AnalyticsTurnCheckpointProgressStatus,
 ) -> &'static str {
-    match status {
-        AnalyticsTurnCheckpointProgressStatus::Pending => "pending",
-        AnalyticsTurnCheckpointProgressStatus::Skipped => "skipped",
-        AnalyticsTurnCheckpointProgressStatus::Completed => "completed",
-        AnalyticsTurnCheckpointProgressStatus::Failed => "failed",
-        AnalyticsTurnCheckpointProgressStatus::FailedOpen => "failed_open",
-    }
+    let canonical_status = TurnCheckpointProgressStatus::from(status);
+
+    format_turn_checkpoint_progress_status(canonical_status)
 }
 
 pub(super) async fn persist_turn_checkpoint_event<R: ConversationRuntime + ?Sized>(
@@ -612,7 +608,7 @@ pub(super) async fn persist_turn_checkpoint_event_value<R: ConversationRuntime +
     .await
 }
 
-fn recover_latest_turn_pair(messages: &[Value]) -> Option<(String, String)> {
+fn recover_latest_turn_pair(messages: &[Value]) -> Option<(usize, String, String)> {
     let assistant_index = messages.iter().rposition(|message| {
         message.get("role").and_then(Value::as_str) == Some("assistant")
             && message.get("content").and_then(Value::as_str).is_some()
@@ -636,7 +632,7 @@ fn recover_latest_turn_pair(messages: &[Value]) -> Option<(String, String)> {
                 .and_then(Value::as_str)
         })
         .map(ToOwned::to_owned)?;
-    Some((user_input, assistant_reply))
+    Some((assistant_index, user_input, assistant_reply))
 }
 
 fn load_turn_checkpoint_identity(checkpoint: &Value) -> Option<TurnCheckpointIdentity> {
@@ -691,10 +687,17 @@ impl TurnCheckpointRepairResumeInput {
     ) -> Result<Self, TurnCheckpointTailRepairReason> {
         let repair_preparation = load_turn_checkpoint_repair_preparation(checkpoint)?;
         let messages = assembled.messages;
-        let Some((user_input, assistant_reply)) = recover_latest_turn_pair(&messages) else {
+        let estimated_tokens = assembled.estimated_tokens;
+        let Some((assistant_index, user_input, assistant_reply)) =
+            recover_latest_turn_pair(&messages)
+        else {
             return Err(TurnCheckpointTailRepairReason::VisibleTurnPairMissing);
         };
-        let Some((_, pre_assistant_messages)) = messages.split_last() else {
+        let assistant_tail_index = assistant_index + 1;
+        if assistant_tail_index != messages.len() {
+            return Err(TurnCheckpointTailRepairReason::CheckpointStateRequiresManualInspection);
+        }
+        let Some(pre_assistant_messages) = messages.get(..assistant_index) else {
             return Err(TurnCheckpointTailRepairReason::VisibleTurnPairMissing);
         };
         let Some(identity) = load_turn_checkpoint_identity(checkpoint) else {
@@ -703,18 +706,21 @@ impl TurnCheckpointRepairResumeInput {
         if !identity.matches_turn(&user_input, &assistant_reply) {
             return Err(TurnCheckpointTailRepairReason::CheckpointIdentityMismatch);
         }
-        if let Some(expected_context_message_count) = repair_preparation
+        let expected_context_message_count = repair_preparation
             .as_ref()
-            .and_then(|preparation| preparation.context_message_count)
+            .and_then(|preparation| preparation.context_message_count);
+        if let Some(expected_context_message_count) = expected_context_message_count
             && pre_assistant_messages.len() != expected_context_message_count
         {
             return Err(TurnCheckpointTailRepairReason::CheckpointPreparationMismatch);
         }
-        if let Some(expected_context_fingerprint_sha256) = repair_preparation
+        let expected_context_fingerprint_sha256 = repair_preparation
             .as_ref()
-            .and_then(|preparation| preparation.context_fingerprint_sha256.as_deref())
-            && checkpoint_context_fingerprint_sha256(pre_assistant_messages)
-                != expected_context_fingerprint_sha256
+            .and_then(|preparation| preparation.context_fingerprint_sha256.as_deref());
+        let actual_context_fingerprint_sha256 =
+            checkpoint_context_fingerprint_sha256(pre_assistant_messages);
+        if let Some(expected_context_fingerprint_sha256) = expected_context_fingerprint_sha256
+            && actual_context_fingerprint_sha256 != expected_context_fingerprint_sha256
         {
             return Err(TurnCheckpointTailRepairReason::CheckpointPreparationFingerprintMismatch);
         }
@@ -725,7 +731,7 @@ impl TurnCheckpointRepairResumeInput {
             messages,
             estimated_tokens: repair_preparation
                 .and_then(|preparation| preparation.estimated_tokens)
-                .or(assembled.estimated_tokens),
+                .or(estimated_tokens),
         })
     }
 
@@ -767,13 +773,165 @@ pub(super) enum TurnCheckpointTailRuntimeEligibility {
 pub(super) fn restore_analytics_turn_checkpoint_progress_status(
     status: AnalyticsTurnCheckpointProgressStatus,
 ) -> TurnCheckpointProgressStatus {
-    match status {
-        AnalyticsTurnCheckpointProgressStatus::Pending => TurnCheckpointProgressStatus::Pending,
-        AnalyticsTurnCheckpointProgressStatus::Skipped => TurnCheckpointProgressStatus::Skipped,
-        AnalyticsTurnCheckpointProgressStatus::Completed => TurnCheckpointProgressStatus::Completed,
-        AnalyticsTurnCheckpointProgressStatus::Failed => TurnCheckpointProgressStatus::Failed,
-        AnalyticsTurnCheckpointProgressStatus::FailedOpen => {
-            TurnCheckpointProgressStatus::FailedOpen
+    TurnCheckpointProgressStatus::from(status)
+}
+
+impl From<AnalyticsTurnCheckpointProgressStatus> for TurnCheckpointProgressStatus {
+    fn from(status: AnalyticsTurnCheckpointProgressStatus) -> Self {
+        match status {
+            AnalyticsTurnCheckpointProgressStatus::Pending => TurnCheckpointProgressStatus::Pending,
+            AnalyticsTurnCheckpointProgressStatus::Skipped => TurnCheckpointProgressStatus::Skipped,
+            AnalyticsTurnCheckpointProgressStatus::Completed => {
+                TurnCheckpointProgressStatus::Completed
+            }
+            AnalyticsTurnCheckpointProgressStatus::Failed => TurnCheckpointProgressStatus::Failed,
+            AnalyticsTurnCheckpointProgressStatus::FailedOpen => {
+                TurnCheckpointProgressStatus::FailedOpen
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Value, json};
+
+    use super::{
+        TurnCheckpointIdentity, TurnCheckpointRepairResumeInput, TurnCheckpointTailRepairReason,
+        checkpoint_context_fingerprint_sha256,
+    };
+    use crate::conversation::context_engine::AssembledConversationContext;
+
+    fn checkpoint_with_preparation(
+        user_input: &str,
+        assistant_reply: &str,
+        pre_assistant_messages: &[Value],
+        estimated_tokens: Option<usize>,
+    ) -> Value {
+        let identity = TurnCheckpointIdentity::from_turn(user_input, assistant_reply);
+        let identity = serde_json::to_value(identity).expect("identity should serialize");
+        let context_message_count = pre_assistant_messages.len();
+        let context_fingerprint_sha256 =
+            checkpoint_context_fingerprint_sha256(pre_assistant_messages);
+
+        json!({
+            "identity": identity,
+            "preparation": {
+                "context_message_count": context_message_count,
+                "context_fingerprint_sha256": context_fingerprint_sha256,
+                "estimated_tokens": estimated_tokens,
+            }
+        })
+    }
+
+    #[test]
+    fn repair_resume_input_accepts_matching_tail_with_preparation() {
+        let pre_assistant_messages = vec![
+            json!({
+                "role": "system",
+                "content": "sys"
+            }),
+            json!({
+                "role": "user",
+                "content": "hello"
+            }),
+        ];
+        let mut messages = pre_assistant_messages.clone();
+        messages.push(json!({
+            "role": "assistant",
+            "content": "world"
+        }));
+        let checkpoint =
+            checkpoint_with_preparation("hello", "world", &pre_assistant_messages, Some(7));
+        let assembled = AssembledConversationContext {
+            messages,
+            artifacts: Vec::new(),
+            estimated_tokens: Some(9),
+            system_prompt_addition: None,
+        };
+        let resume_input =
+            TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
+                .expect("matching checkpoint should resume");
+
+        assert_eq!(resume_input.user_input(), "hello");
+        assert_eq!(resume_input.assistant_reply(), "world");
+        assert_eq!(resume_input.estimated_tokens(), Some(7));
+    }
+
+    #[test]
+    fn repair_resume_input_accepts_matching_tail_without_preparation() {
+        let messages = vec![
+            json!({
+                "role": "system",
+                "content": "sys"
+            }),
+            json!({
+                "role": "user",
+                "content": "hello"
+            }),
+            json!({
+                "role": "assistant",
+                "content": "world"
+            }),
+        ];
+        let identity = TurnCheckpointIdentity::from_turn("hello", "world");
+        let identity = serde_json::to_value(identity).expect("identity should serialize");
+        let checkpoint = json!({
+            "identity": identity,
+        });
+        let assembled = AssembledConversationContext {
+            messages,
+            artifacts: Vec::new(),
+            estimated_tokens: Some(9),
+            system_prompt_addition: None,
+        };
+        let resume_input =
+            TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
+                .expect("legacy checkpoints without preparation should remain repairable");
+
+        assert_eq!(resume_input.user_input(), "hello");
+        assert_eq!(resume_input.assistant_reply(), "world");
+        assert_eq!(resume_input.estimated_tokens(), Some(9));
+    }
+
+    #[test]
+    fn repair_resume_input_requires_assistant_to_be_the_tail_message() {
+        let messages = vec![
+            json!({
+                "role": "system",
+                "content": "sys"
+            }),
+            json!({
+                "role": "user",
+                "content": "hello"
+            }),
+        ];
+        let mut messages = messages;
+        messages.push(json!({
+            "role": "assistant",
+            "content": "world"
+        }));
+        messages.push(json!({
+            "role": "tool",
+            "content": "trailing"
+        }));
+        let identity = TurnCheckpointIdentity::from_turn("hello", "world");
+        let identity = serde_json::to_value(identity).expect("identity should serialize");
+        let checkpoint = json!({
+            "identity": identity,
+        });
+        let assembled = AssembledConversationContext {
+            messages,
+            artifacts: Vec::new(),
+            estimated_tokens: Some(9),
+            system_prompt_addition: None,
+        };
+        let error = TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)
+            .expect_err("trailing messages should require manual inspection");
+
+        assert_eq!(
+            error,
+            TurnCheckpointTailRepairReason::CheckpointStateRequiresManualInspection
+        );
     }
 }

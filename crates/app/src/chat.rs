@@ -598,7 +598,10 @@ async fn run_concurrent_cli_host_loop(
             .map_err(|error| format!("flush stdout failed: {error}"))?;
 
         let next_line = tokio::select! {
-            _ = shutdown.wait() => None,
+            _ = shutdown.wait() => {
+                println!();
+                None
+            },
             line = stdin_reader.next_line() => Some(line?),
         };
 
