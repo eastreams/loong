@@ -84,6 +84,10 @@ fn validate_security_scan_policy(policy: &SecurityScanSpec) -> Result<(), String
             "security scan runtime.execute_wasm_component requires runtime.allowed_path_prefixes to be configured".to_owned(),
         );
     }
+    validate_connector_circuit_breaker_policy(
+        &policy.runtime.bridge_circuit_breaker,
+        "security scan runtime.bridge_circuit_breaker",
+    )?;
     Ok(())
 }
 

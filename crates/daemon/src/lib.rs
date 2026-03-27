@@ -99,6 +99,7 @@ pub mod onboard_presentation;
 mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
+pub mod plugins_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
 pub mod provider_presentation;
@@ -140,6 +141,40 @@ pub fn native_spec_tool_executor(
 }
 
 pub type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BridgeSupportProfileArg {
+    NativeBalanced,
+    OpenclawEcosystemBalanced,
+}
+
+impl BridgeSupportProfileArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeBalanced => "native-balanced",
+            Self::OpenclawEcosystemBalanced => "openclaw-ecosystem-balanced",
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct RunSpecBridgeSupportArgs {
+    /// Optional JSON file containing a bridge support policy override for this spec run
+    #[arg(long, conflicts_with_all = ["bridge_profile", "bridge_support_delta"])]
+    pub bridge_support: Option<String>,
+    /// Optional bundled bridge support profile override for this spec run
+    #[arg(long, value_enum, conflicts_with_all = ["bridge_support", "bridge_support_delta"])]
+    pub bridge_profile: Option<BridgeSupportProfileArg>,
+    /// Optional delta artifact JSON file derived from a bundled bridge support profile
+    #[arg(long, conflicts_with_all = ["bridge_support", "bridge_profile"])]
+    pub bridge_support_delta: Option<String>,
+    /// Optional sha256 pin for the resolved bridge support policy override
+    #[arg(long)]
+    pub bridge_support_sha256: Option<String>,
+    /// Optional sha256 pin for the bridge support delta artifact override
+    #[arg(long)]
+    pub bridge_support_delta_sha256: Option<String>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelSendCliArgs<'a> {
@@ -244,6 +279,8 @@ pub enum Commands {
         print_audit: bool,
         #[arg(long, default_value_t = false)]
         render_summary: bool,
+        #[command(flatten)]
+        bridge_support: RunSpecBridgeSupportArgs,
     },
     /// Run pressure benchmarks for programmatic orchestration and optional regression gate checks
     BenchmarkProgrammaticPressure {
@@ -504,6 +541,17 @@ pub enum Commands {
         json: bool,
         #[command(subcommand)]
         command: skills_cli::SkillsCommands,
+    },
+    #[command(
+        visible_alias = "plugin",
+        about = "Inspect plugin governance truth and deduplicated operator action plans",
+        long_about = "Operator-facing plugin governance namespace for scanning one or more plugin roots, evaluating profile-aware preflight, and consuming the deduplicated operator action plan.\n\nThis command does not introduce a second policy engine. It reuses the existing spec `plugin_preflight` surface and exposes one thin CLI over the same governance contract."
+    )]
+    Plugins {
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: plugins_cli::PluginsCommands,
     },
     /// List compiled channel surfaces, aliases, and readiness status
     Channels {
@@ -1642,11 +1690,22 @@ pub async fn run_spec_cli(
     spec_path: &str,
     print_audit: bool,
     render_summary: bool,
+    bridge_support: &RunSpecBridgeSupportArgs,
 ) -> CliResult<()> {
-    let spec = read_spec_file(spec_path)?;
-    let report =
-        execute_spec_with_native_tool_executor(&spec, print_audit, Some(native_spec_tool_executor))
-            .await;
+    validate_run_spec_bridge_support_args(bridge_support)?;
+    let resolved = read_spec_file_with_bridge_support_resolution(
+        spec_path,
+        run_spec_bridge_support_selection(bridge_support).as_ref(),
+    )?;
+    let report = execute_spec_with_native_tool_executor_and_bridge_support_provenance(
+        &resolved.spec,
+        print_audit,
+        Some(native_spec_tool_executor),
+        resolved.bridge_support_source,
+        resolved.bridge_support_delta_source,
+        resolved.bridge_support_delta_sha256,
+    )
+    .await;
     if render_summary {
         eprintln!("{}", render_spec_run_summary(&report));
     }
@@ -1654,6 +1713,23 @@ pub async fn run_spec_cli(
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");
     Ok(())
+}
+
+fn validate_run_spec_bridge_support_args(args: &RunSpecBridgeSupportArgs) -> CliResult<()> {
+    let has_policy_source = args.bridge_support.is_some()
+        || args.bridge_profile.is_some()
+        || args.bridge_support_delta.is_some();
+    let has_sha256_pin =
+        args.bridge_support_sha256.is_some() || args.bridge_support_delta_sha256.is_some();
+
+    if has_policy_source || !has_sha256_pin {
+        return Ok(());
+    }
+
+    Err(
+        "run-spec bridge support sha256 pins require --bridge-support, --bridge-profile, or --bridge-support-delta"
+            .to_owned(),
+    )
 }
 
 fn render_spec_run_summary(report: &SpecRunReport) -> String {
@@ -1767,6 +1843,9 @@ fn plugin_activation_status_label(status: PluginActivationStatus) -> &'static st
         PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
             "blocked_unsupported_adapter_family"
         }
+        PluginActivationStatus::BlockedCompatibilityMode => "blocked_compatibility_mode",
+        PluginActivationStatus::BlockedIncompatibleHost => "blocked_incompatible_host",
+        PluginActivationStatus::BlockedSlotClaimConflict => "blocked_slot_claim_conflict",
     }
 }
 
@@ -1789,6 +1868,55 @@ fn format_string_list_or_dash(values: &[String]) -> String {
 
 fn sanitize_summary_field(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn run_spec_bridge_support_selection(
+    args: &RunSpecBridgeSupportArgs,
+) -> Option<BridgeSupportSelectionInput> {
+    let selection = BridgeSupportSelectionInput {
+        path: args.bridge_support.clone(),
+        bundled_profile: args
+            .bridge_profile
+            .map(BridgeSupportProfileArg::as_str)
+            .map(str::to_owned),
+        delta_artifact: args.bridge_support_delta.clone(),
+        expected_sha256: args.bridge_support_sha256.clone(),
+        expected_delta_sha256: args.bridge_support_delta_sha256.clone(),
+    };
+    (selection.path.is_some()
+        || selection.bundled_profile.is_some()
+        || selection.delta_artifact.is_some())
+    .then_some(selection)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RunnerSpecFileInput {
+    #[serde(flatten)]
+    spec: RunnerSpec,
+    #[serde(default)]
+    bridge_support_selection: Option<BridgeSupportSelectionInput>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BridgeSupportSelectionInput {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub bundled_profile: Option<String>,
+    #[serde(default)]
+    pub delta_artifact: Option<String>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_delta_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRunnerSpecFile {
+    pub spec: RunnerSpec,
+    pub bridge_support_source: Option<String>,
+    pub bridge_support_delta_source: Option<String>,
+    pub bridge_support_delta_sha256: Option<String>,
 }
 
 pub fn run_validate_config_cli(
@@ -5897,9 +6025,156 @@ pub fn format_usize_rollup(values: &BTreeMap<String, usize>) -> String {
 }
 
 pub fn read_spec_file(path: &str) -> CliResult<RunnerSpec> {
+    read_spec_file_with_bridge_support_resolution(path, None).map(|resolved| resolved.spec)
+}
+
+pub fn read_spec_file_with_bridge_support_selection(
+    path: &str,
+    bridge_support_selection_override: Option<&BridgeSupportSelectionInput>,
+) -> CliResult<RunnerSpec> {
+    read_spec_file_with_bridge_support_resolution(path, bridge_support_selection_override)
+        .map(|resolved| resolved.spec)
+}
+
+pub fn read_spec_file_with_bridge_support_resolution(
+    path: &str,
+    bridge_support_selection_override: Option<&BridgeSupportSelectionInput>,
+) -> CliResult<ResolvedRunnerSpecFile> {
+    let mut input = read_spec_file_input(path)?;
+    let spec_has_bridge_support_config =
+        input.spec.bridge_support.is_some() || input.bridge_support_selection.is_some();
+
+    if let Some(selection) = bridge_support_selection_override {
+        if spec_has_bridge_support_config {
+            return Err(format!(
+                "spec file {path} accepts either file-local bridge support configuration or CLI bridge support selection overrides, not both"
+            ));
+        }
+        let override_selection = resolve_process_relative_bridge_support_selection(selection)?;
+        input.bridge_support_selection = Some(override_selection);
+    }
+
+    resolve_spec_file_input(path, input)
+}
+
+fn resolve_process_relative_bridge_support_selection(
+    selection: &BridgeSupportSelectionInput,
+) -> CliResult<BridgeSupportSelectionInput> {
+    let path = selection
+        .path
+        .as_deref()
+        .map(resolve_process_relative_path)
+        .transpose()?;
+    let delta_artifact = selection
+        .delta_artifact
+        .as_deref()
+        .map(resolve_process_relative_path)
+        .transpose()?;
+
+    Ok(BridgeSupportSelectionInput {
+        path,
+        bundled_profile: selection.bundled_profile.clone(),
+        delta_artifact,
+        expected_sha256: selection.expected_sha256.clone(),
+        expected_delta_sha256: selection.expected_delta_sha256.clone(),
+    })
+}
+
+fn read_spec_file_input(path: &str) -> CliResult<RunnerSpecFileInput> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("failed to read spec file {path}: {error}"))?;
     serde_json::from_str(&raw).map_err(|error| format!("failed to parse spec file {path}: {error}"))
+}
+
+fn resolve_spec_file_input(
+    path: &str,
+    mut input: RunnerSpecFileInput,
+) -> CliResult<ResolvedRunnerSpecFile> {
+    if let Some(selection) = input.bridge_support_selection.take() {
+        if input.spec.bridge_support.is_some() {
+            return Err(format!(
+                "spec file {path} accepts either inline `bridge_support` or `bridge_support_selection`, not both"
+            ));
+        }
+
+        let policy_path = selection
+            .path
+            .as_deref()
+            .map(|value| resolve_spec_relative_path(path, value));
+        let delta_artifact_path = selection
+            .delta_artifact
+            .as_deref()
+            .map(|value| resolve_spec_relative_path(path, value));
+        let resolved = resolve_bridge_support_selection(
+            policy_path.as_deref(),
+            selection.bundled_profile.as_deref(),
+            delta_artifact_path.as_deref(),
+            selection.expected_sha256.as_deref(),
+            selection.expected_delta_sha256.as_deref(),
+        )
+        .map_err(|error| {
+            format!("failed to resolve bridge support selection in {path}: {error}")
+        })?;
+        let bridge_support_source = resolved
+            .as_ref()
+            .map(|selection| selection.policy.source.clone());
+        let bridge_support_delta_source = resolved
+            .as_ref()
+            .and_then(|selection| selection.delta_source.clone());
+        let bridge_support_delta_sha256 = resolved.as_ref().and_then(|selection| {
+            selection
+                .delta_artifact
+                .as_ref()
+                .map(|artifact| artifact.sha256.clone())
+        });
+        input.spec.bridge_support = resolved.map(|selection| selection.policy.profile);
+        return Ok(ResolvedRunnerSpecFile {
+            spec: input.spec,
+            bridge_support_source,
+            bridge_support_delta_source,
+            bridge_support_delta_sha256,
+        });
+    }
+
+    let bridge_support_source = input
+        .spec
+        .bridge_support
+        .as_ref()
+        .map(|_| format!("inline:{path}"));
+
+    Ok(ResolvedRunnerSpecFile {
+        spec: input.spec,
+        bridge_support_source,
+        bridge_support_delta_source: None,
+        bridge_support_delta_sha256: None,
+    })
+}
+
+fn resolve_process_relative_path(value: &str) -> CliResult<String> {
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        return Ok(value.to_owned());
+    }
+
+    let current_dir = std::env::current_dir()
+        .map_err(|error| format!("resolve current directory failed: {error}"))?;
+    let resolved = current_dir.join(candidate);
+
+    Ok(resolved.display().to_string())
+}
+
+fn resolve_spec_relative_path(spec_path: &str, value: &str) -> String {
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        return value.to_owned();
+    }
+
+    Path::new(spec_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(candidate)
+        .display()
+        .to_string()
 }
 
 pub fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {

@@ -161,6 +161,64 @@ fn migrate_cli_parses_apply_selected_flags() {
 }
 
 #[test]
+fn run_spec_cli_parses_bridge_support_delta_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "run-spec",
+        "--spec",
+        "/tmp/runner.spec.json",
+        "--bridge-support-delta",
+        "/tmp/bridge-support.delta.json",
+        "--bridge-support-delta-sha256",
+        "abc123",
+    ])
+    .expect("run-spec with bridge support delta override should parse");
+
+    match cli.command {
+        Some(Commands::RunSpec {
+            spec,
+            print_audit,
+            bridge_support,
+            ..
+        }) => {
+            assert_eq!(spec, "/tmp/runner.spec.json");
+            assert!(!print_audit);
+            assert_eq!(
+                bridge_support.bridge_support_delta.as_deref(),
+                Some("/tmp/bridge-support.delta.json")
+            );
+            assert_eq!(
+                bridge_support.bridge_support_delta_sha256.as_deref(),
+                Some("abc123")
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn run_spec_help_mentions_bridge_support_overrides() {
+    let help = render_cli_help(["run-spec"]);
+
+    assert!(
+        help.contains("--bridge-support <BRIDGE_SUPPORT>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-profile <BRIDGE_PROFILE>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-support-delta <BRIDGE_SUPPORT_DELTA>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-support-delta-sha256 <BRIDGE_SUPPORT_DELTA_SHA256>"),
+        "help: {help}"
+    );
+}
+
+#[test]
 fn safe_lane_summary_cli_rejects_zero_limit() {
     let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");

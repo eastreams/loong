@@ -14,7 +14,8 @@ use kernel::{
     CodebaseAwarenessSnapshot, ConnectorCommand, InMemoryAuditSink, IntegrationCatalog,
     LoongClawKernel, MemoryCoreRequest, MemoryExtensionRequest, PluginAbsorbReport,
     PluginActivationPlan, PluginActivationStatus, PluginBootstrapExecutor, PluginBridgeKind,
-    PluginDescriptor, PluginScanReport, PluginScanner, PluginSetup, PluginSetupReadinessContext,
+    PluginCompatibility, PluginCompatibilityShimSupport, PluginDescriptor, PluginScanReport,
+    PluginScanner, PluginSetup, PluginSetupReadinessContext, PluginSlotClaim,
     PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
     RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreRequest,
     ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
@@ -29,11 +30,16 @@ use crate::spec_runtime::*;
 
 mod approval_policy;
 mod bridge_support_policy;
+mod plugin_inventory;
+mod plugin_preflight;
+mod plugin_preflight_policy;
 mod security_scan_eval;
 mod security_scan_policy;
 mod tool_search;
 use approval_policy::evaluate_approval_guard;
 use bridge_support_policy::bridge_support_policy_checksum;
+use plugin_inventory::execute_plugin_inventory;
+use plugin_preflight::execute_plugin_preflight;
 use security_scan_eval::evaluate_plugin_security_scan;
 use security_scan_policy::{
     apply_security_scan_delta, emit_security_scan_siem_record, security_scan_process_allowlist,
@@ -42,18 +48,57 @@ use tool_search::execute_tool_search;
 
 pub use approval_policy::operation_risk_profile;
 pub use bridge_support_policy::{
-    bridge_support_policy_sha256, security_scan_profile_message, security_scan_profile_sha256,
+    MaterializedBridgeSupportDeltaArtifact, ResolvedBridgeSupportSelection,
+    bridge_support_policy_sha256, load_bridge_support_delta_artifact_from_path,
+    load_bridge_support_policy_from_path, load_bundled_bridge_support_policy,
+    materialize_bridge_support_delta_artifact, materialize_bridge_support_template,
+    resolve_bridge_support_policy, resolve_bridge_support_selection, security_scan_profile_message,
+    security_scan_profile_sha256,
+};
+pub use plugin_preflight_policy::{
+    load_plugin_preflight_policy_from_path, plugin_preflight_policy_checksum,
+    plugin_preflight_policy_message, plugin_preflight_policy_sha256,
 };
 pub use security_scan_policy::{load_security_scan_profile_from_path, security_scan_policy};
 
 pub async fn execute_spec(spec: &RunnerSpec, include_audit: bool) -> SpecRunReport {
-    execute_spec_with_native_tool_executor(spec, include_audit, None).await
+    execute_spec_internal(spec, include_audit, None, None, None, None).await
 }
 
 pub async fn execute_spec_with_native_tool_executor(
     spec: &RunnerSpec,
     include_audit: bool,
     native_tool_executor: Option<crate::NativeToolExecutor>,
+) -> SpecRunReport {
+    execute_spec_internal(spec, include_audit, native_tool_executor, None, None, None).await
+}
+
+pub async fn execute_spec_with_native_tool_executor_and_bridge_support_provenance(
+    spec: &RunnerSpec,
+    include_audit: bool,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+    bridge_support_source: Option<String>,
+    bridge_support_delta_source: Option<String>,
+    bridge_support_delta_sha256: Option<String>,
+) -> SpecRunReport {
+    execute_spec_internal(
+        spec,
+        include_audit,
+        native_tool_executor,
+        bridge_support_source,
+        bridge_support_delta_source,
+        bridge_support_delta_sha256,
+    )
+    .await
+}
+
+async fn execute_spec_internal(
+    spec: &RunnerSpec,
+    include_audit: bool,
+    native_tool_executor: Option<crate::NativeToolExecutor>,
+    bridge_support_source: Option<String>,
+    bridge_support_delta_source: Option<String>,
+    bridge_support_delta_sha256: Option<String>,
 ) -> SpecRunReport {
     let mut pack = spec.pack.clone();
     let audit_sink = default_in_memory_audit_sink();
@@ -178,8 +223,11 @@ pub async fn execute_spec_with_native_tool_executor(
             spec.agent_id.clone(),
             reason,
             approval_guard,
+            bridge_support_source.clone(),
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -205,6 +253,8 @@ pub async fn execute_spec_with_native_tool_executor(
         let bootstrap_policy = bootstrap_policy(spec);
         let (bridge_matrix, enforce_bridge_support) = bridge_support_matrix(spec);
         let mut pending_absorb_inputs = Vec::new();
+        let mut planning_catalog = integration_catalog.clone();
+        let mut planning_pack = pack.clone();
         let mut remaining_bootstrap_budget =
             bootstrap_policy.as_ref().map(|policy| policy.max_tasks);
         for root in &plugin_scan.roots {
@@ -216,13 +266,18 @@ pub async fn execute_spec_with_native_tool_executor(
                 }
             };
             let translation = translator.translate_scan_report(&report);
-            let activation =
-                translator.plan_activation(&translation, &bridge_matrix, &setup_readiness_context);
+            let activation = translator.plan_activation_with_catalog(
+                &translation,
+                &bridge_matrix,
+                &setup_readiness_context,
+                Some(&planning_catalog),
+            );
 
             if enforce_bridge_support && activation.has_blockers() {
                 blocked_reason = Some(format!(
-                    "bridge support enforcement blocked {} plugin(s)",
-                    activation.blocked_plugins
+                    "bridge support enforcement blocked {} plugin(s): {}",
+                    activation.blocked_plugins,
+                    activation.blocker_summary(3)
                 ));
             }
 
@@ -268,9 +323,12 @@ pub async fn execute_spec_with_native_tool_executor(
             }
 
             let enriched_ready_report =
-                enrich_scan_report_with_translation(&ready_report, &translation);
-            let enriched_filtered_report =
-                enrich_scan_report_with_translation(&filtered_report, &translation);
+                enrich_scan_report_with_translation(&ready_report, &translation, Some(&activation));
+            let enriched_filtered_report = enrich_scan_report_with_translation(
+                &filtered_report,
+                &translation,
+                Some(&activation),
+            );
 
             if let (Some(policy), Some(report)) =
                 (security_scan_policy.as_ref(), security_scan_report.as_mut())
@@ -290,7 +348,18 @@ pub async fn execute_spec_with_native_tool_executor(
             plugin_translation_reports.push(translation);
             plugin_activation_plans.push(activation);
             plugin_scan_reports.push(report);
-            pending_absorb_inputs.push(enriched_filtered_report);
+            if blocked_reason.is_none() {
+                match scanner.absorb(
+                    &mut planning_catalog,
+                    &mut planning_pack,
+                    &enriched_filtered_report,
+                ) {
+                    Ok(_) => pending_absorb_inputs.push(enriched_filtered_report),
+                    Err(error) => {
+                        blocked_reason = Some(format!("plugin absorb failed: {error}"));
+                    }
+                }
+            }
 
             if blocked_reason.is_some() {
                 break;
@@ -362,8 +431,11 @@ pub async fn execute_spec_with_native_tool_executor(
             spec.agent_id.clone(),
             reason,
             approval_guard,
+            bridge_support_source.clone(),
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -428,8 +500,11 @@ pub async fn execute_spec_with_native_tool_executor(
             spec.agent_id.clone(),
             reason,
             approval_guard,
+            bridge_support_source.clone(),
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -447,18 +522,61 @@ pub async fn execute_spec_with_native_tool_executor(
     }
 
     let shared_catalog = Arc::new(Mutex::new(integration_catalog.clone()));
-    let bridge_runtime_policy = bridge_runtime_policy(spec, security_scan_policy.as_ref());
-    register_dynamic_catalog_connectors(&mut kernel, shared_catalog, bridge_runtime_policy);
+    let bridge_runtime_policy = match bridge_runtime_policy(spec, security_scan_policy.as_ref()) {
+        Ok(policy) => policy,
+        Err(error) => {
+            let reason = format!("bridge runtime policy is invalid: {error}");
+            return build_blocked_spec_run_report(
+                pack.pack_id.clone(),
+                spec.agent_id.clone(),
+                reason,
+                approval_guard,
+                bridge_support_source.clone(),
+                bridge_support_checksum,
+                bridge_support_sha256,
+                bridge_support_delta_source.clone(),
+                bridge_support_delta_sha256.clone(),
+                self_awareness,
+                architecture_guard,
+                plugin_scan_reports,
+                plugin_translation_reports,
+                plugin_activation_plans,
+                plugin_bootstrap_reports,
+                plugin_bootstrap_queue,
+                plugin_absorb_reports,
+                security_scan_report,
+                auto_provision_plan,
+                integration_catalog,
+                include_audit,
+                &audit_sink,
+            );
+        }
+    };
+    register_dynamic_catalog_connectors(&mut kernel, shared_catalog.clone(), bridge_runtime_policy);
 
     if let Err(error) = kernel.register_pack(pack.clone()) {
-        let reason = format!("spec pack registration failed: {error}");
+        let base_reason = format!("spec pack registration failed: {error}");
+        let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+        let (integration_catalog, reason) = match snapshot_result {
+            Ok(catalog) => (catalog, base_reason),
+            Err(error) => {
+                let fallback_catalog = integration_catalog.clone();
+                let reason = format!(
+                    "{base_reason}; failed to snapshot runtime integration catalog: {error}"
+                );
+                (fallback_catalog, reason)
+            }
+        };
         return build_blocked_spec_run_report(
             pack.pack_id.clone(),
             spec.agent_id.clone(),
             reason,
             approval_guard,
+            bridge_support_source.clone(),
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -475,13 +593,27 @@ pub async fn execute_spec_with_native_tool_executor(
         );
     }
     if let Err(error) = apply_default_selection(&mut kernel, spec.defaults.as_ref()) {
+        let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+        let (integration_catalog, reason) = match snapshot_result {
+            Ok(catalog) => (catalog, error),
+            Err(snapshot_error) => {
+                let fallback_catalog = integration_catalog.clone();
+                let reason = format!(
+                    "{error}; failed to snapshot runtime integration catalog: {snapshot_error}"
+                );
+                (fallback_catalog, reason)
+            }
+        };
         return build_blocked_spec_run_report(
             pack.pack_id.clone(),
             spec.agent_id.clone(),
-            error,
+            reason,
             approval_guard,
+            bridge_support_source.clone(),
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -501,14 +633,28 @@ pub async fn execute_spec_with_native_tool_executor(
     let token = match kernel.issue_token(&pack.pack_id, &spec.agent_id, spec.ttl_s) {
         Ok(token) => token,
         Err(error) => {
-            let reason = format!("token issue for spec failed: {error}");
+            let base_reason = format!("token issue for spec failed: {error}");
+            let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+            let (integration_catalog, reason) = match snapshot_result {
+                Ok(catalog) => (catalog, base_reason),
+                Err(error) => {
+                    let fallback_catalog = integration_catalog.clone();
+                    let reason = format!(
+                        "{base_reason}; failed to snapshot runtime integration catalog: {error}"
+                    );
+                    (fallback_catalog, reason)
+                }
+            };
             return build_blocked_spec_run_report(
                 pack.pack_id.clone(),
                 spec.agent_id.clone(),
                 reason,
                 approval_guard,
+                bridge_support_source.clone(),
                 bridge_support_checksum,
                 bridge_support_sha256,
+                bridge_support_delta_source.clone(),
+                bridge_support_delta_sha256.clone(),
                 self_awareness,
                 architecture_guard,
                 plugin_scan_reports,
@@ -534,19 +680,66 @@ pub async fn execute_spec_with_native_tool_executor(
         &plugin_scan_reports,
         &plugin_translation_reports,
         &setup_readiness_context,
+        &plugin_activation_plans,
+        spec.bridge_support.as_ref().filter(|bridge| bridge.enabled),
         &spec.operation,
     )
     .await
     {
         Ok(result) => result,
         Err(error) => {
+            let snapshot_result = snapshot_runtime_integration_catalog(&shared_catalog);
+            let (integration_catalog, reason) = match snapshot_result {
+                Ok(catalog) => (catalog, error),
+                Err(snapshot_error) => {
+                    let fallback_catalog = integration_catalog.clone();
+                    let reason = format!(
+                        "{error}; failed to snapshot runtime integration catalog: {snapshot_error}"
+                    );
+                    (fallback_catalog, reason)
+                }
+            };
             return build_blocked_spec_run_report(
                 pack.pack_id.clone(),
                 spec.agent_id.clone(),
-                error,
+                reason,
                 approval_guard,
+                bridge_support_source.clone(),
                 bridge_support_checksum,
                 bridge_support_sha256,
+                bridge_support_delta_source.clone(),
+                bridge_support_delta_sha256.clone(),
+                self_awareness,
+                architecture_guard,
+                plugin_scan_reports,
+                plugin_translation_reports,
+                plugin_activation_plans,
+                plugin_bootstrap_reports,
+                plugin_bootstrap_queue,
+                plugin_absorb_reports,
+                security_scan_report,
+                auto_provision_plan,
+                integration_catalog,
+                include_audit,
+                &audit_sink,
+            );
+        }
+    };
+
+    let integration_catalog = match snapshot_runtime_integration_catalog(&shared_catalog) {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            let reason = format!("snapshotting runtime integration catalog failed: {error}");
+            return build_blocked_spec_run_report(
+                pack.pack_id.clone(),
+                spec.agent_id.clone(),
+                reason,
+                approval_guard,
+                bridge_support_source.clone(),
+                bridge_support_checksum,
+                bridge_support_sha256,
+                bridge_support_delta_source.clone(),
+                bridge_support_delta_sha256.clone(),
                 self_awareness,
                 architecture_guard,
                 plugin_scan_reports,
@@ -578,8 +771,11 @@ pub async fn execute_spec_with_native_tool_executor(
             spec.agent_id.clone(),
             reason,
             approval_guard,
+            bridge_support_source,
             bridge_support_checksum,
             bridge_support_sha256,
+            bridge_support_delta_source.clone(),
+            bridge_support_delta_sha256.clone(),
             self_awareness,
             architecture_guard,
             plugin_scan_reports,
@@ -597,13 +793,22 @@ pub async fn execute_spec_with_native_tool_executor(
     }
 
     SpecRunReport {
+        schema_version: SPEC_RUN_REPORT_SCHEMA_VERSION,
+        schema: json_schema_descriptor(
+            SPEC_RUN_REPORT_SCHEMA_VERSION,
+            SPEC_RUN_REPORT_SCHEMA_SURFACE,
+            SPEC_RUN_REPORT_SCHEMA_PURPOSE,
+        ),
         pack_id: pack.pack_id.clone(),
         agent_id: spec.agent_id.clone(),
         operation_kind,
         blocked_reason,
         approval_guard,
+        bridge_support_source,
         bridge_support_checksum,
         bridge_support_sha256,
+        bridge_support_delta_source,
+        bridge_support_delta_sha256,
         self_awareness,
         architecture_guard,
         plugin_scan_reports,
@@ -639,8 +844,11 @@ fn build_blocked_spec_run_report(
     agent_id: String,
     reason: String,
     approval_guard: ApprovalDecisionReport,
+    bridge_support_source: Option<String>,
     bridge_support_checksum: Option<String>,
     bridge_support_sha256: Option<String>,
+    bridge_support_delta_source: Option<String>,
+    bridge_support_delta_sha256: Option<String>,
     self_awareness: Option<CodebaseAwarenessSnapshot>,
     architecture_guard: Option<ArchitectureGuardReport>,
     plugin_scan_reports: Vec<PluginScanReport>,
@@ -661,13 +869,22 @@ fn build_blocked_spec_run_report(
         &plugin_bootstrap_reports,
     );
     SpecRunReport {
+        schema_version: SPEC_RUN_REPORT_SCHEMA_VERSION,
+        schema: json_schema_descriptor(
+            SPEC_RUN_REPORT_SCHEMA_VERSION,
+            SPEC_RUN_REPORT_SCHEMA_SURFACE,
+            SPEC_RUN_REPORT_SCHEMA_PURPOSE,
+        ),
         pack_id,
         agent_id,
         operation_kind: "blocked",
         blocked_reason: Some(reason.clone()),
         approval_guard,
+        bridge_support_source,
         bridge_support_checksum,
         bridge_support_sha256,
+        bridge_support_delta_source,
+        bridge_support_delta_sha256,
         self_awareness,
         architecture_guard,
         plugin_scan_reports,
@@ -1130,15 +1347,7 @@ fn descriptor_bridge_kind(descriptor: &PluginDescriptor) -> PluginBridgeKind {
 fn bridge_support_matrix(spec: &RunnerSpec) -> (BridgeSupportMatrix, bool) {
     match &spec.bridge_support {
         Some(bridge) if bridge.enabled => {
-            let mut matrix = BridgeSupportMatrix::default();
-            if !bridge.supported_bridges.is_empty() {
-                matrix.supported_bridges = bridge.supported_bridges.iter().copied().collect();
-            }
-            if !bridge.supported_adapter_families.is_empty() {
-                matrix.supported_adapter_families =
-                    bridge.supported_adapter_families.iter().cloned().collect();
-            }
-            (matrix, bridge.enforce_supported)
+            (bridge_support_spec_matrix(bridge), bridge.enforce_supported)
         }
         _ => (BridgeSupportMatrix::default(), false),
     }
@@ -1218,20 +1427,80 @@ fn collect_verified_name_list(values: &[String]) -> BTreeSet<String> {
     verified_names
 }
 
+pub(super) fn bridge_support_spec_matrix(bridge: &BridgeSupportSpec) -> BridgeSupportMatrix {
+    let mut matrix = BridgeSupportMatrix::default();
+    if !bridge.supported_bridges.is_empty() {
+        matrix.supported_bridges = bridge.supported_bridges.iter().copied().collect();
+    }
+    if !bridge.supported_adapter_families.is_empty() {
+        matrix.supported_adapter_families =
+            bridge.supported_adapter_families.iter().cloned().collect();
+    }
+    if !bridge.supported_compatibility_modes.is_empty() {
+        matrix.supported_compatibility_modes = bridge
+            .supported_compatibility_modes
+            .iter()
+            .copied()
+            .collect();
+    }
+    if !bridge.supported_compatibility_shims.is_empty() {
+        matrix.supported_compatibility_shims = bridge
+            .supported_compatibility_shims
+            .iter()
+            .cloned()
+            .collect();
+    }
+    if !bridge.supported_compatibility_shim_profiles.is_empty() {
+        matrix.supported_compatibility_shim_profiles = bridge
+            .supported_compatibility_shim_profiles
+            .iter()
+            .cloned()
+            .map(PluginCompatibilityShimSupport::normalized)
+            .map(|profile| (profile.shim.clone(), profile))
+            .collect();
+        matrix
+            .supported_compatibility_shims
+            .extend(matrix.supported_compatibility_shim_profiles.keys().cloned());
+    }
+    matrix
+}
+
+fn raw_bridge_runtime_spec(spec: &RunnerSpec) -> SecurityRuntimeExecutionSpec {
+    let raw_runtime = spec
+        .bridge_support
+        .as_ref()
+        .filter(|bridge| bridge.enabled)
+        .and_then(|bridge| bridge.security_scan.as_ref())
+        .map(|scan| scan.runtime.clone());
+
+    raw_runtime.unwrap_or_default()
+}
+
 fn bridge_runtime_policy(
     spec: &RunnerSpec,
     security_scan: Option<&SecurityScanSpec>,
-) -> BridgeRuntimePolicy {
+) -> CliResult<BridgeRuntimePolicy> {
     let Some(bridge) = &spec.bridge_support else {
-        return BridgeRuntimePolicy::default();
+        return Ok(BridgeRuntimePolicy::default());
     };
     if !bridge.enabled {
-        return BridgeRuntimePolicy::default();
+        return Ok(BridgeRuntimePolicy::default());
     }
 
     let runtime = security_scan
         .map(|scan| scan.runtime.clone())
         .unwrap_or_default();
+    let raw_runtime = raw_bridge_runtime_spec(spec);
+    let bridge_circuit_breaker = if security_scan.is_some() {
+        runtime.bridge_circuit_breaker.clone()
+    } else {
+        raw_runtime.bridge_circuit_breaker
+    };
+    validate_connector_circuit_breaker_policy(
+        &bridge_circuit_breaker,
+        "bridge runtime circuit breaker",
+    )?;
+    let (compatibility_matrix, _) = bridge_support_matrix(spec);
     let (wasm_require_hash_pin, wasm_required_sha256_by_plugin) = security_scan
         .map(|scan| {
             (
@@ -1247,23 +1516,25 @@ fn bridge_runtime_policy(
         .map(|path| normalize_path_for_policy(&path))
         .collect();
 
-    BridgeRuntimePolicy {
+    Ok(BridgeRuntimePolicy {
         execute_process_stdio: bridge.execute_process_stdio,
         execute_http_json: bridge.execute_http_json,
         execute_wasm_component: runtime.execute_wasm_component,
+        compatibility_matrix,
         allowed_process_commands: bridge
             .allowed_process_commands
             .iter()
             .map(|value| value.trim().to_ascii_lowercase())
             .filter(|value| !value.is_empty())
             .collect(),
+        bridge_circuit_breaker,
         wasm_allowed_path_prefixes,
         wasm_max_component_bytes: runtime.max_component_bytes,
         wasm_fuel_limit: runtime.fuel_limit,
         wasm_require_hash_pin,
         wasm_required_sha256_by_plugin,
         enforce_execution_success: bridge.enforce_execution_success,
-    }
+    })
 }
 
 pub fn current_epoch_s() -> u64 {
@@ -1342,10 +1613,25 @@ fn filter_scan_report_by_keys(
         })
         .cloned()
         .collect();
+    let diagnostic_findings = report
+        .diagnostic_findings
+        .iter()
+        .filter(|finding| {
+            let (Some(source_path), Some(plugin_id)) =
+                (finding.source_path.as_deref(), finding.plugin_id.as_deref())
+            else {
+                return false;
+            };
+
+            allowed_keys.contains(&(source_path.to_owned(), plugin_id.to_owned()))
+        })
+        .cloned()
+        .collect();
 
     PluginScanReport {
         scanned_files: report.scanned_files,
         matched_plugins: descriptors.len(),
+        diagnostic_findings,
         descriptors,
     }
 }
@@ -1353,9 +1639,14 @@ fn filter_scan_report_by_keys(
 fn enrich_scan_report_with_translation(
     report: &PluginScanReport,
     translation: &PluginTranslationReport,
+    activation: Option<&PluginActivationPlan>,
 ) -> PluginScanReport {
     let mut runtime_by_key: BTreeMap<(String, String), (String, String, String, String)> =
         BTreeMap::new();
+    let mut activation_contracts_by_key: BTreeMap<
+        (String, String),
+        PluginActivationRuntimeContract,
+    > = BTreeMap::new();
 
     for entry in &translation.entries {
         runtime_by_key.insert(
@@ -1369,24 +1660,67 @@ fn enrich_scan_report_with_translation(
         );
     }
 
+    if let Some(activation) = activation {
+        for entry in &translation.entries {
+            let Some(candidate) = activation.candidate_for(&entry.source_path, &entry.plugin_id)
+            else {
+                continue;
+            };
+            if !matches!(candidate.status, PluginActivationStatus::Ready) {
+                continue;
+            }
+
+            activation_contracts_by_key.insert(
+                (entry.source_path.clone(), entry.plugin_id.clone()),
+                PluginActivationRuntimeContract {
+                    plugin_id: entry.plugin_id.clone(),
+                    source_path: entry.source_path.clone(),
+                    source_kind: entry.source_kind,
+                    dialect: entry.dialect,
+                    dialect_version: entry.dialect_version.clone(),
+                    compatibility_mode: entry.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
+                    bridge_kind: entry.runtime.bridge_kind,
+                    adapter_family: entry.runtime.adapter_family.clone(),
+                    entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
+                    source_language: entry.runtime.source_language.clone(),
+                    compatibility: entry.compatibility.clone(),
+                },
+            );
+        }
+    }
+
     let descriptors: Vec<PluginDescriptor> = report
         .descriptors
         .iter()
         .cloned()
         .map(|mut descriptor| {
             stamp_plugin_provenance_metadata(&mut descriptor);
-            descriptor
-                .manifest
-                .metadata
-                .entry("plugin_id".to_owned())
-                .or_insert_with(|| descriptor.manifest.plugin_id.clone());
-            descriptor
-                .manifest
-                .metadata
-                .entry("defer_loading".to_owned())
-                .or_insert_with(|| descriptor.manifest.defer_loading.to_string());
+            descriptor.manifest.metadata.insert(
+                "plugin_id".to_owned(),
+                descriptor.manifest.plugin_id.clone(),
+            );
+            descriptor.manifest.metadata.insert(
+                "defer_loading".to_owned(),
+                descriptor.manifest.defer_loading.to_string(),
+            );
             let setup = descriptor.manifest.setup.clone();
             insert_plugin_setup_metadata(&mut descriptor.manifest.metadata, setup.as_ref());
+            insert_plugin_slot_claims_metadata(
+                &mut descriptor.manifest.metadata,
+                &descriptor.manifest.slot_claims,
+            );
+            let manifest_api_version = descriptor.manifest.api_version.clone();
+            let plugin_version = descriptor.manifest.version.clone();
+            insert_plugin_manifest_contract_metadata(
+                &mut descriptor.manifest.metadata,
+                manifest_api_version,
+                plugin_version,
+            );
+            insert_plugin_compatibility_metadata(
+                &mut descriptor.manifest.metadata,
+                descriptor.manifest.compatibility.as_ref(),
+            );
             if let Some(summary) = descriptor.manifest.summary.clone() {
                 descriptor
                     .manifest
@@ -1426,11 +1760,15 @@ fn enrich_scan_report_with_translation(
             if let Some(component) = descriptor.manifest.metadata.get("component").cloned() {
                 let resolved = resolve_plugin_relative_path(&descriptor.path, &component);
                 let normalized = normalize_path_for_policy(&resolved);
+                descriptor.manifest.metadata.insert(
+                    "component_resolved_path".to_owned(),
+                    normalized.display().to_string(),
+                );
+            } else {
                 descriptor
                     .manifest
                     .metadata
-                    .entry("component_resolved_path".to_owned())
-                    .or_insert_with(|| normalized.display().to_string());
+                    .remove("component_resolved_path");
             }
 
             if let Some((bridge_kind, adapter_family, entrypoint_hint, source_language)) =
@@ -1442,24 +1780,32 @@ fn enrich_scan_report_with_translation(
                 descriptor
                     .manifest
                     .metadata
-                    .entry("bridge_kind".to_owned())
-                    .or_insert_with(|| bridge_kind.clone());
+                    .insert("bridge_kind".to_owned(), bridge_kind.clone());
                 descriptor
                     .manifest
                     .metadata
-                    .entry("adapter_family".to_owned())
-                    .or_insert_with(|| adapter_family.clone());
+                    .insert("adapter_family".to_owned(), adapter_family.clone());
                 descriptor
                     .manifest
                     .metadata
-                    .entry("entrypoint_hint".to_owned())
-                    .or_insert_with(|| entrypoint_hint.clone());
+                    .insert("entrypoint_hint".to_owned(), entrypoint_hint.clone());
                 descriptor
                     .manifest
                     .metadata
-                    .entry("source_language".to_owned())
-                    .or_insert_with(|| source_language.clone());
+                    .insert("source_language".to_owned(), source_language.clone());
+            } else {
+                descriptor.manifest.metadata.remove("bridge_kind");
+                descriptor.manifest.metadata.remove("adapter_family");
+                descriptor.manifest.metadata.remove("entrypoint_hint");
+                descriptor.manifest.metadata.remove("source_language");
             }
+            insert_plugin_activation_runtime_contract_metadata(
+                &mut descriptor.manifest.metadata,
+                activation_contracts_by_key.get(&(
+                    descriptor.path.clone(),
+                    descriptor.manifest.plugin_id.clone(),
+                )),
+            );
             descriptor
         })
         .collect();
@@ -1467,8 +1813,35 @@ fn enrich_scan_report_with_translation(
     PluginScanReport {
         scanned_files: report.scanned_files,
         matched_plugins: descriptors.len(),
+        diagnostic_findings: report.diagnostic_findings.clone(),
         descriptors,
     }
+}
+
+fn insert_plugin_activation_runtime_contract_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    contract: Option<&PluginActivationRuntimeContract>,
+) {
+    let Some(contract) = contract else {
+        metadata.remove(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY);
+        metadata.remove(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY);
+        return;
+    };
+
+    let Ok(serialized) = plugin_activation_runtime_contract_json(contract) else {
+        metadata.remove(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY);
+        metadata.remove(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY);
+        return;
+    };
+
+    metadata.insert(
+        PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY.to_owned(),
+        serialized.clone(),
+    );
+    metadata.insert(
+        PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY.to_owned(),
+        activation_runtime_contract_checksum_hex(serialized.as_bytes()),
+    );
 }
 
 fn stamp_plugin_provenance_metadata(descriptor: &mut PluginDescriptor) {
@@ -1476,6 +1849,10 @@ fn stamp_plugin_provenance_metadata(descriptor: &mut PluginDescriptor) {
     let source_path_value = descriptor.path.clone();
     let source_kind_key = "plugin_source_kind".to_owned();
     let source_kind_value = descriptor.source_kind.as_str().to_owned();
+    let dialect_key = "plugin_dialect".to_owned();
+    let dialect_value = descriptor.dialect.as_str().to_owned();
+    let compatibility_mode_key = "plugin_compatibility_mode".to_owned();
+    let compatibility_mode_value = descriptor.compatibility_mode.as_str().to_owned();
     let package_root_key = "plugin_package_root".to_owned();
     let package_root_value = descriptor.package_root.clone();
     let package_manifest_path_value = descriptor.package_manifest_path.clone();
@@ -1487,9 +1864,25 @@ fn stamp_plugin_provenance_metadata(descriptor: &mut PluginDescriptor) {
 
     metadata.insert(source_path_key, source_path_value);
     metadata.insert(source_kind_key, source_kind_value);
+    metadata.insert(dialect_key, dialect_value);
+    metadata.insert(compatibility_mode_key, compatibility_mode_value);
     metadata.insert(package_root_key, package_root_value);
     metadata.insert(provenance_summary_key, provenance_summary_value);
     metadata.insert(trust_tier_key, trust_tier_value);
+
+    if let Some(shim) = kernel::PluginCompatibilityShim::for_mode(descriptor.compatibility_mode) {
+        metadata.insert("plugin_compatibility_shim_id".to_owned(), shim.shim_id);
+        metadata.insert("plugin_compatibility_shim_family".to_owned(), shim.family);
+    } else {
+        metadata.remove("plugin_compatibility_shim_id");
+        metadata.remove("plugin_compatibility_shim_family");
+    }
+
+    if let Some(dialect_version) = descriptor.dialect_version.clone() {
+        metadata.insert("plugin_dialect_version".to_owned(), dialect_version);
+    } else {
+        metadata.remove("plugin_dialect_version");
+    }
 
     if let Some(package_manifest_path_value) = package_manifest_path_value {
         let package_manifest_path_key = "plugin_package_manifest_path".to_owned();
@@ -1505,6 +1898,14 @@ fn insert_plugin_setup_metadata(
     setup: Option<&PluginSetup>,
 ) {
     let Some(setup) = setup else {
+        metadata.remove("plugin_setup_mode");
+        metadata.remove("plugin_setup_surface");
+        metadata.remove("plugin_setup_required_env_vars_json");
+        metadata.remove("plugin_setup_recommended_env_vars_json");
+        metadata.remove("plugin_setup_required_config_keys_json");
+        metadata.remove("plugin_setup_default_env_var");
+        metadata.remove("plugin_setup_docs_urls_json");
+        metadata.remove("plugin_setup_remediation");
         return;
     };
 
@@ -1515,6 +1916,8 @@ fn insert_plugin_setup_metadata(
     if let Some(surface) = setup.surface.clone() {
         let surface_key = "plugin_setup_surface".to_owned();
         metadata.insert(surface_key, surface);
+    } else {
+        metadata.remove("plugin_setup_surface");
     }
 
     insert_plugin_setup_string_list_metadata(
@@ -1536,6 +1939,8 @@ fn insert_plugin_setup_metadata(
     if let Some(default_env_var) = setup.default_env_var.clone() {
         let default_env_var_key = "plugin_setup_default_env_var".to_owned();
         metadata.insert(default_env_var_key, default_env_var);
+    } else {
+        metadata.remove("plugin_setup_default_env_var");
     }
 
     insert_plugin_setup_string_list_metadata(
@@ -1547,6 +1952,8 @@ fn insert_plugin_setup_metadata(
     if let Some(remediation) = setup.remediation.clone() {
         let remediation_key = "plugin_setup_remediation".to_owned();
         metadata.insert(remediation_key, remediation);
+    } else {
+        metadata.remove("plugin_setup_remediation");
     }
 }
 
@@ -1558,27 +1965,80 @@ fn insert_plugin_setup_string_list_metadata(
     let is_empty = values.is_empty();
 
     if is_empty {
+        metadata.remove(key);
         return;
     }
 
     let serialized = serde_json::to_string(values);
     let Ok(serialized) = serialized else {
+        metadata.remove(key);
         return;
     };
 
     let metadata_key = key.to_owned();
     metadata.insert(metadata_key, serialized);
 }
-fn fnv1a64_hex(bytes: &[u8]) -> String {
-    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
-    const PRIME: u64 = 0x100000001b3;
 
-    let mut hash = OFFSET_BASIS;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(PRIME);
+fn insert_plugin_slot_claims_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    slot_claims: &[PluginSlotClaim],
+) {
+    if slot_claims.is_empty() {
+        metadata.remove("plugin_slot_claims_json");
+        return;
     }
-    format!("{hash:016x}")
+
+    if let Ok(serialized) = serde_json::to_string(slot_claims) {
+        metadata.insert("plugin_slot_claims_json".to_owned(), serialized);
+    }
+}
+
+fn insert_plugin_manifest_contract_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    manifest_api_version: Option<String>,
+    plugin_version: Option<String>,
+) {
+    if let Some(api_version) = manifest_api_version {
+        metadata.insert("plugin_manifest_api_version".to_owned(), api_version);
+    } else {
+        metadata.remove("plugin_manifest_api_version");
+    }
+
+    if let Some(version) = plugin_version {
+        metadata.insert("plugin_version".to_owned(), version);
+    } else {
+        metadata.remove("plugin_version");
+    }
+}
+
+fn insert_plugin_compatibility_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    compatibility: Option<&PluginCompatibility>,
+) {
+    let Some(compatibility) = compatibility else {
+        metadata.remove("plugin_compatibility_host_api");
+        metadata.remove("plugin_compatibility_host_version_req");
+        return;
+    };
+
+    if let Some(host_api) = compatibility.host_api.clone() {
+        metadata.insert("plugin_compatibility_host_api".to_owned(), host_api);
+    } else {
+        metadata.remove("plugin_compatibility_host_api");
+    }
+
+    if let Some(host_version_req) = compatibility.host_version_req.clone() {
+        metadata.insert(
+            "plugin_compatibility_host_version_req".to_owned(),
+            host_version_req,
+        );
+    } else {
+        metadata.remove("plugin_compatibility_host_version_req");
+    }
+}
+
+fn fnv1a64_hex(bytes: &[u8]) -> String {
+    activation_runtime_contract_checksum_hex(bytes)
 }
 
 pub fn hex_lower(bytes: &[u8]) -> String {
@@ -1622,13 +2082,26 @@ fn register_dynamic_catalog_connectors(
     };
 
     for provider in snapshot {
-        kernel.register_core_connector_adapter(DynamicCatalogConnector {
-            connector_name: provider.connector_name,
-            provider_id: provider.provider_id,
-            catalog: catalog.clone(),
-            bridge_runtime_policy: bridge_runtime_policy.clone(),
-        });
+        let connector = DynamicCatalogConnector::new(
+            provider.connector_name,
+            provider.provider_id,
+            catalog.clone(),
+            bridge_runtime_policy.clone(),
+        );
+
+        kernel.register_core_connector_adapter(connector);
     }
+}
+
+fn snapshot_runtime_integration_catalog(
+    catalog: &Arc<Mutex<IntegrationCatalog>>,
+) -> Result<IntegrationCatalog, String> {
+    let guard = catalog
+        .lock()
+        .map_err(|_err| "integration catalog mutex poisoned".to_owned())?;
+    let snapshot = guard.clone();
+
+    Ok(snapshot)
 }
 
 fn operation_connector_name(operation: &OperationSpec) -> Option<String> {
@@ -1662,6 +2135,8 @@ async fn execute_spec_operation(
     plugin_scan_reports: &[PluginScanReport],
     plugin_translation_reports: &[PluginTranslationReport],
     setup_readiness_context: &PluginSetupReadinessContext,
+    plugin_activation_plans: &[PluginActivationPlan],
+    active_bridge_support: Option<&BridgeSupportSpec>,
     operation: &OperationSpec,
 ) -> CliResult<(&'static str, Value)> {
     match operation {
@@ -1928,6 +2403,7 @@ async fn execute_spec_operation(
                 plugin_scan_reports,
                 plugin_translation_reports,
                 setup_readiness_context,
+                plugin_activation_plans,
                 query,
                 *limit,
                 trust_tiers,
@@ -1945,6 +2421,90 @@ async fn execute_spec_operation(
                     "returned": search_report.results.len(),
                     "trust_filter_summary": search_report.trust_filter_summary,
                     "results": search_report.results,
+                }),
+            ))
+        }
+        OperationSpec::PluginInventory {
+            query,
+            limit,
+            include_ready,
+            include_blocked,
+            include_deferred,
+            include_examples,
+        } => {
+            let results = execute_plugin_inventory(
+                integration_catalog,
+                plugin_scan_reports,
+                plugin_translation_reports,
+                plugin_activation_plans,
+                query,
+                *limit,
+                *include_ready,
+                *include_blocked,
+                *include_deferred,
+                *include_examples,
+            );
+            Ok((
+                "plugin_inventory",
+                json!({
+                    "query": query,
+                    "limit": limit,
+                    "include_ready": include_ready,
+                    "include_blocked": include_blocked,
+                    "include_deferred": include_deferred,
+                    "include_examples": include_examples,
+                    "returned": results.len(),
+                    "results": results,
+                }),
+            ))
+        }
+        OperationSpec::PluginPreflight {
+            query,
+            limit,
+            profile,
+            policy_path,
+            policy_sha256,
+            policy_signature,
+            include_passed,
+            include_warned,
+            include_blocked,
+            include_deferred,
+            include_examples,
+        } => {
+            let report = execute_plugin_preflight(
+                integration_catalog,
+                plugin_scan_reports,
+                plugin_translation_reports,
+                plugin_activation_plans,
+                active_bridge_support,
+                query,
+                *limit,
+                *profile,
+                policy_path.as_deref(),
+                policy_sha256.as_deref(),
+                policy_signature.as_ref(),
+                *include_passed,
+                *include_warned,
+                *include_blocked,
+                *include_deferred,
+                *include_examples,
+            )?;
+            Ok((
+                "plugin_preflight",
+                json!({
+                    "query": query,
+                    "limit": limit,
+                    "profile": profile.as_str(),
+                    "policy_path": policy_path,
+                    "policy_sha256": policy_sha256,
+                    "include_passed": include_passed,
+                    "include_warned": include_warned,
+                    "include_blocked": include_blocked,
+                    "include_deferred": include_deferred,
+                    "include_examples": include_examples,
+                    "summary": report.summary,
+                    "returned": report.results.len(),
+                    "results": report.results,
                 }),
             ))
         }
@@ -2142,11 +2702,61 @@ mod setup_readiness_context_tests {
 }
 
 #[cfg(test)]
+mod bridge_runtime_policy_tests {
+    use super::*;
+
+    #[test]
+    fn bridge_runtime_policy_honors_raw_circuit_breaker_override_when_scan_is_disabled() {
+        let mut spec = RunnerSpec::template();
+        let (mut bridge, _source) =
+            load_bundled_bridge_support_policy("openclaw-ecosystem-balanced")
+                .expect("bundled bridge support should resolve");
+        let mut security_scan = SecurityScanSpec {
+            enabled: false,
+            ..SecurityScanSpec::default()
+        };
+        security_scan.runtime.bridge_circuit_breaker.enabled = false;
+        bridge.security_scan = Some(security_scan);
+        spec.bridge_support = Some(bridge);
+
+        let policy =
+            bridge_runtime_policy(&spec, None).expect("bridge runtime policy should build");
+
+        assert!(!policy.bridge_circuit_breaker.enabled);
+    }
+
+    #[test]
+    fn bridge_runtime_policy_rejects_invalid_circuit_breaker_override() {
+        let mut spec = RunnerSpec::template();
+        let (mut bridge, _source) =
+            load_bundled_bridge_support_policy("openclaw-ecosystem-balanced")
+                .expect("bundled bridge support should resolve");
+        let mut security_scan = SecurityScanSpec {
+            enabled: false,
+            ..SecurityScanSpec::default()
+        };
+        security_scan
+            .runtime
+            .bridge_circuit_breaker
+            .failure_threshold = 0;
+        bridge.security_scan = Some(security_scan);
+        spec.bridge_support = Some(bridge);
+
+        let error = bridge_runtime_policy(&spec, None)
+            .expect_err("invalid bridge circuit breaker policy should fail");
+
+        assert!(error.contains("failure_threshold"));
+    }
+}
+
+#[cfg(test)]
 mod plugin_metadata_tests {
     use super::*;
     use kernel::{
-        Capability, PluginBridgeKind, PluginDescriptor, PluginIR, PluginManifest,
-        PluginRuntimeProfile, PluginScanReport, PluginSetup, PluginSetupMode, PluginSourceKind,
+        Capability, PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus,
+        PluginBridgeKind, PluginCompatibility, PluginCompatibilityMode, PluginContractDialect,
+        PluginDescriptor, PluginIR, PluginManifest, PluginRuntimeProfile, PluginScanReport,
+        PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
         PluginTranslationReport, PluginTrustTier,
     };
     use std::collections::{BTreeMap, BTreeSet};
@@ -2168,10 +2778,20 @@ mod plugin_metadata_tests {
         PluginDescriptor {
             path,
             source_kind,
+            dialect: match source_kind {
+                PluginSourceKind::PackageManifest => {
+                    PluginContractDialect::LoongClawPackageManifest
+                }
+                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+            },
+            dialect_version: Some("v1alpha1".to_owned()),
+            compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp/pkg".to_owned(),
             package_manifest_path,
             language,
             manifest: PluginManifest {
+                api_version: Some("v1alpha1".to_owned()),
+                version: Some("0.3.0".to_owned()),
                 plugin_id: "search-plugin".to_owned(),
                 provider_id: "search-provider".to_owned(),
                 connector_name: "search-connector".to_owned(),
@@ -2195,6 +2815,15 @@ mod plugin_metadata_tests {
                     docs_urls: vec!["https://docs.example.com/tavily".to_owned()],
                     remediation: Some("set a Tavily credential before enabling search".to_owned()),
                 }),
+                slot_claims: vec![PluginSlotClaim {
+                    slot: "provider:web_search".to_owned(),
+                    key: "tavily".to_owned(),
+                    mode: PluginSlotMode::Exclusive,
+                }],
+                compatibility: Some(PluginCompatibility {
+                    host_api: Some("loongclaw-plugin/v1".to_owned()),
+                    host_version_req: Some(">=0.1.0-alpha.1".to_owned()),
+                }),
             },
         }
     }
@@ -2204,6 +2833,11 @@ mod plugin_metadata_tests {
             translated_plugins: 1,
             bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
             entries: vec![PluginIR {
+                manifest_api_version: descriptor.manifest.api_version.clone(),
+                plugin_version: descriptor.manifest.version.clone(),
+                dialect: descriptor.dialect,
+                dialect_version: descriptor.dialect_version.clone(),
+                compatibility_mode: descriptor.compatibility_mode,
                 plugin_id: descriptor.manifest.plugin_id.clone(),
                 provider_id: descriptor.manifest.provider_id.clone(),
                 connector_name: descriptor.manifest.connector_name.clone(),
@@ -2216,7 +2850,10 @@ mod plugin_metadata_tests {
                 source_kind: descriptor.source_kind,
                 package_root: descriptor.package_root.clone(),
                 package_manifest_path: descriptor.package_manifest_path.clone(),
+                diagnostic_findings: Vec::new(),
                 setup: descriptor.manifest.setup.clone(),
+                slot_claims: descriptor.manifest.slot_claims.clone(),
+                compatibility: descriptor.manifest.compatibility.clone(),
                 runtime: PluginRuntimeProfile {
                     source_language: descriptor.language.clone(),
                     bridge_kind: PluginBridgeKind::HttpJson,
@@ -2227,17 +2864,48 @@ mod plugin_metadata_tests {
         }
     }
 
+    fn ready_activation_plan(descriptor: &PluginDescriptor) -> PluginActivationPlan {
+        PluginActivationPlan {
+            total_plugins: 1,
+            ready_plugins: 1,
+            setup_incomplete_plugins: 0,
+            blocked_plugins: 0,
+            candidates: vec![PluginActivationCandidate {
+                plugin_id: descriptor.manifest.plugin_id.clone(),
+                source_path: descriptor.path.clone(),
+                source_kind: descriptor.source_kind,
+                package_root: descriptor.package_root.clone(),
+                package_manifest_path: descriptor.package_manifest_path.clone(),
+                trust_tier: descriptor.manifest.trust_tier,
+                compatibility_mode: descriptor.compatibility_mode,
+                compatibility_shim: None,
+                compatibility_shim_support: None,
+                compatibility_shim_support_mismatch_reasons: Vec::new(),
+                bridge_kind: PluginBridgeKind::HttpJson,
+                adapter_family: "http-adapter".to_owned(),
+                slot_claims: descriptor.manifest.slot_claims.clone(),
+                diagnostic_findings: Vec::new(),
+                status: PluginActivationStatus::Ready,
+                reason: "plugin runtime profile is supported by current runtime matrix".to_owned(),
+                missing_required_env_vars: Vec::new(),
+                missing_required_config_keys: Vec::new(),
+                bootstrap_hint: "spawn python worker and then wire http adapter".to_owned(),
+            }],
+        }
+    }
+
     #[test]
     fn enrich_scan_report_adds_package_manifest_provenance_and_setup_metadata() {
         let descriptor = test_descriptor(PluginSourceKind::PackageManifest);
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
@@ -2284,6 +2952,32 @@ mod plugin_metadata_tests {
                 .map(String::as_str),
             Some("[\"TAVILY_API_KEY\"]")
         );
+        assert_eq!(
+            metadata.get("plugin_slot_claims_json").map(String::as_str),
+            Some("[{\"slot\":\"provider:web_search\",\"key\":\"tavily\",\"mode\":\"exclusive\"}]")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_manifest_api_version")
+                .map(String::as_str),
+            Some("v1alpha1")
+        );
+        assert_eq!(
+            metadata.get("plugin_version").map(String::as_str),
+            Some("0.3.0")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_compatibility_host_api")
+                .map(String::as_str),
+            Some("loongclaw-plugin/v1")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_compatibility_host_version_req")
+                .map(String::as_str),
+            Some(">=0.1.0-alpha.1")
+        );
     }
 
     #[test]
@@ -2292,11 +2986,12 @@ mod plugin_metadata_tests {
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
@@ -2359,11 +3054,12 @@ mod plugin_metadata_tests {
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
@@ -2428,11 +3124,12 @@ mod plugin_metadata_tests {
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
@@ -2482,11 +3179,12 @@ mod plugin_metadata_tests {
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
@@ -2502,6 +3200,165 @@ mod plugin_metadata_tests {
                 .get("plugin_setup_required_env_vars_json")
                 .map(String::as_str),
             Some("[\"TAVILY_API_KEY\"]")
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_removes_stale_host_projected_metadata_when_authoritative_values_absent() {
+        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
+        descriptor.manifest.setup = None;
+        descriptor.manifest.defer_loading = true;
+        descriptor
+            .manifest
+            .metadata
+            .insert("plugin_id".to_owned(), "forged-plugin-id".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("defer_loading".to_owned(), "false".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("plugin_setup_mode".to_owned(), "legacy".to_owned());
+        descriptor.manifest.metadata.insert(
+            "plugin_setup_required_env_vars_json".to_owned(),
+            "[\"LEGACY_KEY\"]".to_owned(),
+        );
+        descriptor.manifest.metadata.insert(
+            "component_resolved_path".to_owned(),
+            "/tmp/forged-component".to_owned(),
+        );
+        descriptor
+            .manifest
+            .metadata
+            .insert("bridge_kind".to_owned(), "process_stdio".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("adapter_family".to_owned(), "legacy-adapter".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("entrypoint_hint".to_owned(), "stdio://legacy".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("source_language".to_owned(), "legacy".to_owned());
+
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        };
+
+        let enriched =
+            enrich_scan_report_with_translation(&report, &PluginTranslationReport::default(), None);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_id").map(String::as_str),
+            Some("search-plugin")
+        );
+        assert_eq!(
+            metadata.get("defer_loading").map(String::as_str),
+            Some("true")
+        );
+        assert!(!metadata.contains_key("plugin_setup_mode"));
+        assert!(!metadata.contains_key("plugin_setup_required_env_vars_json"));
+        assert!(!metadata.contains_key("component_resolved_path"));
+        assert!(!metadata.contains_key("bridge_kind"));
+        assert!(!metadata.contains_key("adapter_family"));
+        assert!(!metadata.contains_key("entrypoint_hint"));
+        assert!(!metadata.contains_key("source_language"));
+    }
+
+    #[test]
+    fn enrich_scan_report_overwrites_forged_runtime_projection_metadata() {
+        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
+        descriptor
+            .manifest
+            .metadata
+            .insert("bridge_kind".to_owned(), "process_stdio".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("adapter_family".to_owned(), "legacy-adapter".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("entrypoint_hint".to_owned(), "stdio://legacy".to_owned());
+        descriptor
+            .manifest
+            .metadata
+            .insert("source_language".to_owned(), "legacy".to_owned());
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("bridge_kind").map(String::as_str),
+            Some("http_json")
+        );
+        assert_eq!(
+            metadata.get("adapter_family").map(String::as_str),
+            Some("http-adapter")
+        );
+        assert_eq!(
+            metadata.get("entrypoint_hint").map(String::as_str),
+            Some("https://example.com/search")
+        );
+        assert_eq!(
+            metadata.get("source_language").map(String::as_str),
+            Some("manifest")
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_attaches_activation_runtime_contract_metadata() {
+        let descriptor = test_descriptor(PluginSourceKind::EmbeddedSource);
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_translation(&descriptor);
+        let activation = ready_activation_plan(&descriptor);
+
+        let enriched =
+            enrich_scan_report_with_translation(&report, &translation, Some(&activation));
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+        let raw_contract = metadata
+            .get(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY)
+            .expect("activation contract metadata should be stamped");
+        let contract = parse_plugin_activation_runtime_contract(raw_contract)
+            .expect("activation contract should decode");
+        let checksum = activation_runtime_contract_checksum_hex(raw_contract.as_bytes());
+
+        assert_eq!(contract.plugin_id, "search-plugin");
+        assert_eq!(contract.source_path, "/tmp/pkg/plugin.py");
+        assert_eq!(contract.source_kind, PluginSourceKind::EmbeddedSource);
+        assert_eq!(
+            contract.dialect,
+            PluginContractDialect::LoongClawEmbeddedSource
+        );
+        assert_eq!(contract.bridge_kind, PluginBridgeKind::HttpJson);
+        assert_eq!(contract.adapter_family, "http-adapter");
+        assert_eq!(contract.entrypoint_hint, "https://example.com/search");
+        assert_eq!(contract.source_language, "py");
+        assert_eq!(
+            metadata
+                .get(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY)
+                .map(String::as_str),
+            Some(checksum.as_str())
         );
     }
 }
@@ -2524,10 +3381,15 @@ mod plugin_trust_summary_tests {
         PluginDescriptor {
             path: source_path.to_owned(),
             source_kind: PluginSourceKind::EmbeddedSource,
+            dialect: kernel::PluginContractDialect::LoongClawEmbeddedSource,
+            dialect_version: Some("v1alpha1".to_owned()),
+            compatibility_mode: kernel::PluginCompatibilityMode::Native,
             package_root: "/tmp/plugins".to_owned(),
             package_manifest_path: None,
             language: "python".to_owned(),
             manifest: PluginManifest {
+                api_version: Some("v1alpha1".to_owned()),
+                version: Some("0.1.0".to_owned()),
                 plugin_id: plugin_id.to_owned(),
                 provider_id: plugin_id.to_owned(),
                 connector_name: plugin_id.to_owned(),
@@ -2542,6 +3404,8 @@ mod plugin_trust_summary_tests {
                 output_examples: Vec::new(),
                 defer_loading: false,
                 setup: None,
+                slot_claims: Vec::new(),
+                compatibility: None,
             },
         }
     }
@@ -2561,6 +3425,7 @@ mod plugin_trust_summary_tests {
         let scan_report = PluginScanReport {
             scanned_files: 2,
             matched_plugins: 2,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![official, unverified],
         };
         let activation_plan = PluginActivationPlan {
@@ -2576,8 +3441,14 @@ mod plugin_trust_summary_tests {
                     package_root: "/tmp/plugins".to_owned(),
                     package_manifest_path: None,
                     trust_tier: PluginTrustTier::Official,
+                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::HttpJson,
                     adapter_family: "http-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
                     missing_required_env_vars: Vec::new(),
@@ -2591,8 +3462,14 @@ mod plugin_trust_summary_tests {
                     package_root: "/tmp/plugins".to_owned(),
                     package_manifest_path: None,
                     trust_tier: PluginTrustTier::Unverified,
+                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::ProcessStdio,
                     adapter_family: "python-stdio-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
                     missing_required_env_vars: Vec::new(),
@@ -2620,6 +3497,8 @@ mod plugin_trust_summary_tests {
                     plugin_id: "official-http".to_owned(),
                     source_path: "/tmp/plugins/official.rs".to_owned(),
                     trust_tier: PluginTrustTier::Official,
+                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
                     bridge_kind: PluginBridgeKind::HttpJson,
                     adapter_family: "http-adapter".to_owned(),
                     bootstrap_hint: "register provider".to_owned(),
@@ -2630,6 +3509,8 @@ mod plugin_trust_summary_tests {
                     plugin_id: "stdio-review".to_owned(),
                     source_path: "/tmp/plugins/stdio.py".to_owned(),
                     trust_tier: PluginTrustTier::Unverified,
+                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
                     bridge_kind: PluginBridgeKind::ProcessStdio,
                     adapter_family: "python-stdio-adapter".to_owned(),
                     bootstrap_hint: "spawn stdio worker".to_owned(),

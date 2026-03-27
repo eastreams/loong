@@ -1,0 +1,42 @@
+{
+  "policy_version": "medium-balanced-2026-03-26",
+  "runtime_activation": {
+    "block_on_activation_blocked": true,
+    "block_on_blocking_diagnostics": true,
+    "warn_on_advisory_diagnostics": true,
+    "block_on_invalid_runtime_attestation": true,
+    "block_on_foreign_dialect_contract": false,
+    "block_on_legacy_openclaw_contract": false,
+    "block_on_compatibility_shim_required": false,
+    "block_on_compatibility_shim_profile_mismatch": false,
+    "block_on_embedded_source_contract": false,
+    "block_on_legacy_metadata_version": false,
+    "block_on_shadowed_embedded_source": false
+  },
+  "sdk_release": {
+    "block_on_activation_blocked": true,
+    "block_on_blocking_diagnostics": true,
+    "warn_on_advisory_diagnostics": true,
+    "block_on_invalid_runtime_attestation": false,
+    "block_on_foreign_dialect_contract": false,
+    "block_on_legacy_openclaw_contract": true,
+    "block_on_compatibility_shim_required": true,
+    "block_on_compatibility_shim_profile_mismatch": true,
+    "block_on_embedded_source_contract": true,
+    "block_on_legacy_metadata_version": false,
+    "block_on_shadowed_embedded_source": false
+  },
+  "marketplace_submission": {
+    "block_on_activation_blocked": true,
+    "block_on_blocking_diagnostics": true,
+    "warn_on_advisory_diagnostics": true,
+    "block_on_invalid_runtime_attestation": false,
+    "block_on_foreign_dialect_contract": false,
+    "block_on_legacy_openclaw_contract": true,
+    "block_on_compatibility_shim_required": true,
+    "block_on_compatibility_shim_profile_mismatch": true,
+    "block_on_embedded_source_contract": true,
+    "block_on_legacy_metadata_version": true,
+    "block_on_shadowed_embedded_source": true
+  }
+}

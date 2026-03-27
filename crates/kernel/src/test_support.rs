@@ -34,7 +34,9 @@ pub struct MockEmbeddedPiHarness {
 pub struct MockCrmConnector;
 pub struct MockCoreConnector;
 pub struct MockCoreConnectorGrpc;
+pub struct MockPanickingCoreConnector;
 pub struct MockConnectorExtension;
+pub struct MockPanickingConnectorExtension;
 pub struct MockAcpHarness;
 pub struct MockCoreRuntime;
 pub struct MockCoreRuntimeFallback;
@@ -141,6 +143,18 @@ impl CoreConnectorAdapter for MockCoreConnectorGrpc {
     }
 }
 #[async_trait]
+impl CoreConnectorAdapter for MockPanickingCoreConnector {
+    fn name(&self) -> &str {
+        "panic-core"
+    }
+    async fn invoke_core(
+        &self,
+        _command: ConnectorCommand,
+    ) -> Result<ConnectorOutcome, ConnectorError> {
+        panic!("simulated connector core panic");
+    }
+}
+#[async_trait]
 impl ConnectorExtensionAdapter for MockConnectorExtension {
     fn name(&self) -> &str {
         "shielded-bridge"
@@ -162,6 +176,19 @@ impl ConnectorExtensionAdapter for MockConnectorExtension {
             status: "ok".to_owned(),
             payload: json!({"tier":"extension","extension":"shielded-bridge","operation":command.operation,"core_probe":core_probe.payload,"payload":command.payload}),
         })
+    }
+}
+#[async_trait]
+impl ConnectorExtensionAdapter for MockPanickingConnectorExtension {
+    fn name(&self) -> &str {
+        "panic-extension"
+    }
+    async fn invoke_extension(
+        &self,
+        _command: ConnectorCommand,
+        _core: &(dyn CoreConnectorAdapter + Sync),
+    ) -> Result<ConnectorOutcome, ConnectorError> {
+        panic!("simulated connector extension panic");
     }
 }
 #[async_trait]

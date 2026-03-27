@@ -303,6 +303,179 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
     assert_eq!(dispatch.outcome.payload["adapter"], "grpc-core");
 }
 
+#[tokio::test]
+async fn layered_connector_core_panic_isolated_to_connector_error() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockPanickingCoreConnector);
+    kernel.register_core_connector_adapter(MockCoreConnector);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "sync_contacts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"batch": 2}),
+    };
+
+    let error = kernel
+        .execute_connector_core("sales-intel", &token, None, failing_command)
+        .await
+        .expect_err("panicking core adapter should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message == "connector core adapter `panic-core` panicked: simulated connector core panic"
+    ));
+
+    kernel
+        .set_default_core_connector_adapter("http-core")
+        .expect("fallback adapter should be selected");
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "sync_contacts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"batch": 1}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .await
+        .expect("kernel should continue serving connector work");
+
+    assert_eq!(dispatch.outcome.payload["adapter"], "http-core");
+}
+
+#[tokio::test]
+async fn layered_connector_extension_panic_isolated_to_connector_error() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockCoreConnector);
+    kernel.register_connector_extension_adapter(MockPanickingConnectorExtension);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "erp"}),
+    };
+
+    let error = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "panic-extension",
+            None,
+            failing_command,
+        )
+        .await
+        .expect_err("panicking extension adapter should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message
+            == "connector extension adapter `panic-extension` panicked: simulated connector extension panic"
+    ));
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "probe".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"mode": "recovery"}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .await
+        .expect("kernel should continue after extension panic");
+
+    assert_eq!(dispatch.outcome.payload["adapter"], "http-core");
+}
+
+#[tokio::test]
+async fn layered_connector_extension_isolates_nested_core_panic() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockPanickingCoreConnector);
+    kernel.register_core_connector_adapter(MockCoreConnector);
+    kernel.register_connector_extension_adapter(MockConnectorExtension);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "erp"}),
+    };
+
+    let error = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            failing_command,
+        )
+        .await
+        .expect_err("nested core panic should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message == "connector core adapter `panic-core` panicked: simulated connector core panic"
+    ));
+
+    kernel
+        .set_default_core_connector_adapter("http-core")
+        .expect("fallback adapter should be selected");
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "crm"}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            recovery_command,
+        )
+        .await
+        .expect("extension path should recover after nested core panic");
+
+    assert_eq!(dispatch.outcome.payload["extension"], "shielded-bridge");
+    assert_eq!(
+        dispatch.outcome.payload["core_probe"]["adapter"],
+        "http-core"
+    );
+}
+
 #[test]
 fn layered_connector_rejects_unknown_default_adapter_override() {
     let (mut kernel, _audit) =

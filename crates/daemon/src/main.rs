@@ -51,7 +51,8 @@ async fn main() {
             spec,
             print_audit,
             render_summary,
-        } => run_spec_cli(&spec, print_audit, render_summary).await,
+            bridge_support,
+        } => run_spec_cli(&spec, print_audit, render_summary, &bridge_support).await,
         Commands::BenchmarkProgrammaticPressure {
             matrix,
             baseline,
@@ -252,6 +253,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Plugins { json, command } => {
+            plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
+        }
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::RuntimeSnapshot {

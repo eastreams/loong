@@ -1,0 +1,25 @@
+{
+  "enabled": true,
+  "supported_bridges": [
+    "process_stdio",
+    "http_json",
+    "mcp_server",
+    "acp_bridge",
+    "acp_runtime"
+  ],
+  "supported_adapter_families": [],
+  "supported_compatibility_modes": [
+    "native"
+  ],
+  "supported_compatibility_shims": [],
+  "supported_compatibility_shim_profiles": [],
+  "enforce_supported": true,
+  "policy_version": "native-balanced@1",
+  "expected_checksum": null,
+  "expected_sha256": null,
+  "execute_process_stdio": false,
+  "execute_http_json": false,
+  "allowed_process_commands": [],
+  "enforce_execution_success": false,
+  "security_scan": null
+}
