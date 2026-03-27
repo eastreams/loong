@@ -7797,6 +7797,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn channel_catalog_operations_expose_requirement_metadata() {
         let catalog = list_channel_catalog();
         let telegram = catalog
@@ -8548,6 +8549,7 @@ mod tests {
         assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
 
+    #[test]
     fn channel_catalog_includes_dingtalk_and_google_chat_config_backed_webhook_surfaces() {
         let catalog = list_channel_catalog();
         let dingtalk = catalog
