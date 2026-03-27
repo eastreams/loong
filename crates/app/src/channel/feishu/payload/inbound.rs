@@ -3,12 +3,12 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::CliResult;
+use crate::channel::feishu::api::FeishuUserPrincipal;
 use crate::channel::{
     ChannelDeliveryResource, ChannelOutboundTarget, ChannelPlatform, ChannelSession,
     feishu::feishu_allowlist_allows_chat,
 };
 use crate::crypto::timing_safe_eq;
-use crate::feishu::FeishuUserPrincipal;
 
 use super::crypto::decrypt_payload_if_needed;
 use super::types::{

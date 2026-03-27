@@ -3,11 +3,11 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::types::{
     FeishuDownloadedMessageResource, FeishuMessageResourceType, FeishuUploadedFile,
     FeishuUploadedImage,
 };
-use crate::feishu::client::FeishuClient;
 
 pub const FEISHU_DEFAULT_MESSAGE_FILE_TYPE: &str = "stream";
 
@@ -212,7 +212,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::feishu::client::FeishuClient;
+    use crate::channel::feishu::api::client::FeishuClient;
     use axum::{
         Json, Router,
         body::Body,
@@ -279,7 +279,7 @@ mod tests {
 
     #[test]
     fn download_message_resource_maps_binary_response_metadata() {
-        let response = crate::feishu::client::FeishuBinaryResponse {
+        let response = crate::channel::feishu::api::client::FeishuBinaryResponse {
             bytes: b"demo".to_vec(),
             content_type: Some("application/pdf".to_owned()),
             content_disposition: Some("attachment; filename=\"spec-sheet.pdf\"".to_owned()),

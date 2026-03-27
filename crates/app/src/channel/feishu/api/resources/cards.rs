@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::types::FeishuCardUpdateReceipt;
-use crate::feishu::client::FeishuClient;
 
 pub fn build_markdown_card(text: &str) -> Value {
     let content = text.trim();

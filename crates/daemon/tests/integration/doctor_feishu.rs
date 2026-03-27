@@ -25,9 +25,9 @@ fn sample_feishu_config(dir: &std::path::Path) -> mvp::config::LoongClawConfig {
     config
 }
 
-fn sample_grant(account_id: &str, now_s: i64) -> mvp::feishu::FeishuGrant {
-    mvp::feishu::FeishuGrant {
-        principal: mvp::feishu::FeishuUserPrincipal {
+fn sample_grant(account_id: &str, now_s: i64) -> mvp::channel::feishu::api::FeishuGrant {
+    mvp::channel::feishu::api::FeishuGrant {
+        principal: mvp::channel::feishu::api::FeishuUserPrincipal {
             account_id: account_id.to_owned(),
             open_id: "ou_123".to_owned(),
             union_id: Some("on_456".to_owned()),
@@ -40,7 +40,7 @@ fn sample_grant(account_id: &str, now_s: i64) -> mvp::feishu::FeishuGrant {
         },
         access_token: "u-token".to_owned(),
         refresh_token: "r-token".to_owned(),
-        scopes: mvp::feishu::FeishuGrantScopeSet::from_scopes([
+        scopes: mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
             "offline_access",
             "docx:document:readonly",
             "im:message:readonly",
@@ -84,7 +84,7 @@ fn doctor_reports_feishu_grant_freshness_when_valid_grant_exists() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
         .save_grant(&sample_grant("feishu_main", now_s))
         .expect("seed feishu grant");
@@ -117,7 +117,7 @@ fn doctor_warns_when_feishu_grant_lacks_doc_write_scope() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let grant = sample_grant("feishu_main", now_s);
     store.save_grant(&grant).expect("seed feishu grant");
     let mut fixes = Vec::new();
@@ -147,9 +147,9 @@ fn doctor_passes_when_feishu_grant_has_doc_write_scope_without_rerun_hint() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let mut grant = sample_grant("feishu_main", now_s);
-    grant.scopes = mvp::feishu::FeishuGrantScopeSet::from_scopes([
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
         "offline_access",
         "docx:document:readonly",
         "docx:document",
@@ -178,9 +178,9 @@ fn doctor_warns_when_feishu_grant_lacks_message_write_scope() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let mut grant = sample_grant("feishu_main", now_s);
-    grant.scopes = mvp::feishu::FeishuGrantScopeSet::from_scopes([
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
         "offline_access",
         "docx:document:readonly",
         "im:message:readonly",
@@ -213,9 +213,9 @@ fn doctor_passes_when_feishu_grant_has_message_write_scope_without_rerun_hint() 
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let mut grant = sample_grant("feishu_main", now_s);
-    grant.scopes = mvp::feishu::FeishuGrantScopeSet::from_scopes([
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
         "offline_access",
         "docx:document:readonly",
         "im:message:readonly",
@@ -244,7 +244,7 @@ fn doctor_warns_when_multiple_feishu_grants_exist_without_selected_default() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
         .save_grant(&sample_grant("feishu_main", now_s))
         .expect("seed first feishu grant");
@@ -278,7 +278,7 @@ fn doctor_reports_selected_feishu_grant_when_default_exists() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
         .save_grant(&sample_grant("feishu_main", now_s))
         .expect("seed first feishu grant");
@@ -310,12 +310,14 @@ fn doctor_uses_effective_selected_grant_for_freshness_and_scope_checks() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
 
     let mut selected = sample_grant("feishu_main", now_s);
     selected.principal.open_id = "ou_selected".to_owned();
-    selected.scopes =
-        mvp::feishu::FeishuGrantScopeSet::from_scopes(["offline_access", "im:message:readonly"]);
+    selected.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "im:message:readonly",
+    ]);
     selected.access_expires_at_s = now_s - 60;
     selected.refresh_expires_at_s = now_s + 3600;
     selected.refreshed_at_s = now_s;
@@ -323,7 +325,7 @@ fn doctor_uses_effective_selected_grant_for_freshness_and_scope_checks() {
 
     let mut latest = sample_grant("feishu_main", now_s + 100);
     latest.principal.open_id = "ou_latest".to_owned();
-    latest.scopes = mvp::feishu::FeishuGrantScopeSet::from_scopes([
+    latest.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
         "offline_access",
         "docx:document:readonly",
         "im:message",
@@ -378,7 +380,7 @@ fn doctor_warns_when_selected_open_id_is_stale_but_single_grant_routes_implicitl
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
         .save_grant(&sample_grant("feishu_main", now_s))
         .expect("seed grant");
@@ -411,7 +413,7 @@ fn doctor_warns_when_effective_grant_is_ambiguous_without_selected_default() {
     fs::create_dir_all(&temp_dir).expect("create temp dir");
     let config = sample_feishu_config(&temp_dir);
     let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
-    let store = mvp::feishu::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     store
         .save_grant(&sample_grant("feishu_main", now_s))
         .expect("seed first grant");

@@ -3,11 +3,11 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::types::{
     FeishuCalendarEntry, FeishuCalendarFreebusyResult, FeishuCalendarFreebusySlot,
     FeishuCalendarListPage, FeishuPrimaryCalendarEntry, FeishuPrimaryCalendarList,
 };
-use crate::feishu::client::FeishuClient;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct FeishuCalendarListQuery {

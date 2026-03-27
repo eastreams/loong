@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::types::{FeishuDocumentContent, FeishuDocumentMetadata};
-use crate::feishu::client::FeishuClient;
 
 const FEISHU_DOC_NESTED_BLOCK_LIMIT: usize = 1000;
 const FEISHU_DOC_BLOCK_TYPE_CALLOUT: i64 = 19;

@@ -15,6 +15,7 @@ use crate::config::{
 };
 
 mod adapter;
+pub mod api;
 mod payload;
 mod webhook;
 mod websocket;
@@ -68,7 +69,7 @@ pub(super) async fn run_feishu_send(
     let message = adapter
         .resolve_operator_outbound_message(
             "loongclaw feishu-send",
-            &crate::feishu::FeishuOperatorOutboundMessageInput {
+            &api::FeishuOperatorOutboundMessageInput {
                 text: request.text.clone(),
                 card: request.card,
                 post_json: request.post_json.clone(),

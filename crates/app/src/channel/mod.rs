@@ -227,7 +227,7 @@ mod discord;
 #[cfg(feature = "channel-email")]
 mod email;
 #[cfg(feature = "channel-feishu")]
-mod feishu;
+pub mod feishu;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;
 mod http;
@@ -1538,7 +1538,7 @@ fn build_feishu_command_context(
     config: LoongClawConfig,
     account_id: Option<&str>,
 ) -> CliResult<ChannelCommandContext<ResolvedFeishuChannelConfig>> {
-    let resolved = crate::feishu::resolve_requested_feishu_account(
+    let resolved = crate::channel::feishu::api::resolve_requested_feishu_account(
         &config.feishu,
         account_id,
         "rerun with `--account <configured_account_id>` using one of those configured accounts",

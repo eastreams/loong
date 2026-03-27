@@ -4988,7 +4988,7 @@ mod tests {
         sqlite_path: &std::path::Path,
         access_token: &str,
         scopes: &[&str],
-    ) -> crate::feishu::FeishuTokenStore {
+    ) -> crate::channel::feishu::api::FeishuTokenStore {
         seed_feishu_tool_grant_for_account(
             sqlite_path,
             "feishu_main",
@@ -5005,12 +5005,12 @@ mod tests {
         open_id: &str,
         access_token: &str,
         scopes: &[&str],
-    ) -> crate::feishu::FeishuTokenStore {
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.to_path_buf());
+    ) -> crate::channel::feishu::api::FeishuTokenStore {
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.to_path_buf());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: account_id.to_owned(),
                     open_id: open_id.to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -5023,7 +5023,9 @@ mod tests {
                 },
                 access_token: access_token.to_owned(),
                 refresh_token: format!("r-{access_token}"),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(scopes.iter().copied()),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
+                    scopes.iter().copied(),
+                ),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
@@ -5153,11 +5155,11 @@ mod tests {
             }),
         );
         let (base_url, server) = spawn_mock_feishu_server(router).await;
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -5170,7 +5172,7 @@ mod tests {
                 },
                 access_token: "u-token-doc".to_owned(),
                 refresh_token: "r-token-doc".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes([
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
                     "offline_access",
                     "docx:document:readonly",
                 ]),
@@ -8966,11 +8968,11 @@ mod tests {
                 }),
             );
         let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -8983,7 +8985,9 @@ mod tests {
                 },
                 access_token: "u-token-expired".to_owned(),
                 refresh_token: "r-token-old".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s - 10,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s - 3600,
@@ -9219,11 +9223,11 @@ mod tests {
         let temp_dir = unique_feishu_tool_temp_dir("whoami-multi-grant");
         fs::create_dir_all(&temp_dir).expect("create temp dir");
         let sqlite_path = temp_dir.join("feishu.sqlite3");
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
-        let now_s = crate::feishu::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_123".to_owned()),
@@ -9236,15 +9240,17 @@ mod tests {
                 },
                 access_token: "u-token-123".to_owned(),
                 refresh_token: "r-token-123".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
             })
             .expect("save first grant");
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_456".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -9257,7 +9263,9 @@ mod tests {
                 },
                 access_token: "u-token-456".to_owned(),
                 refresh_token: "r-token-456".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s + 1,
@@ -9291,11 +9299,11 @@ mod tests {
         let temp_dir = unique_feishu_tool_temp_dir("whoami-missing-explicit-open-id");
         fs::create_dir_all(&temp_dir).expect("create temp dir");
         let sqlite_path = temp_dir.join("feishu.sqlite3");
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
-        let now_s = crate::feishu::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_123".to_owned()),
@@ -9308,15 +9316,17 @@ mod tests {
                 },
                 access_token: "u-token-123".to_owned(),
                 refresh_token: "r-token-123".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
             })
             .expect("save first grant");
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_456".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -9329,7 +9339,9 @@ mod tests {
                 },
                 access_token: "u-token-456".to_owned(),
                 refresh_token: "r-token-456".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s + 1,

@@ -798,7 +798,7 @@ fn feishu_background_surface_is_enabled(
         return Ok(false);
     }
 
-    let resolved = crate::feishu::resolve_requested_feishu_account(
+    let resolved = crate::channel::feishu::api::resolve_requested_feishu_account(
         &config.feishu,
         account_id,
         "rerun with `--channel-account <CHANNEL=ACCOUNT>` using one of those configured accounts",

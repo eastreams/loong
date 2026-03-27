@@ -3,12 +3,12 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::cards;
 use super::types::{
     FeishuMessageDetail, FeishuMessageHistoryPage, FeishuMessageSummary, FeishuMessageWriteReceipt,
     FeishuSearchMessagePage,
 };
-use crate::feishu::client::FeishuClient;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeishuOutboundMessageBody {

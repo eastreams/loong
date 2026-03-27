@@ -249,10 +249,10 @@ pub enum FeishuMessageResourceCliType {
 }
 
 impl FeishuMessageResourceCliType {
-    fn as_resource_type(self) -> mvp::feishu::FeishuMessageResourceType {
+    fn as_resource_type(self) -> mvp::channel::feishu::api::FeishuMessageResourceType {
         match self {
-            Self::Image => mvp::feishu::FeishuMessageResourceType::Image,
-            Self::File => mvp::feishu::FeishuMessageResourceType::File,
+            Self::Image => mvp::channel::feishu::api::FeishuMessageResourceType::Image,
+            Self::File => mvp::channel::feishu::api::FeishuMessageResourceType::File,
         }
     }
 }
@@ -537,7 +537,7 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
     let state = generate_oauth_state();
     let (code_verifier, code_challenge) = build_pkce_pair();
     let now_s = unix_ts_now();
-    let record = mvp::feishu::FeishuOauthStateRecord {
+    let record = mvp::channel::feishu::api::FeishuOauthStateRecord {
         state: state.clone(),
         account_id: context.account_id().to_owned(),
         principal_hint: args.principal_hint.clone().unwrap_or_default(),
@@ -548,14 +548,16 @@ pub async fn execute_feishu_auth_start(args: &FeishuAuthStartArgs) -> CliResult<
         created_at_s: now_s,
     };
     context.store.save_oauth_state_record(&record)?;
-    let authorize_url = mvp::feishu::build_authorize_url(&mvp::feishu::FeishuAuthStartSpec {
-        app_id: client.app_id().to_owned(),
-        redirect_uri: args.redirect_uri.trim().to_owned(),
-        scopes: scopes.clone(),
-        state: state.clone(),
-        code_challenge: Some(code_challenge),
-        code_challenge_method: Some("S256".to_owned()),
-    })?;
+    let authorize_url = mvp::channel::feishu::api::build_authorize_url(
+        &mvp::channel::feishu::api::FeishuAuthStartSpec {
+            app_id: client.app_id().to_owned(),
+            redirect_uri: args.redirect_uri.trim().to_owned(),
+            scopes: scopes.clone(),
+            state: state.clone(),
+            code_challenge: Some(code_challenge),
+            code_challenge_method: Some("S256".to_owned()),
+        },
+    )?;
 
     Ok(json!({
         "account_id": context.account_id(),
@@ -589,8 +591,9 @@ pub async fn execute_feishu_auth_exchange(args: &FeishuAuthExchangeArgs) -> CliR
         ));
     }
     let client = context.build_client()?;
-    let scopes =
-        mvp::feishu::FeishuGrantScopeSet::from_scopes(stored_state.scope_csv.split_whitespace());
+    let scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
+        stored_state.scope_csv.split_whitespace(),
+    );
     let payload = client
         .exchange_authorization_code(
             &args.code,
@@ -601,8 +604,13 @@ pub async fn execute_feishu_auth_exchange(args: &FeishuAuthExchangeArgs) -> CliR
         .await?;
     let user_access_token = required_json_string(&payload, "access_token")?;
     let user_info = client.get_user_info(&user_access_token).await?;
-    let principal = mvp::feishu::map_user_info_to_principal(context.account_id(), &user_info)?;
-    let grant = mvp::feishu::parse_token_exchange_response(&payload, now_s, principal.clone())?;
+    let principal =
+        mvp::channel::feishu::api::map_user_info_to_principal(context.account_id(), &user_info)?;
+    let grant = mvp::channel::feishu::api::parse_token_exchange_response(
+        &payload,
+        now_s,
+        principal.clone(),
+    )?;
     context.store.save_grant(&grant)?;
     context
         .store
@@ -628,7 +636,10 @@ pub async fn execute_feishu_auth_list(args: &FeishuAuthListArgs) -> CliResult<Va
     )?;
     let required_scopes = context.default_scopes();
     let now_s = unix_ts_now();
-    let inventory = mvp::feishu::inspect_grants_for_account(&context.store, context.account_id())?;
+    let inventory = mvp::channel::feishu::api::inspect_grants_for_account(
+        &context.store,
+        context.account_id(),
+    )?;
     let effective_open_id = inventory.effective_open_id.clone();
     let recommendations =
         build_account_recommendations(context.resolved.configured_account_id.as_str(), &inventory);
@@ -706,14 +717,18 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
     )?;
     let required_scopes = context.default_scopes();
     let now_s = unix_ts_now();
-    let inventory = mvp::feishu::inspect_grants_for_account(&context.store, context.account_id())?;
+    let inventory = mvp::channel::feishu::api::inspect_grants_for_account(
+        &context.store,
+        context.account_id(),
+    )?;
     let explicit_open_id = args
         .open_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let effective_open_id =
-        mvp::feishu::effective_selected_open_id(&inventory, explicit_open_id).map(str::to_owned);
+        mvp::channel::feishu::api::effective_selected_open_id(&inventory, explicit_open_id)
+            .map(str::to_owned);
 
     if explicit_open_id.is_none() && inventory.selection_required() {
         let recommendations = build_account_recommendations(
@@ -747,7 +762,7 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
             "grants": grants,
         }));
     }
-    let resolution = mvp::feishu::resolve_grant_selection(
+    let resolution = mvp::channel::feishu::api::resolve_grant_selection(
         &context.store,
         context.account_id(),
         explicit_open_id,
@@ -773,9 +788,9 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
             "status_scope": "grant",
             "requested_open_id": requested_open_id,
             "available_open_ids": available_open_ids,
-            "status": mvp::feishu::auth::summarize_grant_status(None, now_s, &required_scopes),
-            "doc_write_status": mvp::feishu::summarize_doc_write_scope_status(None),
-            "message_write_status": mvp::feishu::summarize_message_write_scope_status(None),
+            "status": mvp::channel::feishu::api::auth::summarize_grant_status(None, now_s, &required_scopes),
+            "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(None),
+            "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(None),
             "recommendations": crate::feishu_support::FeishuGrantRecommendations {
                 auth_start_command: None,
                 select_command: Some(crate::feishu_support::feishu_auth_select_command_hint(
@@ -793,7 +808,11 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
             "required_scopes": required_scopes,
         }));
     }
-    let status = mvp::feishu::auth::summarize_grant_status(grant.as_ref(), now_s, &required_scopes);
+    let status = mvp::channel::feishu::api::auth::summarize_grant_status(
+        grant.as_ref(),
+        now_s,
+        &required_scopes,
+    );
 
     Ok(json!({
         "account_id": context.account_id(),
@@ -803,8 +822,8 @@ pub async fn execute_feishu_auth_status(args: &FeishuGrantArgs) -> CliResult<Val
         "requested_open_id": requested_open_id,
         "available_open_ids": available_open_ids,
         "status": status,
-        "doc_write_status": mvp::feishu::summarize_doc_write_scope_status(grant.as_ref()),
-        "message_write_status": mvp::feishu::summarize_message_write_scope_status(grant.as_ref()),
+        "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(grant.as_ref()),
+        "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(grant.as_ref()),
         "recommendations": build_grant_recommendations(
             context.resolved.configured_account_id.as_str(),
             grant.as_ref(),
@@ -834,7 +853,7 @@ pub async fn execute_feishu_auth_revoke(args: &FeishuGrantArgs) -> CliResult<Val
         args.common.config.as_deref(),
         args.common.account.as_deref(),
     )?;
-    let resolution = mvp::feishu::resolve_grant_selection(
+    let resolution = mvp::channel::feishu::api::resolve_grant_selection(
         &context.store,
         context.account_id(),
         args.open_id.as_deref(),
@@ -852,7 +871,10 @@ pub async fn execute_feishu_auth_revoke(args: &FeishuGrantArgs) -> CliResult<Val
     } else {
         (false, args.open_id.clone())
     };
-    let inventory = mvp::feishu::inspect_grants_for_account(&context.store, context.account_id())?;
+    let inventory = mvp::channel::feishu::api::inspect_grants_for_account(
+        &context.store,
+        context.account_id(),
+    )?;
     let recommendations =
         build_account_recommendations(context.resolved.configured_account_id.as_str(), &inventory);
 
@@ -876,9 +898,11 @@ pub async fn execute_feishu_whoami(args: &FeishuGrantArgs) -> CliResult<Value> {
     )?;
     let grant = require_selected_grant(&context, args.open_id.as_deref())?;
     let client = context.build_client()?;
-    let grant = mvp::feishu::ensure_fresh_user_grant(&client, &context.store, &grant).await?;
+    let grant =
+        mvp::channel::feishu::api::ensure_fresh_user_grant(&client, &context.store, &grant).await?;
     let user_info = client.get_user_info(&grant.access_token).await?;
-    let principal = mvp::feishu::map_user_info_to_principal(context.account_id(), &user_info)?;
+    let principal =
+        mvp::channel::feishu::api::map_user_info_to_principal(context.account_id(), &user_info)?;
 
     Ok(json!({
         "account_id": context.account_id(),
@@ -893,7 +917,7 @@ pub async fn execute_feishu_whoami(args: &FeishuGrantArgs) -> CliResult<Value> {
 pub async fn execute_feishu_read_doc(args: &FeishuReadDocArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
-    let document = mvp::feishu::resources::docs::fetch_document_content(
+    let document = mvp::channel::feishu::api::resources::docs::fetch_document_content(
         &client,
         &grant.access_token,
         &args.url,
@@ -914,7 +938,7 @@ pub async fn execute_feishu_doc_create(args: &FeishuDocCreateArgs) -> CliResult<
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
-        mvp::feishu::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
+        mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
         "loongclaw feishu doc create",
     )?;
     let client = context.build_client()?;
@@ -925,7 +949,7 @@ pub async fn execute_feishu_doc_create(args: &FeishuDocCreateArgs) -> CliResult<
         args.content_type.as_deref(),
         false,
     )?;
-    let document = mvp::feishu::resources::docs::create_document(
+    let document = mvp::channel::feishu::api::resources::docs::create_document(
         &client,
         &grant.access_token,
         args.title.as_deref(),
@@ -937,14 +961,14 @@ pub async fn execute_feishu_doc_create(args: &FeishuDocCreateArgs) -> CliResult<
     let mut inserted_block_count = 0_usize;
     let mut insert_batch_count = 0_usize;
     if let Some(initial_content) = initial_content.as_ref() {
-        let converted = mvp::feishu::resources::docs::convert_content_to_blocks(
+        let converted = mvp::channel::feishu::api::resources::docs::convert_content_to_blocks(
             &client,
             &grant.access_token,
             initial_content.content_type,
             initial_content.content.as_str(),
         )
         .await?;
-        let insert_summary = mvp::feishu::resources::docs::create_nested_blocks(
+        let insert_summary = mvp::channel::feishu::api::resources::docs::create_nested_blocks(
             &client,
             &grant.access_token,
             document.document_id.as_str(),
@@ -973,7 +997,7 @@ pub async fn execute_feishu_doc_append(args: &FeishuDocAppendArgs) -> CliResult<
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
-        mvp::feishu::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
+        mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
         "loongclaw feishu doc append",
     )?;
     let client = context.build_client()?;
@@ -989,16 +1013,16 @@ pub async fn execute_feishu_doc_append(args: &FeishuDocAppendArgs) -> CliResult<
         true,
     )?
     .ok_or_else(|| "loongclaw feishu doc append requires --content or --content-path".to_owned())?;
-    let document_id = mvp::feishu::resources::docs::extract_document_id(url)
+    let document_id = mvp::channel::feishu::api::resources::docs::extract_document_id(url)
         .ok_or_else(|| "failed to resolve Feishu document id".to_owned())?;
-    let converted = mvp::feishu::resources::docs::convert_content_to_blocks(
+    let converted = mvp::channel::feishu::api::resources::docs::convert_content_to_blocks(
         &client,
         &grant.access_token,
         content.content_type,
         content.content.as_str(),
     )
     .await?;
-    let insert_summary = mvp::feishu::resources::docs::create_nested_blocks(
+    let insert_summary = mvp::channel::feishu::api::resources::docs::create_nested_blocks(
         &client,
         &grant.access_token,
         document_id.as_str(),
@@ -1024,10 +1048,10 @@ pub async fn execute_feishu_messages_history(args: &FeishuMessagesHistoryArgs) -
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
-    let page = mvp::feishu::resources::messages::fetch_message_history(
+    let page = mvp::channel::feishu::api::resources::messages::fetch_message_history(
         &client,
         &tenant_access_token,
-        &mvp::feishu::resources::messages::FeishuMessageHistoryQuery {
+        &mvp::channel::feishu::api::resources::messages::FeishuMessageHistoryQuery {
             container_id_type: args.container_id_type.clone(),
             container_id: args.container_id.clone(),
             start_time: args.start_time.clone(),
@@ -1051,7 +1075,7 @@ pub async fn execute_feishu_messages_get(args: &FeishuMessagesGetArgs) -> CliRes
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
-    let message = mvp::feishu::resources::messages::fetch_message_detail(
+    let message = mvp::channel::feishu::api::resources::messages::fetch_message_detail(
         &client,
         &tenant_access_token,
         &args.message_id,
@@ -1072,7 +1096,7 @@ pub async fn execute_feishu_messages_resource(
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
-    let resource = mvp::feishu::resources::media::download_message_resource(
+    let resource = mvp::channel::feishu::api::resources::media::download_message_resource(
         &client,
         &tenant_access_token,
         &args.message_id,
@@ -1119,10 +1143,10 @@ pub async fn execute_feishu_messages_resource(
 pub async fn execute_feishu_search_messages(args: &FeishuSearchMessagesArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
-    let page = mvp::feishu::resources::messages::search_messages(
+    let page = mvp::channel::feishu::api::resources::messages::search_messages(
         &client,
         &grant.access_token,
-        &mvp::feishu::resources::messages::FeishuSearchMessagesQuery {
+        &mvp::channel::feishu::api::resources::messages::FeishuSearchMessagesQuery {
             user_id_type: args.user_id_type.clone(),
             page_size: args.page_size,
             page_token: args.page_token.clone(),
@@ -1151,7 +1175,7 @@ pub async fn execute_feishu_calendar_list(args: &FeishuCalendarListArgs) -> CliR
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
     let client = context.build_client()?;
     if args.primary {
-        let calendars = mvp::feishu::resources::calendar::get_primary_calendars(
+        let calendars = mvp::channel::feishu::api::resources::calendar::get_primary_calendars(
             &client,
             &grant.access_token,
             args.user_id_type.as_deref().or(Some("open_id")),
@@ -1166,10 +1190,10 @@ pub async fn execute_feishu_calendar_list(args: &FeishuCalendarListArgs) -> CliR
         }));
     }
 
-    let page = mvp::feishu::resources::calendar::list_calendars(
+    let page = mvp::channel::feishu::api::resources::calendar::list_calendars(
         &client,
         &grant.access_token,
-        &mvp::feishu::resources::calendar::FeishuCalendarListQuery {
+        &mvp::channel::feishu::api::resources::calendar::FeishuCalendarListQuery {
             page_size: args.page_size,
             page_token: args.page_token.clone(),
             sync_token: args.sync_token.clone(),
@@ -1197,10 +1221,10 @@ pub async fn execute_feishu_calendar_freebusy(
             Some(grant.principal.open_id.clone())
         }
     });
-    let page = mvp::feishu::resources::calendar::get_freebusy(
+    let page = mvp::channel::feishu::api::resources::calendar::get_freebusy(
         &client,
         &grant.access_token,
-        &mvp::feishu::resources::calendar::FeishuCalendarFreebusyQuery {
+        &mvp::channel::feishu::api::resources::calendar::FeishuCalendarFreebusyQuery {
             user_id_type: args.user_id_type.clone().or_else(|| {
                 effective_user_id
                     .as_deref()
@@ -1232,7 +1256,7 @@ pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
-        mvp::feishu::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
+        mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
         "loongclaw feishu send",
     )?;
     let client = context.build_client()?;
@@ -1241,11 +1265,11 @@ pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
         .unwrap_or(context.resolved.receive_id_type.as_str())
         .to_owned();
     let uuid = trimmed_opt(args.uuid.as_deref()).map(ToOwned::to_owned);
-    let body = mvp::feishu::resolve_operator_outbound_message_body(
+    let body = mvp::channel::feishu::api::resolve_operator_outbound_message_body(
         "loongclaw feishu send",
         &client,
         &tenant_access_token,
-        &mvp::feishu::FeishuOperatorOutboundMessageInput {
+        &mvp::channel::feishu::api::FeishuOperatorOutboundMessageInput {
             text: args.text.clone(),
             card: args.card,
             post_json: args.post_json.clone(),
@@ -1258,7 +1282,7 @@ pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
     )
     .await?;
     let msg_type = body.msg_type();
-    let delivery = mvp::feishu::resources::messages::send_outbound_message(
+    let delivery = mvp::channel::feishu::api::resources::messages::send_outbound_message(
         &client,
         &tenant_access_token,
         &receive_id_type,
@@ -1290,16 +1314,16 @@ pub async fn execute_feishu_reply(args: &FeishuReplyArgs) -> CliResult<Value> {
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
-        mvp::feishu::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
+        mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
         "loongclaw feishu reply",
     )?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
-    let body = mvp::feishu::resolve_operator_outbound_message_body(
+    let body = mvp::channel::feishu::api::resolve_operator_outbound_message_body(
         "loongclaw feishu reply",
         &client,
         &tenant_access_token,
-        &mvp::feishu::FeishuOperatorOutboundMessageInput {
+        &mvp::channel::feishu::api::FeishuOperatorOutboundMessageInput {
             text: args.text.clone(),
             card: args.card,
             post_json: args.post_json.clone(),
@@ -1313,7 +1337,7 @@ pub async fn execute_feishu_reply(args: &FeishuReplyArgs) -> CliResult<Value> {
     .await?;
     let msg_type = body.msg_type();
     let uuid = trimmed_opt(args.uuid.as_deref()).map(ToOwned::to_owned);
-    let delivery = mvp::feishu::resources::messages::reply_outbound_message(
+    let delivery = mvp::channel::feishu::api::resources::messages::reply_outbound_message(
         &client,
         &tenant_access_token,
         &args.message_id,
@@ -1342,23 +1366,27 @@ pub async fn execute_feishu_reply(args: &FeishuReplyArgs) -> CliResult<Value> {
 
 async fn load_context_and_fresh_grant(
     args: &FeishuGrantArgs,
-) -> CliResult<(FeishuDaemonContext, mvp::feishu::FeishuGrant)> {
+) -> CliResult<(FeishuDaemonContext, mvp::channel::feishu::api::FeishuGrant)> {
     let context = load_feishu_daemon_context(
         args.common.config.as_deref(),
         args.common.account.as_deref(),
     )?;
     let grant = require_selected_grant(&context, args.open_id.as_deref())?;
     let client = context.build_client()?;
-    let grant = mvp::feishu::ensure_fresh_user_grant(&client, &context.store, &grant).await?;
+    let grant =
+        mvp::channel::feishu::api::ensure_fresh_user_grant(&client, &context.store, &grant).await?;
     Ok((context, grant))
 }
 
 fn require_selected_grant(
     context: &FeishuDaemonContext,
     open_id: Option<&str>,
-) -> CliResult<mvp::feishu::FeishuGrant> {
-    let resolution =
-        mvp::feishu::resolve_grant_selection(&context.store, context.account_id(), open_id)?;
+) -> CliResult<mvp::channel::feishu::api::FeishuGrant> {
+    let resolution = mvp::channel::feishu::api::resolve_grant_selection(
+        &context.store,
+        context.account_id(),
+        open_id,
+    )?;
     if let Some(grant) = resolution.selected_grant().cloned() {
         return Ok(grant);
     }
@@ -1367,7 +1395,7 @@ fn require_selected_grant(
 
 fn describe_grant_selection_error(
     context: &FeishuDaemonContext,
-    resolution: &mvp::feishu::FeishuGrantResolution,
+    resolution: &mvp::channel::feishu::api::FeishuGrantResolution,
 ) -> String {
     let display_account_id = context.resolved.configured_account_id.as_str();
     if let Some(requested_open_id) = resolution.missing_explicit_open_id() {
@@ -1526,7 +1554,7 @@ fn read_feishu_doc_text_file(action: &str, field: &str, raw_path: &str) -> CliRe
 }
 
 fn ensure_grant_has_any_scope(
-    grant: &mvp::feishu::FeishuGrant,
+    grant: &mvp::channel::feishu::api::FeishuGrant,
     configured_account_id: &str,
     accepted: &[&str],
     action: &str,
@@ -1548,7 +1576,7 @@ fn ensure_grant_has_any_scope(
 }
 
 fn serialize_grant_summary(
-    grant: &mvp::feishu::FeishuGrant,
+    grant: &mvp::channel::feishu::api::FeishuGrant,
     configured_account_id: &str,
     now_s: i64,
     required_scopes: &[String],
@@ -1567,9 +1595,9 @@ fn serialize_grant_summary(
         "access_expires_at_s": grant.access_expires_at_s,
         "refresh_expires_at_s": grant.refresh_expires_at_s,
         "refreshed_at_s": grant.refreshed_at_s,
-        "status": mvp::feishu::auth::summarize_grant_status(Some(grant), now_s, required_scopes),
-        "doc_write_status": mvp::feishu::summarize_doc_write_scope_status(Some(grant)),
-        "message_write_status": mvp::feishu::summarize_message_write_scope_status(Some(grant)),
+        "status": mvp::channel::feishu::api::auth::summarize_grant_status(Some(grant), now_s, required_scopes),
+        "doc_write_status": mvp::channel::feishu::api::summarize_doc_write_scope_status(Some(grant)),
+        "message_write_status": mvp::channel::feishu::api::summarize_message_write_scope_status(Some(grant)),
         "recommendations": build_grant_recommendations(
             configured_account_id,
             Some(grant),
