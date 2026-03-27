@@ -29,6 +29,9 @@ pub use loongclaw_spec::spec_execution::*;
 pub use loongclaw_spec::spec_runtime::*;
 pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
+pub use self::channel_send_target_kind::{
+    default_twitch_send_target_kind, parse_twitch_send_target_kind,
+};
 pub use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
@@ -74,6 +77,9 @@ pub use sha2;
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+#[cfg(test)]
+mod channel_send_cli_tests;
+mod channel_send_target_kind;
 mod cli_handoff;
 pub mod completions_cli;
 pub mod doctor_cli;
@@ -4875,16 +4881,6 @@ pub fn parse_signal_send_target_kind(
     parse_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC, raw)
 }
 
-pub fn default_twitch_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
-    default_channel_send_target_kind(TWITCH_SEND_CLI_SPEC)
-}
-
-pub fn parse_twitch_send_target_kind(
-    raw: &str,
-) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
-    parse_channel_send_target_kind(TWITCH_SEND_CLI_SPEC, raw)
-}
-
 pub fn default_mattermost_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(MATTERMOST_SEND_CLI_SPEC)
 }
@@ -4943,167 +4939,6 @@ pub fn parse_nostr_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(NOSTR_SEND_CLI_SPEC, raw)
-}
-
-#[cfg(test)]
-mod channel_send_cli_tests {
-    use super::*;
-
-    #[test]
-    fn email_send_cli_accepts_address_target_kind() {
-        let target_kind = parse_email_send_target_kind("address")
-            .expect("address target kind should be accepted");
-
-        assert_eq!(
-            default_email_send_target_kind(),
-            mvp::channel::ChannelOutboundTargetKind::Address
-        );
-        assert_eq!(
-            target_kind,
-            mvp::channel::ChannelOutboundTargetKind::Address
-        );
-    }
-
-    #[test]
-    fn email_send_cli_rejects_non_address_target_kind() {
-        let error = parse_email_send_target_kind("conversation")
-            .expect_err("conversation target kind should be rejected");
-
-        assert_eq!(
-            error,
-            "email --target-kind does not support `conversation`; use `address`"
-        );
-    }
-
-    #[tokio::test]
-    async fn email_send_cli_requires_target() {
-        let args = ChannelSendCliArgs {
-            config_path: None,
-            account: None,
-            target: None,
-            target_kind: mvp::channel::ChannelOutboundTargetKind::Address,
-            text: "hello",
-            as_card: false,
-        };
-
-        let error = run_email_send_cli_impl(args)
-            .await
-            .expect_err("missing target should fail");
-
-        assert_eq!(error, "email-send requires --target");
-    }
-
-    #[test]
-    fn irc_send_cli_accepts_conversation_target_kind() {
-        let target_kind = parse_irc_send_target_kind("conversation")
-            .expect("irc-send should accept conversation targets");
-
-        assert_eq!(
-            default_irc_send_target_kind(),
-            mvp::channel::ChannelOutboundTargetKind::Conversation
-        );
-        assert_eq!(
-            target_kind,
-            mvp::channel::ChannelOutboundTargetKind::Conversation
-        );
-    }
-
-    #[test]
-    fn irc_send_cli_rejects_non_conversation_target_kind() {
-        let rendered =
-            parse_irc_send_target_kind("endpoint").expect_err("endpoint targets must be rejected");
-
-        assert!(
-            rendered.contains("irc --target-kind does not support `endpoint`; use `conversation`"),
-            "unexpected target-kind error: {rendered}"
-        );
-    }
-
-    #[test]
-    fn irc_send_cli_requires_target() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let result = runtime.block_on(run_irc_send_cli_impl(ChannelSendCliArgs {
-            config_path: None,
-            account: None,
-            target: None,
-            target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
-            text: "hello",
-            as_card: false,
-        }));
-
-        let error = result.expect_err("missing target should fail before runtime execution");
-        assert_eq!(error, "irc-send requires --target");
-    }
-
-    #[test]
-    fn nostr_send_cli_accepts_address_target_kind() {
-        let target_kind = parse_nostr_send_target_kind("address")
-            .expect("nostr-send should accept address targets");
-
-        assert_eq!(
-            default_nostr_send_target_kind(),
-            mvp::channel::ChannelOutboundTargetKind::Address
-        );
-        assert_eq!(
-            target_kind,
-            mvp::channel::ChannelOutboundTargetKind::Address
-        );
-    }
-
-    #[test]
-    fn twitch_send_cli_accepts_conversation_target_kind() {
-        let target_kind = parse_twitch_send_target_kind("conversation")
-            .expect("conversation target kind should be accepted");
-
-        assert_eq!(
-            default_twitch_send_target_kind(),
-            mvp::channel::ChannelOutboundTargetKind::Conversation
-        );
-        assert_eq!(
-            target_kind,
-            mvp::channel::ChannelOutboundTargetKind::Conversation
-        );
-    }
-
-    #[test]
-    fn nostr_send_cli_rejects_non_address_target_kind() {
-        let error = parse_nostr_send_target_kind("conversation")
-            .expect_err("conversation targets must be rejected");
-
-        assert_eq!(
-            error,
-            "nostr --target-kind does not support `conversation`; use `address`"
-        );
-    }
-
-    #[test]
-    fn twitch_send_cli_rejects_non_conversation_target_kind() {
-        let error = parse_twitch_send_target_kind("address")
-            .expect_err("address target kind should be rejected");
-
-        assert_eq!(
-            error,
-            "twitch --target-kind does not support `address`; use `conversation`"
-        );
-    }
-
-    #[tokio::test]
-    async fn twitch_send_cli_requires_target() {
-        let args = ChannelSendCliArgs {
-            config_path: None,
-            account: None,
-            target: None,
-            target_kind: mvp::channel::ChannelOutboundTargetKind::Conversation,
-            text: "hello",
-            as_card: false,
-        };
-
-        let error = run_twitch_send_cli_impl(args)
-            .await
-            .expect_err("missing target should fail");
-
-        assert_eq!(error, "twitch-send requires --target");
-    }
 }
 
 pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
