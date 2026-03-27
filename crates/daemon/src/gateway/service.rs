@@ -10,6 +10,7 @@ use crate::{
     },
 };
 
+use super::control::start_gateway_control_surface;
 use super::state::{
     GatewayOwnerMode, GatewayOwnerStatus, GatewayOwnerTracker, GatewayStopRequestOutcome,
     default_gateway_runtime_state_dir, load_gateway_owner_status, request_gateway_stop,
@@ -110,13 +111,30 @@ async fn run_gateway_runtime_with_hooks_for_test(
         session,
         spec.surfaces.len(),
     )?);
+    let control_surface_result = start_gateway_control_surface(runtime_dir, &loaded_config).await;
+    let control_surface = match control_surface_result {
+        Ok(control_surface) => control_surface,
+        Err(error) => {
+            tracker.finalize_with_error(error.as_str())?;
+            return Err(error);
+        }
+    };
+    let binding_result = tracker.set_control_surface_binding(control_surface.binding());
+    if let Err(error) = binding_result {
+        let shutdown_result = control_surface.shutdown().await;
+        let final_error = merge_gateway_runtime_errors(error, shutdown_result.err());
+        tracker.finalize_with_error(final_error.as_str())?;
+        return Err(final_error);
+    }
 
     let mut runtime_hooks = hooks.clone();
     let original_wait_for_shutdown = hooks.wait_for_shutdown.clone();
     let runtime_dir_for_shutdown = runtime_dir.to_path_buf();
+    let control_surface_for_shutdown = control_surface.clone();
     runtime_hooks.wait_for_shutdown = Arc::new(move || {
         let original_wait_for_shutdown = original_wait_for_shutdown.clone();
         let runtime_dir = runtime_dir_for_shutdown.clone();
+        let control_surface = control_surface_for_shutdown.clone();
         Box::pin(async move {
             tokio::select! {
                 result = (original_wait_for_shutdown)() => result,
@@ -124,6 +142,7 @@ async fn run_gateway_runtime_with_hooks_for_test(
                     result?;
                     Ok("gateway stop requested".to_owned())
                 }
+                result = control_surface.wait_for_unexpected_exit() => result,
             }
         })
     });
@@ -136,12 +155,19 @@ async fn run_gateway_runtime_with_hooks_for_test(
         run_supervisor_with_loaded_config_for_test(loaded_config, spec, runtime_hooks).await;
     match supervisor_result {
         Ok(supervisor) => {
+            let shutdown_result = control_surface.shutdown().await;
+            if let Err(error) = shutdown_result {
+                tracker.finalize_with_error(error.as_str())?;
+                return Err(error);
+            }
             tracker.finalize_from_supervisor(&supervisor)?;
             Ok(supervisor)
         }
         Err(error) => {
-            tracker.finalize_with_error(error.as_str())?;
-            Err(error)
+            let shutdown_result = control_surface.shutdown().await;
+            let final_error = merge_gateway_runtime_errors(error, shutdown_result.err());
+            tracker.finalize_with_error(final_error.as_str())?;
+            Err(final_error)
         }
     }
 }
@@ -340,4 +366,12 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
+}
+
+fn merge_gateway_runtime_errors(primary_error: String, secondary_error: Option<String>) -> String {
+    let Some(secondary_error) = secondary_error else {
+        return primary_error;
+    };
+
+    format!("{primary_error}; {secondary_error}")
 }

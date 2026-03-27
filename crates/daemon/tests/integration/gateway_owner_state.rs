@@ -2,6 +2,7 @@ use super::*;
 
 use std::{
     collections::BTreeMap,
+    fs,
     future::Future,
     path::PathBuf,
     pin::Pin,
@@ -22,6 +23,7 @@ use loongclaw_daemon::{
     },
     supervisor::{BackgroundChannelRunnerRequest, LoadedSupervisorConfig, SupervisorRuntimeHooks},
 };
+use serde_json::Value;
 use tokio::time::{sleep, timeout};
 
 type BoxedCliFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
@@ -103,6 +105,26 @@ async fn wait_until(description: &str, predicate: impl Fn() -> bool) {
     }
 
     panic!("timed out waiting for {description}");
+}
+
+async fn wait_for_gateway_control_surface(
+    runtime_dir: &std::path::Path,
+) -> loongclaw_daemon::gateway::state::GatewayOwnerStatus {
+    wait_until("gateway control surface binding", || {
+        let status = load_gateway_owner_status(runtime_dir);
+        let Some(status) = status else {
+            return false;
+        };
+
+        status.running
+            && status.bind_address.is_some()
+            && status.port.is_some()
+            && status.token_path.is_some()
+    })
+    .await;
+
+    load_gateway_owner_status(runtime_dir)
+        .expect("gateway control surface status should be present")
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -288,4 +310,154 @@ async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_sessi
         .expect("join compat run")
         .expect("compat run should return supervisor state");
     assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_runtime() {
+    let runtime_dir = unique_runtime_dir("localhost-control");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    assert_eq!(running_status.bind_address.as_deref(), Some("127.0.0.1"));
+    let port = running_status
+        .port
+        .expect("control surface port should be persisted");
+    let token_path = running_status
+        .token_path
+        .clone()
+        .expect("control surface token path should be persisted");
+    let token_path = PathBuf::from(token_path);
+    assert!(token_path.exists());
+
+    let token = fs::read_to_string(token_path.as_path()).expect("read gateway control token file");
+    let token = token.trim().to_owned();
+    assert!(!token.is_empty());
+
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
+
+    let unauthorized_status_response = client
+        .get(format!("{base_url}/api/gateway/status"))
+        .send()
+        .await
+        .expect("send unauthorized gateway status request");
+    assert_eq!(
+        unauthorized_status_response.status(),
+        reqwest::StatusCode::UNAUTHORIZED
+    );
+    let unauthorized_status_json: Value = unauthorized_status_response
+        .json()
+        .await
+        .expect("decode unauthorized gateway status response");
+    assert_eq!(unauthorized_status_json["error"]["code"], "unauthorized");
+
+    let authorized_status_response = client
+        .get(format!("{base_url}/api/gateway/status"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send authorized gateway status request");
+    assert_eq!(authorized_status_response.status(), reqwest::StatusCode::OK);
+    let authorized_status_json: Value = authorized_status_response
+        .json()
+        .await
+        .expect("decode authorized gateway status response");
+    assert_eq!(authorized_status_json["phase"], "running");
+    assert_eq!(authorized_status_json["bind_address"], "127.0.0.1");
+    assert_eq!(
+        authorized_status_json["port"].as_u64(),
+        Some(u64::from(port))
+    );
+
+    let channels_response = client
+        .get(format!("{base_url}/api/gateway/channels"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send gateway channels request");
+    assert_eq!(channels_response.status(), reqwest::StatusCode::OK);
+    let channels_json: Value = channels_response
+        .json()
+        .await
+        .expect("decode gateway channels response");
+    assert_eq!(
+        channels_json["schema"]["primary_channel_view"],
+        "channel_surfaces"
+    );
+    assert_eq!(channels_json["schema"]["catalog_view"], "channel_catalog");
+
+    let runtime_snapshot_response = client
+        .get(format!("{base_url}/api/gateway/runtime-snapshot"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send gateway runtime snapshot request");
+    assert_eq!(runtime_snapshot_response.status(), reqwest::StatusCode::OK);
+    let runtime_snapshot_json: Value = runtime_snapshot_response
+        .json()
+        .await
+        .expect("decode gateway runtime snapshot response");
+    assert_eq!(
+        runtime_snapshot_json["schema"]["surface"],
+        "runtime_snapshot"
+    );
+    assert_eq!(
+        runtime_snapshot_json["channels"]["inventory"]["schema"]["catalog_view"],
+        "channel_catalog"
+    );
+    assert!(
+        runtime_snapshot_json["tools"]["visible_tool_count"]
+            .as_u64()
+            .is_some()
+    );
+
+    let stop_response = client
+        .post(format!("{base_url}/api/gateway/stop"))
+        .bearer_auth(token.as_str())
+        .send()
+        .await
+        .expect("send gateway stop request");
+    assert_eq!(stop_response.status(), reqwest::StatusCode::ACCEPTED);
+    let stop_json: Value = stop_response
+        .json()
+        .await
+        .expect("decode gateway stop response");
+    assert_eq!(stop_json["outcome"], "requested");
+
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop after control stop")
+        .expect("join gateway run after control stop")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+
+    let stopped_status = load_gateway_owner_status(runtime_dir.as_path())
+        .expect("stopped gateway status should be present");
+    assert_eq!(stopped_status.phase, "stopped");
+    assert!(!stopped_status.running);
+    assert_eq!(stopped_status.bind_address, None);
+    assert_eq!(stopped_status.port, None);
+    assert_eq!(stopped_status.token_path, None);
+    assert!(!token_path.exists());
 }

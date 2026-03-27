@@ -63,6 +63,13 @@ pub struct GatewayOwnerStatus {
     pub token_path: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayControlSurfaceBinding {
+    pub bind_address: String,
+    pub port: u16,
+    pub token_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GatewayStopRequestOutcome {
     Requested,
@@ -219,6 +226,25 @@ impl GatewayOwnerTracker {
         )
     }
 
+    pub fn set_control_surface_binding(
+        &self,
+        binding: &GatewayControlSurfaceBinding,
+    ) -> CliResult<()> {
+        let persisted_state = {
+            let state_guard = self.state.lock();
+            let mut state_guard = state_guard
+                .map_err(|error| format!("gateway owner state lock poisoned: {error}"))?;
+            state_guard.bind_address = Some(binding.bind_address.clone());
+            state_guard.port = Some(binding.port);
+            state_guard.token_path = Some(binding.token_path.display().to_string());
+            state_guard.last_heartbeat_at = now_ms();
+            state_guard.clone()
+        };
+
+        write_active_owner_state(self.owner_file.as_ref(), &persisted_state)?;
+        write_status_snapshot(self.status_snapshot_path.as_path(), &persisted_state)
+    }
+
     pub fn finalize_from_supervisor(&self, supervisor: &SupervisorState) -> CliResult<()> {
         self.heartbeat_stopped.store(true, Ordering::SeqCst);
         let heartbeat_task = self
@@ -299,6 +325,11 @@ impl GatewayOwnerTracker {
             state_guard.last_heartbeat_at = now_ms();
             if let Some(stopped_at_ms) = stopped_at_ms {
                 state_guard.stopped_at_ms = Some(stopped_at_ms);
+            }
+            if !running {
+                state_guard.bind_address = None;
+                state_guard.port = None;
+                state_guard.token_path = None;
             }
             state_guard.clone()
         };
@@ -480,6 +511,10 @@ fn gateway_status_snapshot_path(runtime_dir: &Path) -> PathBuf {
 
 fn gateway_stop_request_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join("stop-request.json")
+}
+
+pub fn gateway_control_token_path(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join("control-token")
 }
 
 fn read_persisted_gateway_owner_state(path: &Path) -> Option<PersistedGatewayOwnerState> {

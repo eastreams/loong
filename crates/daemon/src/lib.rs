@@ -1924,17 +1924,32 @@ pub fn collect_runtime_snapshot_cli_state(
     config_path: Option<&str>,
 ) -> CliResult<RuntimeSnapshotCliState> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
+    collect_runtime_snapshot_cli_state_from_parts(resolved_path.as_path(), &config)
+}
+
+pub(crate) fn collect_runtime_snapshot_cli_state_from_loaded_config(
+    loaded_config: &supervisor::LoadedSupervisorConfig,
+) -> CliResult<RuntimeSnapshotCliState> {
+    let resolved_path = loaded_config.resolved_path.as_path();
+    let config = &loaded_config.config;
+    collect_runtime_snapshot_cli_state_from_parts(resolved_path, config)
+}
+
+fn collect_runtime_snapshot_cli_state_from_parts(
+    resolved_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+) -> CliResult<RuntimeSnapshotCliState> {
     let config_display = resolved_path.display().to_string();
-    let provider = collect_runtime_snapshot_provider_state(&config);
-    let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(&config)?;
-    let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
-    let acp = mvp::acp::collect_acp_runtime_snapshot(&config)?;
+    let provider = collect_runtime_snapshot_provider_state(config);
+    let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(config)?;
+    let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
+    let acp = mvp::acp::collect_acp_runtime_snapshot(config)?;
     let enabled_channel_ids = config.enabled_channel_ids();
     let enabled_service_channel_ids = config.enabled_service_channel_ids();
-    let channels = mvp::channel::channel_inventory(&config);
+    let channels = mvp::channel::channel_inventory(config);
     let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        &config,
-        Some(resolved_path.as_path()),
+        config,
+        Some(resolved_path),
     );
     let (external_skills, snapshot_tool_runtime) =
         collect_runtime_snapshot_external_skills_state(&tool_runtime);
@@ -1946,7 +1961,7 @@ pub fn collect_runtime_snapshot_cli_state(
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
-    let restore_spec = build_runtime_snapshot_restore_spec(&config, &external_skills);
+    let restore_spec = build_runtime_snapshot_restore_spec(config, &external_skills);
 
     Ok(RuntimeSnapshotCliState {
         config: config_display,

@@ -36,6 +36,11 @@ the daemon-owned gateway surface and continue to reuse the same conversation,
 provider, tool, memory, ACP, dashboard, and runtime-status semantics as CLI and
 future paired clients.
 
+The current gateway slice already provides a localhost-only authenticated
+control surface for gateway owner status, channel inventory, runtime snapshot,
+and cooperative stop. The Web UI should consume that control surface instead of
+inventing a second browser-only runtime contract.
+
 ## Acceptance Criteria
 
 - [ ] The Web UI is treated as one coherent product surface rather than a chat-only browser shell.
