@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-20
+Last updated: 2026-03-27
 
 This roadmap is execution-focused. Every stage has:
 
@@ -439,7 +439,39 @@ adding more surface breadth.
 Trade-off: lowers merge risk and control-plane debt, but requires disciplined ownership extraction
 instead of feature-driven growth inside large files.
 
-### D8: Shared execution security tiers
+### D8: Local product control plane foundation
+
+LoongClaw now has enough real runtime substrate that the next platform risk is
+surface drift rather than missing primitives.
+
+The repo already has:
+
+- a real ACP control plane
+- a durable session repository
+- operator-facing `onboard`, `doctor`, `acp-status`, and observability surfaces
+
+What it still lacks is one localhost-only product control plane contract that
+future HTTP and Web UI work can consume.
+
+Without that layer, `#217`, `#296`, and `#403` can drift into:
+
+- browser-only runtime semantics
+- a gateway-local session model
+- a giant product gateway that starts stealing authority from the kernel
+
+The preferred path is smaller:
+
+- keep the kernel as authority
+- keep ACP internal and real
+- use `SessionRepository` as the canonical product session plane
+- extract a shared local control plane for status, sessions, approvals, support
+  flows, and future turn submission
+
+Trade-off: this adds one explicit platform layer, but it prevents duplicated
+surface logic and keeps future gateway/UI work aligned with the kernel-first
+architecture.
+
+### D9: Shared execution security tiers
 
 The roadmap already names process sandbox profile tiers, but the wider runtime still needs one
 shared execution-tier vocabulary across process, browser, and WASM lanes. Without that, each lane
@@ -455,7 +487,7 @@ Current first-slice mapping:
   its runtime gate is open
 - `trusted` - reserved for future explicit high-trust runtime lanes rather than assumed by default
 
-### D9: First-party workflow packs on hardened primitives
+### D10: First-party workflow packs on hardened primitives
 
 Once the runtime base is harder, LoongClaw should turn that into a small set of first-party
 workflow packs that prove the kernel's value in operator-facing tasks such as release/review work,
@@ -469,8 +501,9 @@ instead of preceding it.
 1. Kernel-first runtime closure and direct-path retirement
 2. Persistent audit sink and query baseline
 3. ACP control-plane hardening and recovery
-4. Shared execution security tiers across process/browser/WASM lanes
-5. First-party workflow packs on hardened runtime primitives
+4. Local product control plane foundation
+5. Shared execution security tiers across process/browser/WASM lanes
+6. First-party workflow packs on hardened runtime primitives
 
 Execution package for this order:
 
