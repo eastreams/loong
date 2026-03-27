@@ -1435,15 +1435,15 @@ pub struct TlonAccountConfig {
     pub account_id: Option<String>,
     #[serde(default)]
     pub ship: Option<String>,
-    #[serde(default = "default_tlon_ship_env")]
+    #[serde(default)]
     pub ship_env: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default = "default_tlon_url_env")]
+    #[serde(default)]
     pub url_env: Option<String>,
     #[serde(default)]
     pub code: Option<SecretRef>,
-    #[serde(default = "default_tlon_code_env")]
+    #[serde(default)]
     pub code_env: Option<String>,
 }
 
@@ -1857,15 +1857,15 @@ pub struct TlonChannelConfig {
     pub default_account: Option<String>,
     #[serde(default)]
     pub ship: Option<String>,
-    #[serde(default = "default_tlon_ship_env")]
+    #[serde(default = "tlon_support::default_tlon_ship_env")]
     pub ship_env: Option<String>,
     #[serde(default)]
     pub url: Option<String>,
-    #[serde(default = "default_tlon_url_env")]
+    #[serde(default = "tlon_support::default_tlon_url_env")]
     pub url_env: Option<String>,
     #[serde(default)]
     pub code: Option<SecretRef>,
-    #[serde(default = "default_tlon_code_env")]
+    #[serde(default = "tlon_support::default_tlon_code_env")]
     pub code_env: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, TlonAccountConfig>,
@@ -6159,32 +6159,36 @@ impl TlonChannelConfig {
             self.default_account.as_deref(),
             self.accounts.keys(),
         );
-        validate_tlon_env_pointer(
+        tlon_support::validate_tlon_env_pointer(
             &mut issues,
             "tlon.ship_env",
             self.ship_env.as_deref(),
             "tlon.ship",
         );
-        validate_tlon_env_pointer(
+        tlon_support::validate_tlon_env_pointer(
             &mut issues,
             "tlon.url_env",
             self.url_env.as_deref(),
             "tlon.url",
         );
-        validate_tlon_env_pointer(
+        tlon_support::validate_tlon_env_pointer(
             &mut issues,
             "tlon.code_env",
             self.code_env.as_deref(),
             "tlon.code",
         );
-        validate_tlon_secret_ref_env_pointer(&mut issues, "tlon.code", self.code.as_ref());
+        tlon_support::validate_tlon_secret_ref_env_pointer(
+            &mut issues,
+            "tlon.code",
+            self.code.as_ref(),
+        );
 
         for (raw_account_id, account) in &self.accounts {
             let account_id = normalize_channel_account_id(raw_account_id);
 
             let ship_field_path = format!("tlon.accounts.{account_id}.ship");
             let ship_env_field_path = format!("{ship_field_path}_env");
-            validate_tlon_env_pointer(
+            tlon_support::validate_tlon_env_pointer(
                 &mut issues,
                 ship_env_field_path.as_str(),
                 account.ship_env.as_deref(),
@@ -6193,7 +6197,7 @@ impl TlonChannelConfig {
 
             let url_field_path = format!("tlon.accounts.{account_id}.url");
             let url_env_field_path = format!("{url_field_path}_env");
-            validate_tlon_env_pointer(
+            tlon_support::validate_tlon_env_pointer(
                 &mut issues,
                 url_env_field_path.as_str(),
                 account.url_env.as_deref(),
@@ -6202,13 +6206,13 @@ impl TlonChannelConfig {
 
             let code_field_path = format!("tlon.accounts.{account_id}.code");
             let code_env_field_path = format!("{code_field_path}_env");
-            validate_tlon_env_pointer(
+            tlon_support::validate_tlon_env_pointer(
                 &mut issues,
                 code_env_field_path.as_str(),
                 account.code_env.as_deref(),
                 code_field_path.as_str(),
             );
-            validate_tlon_secret_ref_env_pointer(
+            tlon_support::validate_tlon_secret_ref_env_pointer(
                 &mut issues,
                 code_field_path.as_str(),
                 account.code.as_ref(),
@@ -6491,17 +6495,6 @@ fn default_imessage_bridge_token_env() -> Option<String> {
     Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
 }
 
-fn default_tlon_ship_env() -> Option<String> {
-    Some(TLON_SHIP_ENV.to_owned())
-}
-
-fn default_tlon_url_env() -> Option<String> {
-    Some(TLON_URL_ENV.to_owned())
-}
-
-fn default_tlon_code_env() -> Option<String> {
-    Some(TLON_CODE_ENV.to_owned())
-}
 fn default_slack_api_base_url() -> String {
     "https://slack.com/api".to_owned()
 }
@@ -7400,50 +7393,6 @@ fn validate_signal_env_pointer(
     }
 }
 
-fn validate_tlon_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    env_key: Option<&str>,
-    inline_field_path: &str,
-) {
-    let example_env_name = if field_path.ends_with("ship_env") {
-        TLON_SHIP_ENV
-    } else if field_path.ends_with("url_env") {
-        TLON_URL_ENV
-    } else {
-        TLON_CODE_ENV
-    };
-    if let Err(issue) = validate_env_pointer_field(
-        field_path,
-        env_key,
-        EnvPointerValidationHint {
-            inline_field_path,
-            example_env_name,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
-fn validate_tlon_secret_ref_env_pointer(
-    issues: &mut Vec<ConfigValidationIssue>,
-    field_path: &str,
-    secret_ref: Option<&SecretRef>,
-) {
-    if let Err(issue) = validate_secret_ref_env_pointer_field(
-        field_path,
-        secret_ref,
-        EnvPointerValidationHint {
-            inline_field_path: field_path,
-            example_env_name: TLON_CODE_ENV,
-            detect_telegram_token_shape: false,
-        },
-    ) {
-        issues.push(*issue);
-    }
-}
-
 fn validate_mattermost_env_pointer(
     issues: &mut Vec<ConfigValidationIssue>,
     field_path: &str,
@@ -7851,6 +7800,11 @@ where
         account_key: None,
     })
 }
+
+mod tlon_support;
+
+#[cfg(test)]
+mod hotspot_tests;
 
 #[cfg(test)]
 mod tests {
@@ -9801,159 +9755,5 @@ mod tests {
             backup.resolved_api_base_url(),
             "https://graph.facebook.com/v26.0"
         );
-    }
-
-    #[test]
-    fn tlon_partial_deserialization_keeps_default_env_pointers() {
-        let config: TlonChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize tlon config");
-
-        assert_eq!(config.ship_env.as_deref(), Some(TLON_SHIP_ENV));
-        assert_eq!(config.url_env.as_deref(), Some(TLON_URL_ENV));
-        assert_eq!(config.code_env.as_deref(), Some(TLON_CODE_ENV));
-    }
-
-    #[test]
-    fn tlon_resolves_credentials_from_env_pointers() {
-        let mut env = crate::test_support::ScopedEnv::new();
-        env.set("TEST_TLON_SHIP", "~zod");
-        env.set("TEST_TLON_URL", "ship.example.test");
-        env.set("TEST_TLON_CODE", "lidlut-tabwed-pillex-ridrup");
-
-        let config: TlonChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "ship_env": "TEST_TLON_SHIP",
-            "url_env": "TEST_TLON_URL",
-            "code_env": "TEST_TLON_CODE"
-        }))
-        .expect("deserialize tlon config");
-
-        let resolved = config
-            .resolve_account(None)
-            .expect("resolve default tlon account");
-        let ship = resolved.ship();
-        let url = resolved.url();
-        let code = resolved.code();
-
-        assert_eq!(ship.as_deref(), Some("~zod"));
-        assert_eq!(url.as_deref(), Some("ship.example.test"));
-        assert_eq!(code.as_deref(), Some("lidlut-tabwed-pillex-ridrup"));
-    }
-
-    #[test]
-    fn tlon_multi_account_resolution_merges_base_and_account_overrides() {
-        let config: TlonChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "ship": "~zod",
-            "url": "ship.example.test",
-            "code": "base-code",
-            "default_account": "Primary",
-            "accounts": {
-                "Primary": {
-                    "account_id": "Tlon-Ops",
-                    "code": "primary-code"
-                },
-                "Backup": {
-                    "enabled": false,
-                    "ship": "~bus"
-                }
-            }
-        }))
-        .expect("deserialize tlon multi-account config");
-
-        assert_eq!(config.configured_account_ids(), vec!["backup", "primary"]);
-        assert_eq!(config.default_configured_account_id(), "primary");
-
-        let primary = config
-            .resolve_account(None)
-            .expect("resolve default tlon account");
-        let primary_ship = primary.ship();
-        let primary_url = primary.url();
-        let primary_code = primary.code();
-
-        assert_eq!(primary.configured_account_id, "primary");
-        assert_eq!(primary.account.id, "tlon-ops");
-        assert_eq!(primary.account.label, "Tlon-Ops");
-        assert_eq!(primary_ship.as_deref(), Some("~zod"));
-        assert_eq!(primary_url.as_deref(), Some("ship.example.test"));
-        assert_eq!(primary_code.as_deref(), Some("primary-code"));
-
-        let backup = config
-            .resolve_account(Some("Backup"))
-            .expect("resolve explicit tlon account");
-        let backup_ship = backup.ship();
-        let backup_url = backup.url();
-        let backup_code = backup.code();
-
-        assert_eq!(backup.configured_account_id, "backup");
-        assert!(!backup.enabled);
-        assert_eq!(backup.account.id, "tlon_bus");
-        assert_eq!(backup.account.label, "ship:~bus");
-        assert_eq!(backup_ship.as_deref(), Some("~bus"));
-        assert_eq!(backup_url.as_deref(), Some("ship.example.test"));
-        assert_eq!(backup_code.as_deref(), Some("base-code"));
-    }
-
-    #[test]
-    fn telegram_streaming_mode_deserializes_from_json() {
-        let off: TelegramStreamingMode = serde_json::from_str("\"off\"").expect("deserialize off");
-        assert_eq!(off, TelegramStreamingMode::Off);
-
-        let draft: TelegramStreamingMode =
-            serde_json::from_str("\"draft\"").expect("deserialize draft");
-        assert_eq!(draft, TelegramStreamingMode::Draft);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_default_is_off() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "TEST_TOKEN"
-        }))
-        .expect("deserialize telegram config");
-        assert_eq!(config.streaming_mode, TelegramStreamingMode::Off);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_inherited_from_base_in_multi_account() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "BASE_TOKEN",
-            "streaming_mode": "draft",
-            "accounts": {
-                "Account1": {
-                    "bot_token_env": "ACCOUNT1_TOKEN"
-                }
-            }
-        }))
-        .expect("deserialize telegram config");
-
-        let resolved = config
-            .resolve_account(Some("Account1"))
-            .expect("resolve account1");
-        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Draft);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_overridden_per_account() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "BASE_TOKEN",
-            "streaming_mode": "draft",
-            "accounts": {
-                "Account1": {
-                    "streaming_mode": "off",
-                    "bot_token_env": "ACCOUNT1_TOKEN"
-                }
-            }
-        }))
-        .expect("deserialize telegram config");
-
-        let resolved = config
-            .resolve_account(Some("Account1"))
-            .expect("resolve account1");
-        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Off);
     }
 }

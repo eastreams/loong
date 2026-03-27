@@ -15,7 +15,6 @@ use std::time::Duration;
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -80,7 +79,6 @@ use crate::CliResult;
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -104,7 +102,6 @@ use crate::KernelContext;
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -128,7 +125,6 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -174,8 +170,6 @@ use super::config::ResolvedSynologyChatChannelConfig;
 use super::config::ResolvedTeamsChannelConfig;
 #[cfg(feature = "channel-telegram")]
 use super::config::ResolvedTelegramChannelConfig;
-#[cfg(feature = "channel-tlon")]
-use super::config::ResolvedTlonChannelConfig;
 #[cfg(feature = "channel-webhook")]
 use super::config::ResolvedWebhookChannelConfig;
 #[cfg(feature = "channel-wecom")]
@@ -196,7 +190,6 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-twitch",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -269,6 +262,7 @@ mod teams;
 mod telegram;
 #[cfg(feature = "channel-tlon")]
 mod tlon;
+mod tlon_command;
 /// Channel API traits for platform-agnostic abstraction
 pub mod traits;
 #[cfg(any(
@@ -326,6 +320,7 @@ pub use registry::{
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
 pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
+pub use tlon_command::run_tlon_send;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -822,7 +817,6 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1208,7 +1202,6 @@ where
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1240,7 +1233,6 @@ struct ChannelCommandContext<R> {
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -1330,7 +1322,6 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-twitch",
     feature = "channel-irc",
@@ -1686,39 +1677,6 @@ fn build_line_command_context(
     if !resolved.enabled {
         return Err(format!(
             "line account `{}` is disabled by configuration",
-            resolved.configured_account_id
-        ));
-    }
-    Ok(ChannelCommandContext {
-        resolved_path,
-        config,
-        resolved,
-        route,
-    })
-}
-
-#[cfg(feature = "channel-tlon")]
-fn load_tlon_command_context(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedTlonChannelConfig>> {
-    let (resolved_path, config) = super::config::load(config_path)?;
-    build_tlon_command_context(resolved_path, config, account_id)
-}
-
-#[cfg(feature = "channel-tlon")]
-fn build_tlon_command_context(
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedTlonChannelConfig>> {
-    let resolved = config.tlon.resolve_account(account_id)?;
-    let route = config
-        .tlon
-        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
-    if !resolved.enabled {
-        return Err(format!(
-            "tlon account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -2106,7 +2064,6 @@ fn build_nostr_command_context(
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-irc",
     feature = "channel-synology-chat",
@@ -3414,59 +3371,6 @@ pub async fn run_irc_send(
 }
 
 #[allow(clippy::print_stdout)] // CLI output
-pub async fn run_tlon_send(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-    target: &str,
-    target_kind: ChannelOutboundTargetKind,
-    text: &str,
-) -> CliResult<()> {
-    if !cfg!(feature = "channel-tlon") {
-        return Err("tlon channel is disabled (enable feature `channel-tlon`)".to_owned());
-    }
-
-    #[cfg(not(feature = "channel-tlon"))]
-    {
-        let _ = (config_path, account_id, target, target_kind, text);
-        return Err("tlon channel is disabled (enable feature `channel-tlon`)".to_owned());
-    }
-
-    #[cfg(feature = "channel-tlon")]
-    {
-        let context = load_tlon_command_context(config_path, account_id)?;
-        let target = target.to_owned();
-        let text = text.to_owned();
-        run_channel_send_command(
-            context,
-            ChannelSendCommandSpec { channel_id: "tlon" },
-            |context| {
-                Box::pin(async move {
-                    tlon::run_tlon_send(
-                        &context.resolved,
-                        target_kind,
-                        target.as_str(),
-                        text.as_str(),
-                    )
-                    .await
-                })
-            },
-            |context| {
-                format!(
-                    "tlon message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
-                    context.resolved_path.display(),
-                    context.resolved.configured_account_id,
-                    context.resolved.account.label,
-                    context.route.selected_by_default(),
-                    context.route.default_account_source.as_str(),
-                    target_kind
-                )
-            },
-        )
-        .await
-    }
-}
-
-#[allow(clippy::print_stdout)] // CLI output
 pub async fn run_imessage_send(
     config_path: Option<&str>,
     account_id: Option<&str>,
@@ -4734,7 +4638,6 @@ fn normalized_feishu_callback_context(
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
-    feature = "channel-tlon",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-twitch",
