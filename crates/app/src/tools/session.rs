@@ -2561,6 +2561,7 @@ fn resolve_session_tool_policy_tool_ids(
 fn normalize_session_tool_runtime_narrowing(
     mut runtime_narrowing: ToolRuntimeNarrowing,
 ) -> ToolRuntimeNarrowing {
+    // Persisted session policies are only allowed to tighten fetch access, never widen it.
     if runtime_narrowing.web_fetch.allow_private_hosts == Some(true) {
         runtime_narrowing.web_fetch.allow_private_hosts = None;
     }

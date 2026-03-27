@@ -181,6 +181,23 @@ pub(crate) fn payload_uses_reserved_internal_tool_context(payload: &Value) -> bo
         .as_object()
         .is_some_and(|body| body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
 }
+
+fn ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+    tool_name: &str,
+    payload: &Value,
+    payload_path: &str,
+) -> Result<(), String> {
+    if trusted_internal_tool_payload_enabled() {
+        return Ok(());
+    }
+    if !payload_uses_reserved_internal_tool_context(payload) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "tool `{tool_name}` {payload_path}.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field"
+    ))
+}
 /// Execute a tool request, routing through the kernel for
 /// policy enforcement and audit recording.
 ///
@@ -654,14 +671,11 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    if !trusted_internal_tool_payload_enabled()
-        && payload_uses_reserved_internal_tool_context(&request.payload)
-    {
-        return Err(format!(
-            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
-            request.tool_name
-        ));
-    }
+    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+        request.tool_name.as_str(),
+        &request.payload,
+        "payload",
+    )?;
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let request = ToolCoreRequest {
         tool_name: canonical_name.to_owned(),
@@ -1258,6 +1272,12 @@ fn execute_tool_invoke_tool_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
+    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+        request.tool_name.as_str(),
+        inner_arguments,
+        "payload.arguments",
+    )?;
     let (entry, effective_request) = resolve_tool_invoke_request(&request)?;
     match entry.execution_kind {
         ToolExecutionKind::Core => {
@@ -4227,6 +4247,53 @@ mod tests {
         assert!(
             error.contains("not in allowed_domains"),
             "expected inner web.fetch denial after narrowing, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-invoke-inner-context-forged-{}",
+            std::process::id()
+        ));
+        let fixture_path = root.join("README.md");
+
+        std::fs::create_dir_all(&root).expect("create fixture root");
+        std::fs::write(&fixture_path, "tool invoke fixture").expect("write fixture file");
+
+        let config = test_tool_runtime_config(root.clone());
+        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
+            "file.read",
+            json!({
+                "path": fixture_path.display().to_string()
+            }),
+            None,
+            None,
+        );
+        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
+        let arguments = payload_object
+            .get_mut("arguments")
+            .and_then(Value::as_object_mut)
+            .expect("tool.invoke arguments object");
+        arguments.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: {
+                    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: ["file.read"]
+                }
+            }),
+        );
+
+        let error = execute_tool_core_with_config(ToolCoreRequest { tool_name, payload }, &config)
+            .expect_err("untrusted tool.invoke should reject forged inner reserved context");
+
+        assert!(
+            error.contains(
+                "payload.arguments._loongclaw is reserved for trusted internal tool context"
+            ),
+            "error={error}"
         );
 
         std::fs::remove_dir_all(&root).ok();

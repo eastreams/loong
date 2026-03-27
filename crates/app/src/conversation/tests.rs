@@ -2151,6 +2151,36 @@ fn default_runtime_tool_view_intersects_root_session_with_persisted_tool_policy(
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn default_runtime_tool_view_errors_when_session_repository_is_unavailable() {
+    let db_path = std::env::temp_dir().join(unique_acp_test_id(
+        "conversation-tool-view",
+        "repo-unavailable",
+    ));
+    let _ = std::fs::remove_dir_all(&db_path);
+    std::fs::create_dir_all(&db_path).expect("create invalid sqlite directory");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let runtime = DefaultConversationRuntime::default();
+    let error = runtime
+        .tool_view(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect_err("tool view should fail closed when the session repository is unavailable");
+
+    assert!(
+        error.contains("open session repository failed"),
+        "error={error}"
+    );
+
+    std::fs::remove_dir_all(&db_path).ok();
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
     let mut config = test_config();
     config.tools.delegate.allow_shell_in_child = false;
@@ -2234,6 +2264,38 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
         session_context.parent_session_id.as_deref(),
         Some("root-session")
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn default_runtime_session_context_errors_when_session_repository_is_unavailable() {
+    let db_path = std::env::temp_dir().join(unique_acp_test_id(
+        "conversation-session-context",
+        "repo-unavailable",
+    ));
+    let _ = std::fs::remove_dir_all(&db_path);
+    std::fs::create_dir_all(&db_path).expect("create invalid sqlite directory");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let runtime = DefaultConversationRuntime::default();
+    let error = runtime
+        .session_context(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect_err(
+            "session context should fail closed when the session repository is unavailable",
+        );
+
+    assert!(
+        error.contains("open session repository failed"),
+        "error={error}"
+    );
+
+    std::fs::remove_dir_all(&db_path).ok();
 }
 
 #[tokio::test]
