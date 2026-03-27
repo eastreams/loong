@@ -4487,9 +4487,10 @@ fn render_channel_route_notice(
     if !route.uses_implicit_fallback_default() {
         return None;
     }
+    let config_key = channel_id.replace('-', "_");
     Some(format!(
         "{} omitted --account and routed to configured account `{}` via fallback default selection; set {}.default_account or pass --account to avoid routing surprises",
-        channel_id, route.selected_configured_account_id, channel_id
+        channel_id, route.selected_configured_account_id, config_key
     ))
 }
 
@@ -5434,6 +5435,27 @@ mod tests {
         assert!(rendered.contains("alerts"));
         assert!(rendered.contains("--account"));
         assert!(rendered.contains("telegram.default_account"));
+    }
+
+    #[cfg(any(
+        feature = "channel-telegram",
+        feature = "channel-feishu",
+        feature = "channel-matrix"
+    ))]
+    #[test]
+    fn render_channel_route_notice_normalizes_hyphenated_config_keys() {
+        let route = crate::config::ChannelResolvedAccountRoute {
+            requested_account_id: None,
+            configured_account_count: 2,
+            selected_configured_account_id: "alerts".to_owned(),
+            default_account_source: crate::config::ChannelDefaultAccountSelectionSource::Fallback,
+        };
+
+        let rendered =
+            render_channel_route_notice("google-chat", &route).expect("fallback route should warn");
+
+        assert!(rendered.contains("google-chat"));
+        assert!(rendered.contains("google_chat.default_account"));
     }
 
     #[cfg(any(
