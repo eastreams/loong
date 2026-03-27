@@ -90,6 +90,7 @@ The manifest is the source of truth for:
 - version and display metadata
 - provided runtime surfaces
 - bridge/runtime metadata
+- declared `trust_tier` classification metadata for operator-visible policy and review
 - setup metadata
 - capability-slot ownership declarations
 
@@ -295,6 +296,8 @@ Important design constraints:
 ### Phase 4: Supply-Chain And SDK Alignment
 
 - align package contract with trust-tier, signing, and provenance work
+- surface typed trust-tier and provenance metadata through scan, activation, and catalog/search
+  outputs before signature enforcement lands
 - align SDK work with the manifest contract rather than inventing a parallel
   author-facing metadata model
 

@@ -15,8 +15,8 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use kernel::{
-    Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent, ToolCoreOutcome,
-    ToolCoreRequest,
+    BootstrapTaskStatus, Capability, ConnectorCommand, FixedClock, InMemoryAuditSink,
+    PluginActivationStatus, TaskIntent, ToolCoreOutcome, ToolCoreRequest,
 };
 use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,13 @@ pub struct Cli {
     pub command: Option<Commands>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum InitSpecPreset {
+    #[default]
+    Default,
+    PluginTrustGuard,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
@@ -217,6 +224,8 @@ pub enum Commands {
     InitSpec {
         #[arg(long, default_value = "loongclaw.spec.json")]
         output: String,
+        #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
+        preset: InitSpecPreset,
     },
     /// Run a full workflow from a JSON spec (task/connector/runtime/tool/memory)
     RunSpec {
@@ -224,6 +233,8 @@ pub enum Commands {
         spec: String,
         #[arg(long, default_value_t = false)]
         print_audit: bool,
+        #[arg(long, default_value_t = false)]
+        render_summary: bool,
     },
     /// Run pressure benchmarks for programmatic orchestration and optional regression gate checks
     BenchmarkProgrammaticPressure {
@@ -1557,22 +1568,167 @@ pub async fn run_audit_demo() -> CliResult<()> {
     Ok(())
 }
 
-pub fn init_spec_cli(output_path: &str) -> CliResult<()> {
-    let spec = RunnerSpec::template();
+pub fn init_spec_cli(output_path: &str, preset: InitSpecPreset) -> CliResult<()> {
+    let spec = match preset {
+        InitSpecPreset::Default => RunnerSpec::template(),
+        InitSpecPreset::PluginTrustGuard => RunnerSpec::plugin_trust_guard_template(),
+    };
     write_json_file(output_path, &spec)?;
     println!("spec template written to {}", output_path);
     Ok(())
 }
 
-pub async fn run_spec_cli(spec_path: &str, print_audit: bool) -> CliResult<()> {
+pub async fn run_spec_cli(
+    spec_path: &str,
+    print_audit: bool,
+    render_summary: bool,
+) -> CliResult<()> {
     let spec = read_spec_file(spec_path)?;
     let report =
         execute_spec_with_native_tool_executor(&spec, print_audit, Some(native_spec_tool_executor))
             .await;
+    if render_summary {
+        eprintln!("{}", render_spec_run_summary(&report));
+    }
     let pretty = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");
     Ok(())
+}
+
+fn render_spec_run_summary(report: &SpecRunReport) -> String {
+    let mut lines = vec![format!(
+        "run-spec summary pack={} agent={} status={} operation={}",
+        report.pack_id,
+        report.agent_id,
+        spec_run_status_label(report),
+        report.operation_kind
+    )];
+
+    if let Some(blocked_reason) = report.blocked_reason.as_deref() {
+        lines.push(format!(
+            "blocked_reason={}",
+            sanitize_summary_field(blocked_reason)
+        ));
+    }
+
+    if report.plugin_trust_summary.scanned_plugins > 0 {
+        let trust = &report.plugin_trust_summary;
+        lines.push(format!(
+            "plugin_trust scanned={} official={} verified_community={} unverified={} high_risk={} high_risk_unverified={} blocked_auto_apply={} review_required={}",
+            trust.scanned_plugins,
+            trust.official_plugins,
+            trust.verified_community_plugins,
+            trust.unverified_plugins,
+            trust.high_risk_plugins,
+            trust.high_risk_unverified_plugins,
+            trust.blocked_auto_apply_plugins,
+            trust.review_required_plugins.len()
+        ));
+
+        for entry in trust.review_required_plugins.iter().take(3) {
+            lines.push(render_plugin_trust_review_summary(entry));
+        }
+        if trust.review_required_plugins.len() > 3 {
+            lines.push(format!(
+                "plugin_review remaining={}",
+                trust.review_required_plugins.len() - 3
+            ));
+        }
+    }
+
+    if let Some(summary) = report.tool_search_summary.as_ref() {
+        lines.push(format!(
+            "tool_search {}",
+            sanitize_summary_field(&summary.headline)
+        ));
+
+        if summary.trust_filter_summary.applied {
+            lines.push(format!(
+                "tool_search_filters query_requested={} structured_requested={} effective={} conflicting={} filtered_out_by_tier={}",
+                format_string_list_or_dash(&summary.trust_filter_summary.query_requested_tiers),
+                format_string_list_or_dash(&summary.trust_filter_summary.structured_requested_tiers),
+                format_string_list_or_dash(&summary.trust_filter_summary.effective_tiers),
+                summary.trust_filter_summary.conflicting_requested_tiers,
+                format_usize_rollup(&summary.trust_filter_summary.filtered_out_tier_counts)
+            ));
+        }
+
+        for (index, entry) in summary.top_results.iter().enumerate() {
+            lines.push(format!(
+                "tool_search_top[{}] provider={} connector={} tool_id={} trust={} bridge={} score={} setup_ready={} loaded={} deferred={}",
+                index + 1,
+                entry.provider_id,
+                entry.connector_name,
+                entry.tool_id,
+                entry.trust_tier.as_deref().unwrap_or("-"),
+                entry.bridge_kind,
+                entry.score,
+                entry.setup_ready,
+                entry.loaded,
+                entry.deferred
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn spec_run_status_label(report: &SpecRunReport) -> &'static str {
+    if report.blocked_reason.is_some() || report.operation_kind == "blocked" {
+        "blocked"
+    } else {
+        "ok"
+    }
+}
+
+fn render_plugin_trust_review_summary(entry: &PluginTrustReviewEntry) -> String {
+    format!(
+        "plugin_review plugin={} tier={} bridge={} activation={} bootstrap={} source={} provenance={} reason={}",
+        entry.plugin_id,
+        entry.trust_tier.as_str(),
+        entry.bridge_kind.as_str(),
+        plugin_activation_status_label(entry.activation_status),
+        entry
+            .bootstrap_status
+            .map(bootstrap_task_status_label)
+            .unwrap_or("-"),
+        sanitize_summary_field(&entry.source_path),
+        sanitize_summary_field(&entry.provenance_summary),
+        sanitize_summary_field(&entry.reason)
+    )
+}
+
+fn plugin_activation_status_label(status: PluginActivationStatus) -> &'static str {
+    match status {
+        PluginActivationStatus::Ready => "ready",
+        PluginActivationStatus::SetupIncomplete => "setup_incomplete",
+        PluginActivationStatus::BlockedUnsupportedBridge => "blocked_unsupported_bridge",
+        PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
+            "blocked_unsupported_adapter_family"
+        }
+    }
+}
+
+fn bootstrap_task_status_label(status: BootstrapTaskStatus) -> &'static str {
+    match status {
+        BootstrapTaskStatus::Applied => "applied",
+        BootstrapTaskStatus::DeferredUnsupportedAutoApply => "deferred_unsupported_auto_apply",
+        BootstrapTaskStatus::SkippedNotReady => "skipped_not_ready",
+        BootstrapTaskStatus::SkippedByPolicyLimit => "skipped_by_policy_limit",
+    }
+}
+
+fn format_string_list_or_dash(values: &[String]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+
+    values.join(",")
+}
+
+fn sanitize_summary_field(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub fn run_validate_config_cli(

@@ -17,7 +17,8 @@ use kernel::{
     PluginDescriptor, PluginScanReport, PluginScanner, PluginSetup, PluginSetupReadinessContext,
     PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
     RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreRequest,
-    ToolExtensionRequest,
+    ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
+    plugin_provenance_summary_for_descriptor,
 };
 use serde_json::{Value, json};
 
@@ -340,6 +341,21 @@ pub async fn execute_spec_with_native_tool_executor(
         blocked_reason = Some(error);
     }
 
+    let plugin_trust_summary = build_plugin_trust_summary(
+        &plugin_scan_reports,
+        &plugin_activation_plans,
+        &plugin_bootstrap_reports,
+    );
+    if let Err(error) = emit_plugin_trust_audit_event(
+        &kernel,
+        &pack.pack_id,
+        &spec.agent_id,
+        &plugin_trust_summary,
+    ) && blocked_reason.is_none()
+    {
+        blocked_reason = Some(error);
+    }
+
     if let Some(reason) = blocked_reason.clone() {
         return build_blocked_spec_run_report(
             pack.pack_id.clone(),
@@ -547,6 +563,38 @@ pub async fn execute_spec_with_native_tool_executor(
             );
         }
     };
+    let tool_search_summary = (operation_kind == "tool_search")
+        .then(|| build_tool_search_operation_summary(&outcome))
+        .flatten();
+    if let Some(summary) = tool_search_summary.as_ref()
+        && let Err(error) =
+            emit_tool_search_audit_event(&kernel, &pack.pack_id, &spec.agent_id, summary)
+    {
+        blocked_reason = Some(error);
+    }
+    if let Some(reason) = blocked_reason.clone() {
+        return build_blocked_spec_run_report(
+            pack.pack_id.clone(),
+            spec.agent_id.clone(),
+            reason,
+            approval_guard,
+            bridge_support_checksum,
+            bridge_support_sha256,
+            self_awareness,
+            architecture_guard,
+            plugin_scan_reports,
+            plugin_translation_reports,
+            plugin_activation_plans,
+            plugin_bootstrap_reports,
+            plugin_bootstrap_queue,
+            plugin_absorb_reports,
+            security_scan_report,
+            auto_provision_plan,
+            integration_catalog,
+            include_audit,
+            &audit_sink,
+        );
+    }
 
     SpecRunReport {
         pack_id: pack.pack_id.clone(),
@@ -562,6 +610,8 @@ pub async fn execute_spec_with_native_tool_executor(
         plugin_translation_reports,
         plugin_activation_plans,
         plugin_bootstrap_reports,
+        plugin_trust_summary,
+        tool_search_summary,
         plugin_bootstrap_queue,
         plugin_absorb_reports,
         security_scan_report,
@@ -605,6 +655,11 @@ fn build_blocked_spec_run_report(
     include_audit: bool,
     audit_sink: &Arc<InMemoryAuditSink>,
 ) -> SpecRunReport {
+    let plugin_trust_summary = build_plugin_trust_summary(
+        &plugin_scan_reports,
+        &plugin_activation_plans,
+        &plugin_bootstrap_reports,
+    );
     SpecRunReport {
         pack_id,
         agent_id,
@@ -619,6 +674,8 @@ fn build_blocked_spec_run_report(
         plugin_translation_reports,
         plugin_activation_plans,
         plugin_bootstrap_reports,
+        plugin_trust_summary,
+        tool_search_summary: None,
         plugin_bootstrap_queue,
         plugin_absorb_reports,
         security_scan_report,
@@ -630,6 +687,242 @@ fn build_blocked_spec_run_report(
         } else {
             None
         },
+    }
+}
+
+fn build_plugin_trust_summary(
+    plugin_scan_reports: &[PluginScanReport],
+    plugin_activation_plans: &[PluginActivationPlan],
+    plugin_bootstrap_reports: &[BootstrapReport],
+) -> PluginTrustSummary {
+    let mut summary = PluginTrustSummary::default();
+    let mut provenance_by_plugin = BTreeMap::new();
+    let mut bootstrap_by_plugin = BTreeMap::new();
+
+    for report in plugin_scan_reports {
+        for descriptor in &report.descriptors {
+            summary.scanned_plugins = summary.scanned_plugins.saturating_add(1);
+            match descriptor.manifest.trust_tier {
+                kernel::PluginTrustTier::Official => {
+                    summary.official_plugins = summary.official_plugins.saturating_add(1);
+                }
+                kernel::PluginTrustTier::VerifiedCommunity => {
+                    summary.verified_community_plugins =
+                        summary.verified_community_plugins.saturating_add(1);
+                }
+                kernel::PluginTrustTier::Unverified => {
+                    summary.unverified_plugins = summary.unverified_plugins.saturating_add(1);
+                }
+            }
+            provenance_by_plugin.insert(
+                (
+                    descriptor.path.clone(),
+                    descriptor.manifest.plugin_id.clone(),
+                ),
+                plugin_provenance_summary_for_descriptor(descriptor),
+            );
+        }
+    }
+
+    for report in plugin_bootstrap_reports {
+        for task in &report.tasks {
+            bootstrap_by_plugin.insert(
+                (task.source_path.clone(), task.plugin_id.clone()),
+                (task.status, task.reason.clone()),
+            );
+        }
+    }
+
+    for plan in plugin_activation_plans {
+        for candidate in &plan.candidates {
+            if plugin_bridge_is_high_risk_auto_apply(candidate.bridge_kind) {
+                summary.high_risk_plugins = summary.high_risk_plugins.saturating_add(1);
+            }
+            if !matches!(candidate.trust_tier, kernel::PluginTrustTier::Unverified)
+                || !plugin_bridge_is_high_risk_auto_apply(candidate.bridge_kind)
+            {
+                continue;
+            }
+
+            summary.high_risk_unverified_plugins =
+                summary.high_risk_unverified_plugins.saturating_add(1);
+
+            let plugin_key = (candidate.source_path.clone(), candidate.plugin_id.clone());
+            let provenance_summary = provenance_by_plugin
+                .get(&plugin_key)
+                .cloned()
+                .unwrap_or_else(|| {
+                    kernel::format_plugin_provenance_summary(
+                        candidate.source_kind,
+                        &candidate.source_path,
+                        candidate.package_manifest_path.as_deref(),
+                    )
+                });
+            let (bootstrap_status, bootstrap_reason) = bootstrap_by_plugin
+                .get(&plugin_key)
+                .map(|(status, reason)| (Some(*status), Some(reason.clone())))
+                .unwrap_or((None, None));
+
+            if matches!(
+                bootstrap_status,
+                Some(BootstrapTaskStatus::DeferredUnsupportedAutoApply)
+            ) && bootstrap_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("bootstrap trust policy"))
+            {
+                summary.blocked_auto_apply_plugins =
+                    summary.blocked_auto_apply_plugins.saturating_add(1);
+            }
+
+            summary
+                .review_required_plugins
+                .push(PluginTrustReviewEntry {
+                    plugin_id: candidate.plugin_id.clone(),
+                    source_path: candidate.source_path.clone(),
+                    provenance_summary,
+                    trust_tier: candidate.trust_tier,
+                    bridge_kind: candidate.bridge_kind,
+                    activation_status: candidate.status,
+                    bootstrap_status,
+                    reason: bootstrap_reason.unwrap_or_else(|| candidate.reason.clone()),
+                });
+        }
+    }
+
+    summary.review_required_plugins.sort_by(|left, right| {
+        left.plugin_id
+            .cmp(&right.plugin_id)
+            .then_with(|| left.source_path.cmp(&right.source_path))
+    });
+
+    summary
+}
+
+fn build_tool_search_operation_summary(outcome: &Value) -> Option<ToolSearchOperationSummary> {
+    let payload = outcome.as_object()?;
+    let results = payload.get("results")?.as_array()?;
+    let top_results = results
+        .iter()
+        .take(3)
+        .filter_map(build_tool_search_operation_summary_entry)
+        .collect::<Vec<_>>();
+    let trust_filter_summary = payload
+        .get("trust_filter_summary")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<ToolSearchTrustFilterSummary>(value).ok())
+        .unwrap_or_default();
+    let query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let returned = payload
+        .get("returned")
+        .and_then(Value::as_u64)
+        .map_or(results.len(), |value| value as usize);
+    let trust_tiers = payload
+        .get("trust_tiers")
+        .and_then(Value::as_array)
+        .map(|tiers| {
+            tiers
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(ToolSearchOperationSummary {
+        headline: build_tool_search_operation_headline(
+            &query,
+            returned,
+            &trust_tiers,
+            &trust_filter_summary,
+            &top_results,
+        ),
+        query,
+        returned,
+        trust_tiers,
+        trust_filter_summary,
+        top_results,
+    })
+}
+
+fn build_tool_search_operation_summary_entry(
+    value: &Value,
+) -> Option<ToolSearchOperationSummaryEntry> {
+    let entry = value.as_object()?;
+    Some(ToolSearchOperationSummaryEntry {
+        tool_id: entry.get("tool_id")?.as_str()?.to_owned(),
+        provider_id: entry.get("provider_id")?.as_str()?.to_owned(),
+        connector_name: entry.get("connector_name")?.as_str()?.to_owned(),
+        trust_tier: entry
+            .get("trust_tier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bridge_kind: entry.get("bridge_kind")?.as_str()?.to_owned(),
+        score: entry
+            .get("score")
+            .and_then(Value::as_u64)
+            .map_or(0, |value| value as u32),
+        setup_ready: entry
+            .get("setup_ready")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        deferred: entry
+            .get("deferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        loaded: entry
+            .get("loaded")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
+fn build_tool_search_operation_headline(
+    query: &str,
+    returned: usize,
+    trust_tiers: &[String],
+    trust_filter_summary: &ToolSearchTrustFilterSummary,
+    top_results: &[ToolSearchOperationSummaryEntry],
+) -> String {
+    let result_noun = if returned == 1 { "result" } else { "results" };
+    let mut parts = vec![format!("returned {returned} {result_noun}")];
+
+    if trust_filter_summary.applied {
+        let scope = if trust_filter_summary.effective_tiers.is_empty() {
+            "none".to_owned()
+        } else {
+            trust_filter_summary.effective_tiers.join(",")
+        };
+        parts.push(format!("trust_scope={scope}"));
+        if trust_filter_summary.filtered_out_candidates > 0 {
+            let filtered_noun = if trust_filter_summary.filtered_out_candidates == 1 {
+                "candidate"
+            } else {
+                "candidates"
+            };
+            parts.push(format!(
+                "filtered_out={} {filtered_noun}",
+                trust_filter_summary.filtered_out_candidates
+            ));
+        }
+        if trust_filter_summary.conflicting_requested_tiers {
+            parts.push("conflicting_trust_filters=true".to_owned());
+        }
+    } else if !trust_tiers.is_empty() {
+        parts.push(format!("requested_tiers={}", trust_tiers.join(",")));
+    }
+
+    if let Some(first) = top_results.first() {
+        parts.push(format!("top_match={}", first.provider_id));
+    }
+
+    if query.is_empty() {
+        parts.join("; ")
+    } else {
+        format!("query=\"{query}\"; {}", parts.join("; "))
     }
 }
 
@@ -685,6 +978,90 @@ fn emit_security_scan_audit_event(
             },
         )
         .map_err(|error| format!("failed to record security scan audit event: {error}"))
+}
+
+fn emit_plugin_trust_audit_event(
+    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    pack_id: &str,
+    agent_id: &str,
+    summary: &PluginTrustSummary,
+) -> Result<(), String> {
+    if summary.scanned_plugins == 0 {
+        return Ok(());
+    }
+
+    let review_required_plugin_ids: Vec<String> = summary
+        .review_required_plugins
+        .iter()
+        .map(|entry| entry.plugin_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let review_required_bridges: Vec<String> = summary
+        .review_required_plugins
+        .iter()
+        .map(|entry| entry.bridge_kind.as_str().to_owned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    kernel
+        .record_audit_event(
+            Some(agent_id),
+            AuditEventKind::PluginTrustEvaluated {
+                pack_id: pack_id.to_owned(),
+                scanned_plugins: summary.scanned_plugins,
+                official_plugins: summary.official_plugins,
+                verified_community_plugins: summary.verified_community_plugins,
+                unverified_plugins: summary.unverified_plugins,
+                high_risk_plugins: summary.high_risk_plugins,
+                high_risk_unverified_plugins: summary.high_risk_unverified_plugins,
+                blocked_auto_apply_plugins: summary.blocked_auto_apply_plugins,
+                review_required_plugin_ids,
+                review_required_bridges,
+            },
+        )
+        .map_err(|error| format!("failed to record plugin trust audit event: {error}"))
+}
+
+fn emit_tool_search_audit_event(
+    kernel: &LoongClawKernel<StaticPolicyEngine>,
+    pack_id: &str,
+    agent_id: &str,
+    summary: &ToolSearchOperationSummary,
+) -> Result<(), String> {
+    let top_provider_ids = summary
+        .top_results
+        .iter()
+        .map(|entry| entry.provider_id.clone())
+        .collect::<Vec<_>>();
+
+    kernel
+        .record_audit_event(
+            Some(agent_id),
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id: pack_id.to_owned(),
+                query: summary.query.clone(),
+                returned: summary.returned,
+                trust_filter_applied: summary.trust_filter_summary.applied,
+                query_requested_tiers: summary.trust_filter_summary.query_requested_tiers.clone(),
+                structured_requested_tiers: summary
+                    .trust_filter_summary
+                    .structured_requested_tiers
+                    .clone(),
+                effective_tiers: summary.trust_filter_summary.effective_tiers.clone(),
+                conflicting_requested_tiers: summary
+                    .trust_filter_summary
+                    .conflicting_requested_tiers,
+                filtered_out_candidates: summary.trust_filter_summary.filtered_out_candidates,
+                filtered_out_tier_counts: summary
+                    .trust_filter_summary
+                    .filtered_out_tier_counts
+                    .clone(),
+                top_provider_ids,
+            },
+        )
+        .map_err(|error| format!("failed to record tool search audit event: {error}"))
 }
 
 pub fn resolve_plugin_relative_path(source_path: &str, artifact: &str) -> PathBuf {
@@ -924,6 +1301,9 @@ fn bootstrap_policy(spec: &RunnerSpec) -> Option<BootstrapPolicy> {
     if let Some(value) = bootstrap.allow_acp_runtime_auto_apply {
         policy.allow_acp_runtime_auto_apply = value;
     }
+    if let Some(value) = bootstrap.block_unverified_high_risk_auto_apply {
+        policy.block_unverified_high_risk_auto_apply = value;
+    }
     if let Some(value) = bootstrap.enforce_ready_execution {
         policy.enforce_ready_execution = value;
     }
@@ -1099,11 +1479,17 @@ fn stamp_plugin_provenance_metadata(descriptor: &mut PluginDescriptor) {
     let package_root_key = "plugin_package_root".to_owned();
     let package_root_value = descriptor.package_root.clone();
     let package_manifest_path_value = descriptor.package_manifest_path.clone();
+    let provenance_summary_key = "plugin_provenance_summary".to_owned();
+    let provenance_summary_value = plugin_provenance_summary_for_descriptor(descriptor);
+    let trust_tier_key = "plugin_trust_tier".to_owned();
+    let trust_tier_value = descriptor.manifest.trust_tier.as_str().to_owned();
     let metadata = &mut descriptor.manifest.metadata;
 
     metadata.insert(source_path_key, source_path_value);
     metadata.insert(source_kind_key, source_kind_value);
     metadata.insert(package_root_key, package_root_value);
+    metadata.insert(provenance_summary_key, provenance_summary_value);
+    metadata.insert(trust_tier_key, trust_tier_value);
 
     if let Some(package_manifest_path_value) = package_manifest_path_value {
         let package_manifest_path_key = "plugin_package_manifest_path".to_owned();
@@ -1533,16 +1919,18 @@ async fn execute_spec_operation(
         OperationSpec::ToolSearch {
             query,
             limit,
+            trust_tiers,
             include_deferred,
             include_examples,
         } => {
-            let matches = execute_tool_search(
+            let search_report = execute_tool_search(
                 integration_catalog,
                 plugin_scan_reports,
                 plugin_translation_reports,
                 setup_readiness_context,
                 query,
                 *limit,
+                trust_tiers,
                 *include_deferred,
                 *include_examples,
             );
@@ -1551,10 +1939,12 @@ async fn execute_spec_operation(
                 json!({
                     "query": query,
                     "limit": limit,
+                    "trust_tiers": trust_tiers.iter().map(|tier| tier.as_str()).collect::<Vec<_>>(),
                     "include_deferred": include_deferred,
                     "include_examples": include_examples,
-                    "returned": matches.len(),
-                    "results": matches,
+                    "returned": search_report.results.len(),
+                    "trust_filter_summary": search_report.trust_filter_summary,
+                    "results": search_report.results,
                 }),
             ))
         }
@@ -1641,6 +2031,7 @@ mod bootstrap_policy_tests {
             allow_mcp_server_auto_apply: None,
             allow_acp_bridge_auto_apply: Some(true),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: Some(true),
             enforce_ready_execution: None,
             max_tasks: None,
         });
@@ -1648,6 +2039,7 @@ mod bootstrap_policy_tests {
         let policy = bootstrap_policy(&spec).expect("bootstrap policy should resolve");
         assert!(policy.allow_acp_bridge_auto_apply);
         assert!(!policy.allow_acp_runtime_auto_apply);
+        assert!(policy.block_unverified_high_risk_auto_apply);
     }
 }
 
@@ -1755,7 +2147,7 @@ mod plugin_metadata_tests {
     use kernel::{
         Capability, PluginBridgeKind, PluginDescriptor, PluginIR, PluginManifest,
         PluginRuntimeProfile, PluginScanReport, PluginSetup, PluginSetupMode, PluginSourceKind,
-        PluginTranslationReport,
+        PluginTranslationReport, PluginTrustTier,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1786,6 +2178,7 @@ mod plugin_metadata_tests {
                 channel_id: Some("primary".to_owned()),
                 endpoint: Some("https://example.com/search".to_owned()),
                 capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: PluginTrustTier::VerifiedCommunity,
                 metadata: BTreeMap::new(),
                 summary: Some("Search plugin".to_owned()),
                 tags: vec!["search".to_owned()],
@@ -1817,6 +2210,7 @@ mod plugin_metadata_tests {
                 channel_id: descriptor.manifest.channel_id.clone(),
                 endpoint: descriptor.manifest.endpoint.clone(),
                 capabilities: descriptor.manifest.capabilities.clone(),
+                trust_tier: descriptor.manifest.trust_tier,
                 metadata: descriptor.manifest.metadata.clone(),
                 source_path: descriptor.path.clone(),
                 source_kind: descriptor.source_kind,
@@ -1851,8 +2245,18 @@ mod plugin_metadata_tests {
             Some("package_manifest")
         );
         assert_eq!(
+            metadata.get("plugin_trust_tier").map(String::as_str),
+            Some("verified-community")
+        );
+        assert_eq!(
             metadata.get("plugin_package_root").map(String::as_str),
             Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_provenance_summary")
+                .map(String::as_str),
+            Some("package_manifest:/tmp/pkg/loongclaw.plugin.json")
         );
         assert_eq!(
             metadata
@@ -1900,8 +2304,18 @@ mod plugin_metadata_tests {
             Some("embedded_source")
         );
         assert_eq!(
+            metadata.get("plugin_trust_tier").map(String::as_str),
+            Some("verified-community")
+        );
+        assert_eq!(
             metadata.get("plugin_package_root").map(String::as_str),
             Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_provenance_summary")
+                .map(String::as_str),
+            Some("embedded_source:/tmp/pkg/plugin.py")
         );
         assert_eq!(
             metadata.get("plugin_setup_mode").map(String::as_str),
@@ -1933,6 +2347,14 @@ mod plugin_metadata_tests {
             "plugin_package_manifest_path".to_owned(),
             "/forged/package-manifest".to_owned(),
         );
+        descriptor.manifest.metadata.insert(
+            "plugin_provenance_summary".to_owned(),
+            "forged:summary".to_owned(),
+        );
+        descriptor
+            .manifest
+            .metadata
+            .insert("plugin_trust_tier".to_owned(), "unverified".to_owned());
 
         let report = PluginScanReport {
             scanned_files: 1,
@@ -1955,6 +2377,16 @@ mod plugin_metadata_tests {
         assert_eq!(
             metadata.get("plugin_package_root").map(String::as_str),
             Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_provenance_summary")
+                .map(String::as_str),
+            Some("package_manifest:/tmp/pkg/loongclaw.plugin.json")
+        );
+        assert_eq!(
+            metadata.get("plugin_trust_tier").map(String::as_str),
+            Some("verified-community")
         );
         assert_eq!(
             metadata
@@ -1984,6 +2416,14 @@ mod plugin_metadata_tests {
             "plugin_package_manifest_path".to_owned(),
             "/forged/package-manifest".to_owned(),
         );
+        descriptor.manifest.metadata.insert(
+            "plugin_provenance_summary".to_owned(),
+            "forged:summary".to_owned(),
+        );
+        descriptor
+            .manifest
+            .metadata
+            .insert("plugin_trust_tier".to_owned(), "official".to_owned());
 
         let report = PluginScanReport {
             scanned_files: 1,
@@ -2006,6 +2446,16 @@ mod plugin_metadata_tests {
         assert_eq!(
             metadata.get("plugin_package_root").map(String::as_str),
             Some("/tmp/pkg")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_provenance_summary")
+                .map(String::as_str),
+            Some("embedded_source:/tmp/pkg/plugin.py")
+        );
+        assert_eq!(
+            metadata.get("plugin_trust_tier").map(String::as_str),
+            Some("verified-community")
         );
         assert!(
             !metadata.contains_key("plugin_package_manifest_path"),
@@ -2052,6 +2502,163 @@ mod plugin_metadata_tests {
                 .get("plugin_setup_required_env_vars_json")
                 .map(String::as_str),
             Some("[\"TAVILY_API_KEY\"]")
+        );
+    }
+}
+
+#[cfg(test)]
+mod plugin_trust_summary_tests {
+    use super::build_plugin_trust_summary;
+    use kernel::{
+        BootstrapReport, BootstrapTask, BootstrapTaskStatus, Capability, PluginActivationCandidate,
+        PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginDescriptor,
+        PluginManifest, PluginScanReport, PluginSourceKind, PluginTrustTier,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn descriptor(
+        plugin_id: &str,
+        source_path: &str,
+        trust_tier: PluginTrustTier,
+    ) -> PluginDescriptor {
+        PluginDescriptor {
+            path: source_path.to_owned(),
+            source_kind: PluginSourceKind::EmbeddedSource,
+            package_root: "/tmp/plugins".to_owned(),
+            package_manifest_path: None,
+            language: "python".to_owned(),
+            manifest: PluginManifest {
+                plugin_id: plugin_id.to_owned(),
+                provider_id: plugin_id.to_owned(),
+                connector_name: plugin_id.to_owned(),
+                channel_id: Some("primary".to_owned()),
+                endpoint: Some(format!("local://{plugin_id}")),
+                capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier,
+                metadata: BTreeMap::new(),
+                summary: None,
+                tags: Vec::new(),
+                input_examples: Vec::new(),
+                output_examples: Vec::new(),
+                defer_loading: false,
+                setup: None,
+            },
+        }
+    }
+
+    #[test]
+    fn build_plugin_trust_summary_counts_tiers_and_review_required_plugins() {
+        let official = descriptor(
+            "official-http",
+            "/tmp/plugins/official.rs",
+            PluginTrustTier::Official,
+        );
+        let unverified = descriptor(
+            "stdio-review",
+            "/tmp/plugins/stdio.py",
+            PluginTrustTier::Unverified,
+        );
+        let scan_report = PluginScanReport {
+            scanned_files: 2,
+            matched_plugins: 2,
+            descriptors: vec![official, unverified],
+        };
+        let activation_plan = PluginActivationPlan {
+            total_plugins: 2,
+            ready_plugins: 2,
+            setup_incomplete_plugins: 0,
+            blocked_plugins: 0,
+            candidates: vec![
+                PluginActivationCandidate {
+                    plugin_id: "official-http".to_owned(),
+                    source_path: "/tmp/plugins/official.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp/plugins".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::Official,
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "http-adapter".to_owned(),
+                    status: PluginActivationStatus::Ready,
+                    reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
+                    bootstrap_hint: "register provider".to_owned(),
+                },
+                PluginActivationCandidate {
+                    plugin_id: "stdio-review".to_owned(),
+                    source_path: "/tmp/plugins/stdio.py".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp/plugins".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::Unverified,
+                    bridge_kind: PluginBridgeKind::ProcessStdio,
+                    adapter_family: "python-stdio-adapter".to_owned(),
+                    status: PluginActivationStatus::Ready,
+                    reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
+                    bootstrap_hint: "spawn stdio worker".to_owned(),
+                },
+            ],
+        };
+        let bootstrap_report = BootstrapReport {
+            total_tasks: 2,
+            applied_tasks: 1,
+            deferred_tasks: 1,
+            skipped_tasks: 0,
+            blocked: true,
+            block_reason: Some(
+                "bootstrap policy blocked 1 ready plugin(s) that were not auto-applied"
+                    .to_owned(),
+            ),
+            applied_plugin_keys: BTreeSet::from([(
+                "/tmp/plugins/official.rs".to_owned(),
+                "official-http".to_owned(),
+            )]),
+            tasks: vec![
+                BootstrapTask {
+                    plugin_id: "official-http".to_owned(),
+                    source_path: "/tmp/plugins/official.rs".to_owned(),
+                    trust_tier: PluginTrustTier::Official,
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "http-adapter".to_owned(),
+                    bootstrap_hint: "register provider".to_owned(),
+                    status: BootstrapTaskStatus::Applied,
+                    reason: "bridge is allowed for automatic bootstrap apply".to_owned(),
+                },
+                BootstrapTask {
+                    plugin_id: "stdio-review".to_owned(),
+                    source_path: "/tmp/plugins/stdio.py".to_owned(),
+                    trust_tier: PluginTrustTier::Unverified,
+                    bridge_kind: PluginBridgeKind::ProcessStdio,
+                    adapter_family: "python-stdio-adapter".to_owned(),
+                    bootstrap_hint: "spawn stdio worker".to_owned(),
+                    status: BootstrapTaskStatus::DeferredUnsupportedAutoApply,
+                    reason:
+                        "bridge is ready but auto-apply is blocked by bootstrap trust policy for unverified high-risk plugins"
+                            .to_owned(),
+                },
+            ],
+        };
+
+        let summary =
+            build_plugin_trust_summary(&[scan_report], &[activation_plan], &[bootstrap_report]);
+
+        assert_eq!(summary.scanned_plugins, 2);
+        assert_eq!(summary.official_plugins, 1);
+        assert_eq!(summary.unverified_plugins, 1);
+        assert_eq!(summary.high_risk_plugins, 1);
+        assert_eq!(summary.high_risk_unverified_plugins, 1);
+        assert_eq!(summary.blocked_auto_apply_plugins, 1);
+        assert_eq!(summary.review_required_plugins.len(), 1);
+        assert_eq!(summary.review_required_plugins[0].plugin_id, "stdio-review");
+        assert_eq!(
+            summary.review_required_plugins[0].provenance_summary,
+            "embedded_source:/tmp/plugins/stdio.py"
+        );
+        assert_eq!(
+            summary.review_required_plugins[0].bootstrap_status,
+            Some(BootstrapTaskStatus::DeferredUnsupportedAutoApply)
         );
     }
 }

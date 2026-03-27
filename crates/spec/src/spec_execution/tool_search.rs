@@ -1,13 +1,22 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use kernel::{
     IntegrationCatalog, PluginBridgeKind, PluginScanReport, PluginSetupReadinessContext,
-    PluginTranslationReport, evaluate_plugin_setup_requirements,
+    PluginTranslationReport, PluginTrustTier, evaluate_plugin_setup_requirements,
+    plugin_provenance_summary_for_descriptor,
 };
 use serde_json::Value;
 
 use super::descriptor_bridge_kind;
-use crate::spec_runtime::{ToolSearchEntry, ToolSearchResult, detect_provider_bridge_kind};
+use crate::spec_runtime::{
+    ToolSearchEntry, ToolSearchResult, ToolSearchTrustFilterSummary, detect_provider_bridge_kind,
+};
+
+#[derive(Debug)]
+pub(super) struct ToolSearchExecutionReport {
+    pub results: Vec<ToolSearchResult>,
+    pub trust_filter_summary: ToolSearchTrustFilterSummary,
+}
 
 pub(super) fn execute_tool_search(
     integration_catalog: &IntegrationCatalog,
@@ -16,9 +25,10 @@ pub(super) fn execute_tool_search(
     setup_readiness_context: &PluginSetupReadinessContext,
     query: &str,
     limit: usize,
+    trust_tiers: &[PluginTrustTier],
     include_deferred: bool,
     include_examples: bool,
-) -> Vec<ToolSearchResult> {
+) -> ToolSearchExecutionReport {
     let mut entries: BTreeMap<String, ToolSearchEntry> = BTreeMap::new();
     let mut translation_by_key: BTreeMap<
         (String, String),
@@ -67,6 +77,8 @@ pub(super) fn execute_tool_search(
             .cloned();
         let setup_docs_urls = metadata_strings(&provider.metadata, "plugin_setup_docs_urls_json");
         let setup_remediation = provider.metadata.get("plugin_setup_remediation").cloned();
+        let provenance_summary = provider.metadata.get("plugin_provenance_summary").cloned();
+        let trust_tier = provider.metadata.get("plugin_trust_tier").cloned();
         let mut adapter_family = provider.metadata.get("adapter_family").cloned();
         let mut entrypoint_hint = provider
             .metadata
@@ -102,6 +114,8 @@ pub(super) fn execute_tool_search(
                     .metadata
                     .get("plugin_package_manifest_path")
                     .cloned(),
+                provenance_summary,
+                trust_tier,
                 bridge_kind: resolved_bridge_kind,
                 adapter_family,
                 entrypoint_hint,
@@ -151,6 +165,8 @@ pub(super) fn execute_tool_search(
                     source_kind: Some(descriptor.source_kind.as_str().to_owned()),
                     package_root: Some(descriptor.package_root.clone()),
                     package_manifest_path: descriptor.package_manifest_path.clone(),
+                    provenance_summary: Some(plugin_provenance_summary_for_descriptor(descriptor)),
+                    trust_tier: Some(manifest.trust_tier.as_str().to_owned()),
                     bridge_kind,
                     adapter_family: adapter_family.clone(),
                     entrypoint_hint: entrypoint_hint.clone(),
@@ -216,6 +232,13 @@ pub(super) fn execute_tool_search(
             }
             if entry.package_manifest_path.is_none() {
                 entry.package_manifest_path = descriptor.package_manifest_path.clone();
+            }
+            if entry.provenance_summary.is_none() {
+                entry.provenance_summary =
+                    Some(plugin_provenance_summary_for_descriptor(descriptor));
+            }
+            if entry.trust_tier.is_none() {
+                entry.trust_tier = Some(manifest.trust_tier.as_str().to_owned());
             }
             if entry.summary.is_none() {
                 entry.summary = manifest.summary.clone();
@@ -310,20 +333,24 @@ pub(super) fn execute_tool_search(
         entry.missing_required_config_keys = readiness.missing_required_config_keys;
     }
 
-    let query_normalized = query.trim().to_ascii_lowercase();
-    let tokens: Vec<String> = query_normalized
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect();
+    let parsed_query = parse_tool_search_query(query, trust_tiers);
 
-    let mut ranked: Vec<(u32, ToolSearchEntry)> = entries
+    let deferred_visible_entries: Vec<ToolSearchEntry> = entries
         .into_values()
         .filter(|entry| include_deferred || !entry.deferred || entry.loaded)
+        .collect();
+    let candidates_before_trust_filter = deferred_visible_entries.len();
+    let (trust_matched_entries, trust_filtered_entries): (Vec<_>, Vec<_>) =
+        deferred_visible_entries
+            .into_iter()
+            .partition(|entry| tool_search_matches_trust_tier_filter(entry, &parsed_query));
+
+    let mut ranked: Vec<(u32, ToolSearchEntry)> = trust_matched_entries
+        .into_iter()
         .filter_map(|entry| {
-            let score = tool_search_score(&entry, &query_normalized, &tokens);
-            if query_normalized.is_empty() || score > 0 {
+            let score =
+                tool_search_score(&entry, &parsed_query.normalized_text, &parsed_query.tokens);
+            if parsed_query.normalized_text.is_empty() || score > 0 {
                 Some((score, entry))
             } else {
                 None
@@ -335,11 +362,15 @@ pub(super) fn execute_tool_search(
         right_score
             .cmp(left_score)
             .then_with(|| right.loaded.cmp(&left.loaded))
+            .then_with(|| {
+                trust_tier_sort_rank(right.trust_tier.as_deref())
+                    .cmp(&trust_tier_sort_rank(left.trust_tier.as_deref()))
+            })
             .then_with(|| left.tool_id.cmp(&right.tool_id))
     });
 
     let capped_limit = limit.clamp(1, 50);
-    ranked
+    let results = ranked
         .into_iter()
         .take(capped_limit)
         .map(|(score, entry)| ToolSearchResult {
@@ -351,6 +382,8 @@ pub(super) fn execute_tool_search(
             source_kind: entry.source_kind,
             package_root: entry.package_root,
             package_manifest_path: entry.package_manifest_path,
+            provenance_summary: entry.provenance_summary,
+            trust_tier: entry.trust_tier,
             bridge_kind: entry.bridge_kind.as_str().to_owned(),
             adapter_family: entry.adapter_family,
             entrypoint_hint: entry.entrypoint_hint,
@@ -382,7 +415,26 @@ pub(super) fn execute_tool_search(
                 Vec::new()
             },
         })
-        .collect()
+        .collect();
+
+    ToolSearchExecutionReport {
+        results,
+        trust_filter_summary: ToolSearchTrustFilterSummary {
+            applied: parsed_query.trust_filter_requested,
+            query_requested_tiers: parsed_query.query_requested_tiers.into_iter().collect(),
+            structured_requested_tiers: parsed_query
+                .structured_requested_tiers
+                .into_iter()
+                .collect(),
+            effective_tiers: parsed_query.effective_trust_tiers.into_iter().collect(),
+            conflicting_requested_tiers: parsed_query.conflicting_requested_tiers,
+            candidates_before_trust_filter,
+            candidates_after_trust_filter: candidates_before_trust_filter
+                .saturating_sub(trust_filtered_entries.len()),
+            filtered_out_candidates: trust_filtered_entries.len(),
+            filtered_out_tier_counts: build_filtered_out_tier_counts(&trust_filtered_entries),
+        },
+    }
 }
 
 fn metadata_tags(metadata: &BTreeMap<String, String>) -> Vec<String> {
@@ -428,6 +480,144 @@ fn metadata_bool(metadata: &BTreeMap<String, String>, key: &str) -> Option<bool>
         })
 }
 
+#[derive(Debug, Default)]
+struct ParsedToolSearchQuery {
+    normalized_text: String,
+    tokens: Vec<String>,
+    query_requested_tiers: BTreeSet<String>,
+    structured_requested_tiers: BTreeSet<String>,
+    effective_trust_tiers: BTreeSet<String>,
+    trust_filter_requested: bool,
+    conflicting_requested_tiers: bool,
+}
+
+fn parse_tool_search_query(
+    query: &str,
+    structured_trust_tiers: &[PluginTrustTier],
+) -> ParsedToolSearchQuery {
+    let mut freeform_terms = Vec::new();
+    let mut query_trust_tiers = BTreeSet::new();
+
+    for term in query
+        .split_whitespace()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+    {
+        if let Some((raw_key, raw_value)) = term.split_once(':')
+            && matches!(
+                normalize_tool_search_filter_key(raw_key).as_str(),
+                "trust" | "tier" | "trust-tier" | "trust_tier"
+            )
+            && let Some(trust_tier) = normalize_trust_tier_label(raw_value)
+        {
+            query_trust_tiers.insert(trust_tier.to_owned());
+            continue;
+        }
+
+        freeform_terms.push(term.to_owned());
+    }
+
+    let structured_requested_tiers = structured_trust_tiers
+        .iter()
+        .map(|trust_tier| trust_tier.as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    let trust_filter_requested =
+        !query_trust_tiers.is_empty() || !structured_requested_tiers.is_empty();
+    let effective_trust_tiers = if structured_requested_tiers.is_empty() {
+        query_trust_tiers.clone()
+    } else if query_trust_tiers.is_empty() {
+        structured_requested_tiers.clone()
+    } else {
+        structured_requested_tiers
+            .intersection(&query_trust_tiers)
+            .cloned()
+            .collect()
+    };
+    let conflicting_requested_tiers = trust_filter_requested
+        && !query_trust_tiers.is_empty()
+        && !structured_requested_tiers.is_empty()
+        && effective_trust_tiers.is_empty();
+    let normalized_text = freeform_terms.join(" ").trim().to_ascii_lowercase();
+    let tokens = tokenize_tool_search_text(&normalized_text);
+    ParsedToolSearchQuery {
+        normalized_text,
+        tokens,
+        query_requested_tiers: query_trust_tiers,
+        structured_requested_tiers,
+        effective_trust_tiers,
+        trust_filter_requested,
+        conflicting_requested_tiers,
+    }
+}
+
+fn normalize_tool_search_filter_key(key: &str) -> String {
+    key.trim().to_ascii_lowercase()
+}
+
+fn tokenize_tool_search_text(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn normalize_trust_tier_label(value: &str) -> Option<&'static str> {
+    let normalized = value
+        .trim()
+        .trim_matches(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .to_ascii_lowercase()
+        .replace('_', "-");
+
+    match normalized.as_str() {
+        "official" => Some("official"),
+        "verified-community" | "verifiedcommunity" | "verified" => Some("verified-community"),
+        "unverified" => Some("unverified"),
+        _ => None,
+    }
+}
+
+fn tool_search_matches_trust_tier_filter(
+    entry: &ToolSearchEntry,
+    query: &ParsedToolSearchQuery,
+) -> bool {
+    if !query.trust_filter_requested {
+        return true;
+    }
+
+    entry
+        .trust_tier
+        .as_deref()
+        .and_then(normalize_trust_tier_label)
+        .is_some_and(|trust_tier| query.effective_trust_tiers.contains(trust_tier))
+}
+
+fn build_filtered_out_tier_counts(entries: &[ToolSearchEntry]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for entry in entries {
+        let label = entry
+            .trust_tier
+            .as_deref()
+            .and_then(normalize_trust_tier_label)
+            .unwrap_or("unknown")
+            .to_owned();
+        *counts.entry(label).or_insert(0) += 1;
+    }
+    counts
+}
+
+fn trust_tier_sort_rank(trust_tier: Option<&str>) -> u8 {
+    match trust_tier.and_then(normalize_trust_tier_label) {
+        Some("official") => 3,
+        Some("verified-community") => 2,
+        // Keep missing or legacy metadata neutral instead of treating it as unverified.
+        Some("unverified") => 0,
+        None => 1,
+        Some(_) => 1,
+    }
+}
+
 fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) -> u32 {
     if query.is_empty() {
         return if entry.loaded { 10 } else { 5 };
@@ -458,6 +648,16 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
         .to_ascii_lowercase();
     let package_manifest_path = entry
         .package_manifest_path
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let provenance_summary = entry
+        .provenance_summary
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let trust_tier = entry
+        .trust_tier
         .as_deref()
         .unwrap_or_default()
         .to_ascii_lowercase();
@@ -551,6 +751,14 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
     if package_manifest_path.contains(query) {
         score = score.saturating_add(20);
     }
+    if provenance_summary.contains(query) {
+        score = score.saturating_add(18);
+    }
+    if trust_tier == query {
+        score = score.saturating_add(32);
+    } else if trust_tier.contains(query) {
+        score = score.saturating_add(16);
+    }
     if adapter_family.contains(query) {
         score = score.saturating_add(18);
     }
@@ -612,7 +820,7 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
     }
 
     let haystack = format!(
-        "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {} {}",
         connector,
         provider,
         tool_id,
@@ -621,6 +829,8 @@ fn tool_search_score(entry: &ToolSearchEntry, query: &str, tokens: &[String]) ->
         source_kind,
         package_root,
         package_manifest_path,
+        provenance_summary,
+        trust_tier,
         adapter_family,
         entrypoint_hint,
         source_language,
@@ -674,6 +884,11 @@ mod tests {
                     "plugin_package_manifest_path".to_owned(),
                     "/tmp/tavily/loongclaw.plugin.json".to_owned(),
                 ),
+                (
+                    "plugin_provenance_summary".to_owned(),
+                    "package_manifest:/tmp/tavily/loongclaw.plugin.json".to_owned(),
+                ),
+                ("plugin_trust_tier".to_owned(), "official".to_owned()),
                 ("plugin_setup_mode".to_owned(), "metadata_only".to_owned()),
                 ("plugin_setup_surface".to_owned(), "web_search".to_owned()),
                 (
@@ -705,41 +920,60 @@ mod tests {
         };
         catalog.upsert_provider(provider);
 
-        let results = execute_tool_search(
+        let report = execute_tool_search(
             &catalog,
             &[],
             &[],
             &PluginSetupReadinessContext::default(),
             "TAVILY_API_KEY",
             10,
+            &[],
             true,
             false,
         );
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].source_kind.as_deref(), Some("package_manifest"));
-        assert_eq!(results[0].package_root.as_deref(), Some("/tmp/tavily"));
+        assert_eq!(report.results.len(), 1);
+        assert!(!report.trust_filter_summary.applied);
         assert_eq!(
-            results[0].package_manifest_path.as_deref(),
+            report.results[0].source_kind.as_deref(),
+            Some("package_manifest")
+        );
+        assert_eq!(
+            report.results[0].package_root.as_deref(),
+            Some("/tmp/tavily")
+        );
+        assert_eq!(
+            report.results[0].package_manifest_path.as_deref(),
             Some("/tmp/tavily/loongclaw.plugin.json")
         );
-        assert_eq!(results[0].setup_mode.as_deref(), Some("metadata_only"));
-        assert_eq!(results[0].setup_surface.as_deref(), Some("web_search"));
         assert_eq!(
-            results[0].setup_default_env_var.as_deref(),
+            report.results[0].provenance_summary.as_deref(),
+            Some("package_manifest:/tmp/tavily/loongclaw.plugin.json")
+        );
+        assert_eq!(report.results[0].trust_tier.as_deref(), Some("official"));
+        assert_eq!(
+            report.results[0].setup_mode.as_deref(),
+            Some("metadata_only")
+        );
+        assert_eq!(
+            report.results[0].setup_surface.as_deref(),
+            Some("web_search")
+        );
+        assert_eq!(
+            report.results[0].setup_default_env_var.as_deref(),
             Some("TAVILY_API_KEY")
         );
         assert_eq!(
-            results[0].setup_required_env_vars,
+            report.results[0].setup_required_env_vars,
             vec!["TAVILY_API_KEY".to_owned()]
         );
-        assert!(!results[0].setup_ready);
+        assert!(!report.results[0].setup_ready);
         assert_eq!(
-            results[0].missing_required_env_vars,
+            report.results[0].missing_required_env_vars,
             vec!["TAVILY_API_KEY".to_owned()]
         );
         assert_eq!(
-            results[0].missing_required_config_keys,
+            report.results[0].missing_required_config_keys,
             vec!["tools.web_search.default_provider".to_owned()]
         );
     }
@@ -771,20 +1005,285 @@ mod tests {
             ]),
         };
 
-        let results = execute_tool_search(
+        let report = execute_tool_search(
             &catalog,
             &[],
             &[],
             &setup_readiness_context,
             "tavily",
             10,
+            &[],
             true,
             false,
         );
 
-        assert_eq!(results.len(), 1);
-        assert!(results[0].setup_ready);
-        assert!(results[0].missing_required_env_vars.is_empty());
-        assert!(results[0].missing_required_config_keys.is_empty());
+        assert_eq!(report.results.len(), 1);
+        assert!(report.results[0].setup_ready);
+        assert!(report.results[0].missing_required_env_vars.is_empty());
+        assert!(report.results[0].missing_required_config_keys.is_empty());
+    }
+
+    #[test]
+    fn execute_tool_search_prefers_higher_trust_tier_when_scores_tie() {
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "aaa-unverified".to_owned(),
+            connector_name: "search-alpha".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "aaa-unverified".to_owned()),
+                ("plugin_trust_tier".to_owned(), "unverified".to_owned()),
+                ("plugin_source_path".to_owned(), "/tmp/aaa.rs".to_owned()),
+            ]),
+        });
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "zzz-official".to_owned(),
+            connector_name: "search-zeta".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "zzz-official".to_owned()),
+                ("plugin_trust_tier".to_owned(), "official".to_owned()),
+                ("plugin_source_path".to_owned(), "/tmp/zzz.rs".to_owned()),
+            ]),
+        });
+
+        let report = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &PluginSetupReadinessContext::default(),
+            "",
+            10,
+            &[],
+            true,
+            false,
+        );
+
+        assert_eq!(report.results.len(), 2);
+        assert_eq!(report.results[0].trust_tier.as_deref(), Some("official"));
+        assert_eq!(report.results[1].trust_tier.as_deref(), Some("unverified"));
+    }
+
+    #[test]
+    fn execute_tool_search_filters_by_trust_tier_query_prefix() {
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "official-search".to_owned(),
+            connector_name: "official-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "official-search".to_owned()),
+                ("plugin_trust_tier".to_owned(), "official".to_owned()),
+                (
+                    "summary".to_owned(),
+                    "Search across official docs".to_owned(),
+                ),
+            ]),
+        });
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "verified-search".to_owned(),
+            connector_name: "verified-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "verified-search".to_owned()),
+                (
+                    "plugin_trust_tier".to_owned(),
+                    "verified-community".to_owned(),
+                ),
+                (
+                    "summary".to_owned(),
+                    "Search across community docs".to_owned(),
+                ),
+            ]),
+        });
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "unverified-search".to_owned(),
+            connector_name: "unverified-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "unverified-search".to_owned()),
+                ("plugin_trust_tier".to_owned(), "unverified".to_owned()),
+                ("summary".to_owned(), "Search across random docs".to_owned()),
+            ]),
+        });
+
+        let report = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &PluginSetupReadinessContext::default(),
+            "tier:verified_community search",
+            10,
+            &[],
+            true,
+            false,
+        );
+
+        assert_eq!(report.results.len(), 1);
+        assert!(report.trust_filter_summary.applied);
+        assert_eq!(
+            report.trust_filter_summary.query_requested_tiers,
+            vec!["verified-community".to_owned()]
+        );
+        assert_eq!(
+            report.trust_filter_summary.effective_tiers,
+            vec!["verified-community".to_owned()]
+        );
+        assert!(!report.trust_filter_summary.conflicting_requested_tiers);
+        assert_eq!(report.trust_filter_summary.filtered_out_candidates, 2);
+        assert_eq!(
+            report
+                .trust_filter_summary
+                .filtered_out_tier_counts
+                .get("official"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .trust_filter_summary
+                .filtered_out_tier_counts
+                .get("unverified"),
+            Some(&1)
+        );
+        assert_eq!(report.results[0].provider_id, "verified-search");
+        assert_eq!(
+            report.results[0].trust_tier.as_deref(),
+            Some("verified-community")
+        );
+    }
+
+    #[test]
+    fn execute_tool_search_filters_by_structured_trust_tiers() {
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "official-search".to_owned(),
+            connector_name: "official-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "official-search".to_owned()),
+                ("plugin_trust_tier".to_owned(), "official".to_owned()),
+                (
+                    "summary".to_owned(),
+                    "Search across official docs".to_owned(),
+                ),
+            ]),
+        });
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "verified-search".to_owned(),
+            connector_name: "verified-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "verified-search".to_owned()),
+                (
+                    "plugin_trust_tier".to_owned(),
+                    "verified-community".to_owned(),
+                ),
+                (
+                    "summary".to_owned(),
+                    "Search across community docs".to_owned(),
+                ),
+            ]),
+        });
+
+        let report = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &PluginSetupReadinessContext::default(),
+            "search",
+            10,
+            &[PluginTrustTier::Official],
+            true,
+            false,
+        );
+
+        assert_eq!(report.results.len(), 1);
+        assert!(report.trust_filter_summary.applied);
+        assert_eq!(
+            report.trust_filter_summary.structured_requested_tiers,
+            vec!["official".to_owned()]
+        );
+        assert_eq!(
+            report.trust_filter_summary.effective_tiers,
+            vec!["official".to_owned()]
+        );
+        assert!(!report.trust_filter_summary.conflicting_requested_tiers);
+        assert_eq!(report.trust_filter_summary.filtered_out_candidates, 1);
+        assert_eq!(report.results[0].provider_id, "official-search");
+        assert_eq!(report.results[0].trust_tier.as_deref(), Some("official"));
+    }
+
+    #[test]
+    fn execute_tool_search_conflicting_query_and_structured_trust_filters_fail_closed() {
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "official-search".to_owned(),
+            connector_name: "official-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "official-search".to_owned()),
+                ("plugin_trust_tier".to_owned(), "official".to_owned()),
+                (
+                    "summary".to_owned(),
+                    "Search across official docs".to_owned(),
+                ),
+            ]),
+        });
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "verified-search".to_owned(),
+            connector_name: "verified-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "verified-search".to_owned()),
+                (
+                    "plugin_trust_tier".to_owned(),
+                    "verified-community".to_owned(),
+                ),
+                (
+                    "summary".to_owned(),
+                    "Search across community docs".to_owned(),
+                ),
+            ]),
+        });
+
+        let report = execute_tool_search(
+            &catalog,
+            &[],
+            &[],
+            &PluginSetupReadinessContext::default(),
+            "trust:official search",
+            10,
+            &[PluginTrustTier::VerifiedCommunity],
+            true,
+            false,
+        );
+
+        assert!(report.results.is_empty());
+        assert!(report.trust_filter_summary.applied);
+        assert_eq!(
+            report.trust_filter_summary.query_requested_tiers,
+            vec!["official".to_owned()]
+        );
+        assert_eq!(
+            report.trust_filter_summary.structured_requested_tiers,
+            vec!["verified-community".to_owned()]
+        );
+        assert!(report.trust_filter_summary.effective_tiers.is_empty());
+        assert!(report.trust_filter_summary.conflicting_requested_tiers);
+        assert_eq!(report.trust_filter_summary.filtered_out_candidates, 2);
+        assert_eq!(
+            report
+                .trust_filter_summary
+                .filtered_out_tier_counts
+                .get("official"),
+            Some(&1)
+        );
+        assert_eq!(
+            report
+                .trust_filter_summary
+                .filtered_out_tier_counts
+                .get("verified-community"),
+            Some(&1)
+        );
     }
 }

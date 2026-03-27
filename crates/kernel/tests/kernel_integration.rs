@@ -579,6 +579,123 @@ fn record_audit_event_supports_provider_failover_summary() {
     ));
 }
 
+#[test]
+fn record_audit_event_supports_plugin_trust_summary() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_124));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+
+    kernel
+        .record_audit_event(
+            Some("agent-plugin-trust"),
+            AuditEventKind::PluginTrustEvaluated {
+                pack_id: "pack-plugin-trust".to_owned(),
+                scanned_plugins: 3,
+                official_plugins: 1,
+                verified_community_plugins: 1,
+                unverified_plugins: 1,
+                high_risk_plugins: 2,
+                high_risk_unverified_plugins: 1,
+                blocked_auto_apply_plugins: 1,
+                review_required_plugin_ids: vec!["stdio-review".to_owned()],
+                review_required_bridges: vec!["process_stdio".to_owned()],
+            },
+        )
+        .expect("plugin trust audit event should record");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "evt-0000000000000001");
+    assert_eq!(events[0].timestamp_epoch_s, 1_700_000_124);
+    assert_eq!(events[0].agent_id.as_deref(), Some("agent-plugin-trust"));
+    assert!(matches!(
+        &events[0].kind,
+        AuditEventKind::PluginTrustEvaluated {
+            pack_id,
+            scanned_plugins,
+            official_plugins,
+            verified_community_plugins,
+            unverified_plugins,
+            high_risk_plugins,
+            high_risk_unverified_plugins,
+            blocked_auto_apply_plugins,
+            review_required_plugin_ids,
+            review_required_bridges,
+        } if pack_id == "pack-plugin-trust"
+            && *scanned_plugins == 3
+            && *official_plugins == 1
+            && *verified_community_plugins == 1
+            && *unverified_plugins == 1
+            && *high_risk_plugins == 2
+            && *high_risk_unverified_plugins == 1
+            && *blocked_auto_apply_plugins == 1
+            && review_required_plugin_ids == &vec!["stdio-review".to_owned()]
+            && review_required_bridges == &vec!["process_stdio".to_owned()]
+    ));
+}
+
+#[test]
+fn record_audit_event_supports_tool_search_summary() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_125));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+
+    kernel
+        .record_audit_event(
+            Some("agent-tool-search"),
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id: "pack-tool-search".to_owned(),
+                query: "trust:official search".to_owned(),
+                returned: 0,
+                trust_filter_applied: true,
+                query_requested_tiers: vec!["official".to_owned()],
+                structured_requested_tiers: vec!["verified-community".to_owned()],
+                effective_tiers: Vec::new(),
+                conflicting_requested_tiers: true,
+                filtered_out_candidates: 2,
+                filtered_out_tier_counts: BTreeMap::from([
+                    ("official".to_owned(), 1_usize),
+                    ("verified-community".to_owned(), 1_usize),
+                ]),
+                top_provider_ids: Vec::new(),
+            },
+        )
+        .expect("tool search audit event should record");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "evt-0000000000000001");
+    assert_eq!(events[0].timestamp_epoch_s, 1_700_000_125);
+    assert_eq!(events[0].agent_id.as_deref(), Some("agent-tool-search"));
+    assert!(matches!(
+        &events[0].kind,
+        AuditEventKind::ToolSearchEvaluated {
+            pack_id,
+            query,
+            returned,
+            trust_filter_applied,
+            query_requested_tiers,
+            structured_requested_tiers,
+            effective_tiers,
+            conflicting_requested_tiers,
+            filtered_out_candidates,
+            filtered_out_tier_counts,
+            top_provider_ids,
+        } if pack_id == "pack-tool-search"
+            && query == "trust:official search"
+            && *returned == 0
+            && *trust_filter_applied
+            && query_requested_tiers == &vec!["official".to_owned()]
+            && structured_requested_tiers == &vec!["verified-community".to_owned()]
+            && effective_tiers.is_empty()
+            && *conflicting_requested_tiers
+            && *filtered_out_candidates == 2
+            && filtered_out_tier_counts.get("official") == Some(&1)
+            && filtered_out_tier_counts.get("verified-community") == Some(&1)
+            && top_provider_ids.is_empty()
+    ));
+}
+
 #[tokio::test]
 async fn layered_runtime_tool_and_memory_paths_execute_via_core_and_extension() {
     let (mut kernel, _audit) =

@@ -32,6 +32,7 @@ pub use audit::{
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{
     BootstrapPolicy, BootstrapReport, BootstrapTask, BootstrapTaskStatus, PluginBootstrapExecutor,
+    plugin_bridge_is_high_risk_auto_apply,
 };
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use connector::{
@@ -58,7 +59,8 @@ pub use memory::{
 pub use pack::VerticalPackManifest;
 pub use plugin::{
     PluginAbsorbReport, PluginDescriptor, PluginManifest, PluginScanReport, PluginScanner,
-    PluginSetup, PluginSetupMode, PluginSourceKind,
+    PluginSetup, PluginSetupMode, PluginSourceKind, PluginTrustTier,
+    format_plugin_provenance_summary, plugin_provenance_summary_for_descriptor,
 };
 pub use plugin_ir::{
     BridgeSupportMatrix, PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus,

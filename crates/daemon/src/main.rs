@@ -46,8 +46,12 @@ async fn main() {
             invoke_connector_cli(&operation, &payload).await
         }
         Commands::AuditDemo => run_audit_demo().await,
-        Commands::InitSpec { output } => init_spec_cli(&output),
-        Commands::RunSpec { spec, print_audit } => run_spec_cli(&spec, print_audit).await,
+        Commands::InitSpec { output, preset } => init_spec_cli(&output, preset),
+        Commands::RunSpec {
+            spec,
+            print_audit,
+            render_summary,
+        } => run_spec_cli(&spec, print_audit, render_summary).await,
         Commands::BenchmarkProgrammaticPressure {
             matrix,
             baseline,

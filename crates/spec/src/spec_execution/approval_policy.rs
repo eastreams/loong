@@ -174,7 +174,20 @@ fn operation_approval_key(operation: &OperationSpec) -> String {
         } => {
             format!("memory_extension:{extension}:{operation}")
         }
-        OperationSpec::ToolSearch { query, .. } => format!("tool_search:{query}"),
+        OperationSpec::ToolSearch {
+            query, trust_tiers, ..
+        } => {
+            if trust_tiers.is_empty() {
+                format!("tool_search:{query}")
+            } else {
+                let trust_scope = trust_tiers
+                    .iter()
+                    .map(|tier| tier.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("tool_search:{query}:trust:{trust_scope}")
+            }
+        }
         OperationSpec::ProgrammaticToolCall { caller, .. } => {
             format!("programmatic_tool_call:{caller}")
         }
@@ -367,9 +380,15 @@ fn operation_payload_keys(operation: &OperationSpec) -> Vec<String> {
         OperationSpec::ToolSearch { .. } => {
             let mut keys = Vec::new();
             keys.extend(
-                ["query", "limit", "include_deferred", "include_examples"]
-                    .iter()
-                    .map(|value| (*value).to_owned()),
+                [
+                    "query",
+                    "limit",
+                    "trust_tiers",
+                    "include_deferred",
+                    "include_examples",
+                ]
+                .iter()
+                .map(|value| (*value).to_owned()),
             );
             keys
         }
@@ -599,15 +618,18 @@ fn operation_payload_strings(operation: &OperationSpec) -> Vec<String> {
         OperationSpec::ToolSearch {
             query,
             limit,
+            trust_tiers,
             include_deferred,
             include_examples,
         } => {
-            vec![
+            let mut values = vec![
                 query.clone(),
                 limit.to_string(),
                 include_deferred.to_string(),
                 include_examples.to_string(),
-            ]
+            ];
+            values.extend(trust_tiers.iter().map(|tier| tier.as_str().to_owned()));
+            values
         }
         OperationSpec::ProgrammaticToolCall {
             caller,

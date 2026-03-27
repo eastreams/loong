@@ -1,5 +1,9 @@
 use super::*;
 
+fn render_cli_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
 #[test]
 fn template_spec_is_json_roundtrip_stable() {
     let spec = RunnerSpec::template();
@@ -26,6 +30,266 @@ fn runtime_extension_fixture_uses_backward_compatible_spec_defaults() {
         .expect("runtime-extension fixture should parse when hotfixes is omitted");
     assert!(parsed.hotfixes.is_empty());
     assert!(parsed.plugin_setup_readiness.is_none());
+}
+
+#[test]
+fn tool_search_trusted_fixture_parses_structured_trust_tiers() {
+    let raw = include_str!("../../../../examples/spec/tool-search-trusted.json");
+    let parsed: RunnerSpec =
+        serde_json::from_str(raw).expect("tool-search-trusted fixture should parse");
+
+    let OperationSpec::ToolSearch { trust_tiers, .. } = parsed.operation else {
+        panic!("tool-search-trusted fixture should use tool_search operation");
+    };
+    assert_eq!(trust_tiers.len(), 1);
+    assert_eq!(trust_tiers[0].as_str(), "official");
+}
+
+#[test]
+fn init_spec_cli_plugin_trust_guard_preset_writes_expected_bootstrap_defaults() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("loongclaw-plugin-trust-guard-{unique}.json"));
+
+    init_spec_cli(
+        path.to_str().expect("temp path should be utf8"),
+        InitSpecPreset::PluginTrustGuard,
+    )
+    .expect("init-spec should write trust guard preset");
+
+    let raw = fs::read_to_string(&path).expect("read generated spec");
+    let parsed: RunnerSpec = serde_json::from_str(&raw).expect("generated spec should parse");
+    let plugin_scan = parsed
+        .plugin_scan
+        .as_ref()
+        .expect("trust guard preset should enable plugin scan");
+    let bridge_support = parsed
+        .bridge_support
+        .as_ref()
+        .expect("trust guard preset should enable bridge support");
+    let bootstrap = parsed
+        .bootstrap
+        .as_ref()
+        .expect("trust guard preset should enable bootstrap");
+
+    assert_eq!(parsed.pack.pack_id, "community-plugin-intake");
+    assert_eq!(plugin_scan.roots, vec!["plugins"]);
+    assert!(bridge_support.enabled);
+    assert!(bridge_support.enforce_supported);
+    assert!(
+        bridge_support
+            .supported_bridges
+            .contains(&PluginBridgeKind::ProcessStdio)
+    );
+    assert_eq!(bootstrap.allow_process_stdio_auto_apply, Some(true));
+    assert_eq!(bootstrap.block_unverified_high_risk_auto_apply, Some(true));
+    assert_eq!(bootstrap.enforce_ready_execution, Some(true));
+
+    fs::remove_file(path).expect("remove generated spec");
+}
+
+#[test]
+fn example_spec_fixtures_parse_as_runner_specs() {
+    let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/spec");
+    let mut parsed_specs = 0usize;
+
+    for entry in fs::read_dir(&examples_dir).expect("read example spec directory") {
+        let entry = entry.expect("read example spec entry");
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        let raw = fs::read_to_string(&path).expect("read example spec file");
+        serde_json::from_str::<RunnerSpec>(&raw).unwrap_or_else(|error| {
+            panic!(
+                "example spec fixture should parse: {}: {error}",
+                path.display()
+            )
+        });
+        parsed_specs = parsed_specs.saturating_add(1);
+    }
+
+    assert!(
+        parsed_specs >= 1,
+        "expected at least one example spec fixture under {}",
+        examples_dir.display()
+    );
+}
+
+#[test]
+fn run_spec_cli_render_summary_preserves_stdout_json_and_writes_trust_search_summary() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let spec_path = workspace_root.join("examples/spec/tool-search-trusted.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .arg("run-spec")
+        .arg("--spec")
+        .arg(&spec_path)
+        .arg("--render-summary")
+        .current_dir(&workspace_root)
+        .output()
+        .expect("spawn run-spec with render-summary");
+    let stdout = render_cli_output(&output.stdout);
+    let stderr = render_cli_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "run-spec should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should remain machine-readable JSON");
+    assert_eq!(payload["pack_id"], "tool-search-trusted-pack");
+    assert_eq!(
+        payload["tool_search_summary"]["headline"],
+        "query=\"echo\"; returned 1 result; trust_scope=official; filtered_out=2 candidates; top_match=wasm-secure-echo"
+    );
+    assert!(
+        !stdout.contains("run-spec summary"),
+        "stdout should not include human summary lines: {stdout:?}"
+    );
+    assert!(
+        stderr.contains(
+            "run-spec summary pack=tool-search-trusted-pack agent=agent-tool-search-trusted status=ok operation=tool_search"
+        ),
+        "stderr should include top-level run summary: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "plugin_trust scanned=3 official=1 verified_community=1 unverified=1 high_risk=3 high_risk_unverified=1 blocked_auto_apply=0 review_required=1"
+        ),
+        "stderr should include plugin trust rollup: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search query=\"echo\"; returned 1 result; trust_scope=official; filtered_out=2 candidates; top_match=wasm-secure-echo"
+        ),
+        "stderr should include the trust-aware tool-search headline: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search_filters query_requested=- structured_requested=official effective=official conflicting=false filtered_out_by_tier=unverified:1,verified-community:1"
+        ),
+        "stderr should include the resolved trust filter breakdown: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search_top[1] provider=wasm-secure-echo connector=wasm-secure-echo tool_id=wasm-secure-echo::wasm-secure-echo trust=official bridge=wasm_component"
+        ),
+        "stderr should include a compact top-result card: {stderr:?}"
+    );
+}
+
+#[test]
+fn run_spec_cli_render_summary_surfaces_blocked_plugin_trust_review() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let spec_path = workspace_root.join("examples/spec/plugin-bootstrap-trust-policy.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .arg("run-spec")
+        .arg("--spec")
+        .arg(&spec_path)
+        .arg("--render-summary")
+        .current_dir(&workspace_root)
+        .output()
+        .expect("spawn blocked run-spec with render-summary");
+    let stdout = render_cli_output(&output.stdout);
+    let stderr = render_cli_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "blocked run-spec should still serialize a report, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should remain machine-readable JSON");
+    assert_eq!(payload["operation_kind"], "blocked");
+    assert_eq!(payload["outcome"]["status"], "blocked");
+    assert!(
+        stderr.contains(
+            "run-spec summary pack=plugin-bootstrap-trust-policy-pack agent=agent-plugin-bootstrap-trust-policy status=blocked operation=blocked"
+        ),
+        "stderr should mark the blocked run clearly: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("blocked_reason=bootstrap policy blocked"),
+        "stderr should include the blocked reason: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("plugin_trust scanned=1 official=0 verified_community=0 unverified=1 high_risk=1 high_risk_unverified=1 blocked_auto_apply=1 review_required=1"),
+        "stderr should include the trust-policy rollup: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("plugin_review plugin=stdio-echo-py tier=unverified bridge=process_stdio activation=ready bootstrap=deferred_unsupported_auto_apply"),
+        "stderr should include the review-required plugin entry: {stderr:?}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_bootstrap_trust_policy_fixture_blocks_unverified_process_plugin() {
+    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/spec/plugin-bootstrap-trust-policy.json");
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let raw = fs::read_to_string(&fixture_path).expect("read trust policy fixture");
+    let mut spec: RunnerSpec =
+        serde_json::from_str(&raw).expect("trust policy fixture should parse");
+
+    let plugin_scan = spec
+        .plugin_scan
+        .as_mut()
+        .expect("trust policy fixture should define plugin scan");
+    for root in &mut plugin_scan.roots {
+        *root = workspace_root.join(root.as_str()).display().to_string();
+    }
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "blocked");
+    assert_eq!(report.outcome["status"], "blocked");
+    assert!(
+        report
+            .blocked_reason
+            .as_deref()
+            .expect("blocked reason should exist")
+            .contains("bootstrap policy blocked")
+    );
+    assert_eq!(report.plugin_bootstrap_reports.len(), 1);
+    assert_eq!(report.plugin_bootstrap_reports[0].applied_tasks, 0);
+    assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
+    assert_eq!(
+        report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
+        loongclaw_daemon::kernel::PluginTrustTier::Unverified
+    );
+    assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.blocked_auto_apply_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.review_required_plugins.len(), 1);
+    assert_eq!(
+        report.plugin_trust_summary.review_required_plugins[0]
+            .bootstrap_status
+            .expect("bootstrap status should exist"),
+        loongclaw_daemon::kernel::BootstrapTaskStatus::DeferredUnsupportedAutoApply
+    );
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::PluginTrustEvaluated {
+                scanned_plugins,
+                high_risk_unverified_plugins,
+                blocked_auto_apply_plugins,
+                review_required_plugin_ids,
+                review_required_bridges,
+                ..
+            } if *scanned_plugins == 1
+                && *high_risk_unverified_plugins == 1
+                && *blocked_auto_apply_plugins == 1
+                && review_required_plugin_ids == &vec!["stdio-echo-py".to_owned()]
+                && review_required_bridges == &vec!["process_stdio".to_owned()]
+        )
+    }));
 }
 
 #[tokio::test]
@@ -1170,6 +1434,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
 #   "channel_id": "primary",
 #   "endpoint": "https://example.com/tavily",
 #   "capabilities": ["InvokeConnector"],
+#   "trust_tier": "verified-community",
 #   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
 #   "summary": "Tavily web search",
 #   "setup": {
@@ -1231,6 +1496,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
         operation: OperationSpec::ToolSearch {
             query: "tavily".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -1239,6 +1505,22 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
     let report = execute_spec(&spec, true).await;
 
     assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose a top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"tavily\"; returned 1 result; top_match=tavily-search"
+    );
+    assert_eq!(search_summary.query, "tavily");
+    assert_eq!(search_summary.returned, 1);
+    assert!(search_summary.top_results.len() == 1);
+    assert_eq!(search_summary.top_results[0].provider_id, "tavily-search");
+    assert_eq!(
+        search_summary.top_results[0].trust_tier.as_deref(),
+        Some("verified-community")
+    );
     assert_eq!(report.plugin_activation_plans.len(), 1);
     assert_eq!(report.plugin_activation_plans[0].ready_plugins, 0);
     assert_eq!(
@@ -1249,6 +1531,14 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
     assert!(report.plugin_bootstrap_queue.is_empty());
     assert_eq!(report.outcome["returned"], 1);
     assert_eq!(report.outcome["results"][0]["provider_id"], "tavily-search");
+    assert_eq!(
+        report.outcome["results"][0]["trust_tier"],
+        "verified-community"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["provenance_summary"],
+        format!("embedded_source:{}", plugin_file.display())
+    );
     assert_eq!(report.outcome["results"][0]["setup_ready"], false);
     assert_eq!(
         report.outcome["results"][0]["missing_required_env_vars"][0],
@@ -1363,6 +1653,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -1480,6 +1771,7 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1513,6 +1805,148 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
             .provider("ffi-provider")
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn execute_spec_bootstrap_trust_policy_blocks_unverified_high_risk_auto_apply() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-trust-{}", unique));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("ffi_plugin.rs"),
+        r#"
+// LOONGCLAW_PLUGIN_START
+// {
+//   "plugin_id": "ffi-plugin",
+//   "provider_id": "ffi-provider",
+//   "connector_name": "ffi-provider",
+//   "channel_id": "primary",
+//   "endpoint": "https://ffi.invalid/invoke",
+//   "capabilities": ["InvokeConnector"],
+//   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
+// }
+// LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write ffi plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-bootstrap-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-bootstrap-trust".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::NativeFfi],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(true),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: Some(true),
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(10),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::Task {
+            task_id: "t-bootstrap-trust".to_owned(),
+            objective: "must be blocked by bootstrap trust policy".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "blocked");
+    assert_eq!(report.outcome["status"], "blocked");
+    assert!(
+        report
+            .blocked_reason
+            .expect("blocked reason must exist")
+            .contains("bootstrap policy blocked")
+    );
+    assert_eq!(report.plugin_bootstrap_reports.len(), 1);
+    assert_eq!(report.plugin_bootstrap_reports[0].applied_tasks, 0);
+    assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
+    assert_eq!(
+        report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
+        kernel::PluginTrustTier::Unverified
+    );
+    assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.blocked_auto_apply_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.review_required_plugins.len(), 1);
+    assert_eq!(
+        report.plugin_trust_summary.review_required_plugins[0].bridge_kind,
+        PluginBridgeKind::NativeFfi
+    );
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::PluginTrustEvaluated {
+                scanned_plugins,
+                high_risk_unverified_plugins,
+                blocked_auto_apply_plugins,
+                review_required_plugin_ids,
+                review_required_bridges,
+                ..
+            } if *scanned_plugins == 1
+                && *high_risk_unverified_plugins == 1
+                && *blocked_auto_apply_plugins == 1
+                && review_required_plugin_ids == &vec!["ffi-plugin".to_owned()]
+                && review_required_bridges == &vec!["native_ffi".to_owned()]
+        )
+    }));
+    assert!(
+        report.plugin_bootstrap_reports[0].tasks[0]
+            .reason
+            .contains("bootstrap trust policy for unverified high-risk plugins")
+    );
+    assert!(report.plugin_absorb_reports.is_empty());
 }
 
 #[tokio::test]
@@ -1776,6 +2210,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1920,6 +2355,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2001,6 +2437,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
         .provider("wasm-runtime-provider")
         .expect("provider should exist");
     let plugin_root_string = plugin_root.display().to_string();
+    let plugin_source_path = plugin_root.join("plugin.rs");
     assert!(provider.metadata.contains_key("plugin_source_path"));
     assert_eq!(
         provider
@@ -2015,6 +2452,20 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
             .get("plugin_package_root")
             .map(String::as_str),
         Some(plugin_root_string.as_str())
+    );
+    assert_eq!(
+        provider
+            .metadata
+            .get("plugin_provenance_summary")
+            .map(String::as_str),
+        Some(format!("embedded_source:{}", plugin_source_path.display()).as_str())
+    );
+    assert_eq!(
+        provider
+            .metadata
+            .get("plugin_trust_tier")
+            .map(String::as_str),
+        Some("unverified")
     );
     assert!(
         !provider
@@ -2151,6 +2602,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2290,6 +2742,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2425,6 +2878,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2565,6 +3019,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2709,6 +3164,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2844,6 +3300,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2980,6 +3437,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -3202,6 +3660,7 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3352,6 +3811,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3484,6 +3944,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3621,6 +4082,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3755,6 +4217,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3880,6 +4343,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -4038,6 +4502,7 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -4182,6 +4647,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -4333,6 +4799,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5342,6 +5809,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5465,6 +5933,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(8),
         }),
@@ -5817,6 +6286,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5962,6 +6432,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -5971,6 +6442,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         operation: OperationSpec::ToolSearch {
             query: "web search".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: false,
             include_examples: false,
         },
@@ -5982,12 +6454,23 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         "blocked_reason={:?}, outcome={}",
         report_hidden_deferred.blocked_reason, report_hidden_deferred.outcome
     );
+    let hidden_summary = report_hidden_deferred
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        hidden_summary.headline,
+        "query=\"web search\"; returned 0 results"
+    );
+    assert_eq!(hidden_summary.query, "web search");
+    assert_eq!(hidden_summary.returned, 0);
     assert_eq!(report_hidden_deferred.outcome["returned"], 0);
 
     let mut visible_spec = base_spec;
     visible_spec.operation = OperationSpec::ToolSearch {
         query: "web search".to_owned(),
         limit: 5,
+        trust_tiers: Vec::new(),
         include_deferred: true,
         include_examples: true,
     };
@@ -5997,6 +6480,20 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         report_visible_deferred.operation_kind, "tool_search",
         "blocked_reason={:?}, outcome={}",
         report_visible_deferred.blocked_reason, report_visible_deferred.outcome
+    );
+    let visible_summary = report_visible_deferred
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        visible_summary.headline,
+        "query=\"web search\"; returned 2 results; top_match=openrouter-research"
+    );
+    assert_eq!(visible_summary.returned, 2);
+    assert_eq!(visible_summary.top_results.len(), 2);
+    assert_eq!(
+        visible_summary.top_results[0].provider_id,
+        "openrouter-research"
     );
     assert_eq!(report_visible_deferred.outcome["returned"], 2);
     assert_eq!(
@@ -6099,6 +6596,7 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(8),
         }),
@@ -6112,6 +6610,7 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
         operation: OperationSpec::ToolSearch {
             query: "tavily".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -6222,6 +6721,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(8),
         }),
@@ -6231,6 +6731,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         operation: OperationSpec::ToolSearch {
             query: "rusty".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -6238,6 +6739,17 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
 
     let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"rusty\"; returned 1 result; top_match=rusty-search"
+    );
+    assert_eq!(search_summary.query, "rusty");
+    assert_eq!(search_summary.returned, 1);
+    assert_eq!(search_summary.top_results[0].bridge_kind, "native_ffi");
     assert_eq!(report.outcome["returned"], 1);
     assert_eq!(report.outcome["results"][0]["provider_id"], "rusty-search");
     assert_eq!(report.outcome["results"][0]["bridge_kind"], "native_ffi");
@@ -6245,4 +6757,542 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         report.outcome["results"][0]["adapter_family"],
         "rust-ffi-adapter"
     );
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-trust-filter-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("unverified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "unverified-search",
+#   "provider_id": "unverified-search",
+#   "connector_name": "unverified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/unverified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search unreviewed docs",
+#   "trust_tier": "unverified"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write unverified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-trust-filter".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-trust-filter".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "trust:official search".to_owned(),
+            limit: 5,
+            trust_tiers: Vec::new(),
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"trust:official search\"; returned 1 result; trust_scope=official; filtered_out=1 candidate; top_match=official-search"
+    );
+    assert_eq!(search_summary.query, "trust:official search");
+    assert_eq!(search_summary.returned, 1);
+    assert_eq!(
+        search_summary.trust_filter_summary.query_requested_tiers,
+        vec!["official".to_owned()]
+    );
+    assert!(
+        !search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["query_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        false
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["unverified"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(
+        report.outcome["results"][0]["provider_id"],
+        "official-search"
+    );
+    assert_eq!(report.outcome["results"][0]["trust_tier"], "official");
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-structured-trust-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("verified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "verified-search",
+#   "provider_id": "verified-search",
+#   "connector_name": "verified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/verified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted community docs",
+#   "trust_tier": "verified-community"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write verified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-structured-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-structured-trust".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "search".to_owned(),
+            limit: 5,
+            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::Official],
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"search\"; returned 1 result; trust_scope=official; filtered_out=1 candidate; top_match=official-search"
+    );
+    assert_eq!(search_summary.query, "search");
+    assert_eq!(search_summary.returned, 1);
+    assert_eq!(search_summary.trust_tiers, vec!["official".to_owned()]);
+    assert!(
+        !search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_tiers"], json!(["official"]));
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["structured_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        false
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["verified-community"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(
+        report.outcome["results"][0]["provider_id"],
+        "official-search"
+    );
+    assert_eq!(report.outcome["results"][0]["trust_tier"], "official");
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-conflicting-trust-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("verified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "verified-search",
+#   "provider_id": "verified-search",
+#   "connector_name": "verified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/verified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted community docs",
+#   "trust_tier": "verified-community"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write verified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-conflicting-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-conflicting-trust".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "trust:official search".to_owned(),
+            limit: 5,
+            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::VerifiedCommunity],
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"trust:official search\"; returned 0 results; trust_scope=none; filtered_out=2 candidates; conflicting_trust_filters=true"
+    );
+    assert_eq!(search_summary.query, "trust:official search");
+    assert_eq!(search_summary.returned, 0);
+    assert!(search_summary.top_results.is_empty());
+    assert_eq!(
+        search_summary.trust_tiers,
+        vec!["verified-community".to_owned()]
+    );
+    assert!(
+        search_summary
+            .trust_filter_summary
+            .effective_tiers
+            .is_empty()
+    );
+    assert!(
+        search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_tiers"], json!(["verified-community"]));
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["query_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["structured_requested_tiers"],
+        json!(["verified-community"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!([])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        true
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        2
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["official"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["verified-community"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 0);
+    assert_eq!(report.outcome["results"], json!([]));
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id,
+                query,
+                returned,
+                trust_filter_applied,
+                query_requested_tiers,
+                structured_requested_tiers,
+                effective_tiers,
+                conflicting_requested_tiers,
+                filtered_out_candidates,
+                filtered_out_tier_counts,
+                top_provider_ids,
+            } if pack_id == "spec-tool-search-conflicting-trust"
+                && query == "trust:official search"
+                && *returned == 0
+                && *trust_filter_applied
+                && query_requested_tiers == &vec!["official".to_owned()]
+                && structured_requested_tiers == &vec!["verified-community".to_owned()]
+                && effective_tiers.is_empty()
+                && *conflicting_requested_tiers
+                && *filtered_out_candidates == 2
+                && filtered_out_tier_counts.get("official") == Some(&1)
+                && filtered_out_tier_counts.get("verified-community") == Some(&1)
+                && top_provider_ids.is_empty()
+        )
+    }));
 }

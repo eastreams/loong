@@ -17,6 +17,27 @@ use crate::{
 const PACKAGE_MANIFEST_FILE_NAME: &str = "loongclaw.plugin.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginTrustTier {
+    Official,
+    #[serde(alias = "verified_community")]
+    VerifiedCommunity,
+    #[default]
+    Unverified,
+}
+
+impl PluginTrustTier {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Official => "official",
+            Self::VerifiedCommunity => "verified-community",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginSetupMode {
     #[default]
@@ -111,6 +132,8 @@ pub struct PluginManifest {
     pub channel_id: Option<String>,
     pub endpoint: Option<String>,
     pub capabilities: BTreeSet<Capability>,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
     pub metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub summary: Option<String>,
@@ -151,6 +174,34 @@ pub struct PluginDescriptor {
     pub package_manifest_path: Option<String>,
     pub language: String,
     pub manifest: PluginManifest,
+}
+
+#[must_use]
+pub fn format_plugin_provenance_summary(
+    source_kind: PluginSourceKind,
+    source_path: &str,
+    package_manifest_path: Option<&str>,
+) -> String {
+    if let Some(package_manifest_path) = package_manifest_path
+        && !matches!(source_kind, PluginSourceKind::PackageManifest)
+    {
+        return format!(
+            "{}:{} (package_manifest:{package_manifest_path})",
+            source_kind.as_str(),
+            source_path
+        );
+    }
+
+    format!("{}:{source_path}", source_kind.as_str())
+}
+
+#[must_use]
+pub fn plugin_provenance_summary_for_descriptor(descriptor: &PluginDescriptor) -> String {
+    format_plugin_provenance_summary(
+        descriptor.source_kind,
+        &descriptor.path,
+        descriptor.package_manifest_path.as_deref(),
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -1039,6 +1090,10 @@ mod tests {
                 .iter()
                 .all(|descriptor| descriptor.package_manifest_path.is_none())
         );
+        assert!(report.descriptors.iter().all(|descriptor| matches!(
+            descriptor.manifest.trust_tier,
+            PluginTrustTier::Unverified
+        )));
         assert!(
             report
                 .descriptors
@@ -1064,6 +1119,7 @@ mod tests {
   "connector_name": "tavily-http",
   "endpoint": "https://api.tavily.com/search",
   "capabilities": ["InvokeConnector"],
+  "trust_tier": "verified-community",
   "metadata": {
     "bridge_kind": "http_json",
     "adapter_family": "web-search"
@@ -1117,6 +1173,10 @@ mod tests {
         assert_eq!(
             report.descriptors[0].package_manifest_path,
             Some(manifest_file.display().to_string())
+        );
+        assert_eq!(
+            report.descriptors[0].manifest.trust_tier,
+            PluginTrustTier::VerifiedCommunity
         );
         assert_eq!(
             report.descriptors[0].manifest.setup,
@@ -1568,6 +1628,7 @@ mod tests {
                         Capability::InvokeConnector,
                         Capability::ObserveTelemetry,
                     ]),
+                    trust_tier: PluginTrustTier::Official,
                     metadata: BTreeMap::from([("version".to_owned(), "1.3.0".to_owned())]),
                     summary: None,
                     tags: Vec::new(),
@@ -1635,6 +1696,7 @@ mod tests {
                         channel_id: Some("good-channel".to_owned()),
                         endpoint: Some("https://good.local/invoke".to_owned()),
                         capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                        trust_tier: PluginTrustTier::VerifiedCommunity,
                         metadata: BTreeMap::from([("version".to_owned(), "1.0.0".to_owned())]),
                         summary: None,
                         tags: Vec::new(),
@@ -1657,6 +1719,7 @@ mod tests {
                         channel_id: None,
                         endpoint: None,
                         capabilities: BTreeSet::new(),
+                        trust_tier: PluginTrustTier::Unverified,
                         metadata: BTreeMap::new(),
                         summary: None,
                         tags: Vec::new(),
@@ -1682,5 +1745,19 @@ mod tests {
         // Verify rollback: catalog and pack are identical to their pre-absorb state.
         assert_eq!(catalog, catalog_before, "catalog must be rolled back");
         assert_eq!(pack, pack_before, "pack must be rolled back");
+    }
+
+    #[test]
+    fn format_plugin_provenance_summary_prefers_package_manifest_context() {
+        let summary = format_plugin_provenance_summary(
+            PluginSourceKind::EmbeddedSource,
+            "/tmp/pkg/plugin.py",
+            Some("/tmp/pkg/loongclaw.plugin.json"),
+        );
+
+        assert_eq!(
+            summary,
+            "embedded_source:/tmp/pkg/plugin.py (package_manifest:/tmp/pkg/loongclaw.plugin.json)"
+        );
     }
 }

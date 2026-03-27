@@ -10,13 +10,14 @@ use std::{
 
 use async_trait::async_trait;
 use kernel::{
-    ArchitectureGuardReport, AuditEvent, BootstrapReport, Capability, CodebaseAwarenessSnapshot,
-    ConnectorCommand, ConnectorError, ConnectorOutcome, CoreConnectorAdapter, CoreMemoryAdapter,
-    CoreRuntimeAdapter, CoreToolAdapter, ExecutionRoute, HarnessAdapter, HarnessError, HarnessKind,
-    HarnessOutcome, HarnessRequest, IntegrationCatalog, IntegrationHotfix, MemoryCoreOutcome,
-    MemoryCoreRequest, MemoryExtensionAdapter, MemoryExtensionOutcome, MemoryExtensionRequest,
-    PluginAbsorbReport, PluginActivationPlan, PluginBridgeKind, PluginScanReport,
-    PluginTranslationReport, ProvisionPlan, RuntimeCoreOutcome, RuntimeCoreRequest,
+    ArchitectureGuardReport, AuditEvent, BootstrapReport, BootstrapTaskStatus, Capability,
+    CodebaseAwarenessSnapshot, ConnectorCommand, ConnectorError, ConnectorOutcome,
+    CoreConnectorAdapter, CoreMemoryAdapter, CoreRuntimeAdapter, CoreToolAdapter, ExecutionRoute,
+    HarnessAdapter, HarnessError, HarnessKind, HarnessOutcome, HarnessRequest, IntegrationCatalog,
+    IntegrationHotfix, MemoryCoreOutcome, MemoryCoreRequest, MemoryExtensionAdapter,
+    MemoryExtensionOutcome, MemoryExtensionRequest, PluginAbsorbReport, PluginActivationPlan,
+    PluginActivationStatus, PluginBridgeKind, PluginScanReport, PluginTranslationReport,
+    PluginTrustTier, ProvisionPlan, RuntimeCoreOutcome, RuntimeCoreRequest,
     RuntimeExtensionAdapter, RuntimeExtensionOutcome, RuntimeExtensionRequest, ToolCoreOutcome,
     ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
     VerticalPackManifest,
@@ -138,6 +139,8 @@ pub enum OperationSpec {
         query: String,
         #[serde(default = "default_tool_search_limit")]
         limit: usize,
+        #[serde(default)]
+        trust_tiers: Vec<PluginTrustTier>,
         #[serde(default)]
         include_deferred: bool,
         #[serde(default)]
@@ -964,6 +967,8 @@ pub struct BootstrapSpec {
     #[serde(default)]
     pub allow_acp_runtime_auto_apply: Option<bool>,
     #[serde(default)]
+    pub block_unverified_high_risk_auto_apply: Option<bool>,
+    #[serde(default)]
     pub enforce_ready_execution: Option<bool>,
     #[serde(default)]
     pub max_tasks: Option<usize>,
@@ -1095,6 +1100,81 @@ impl RunnerSpec {
             },
         }
     }
+
+    pub fn plugin_trust_guard_template() -> Self {
+        Self {
+            pack: VerticalPackManifest {
+                pack_id: "community-plugin-intake".to_owned(),
+                domain: "platform".to_owned(),
+                version: "0.1.0".to_owned(),
+                default_route: ExecutionRoute {
+                    harness_kind: HarnessKind::EmbeddedPi,
+                    adapter: Some("pi-local".to_owned()),
+                },
+                allowed_connectors: BTreeSet::new(),
+                granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+                metadata: BTreeMap::from([
+                    ("owner".to_owned(), "platform-team".to_owned()),
+                    ("stage".to_owned(), "plugin-trust-guard".to_owned()),
+                ]),
+            },
+            agent_id: "agent-plugin-trust-guard".to_owned(),
+            ttl_s: 120,
+            approval: Some(HumanApprovalSpec {
+                mode: HumanApprovalMode::Disabled,
+                ..HumanApprovalSpec::default()
+            }),
+            defaults: None,
+            self_awareness: None,
+            plugin_scan: Some(PluginScanSpec {
+                enabled: true,
+                roots: vec!["plugins".to_owned()],
+            }),
+            plugin_setup_readiness: Some(PluginSetupReadinessSpec::default()),
+            bridge_support: Some(BridgeSupportSpec {
+                enabled: true,
+                supported_bridges: vec![
+                    PluginBridgeKind::ProcessStdio,
+                    PluginBridgeKind::NativeFfi,
+                    PluginBridgeKind::WasmComponent,
+                    PluginBridgeKind::McpServer,
+                    PluginBridgeKind::AcpBridge,
+                    PluginBridgeKind::AcpRuntime,
+                ],
+                supported_adapter_families: Vec::new(),
+                enforce_supported: true,
+                policy_version: Some("v1".to_owned()),
+                expected_checksum: None,
+                expected_sha256: None,
+                execute_process_stdio: false,
+                execute_http_json: false,
+                allowed_process_commands: Vec::new(),
+                enforce_execution_success: false,
+                security_scan: None,
+            }),
+            bootstrap: Some(BootstrapSpec {
+                enabled: true,
+                allow_http_json_auto_apply: Some(false),
+                allow_process_stdio_auto_apply: Some(true),
+                allow_native_ffi_auto_apply: Some(false),
+                allow_wasm_component_auto_apply: Some(false),
+                allow_mcp_server_auto_apply: Some(false),
+                allow_acp_bridge_auto_apply: Some(false),
+                allow_acp_runtime_auto_apply: Some(false),
+                block_unverified_high_risk_auto_apply: Some(true),
+                enforce_ready_execution: Some(true),
+                max_tasks: Some(16),
+            }),
+            auto_provision: None,
+            hotfixes: Vec::new(),
+            operation: OperationSpec::Task {
+                task_id: "review-plugin-trust-guard".to_owned(),
+                objective: "review whether scanned plugins are eligible for bootstrap auto-apply under the trust policy".to_owned(),
+                required_capabilities: BTreeSet::new(),
+                payload: json!({}),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1112,6 +1192,8 @@ pub struct SpecRunReport {
     pub plugin_translation_reports: Vec<PluginTranslationReport>,
     pub plugin_activation_plans: Vec<PluginActivationPlan>,
     pub plugin_bootstrap_reports: Vec<BootstrapReport>,
+    pub plugin_trust_summary: PluginTrustSummary,
+    pub tool_search_summary: Option<ToolSearchOperationSummary>,
     pub plugin_bootstrap_queue: Vec<String>,
     pub plugin_absorb_reports: Vec<PluginAbsorbReport>,
     pub security_scan_report: Option<SecurityScanReport>,
@@ -1119,6 +1201,30 @@ pub struct SpecRunReport {
     pub outcome: Value,
     pub integration_catalog: IntegrationCatalog,
     pub audit_events: Option<Vec<AuditEvent>>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct PluginTrustSummary {
+    pub scanned_plugins: usize,
+    pub official_plugins: usize,
+    pub verified_community_plugins: usize,
+    pub unverified_plugins: usize,
+    pub high_risk_plugins: usize,
+    pub high_risk_unverified_plugins: usize,
+    pub blocked_auto_apply_plugins: usize,
+    pub review_required_plugins: Vec<PluginTrustReviewEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginTrustReviewEntry {
+    pub plugin_id: String,
+    pub source_path: String,
+    pub provenance_summary: String,
+    pub trust_tier: PluginTrustTier,
+    pub bridge_kind: PluginBridgeKind,
+    pub activation_status: PluginActivationStatus,
+    pub bootstrap_status: Option<BootstrapTaskStatus>,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -1131,6 +1237,8 @@ pub struct ToolSearchEntry {
     pub source_kind: Option<String>,
     pub package_root: Option<String>,
     pub package_manifest_path: Option<String>,
+    pub provenance_summary: Option<String>,
+    pub trust_tier: Option<String>,
     pub bridge_kind: PluginBridgeKind,
     pub adapter_family: Option<String>,
     pub entrypoint_hint: Option<String>,
@@ -1164,6 +1272,8 @@ pub struct ToolSearchResult {
     pub source_kind: Option<String>,
     pub package_root: Option<String>,
     pub package_manifest_path: Option<String>,
+    pub provenance_summary: Option<String>,
+    pub trust_tier: Option<String>,
     pub bridge_kind: String,
     pub adapter_family: Option<String>,
     pub entrypoint_hint: Option<String>,
@@ -1186,6 +1296,42 @@ pub struct ToolSearchResult {
     pub tags: Vec<String>,
     pub input_examples: Vec<Value>,
     pub output_examples: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ToolSearchTrustFilterSummary {
+    pub applied: bool,
+    pub query_requested_tiers: Vec<String>,
+    pub structured_requested_tiers: Vec<String>,
+    pub effective_tiers: Vec<String>,
+    pub conflicting_requested_tiers: bool,
+    pub candidates_before_trust_filter: usize,
+    pub candidates_after_trust_filter: usize,
+    pub filtered_out_candidates: usize,
+    pub filtered_out_tier_counts: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSearchOperationSummary {
+    pub headline: String,
+    pub query: String,
+    pub returned: usize,
+    pub trust_tiers: Vec<String>,
+    pub trust_filter_summary: ToolSearchTrustFilterSummary,
+    pub top_results: Vec<ToolSearchOperationSummaryEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ToolSearchOperationSummaryEntry {
+    pub tool_id: String,
+    pub provider_id: String,
+    pub connector_name: String,
+    pub trust_tier: Option<String>,
+    pub bridge_kind: String,
+    pub score: u32,
+    pub setup_ready: bool,
+    pub deferred: bool,
+    pub loaded: bool,
 }
 
 pub struct EmbeddedPiHarness {

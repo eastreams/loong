@@ -608,6 +608,7 @@ mod tests {
                 channel_id: None,
                 endpoint: None,
                 capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: kernel::PluginTrustTier::Unverified,
                 metadata: BTreeMap::from([(
                     "bridge_kind".to_owned(),
                     bridge_kind.as_str().to_owned(),

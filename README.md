@@ -288,7 +288,15 @@ loongclaw completions elvish >> ~/.config/elvish/rc.elv
 
    ```bash
    loongclaw audit recent --limit 20
+   loongclaw audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
    loongclaw audit summary --limit 200 --json
+   loongclaw audit discovery --limit 50 --triage-label conflict
+   loongclaw audit discovery --since-epoch-s 1700010000 --until-epoch-s 1700013600
+   loongclaw audit discovery --group-by pack
+   loongclaw audit summary --pack-id sales-intel --agent-id agent-search
+   loongclaw audit summary --group-by pack
+   loongclaw audit recent --event-id evt-123 --token-id token-abc
+   loongclaw audit token-trail --token-id token-abc
    ```
 
 Channel setup comes after the base CLI path is healthy.
@@ -305,7 +313,15 @@ survive process restarts.
 loongclaw doctor --config ~/.loongclaw/config.toml
 loongclaw doctor --config ~/.loongclaw/config.toml --json
 loongclaw audit recent --config ~/.loongclaw/config.toml
+loongclaw audit recent --config ~/.loongclaw/config.toml --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
 loongclaw audit summary --config ~/.loongclaw/config.toml
+loongclaw audit discovery --config ~/.loongclaw/config.toml --query-contains "trust:official" --trust-tier official
+loongclaw audit discovery --config ~/.loongclaw/config.toml --group-by agent
+loongclaw audit summary --config ~/.loongclaw/config.toml --since-epoch-s 1700010000 --until-epoch-s 1700013600
+loongclaw audit recent --config ~/.loongclaw/config.toml --pack-id sales-intel --agent-id agent-search
+loongclaw audit summary --config ~/.loongclaw/config.toml --group-by token
+loongclaw audit recent --config ~/.loongclaw/config.toml --event-id evt-123 --token-id token-abc
+loongclaw audit token-trail --config ~/.loongclaw/config.toml --token-id token-abc
 loongclaw audit recent --config ~/.loongclaw/config.toml --json
 if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
@@ -316,7 +332,47 @@ addition to the existing runtime checks. For durable modes (`fanout` or
 `doctor --fix` can pre-create it when you want a clean preflight. Use
 `audit recent` when you want the bounded last-N event window and
 `audit summary` when you want a compact kind/count rollup plus last-seen
-fields. Raw `tail` remains a fallback when you need the original JSONL lines.
+fields. Use `audit discovery` when you specifically need trust-aware tool
+search triage, trust-scope rollups, and the last filtered discovery context
+without composing `--kind ToolSearchEvaluated` by hand. Use `audit token-trail`
+when you need one token lifecycle reconstructed as a retained timeline with
+issued/denied/revoked summary fields and an explicit truncation signal when the
+selected `--limit` is too small to keep the full trail in view. `audit summary`
+also accepts `--group-by pack|agent|token` when you need the filtered window
+collapsed into grouped rollups with per-group event-kind counts, triage counts,
+and last-seen metadata. `audit discovery` now also accepts `--group-by pack|agent`
+so trust-aware tool-search failures can be collapsed into per-pack or per-agent
+trust/triage rollups before you jump into one filtered window or token trail.
+Each grouped discovery entry also carries a ready-to-run `drill_down_command`
+that replays the same retained window through `audit recent` with the group
+identity and active trust-aware filters already applied. `audit recent` now
+also accepts `--query-contains` and `--trust-tier`, so that handoff stays
+aligned with the exact discovery slice that produced the hotspot. Grouped
+discovery rows also carry a `correlated_summary_command` that broadens the same
+time window and workload identity into `audit summary`, so operators can pivot
+from one trust-aware hotspot to the wider audit context without rebuilding the
+command. Those rows now also include a compact correlated summary preview, so
+you can see whether the same workload window also contains adjacent triage like
+authorization denial or provider failover before switching commands. That
+preview now also emits a focused signal layer with `additional_events`,
+non-discovery event/triage counts, and an `attention_hint`, so adjacent audit
+degradation is emphasized instead of being buried inside the full widened
+summary. That focused layer now also emits a `remediation_hint`, so grouped
+discovery can point from adjacent audit symptoms directly to the next operator
+action instead of only telling you what widened. It now also emits a
+`correlated_remediation_command`, so the strongest adjacent signal can jump
+straight into the most relevant next retained-audit view instead of stopping at
+advice text.
+All four commands also
+accept `--since-epoch-s` and `--until-epoch-s` so retained audit review can be
+bounded to a concrete epoch-second window; the bounds are inclusive and are
+rendered back in both text and JSON output. They also accept `--pack-id` and
+`--agent-id` so retained review can collapse to one workload or one operator
+session without post-processing the raw journal. When you need an exact
+incident drill-down, they also accept `--event-id` and `--token-id`; the token
+filter follows typed token-bearing events like `TokenIssued`, `TokenRevoked`,
+and `AuthorizationDenied` instead of relying on raw string scans. Raw `tail`
+remains a fallback when you need the original JSONL lines.
 
 When provider model probing fails before any HTTP status is returned, `doctor`
 now adds a provider route probe for the active request/models host. That probe

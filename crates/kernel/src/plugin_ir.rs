@@ -4,7 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     contracts::Capability,
-    plugin::{PluginDescriptor, PluginManifest, PluginScanReport, PluginSetup, PluginSourceKind},
+    plugin::{
+        PluginDescriptor, PluginManifest, PluginScanReport, PluginSetup, PluginSourceKind,
+        PluginTrustTier,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -52,6 +55,8 @@ pub struct PluginIR {
     pub channel_id: Option<String>,
     pub endpoint: Option<String>,
     pub capabilities: BTreeSet<Capability>,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
     pub metadata: BTreeMap<String, String>,
     pub source_path: String,
     pub source_kind: PluginSourceKind,
@@ -167,6 +172,8 @@ pub struct PluginActivationCandidate {
     pub source_kind: PluginSourceKind,
     pub package_root: String,
     pub package_manifest_path: Option<String>,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
     pub bridge_kind: PluginBridgeKind,
     pub adapter_family: String,
     pub status: PluginActivationStatus,
@@ -267,6 +274,7 @@ impl PluginTranslator {
             channel_id: descriptor.manifest.channel_id.clone(),
             endpoint: descriptor.manifest.endpoint.clone(),
             capabilities: descriptor.manifest.capabilities.clone(),
+            trust_tier: descriptor.manifest.trust_tier,
             metadata: descriptor.manifest.metadata.clone(),
             source_path: descriptor.path.clone(),
             source_kind: descriptor.source_kind,
@@ -340,6 +348,7 @@ impl PluginTranslator {
                 source_kind: ir.source_kind,
                 package_root: ir.package_root.clone(),
                 package_manifest_path: ir.package_manifest_path.clone(),
+                trust_tier: ir.trust_tier,
                 bridge_kind: ir.runtime.bridge_kind,
                 adapter_family: ir.runtime.adapter_family.clone(),
                 status,
@@ -538,7 +547,9 @@ fn bootstrap_hint(ir: &PluginIR) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::{PluginManifest, PluginSetup, PluginSetupMode, PluginSourceKind};
+    use crate::plugin::{
+        PluginManifest, PluginSetup, PluginSetupMode, PluginSourceKind, PluginTrustTier,
+    };
 
     fn descriptor(language: &str, metadata: BTreeMap<String, String>) -> PluginDescriptor {
         let source_kind = if language == "manifest" {
@@ -570,6 +581,7 @@ mod tests {
                 channel_id: Some("primary".to_owned()),
                 endpoint: Some("https://example.com/invoke".to_owned()),
                 capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: PluginTrustTier::VerifiedCommunity,
                 metadata,
                 summary: None,
                 tags: Vec::new(),
@@ -613,6 +625,12 @@ mod tests {
             report.bridge_distribution.get("process_stdio").copied(),
             Some(1)
         );
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|entry| entry.trust_tier == PluginTrustTier::VerifiedCommunity)
+        );
     }
 
     #[test]
@@ -643,6 +661,7 @@ mod tests {
         assert_eq!(ir.runtime.source_language, "manifest");
         assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::HttpJson);
         assert_eq!(ir.runtime.adapter_family, "http-adapter");
+        assert_eq!(ir.trust_tier, PluginTrustTier::VerifiedCommunity);
         assert_eq!(ir.source_kind, PluginSourceKind::PackageManifest);
         assert_eq!(ir.package_root, "/tmp");
         assert_eq!(
@@ -715,6 +734,10 @@ mod tests {
         );
         assert_eq!(plan.candidates[0].package_root, "/tmp");
         assert_eq!(plan.candidates[0].package_manifest_path, None);
+        assert_eq!(
+            plan.candidates[0].trust_tier,
+            PluginTrustTier::VerifiedCommunity
+        );
         assert!(matches!(
             plan.candidates[0].status,
             PluginActivationStatus::SetupIncomplete
