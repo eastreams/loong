@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use clap::Subcommand;
 use kernel::probe_jsonl_audit_journal_runtime_ready;
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
@@ -13,12 +14,19 @@ use serde_json::json;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
 
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DoctorCommands {
+    /// Report effective security exposure and config hygiene posture
+    Security,
+}
+
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
     pub config: Option<String>,
     pub fix: bool,
     pub json: bool,
     pub skip_model_probe: bool,
+    pub command: Option<DoctorCommands>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +51,22 @@ struct DoctorSummary {
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
+    if let Some(command) = options.command.clone() {
+        return match command {
+            DoctorCommands::Security => {
+                crate::doctor_security_cli::run_doctor_security_cli(
+                    crate::doctor_security_cli::DoctorSecurityCommandOptions {
+                        config: options.config,
+                        json: options.json,
+                        fix: options.fix,
+                        skip_model_probe: options.skip_model_probe,
+                    },
+                )
+                .await
+            }
+        };
+    }
+
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
     let mut checks = Vec::new();
     let mut fixes = Vec::new();
@@ -339,7 +363,7 @@ fn durable_audit_retention_doctor_check(
     }
 }
 
-fn durable_audit_target_issue(path: &Path) -> Option<String> {
+pub(crate) fn durable_audit_target_issue(path: &Path) -> Option<String> {
     durable_audit_target_issue_with_probe(path, durable_audit_runtime_probe)
 }
 

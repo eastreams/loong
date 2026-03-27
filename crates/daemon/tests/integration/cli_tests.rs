@@ -55,6 +55,100 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 }
 
 #[test]
+fn doctor_help_mentions_security_subcommand() {
+    let help = render_cli_help(["doctor"]);
+
+    assert!(
+        help.contains("security"),
+        "doctor help should advertise the security audit subcommand: {help}"
+    );
+    assert!(
+        help.contains("--config <CONFIG>"),
+        "doctor help should keep the shared config flag visible: {help}"
+    );
+}
+
+#[test]
+fn doctor_security_help_mentions_security_exposure_audit() {
+    let help = render_cli_help(["doctor", "security"]);
+
+    assert!(
+        help.contains("security exposure"),
+        "doctor security help should describe the exposure audit: {help}"
+    );
+    assert!(
+        help.contains("Usage: security"),
+        "doctor security help should render a dedicated usage block: {help}"
+    );
+}
+
+#[test]
+fn doctor_security_cli_parses_subcommand_and_global_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "doctor",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "security",
+        "--json",
+    ])
+    .expect("`doctor security --json` should parse");
+
+    match cli.command {
+        Some(Commands::Doctor {
+            config,
+            fix,
+            json,
+            skip_model_probe,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(!fix);
+            assert!(json);
+            assert!(!skip_model_probe);
+            assert_eq!(
+                command,
+                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn doctor_security_cli_accepts_global_flags_after_subcommand() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "doctor",
+        "security",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--skip-model-probe",
+    ])
+    .expect("global doctor flags should remain valid after the security subcommand");
+
+    match cli.command {
+        Some(Commands::Doctor {
+            config,
+            fix,
+            json,
+            skip_model_probe,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(!fix);
+            assert!(!json);
+            assert!(skip_model_probe);
+            assert_eq!(
+                command,
+                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn setup_subcommand_is_removed() {
     let error = try_parse_cli(["loongclaw", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
