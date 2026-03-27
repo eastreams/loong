@@ -216,9 +216,18 @@ fn merge_feishu_config(
         target.base_url = source.base_url.clone();
         changed = true;
     }
-    if target.mode.is_none() && source.mode.is_some() {
-        target.mode = source.mode;
-        changed = true;
+    if target.mode.is_none() {
+        let next_mode = source.mode.or_else(|| {
+            if target.enabled {
+                Some(mvp::config::FeishuChannelServeMode::Websocket)
+            } else {
+                None
+            }
+        });
+        if next_mode.is_some() {
+            target.mode = next_mode;
+            changed = true;
+        }
     }
     if target.receive_id_type == default.receive_id_type
         && source.receive_id_type != default.receive_id_type
@@ -373,5 +382,57 @@ mod tests {
         );
         assert!(config.feishu.verification_token_env.is_none());
         assert!(config.feishu.encrypt_key_env.is_none());
+    }
+
+    #[test]
+    fn merge_defaults_to_websocket_when_enabling_feishu_without_explicit_mode() {
+        let mut target = parse_config(
+            r#"
+            [feishu]
+            enabled = false
+            "#,
+        );
+        let source = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+
+        assert!(
+            apply(&mut target, &source),
+            "enabling feishu without explicit mode should still produce a persisted mode"
+        );
+        assert_eq!(
+            target.feishu.mode,
+            Some(mvp::config::FeishuChannelServeMode::Websocket),
+            "merge should persist websocket mode for enabled feishu imports when mode is omitted"
+        );
+    }
+
+    #[test]
+    fn merge_defaults_to_websocket_when_target_already_enabled() {
+        let mut target = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+        let source = parse_config(
+            r#"
+            [feishu]
+            enabled = false
+            "#,
+        );
+
+        assert!(
+            apply(&mut target, &source),
+            "enabled feishu target should persist websocket mode even if incoming source omits mode"
+        );
+        assert_eq!(
+            target.feishu.mode,
+            Some(mvp::config::FeishuChannelServeMode::Websocket),
+            "merge should persist websocket mode whenever merged feishu remains enabled and mode is omitted"
+        );
     }
 }
