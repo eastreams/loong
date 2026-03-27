@@ -293,7 +293,7 @@ Delivered in current baseline:
 - release-first install flow with checksum-verified prebuilt binaries and explicit source fallback (`scripts/install.sh`, `scripts/install.ps1`)
 - runtime-visible tool advertising so capability snapshots and provider tool schemas follow the actually enabled tool surface
 - Cargo feature flags for MVP packaging controls
-- product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, runtime experiment, and Web UI expectations
+- product specs for installation, onboarding, one-shot ask, doctor, browser automation, tool surface, channel setup, runtime experiment, the local product control plane, and Web UI expectations
 - experiment-state operator surface foundation:
   - `runtime-snapshot` persists lineage-aware runtime checkpoint artifacts
   - `runtime-restore` replays a persisted checkpoint as a dry-run or apply plan
@@ -329,7 +329,7 @@ Remaining deliverables:
   - still add isolated browser profile lifecycle and release packaging around the companion runtime
   - keep richer browser automation exposed only through truthful runtime-visible tool advertising and governed tool contracts
 - browser-facing product surface:
-  - Web UI implementation as a thin shell over existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
+  - Web UI implementation as a thin shell over the local product control plane plus existing ask/chat, onboarding, dashboard, and browser semantics, not a separate assistant runtime
 
 Acceptance criteria:
 
