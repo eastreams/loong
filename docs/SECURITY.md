@@ -68,7 +68,7 @@ Tool-specific request approval currently lives in the `PolicyExtensionChain`; th
 - `web.fetch`, `web.search`, and the shared browser-side URL validators intentionally build their HTTP clients with `reqwest::ClientBuilder::no_proxy()`
 - This keeps DNS resolution and connect-time routing inside the same SSRF-safe policy boundary instead of delegating host decisions to ambient `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, or `NO_PROXY` environment settings
 - The built-in browser surface now uses the same SSRF-safe client construction, so browser navigation no longer trusts ambient proxy environment variables for host reachability decisions
-- The managed browser companion validates both the requested navigation target and the returned `page_url` against its runtime web policy, which prevents the companion from silently crossing into blocked or private destinations after launch
+- The managed browser companion validates both the requested navigation target and the returned `page_url` against its runtime web policy, and it tears down companion session state if a returned `page_url` falls outside that policy
 - Config-backed outbound channel endpoints now share one outbound HTTP trust policy: URLs must use `http` or `https`, must not embed credentials, and block private or special-use hosts by default
 - Channel outbound HTTP clients do not auto-follow redirects, which prevents an initially trusted endpoint from silently crossing into a different destination after the first response
 - Operators who intentionally target a local or private bridge can widen that boundary with `[outbound_http] allow_private_hosts = true`; the default remains fail-closed for public-only outbound delivery

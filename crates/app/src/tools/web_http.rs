@@ -37,10 +37,11 @@ pub(crate) fn validate_http_target(
         ));
     }
 
-    let host = url
+    let raw_host = url
         .host_str()
-        .map(str::to_ascii_lowercase)
+        .map(normalize_domain_text)
         .ok_or_else(|| format!("{surface_name} url has no host"))?;
+    let host = raw_host;
 
     let blocked_rule = options
         .blocked_domains
@@ -274,14 +275,25 @@ fn first_matching_domain_rule<'a>(host: &str, rules: &'a BTreeSet<String>) -> Op
         .map(String::as_str)
 }
 
+/// Wildcard rules in the `*.example.com` form intentionally match both the
+/// apex domain (`example.com`) and any subdomain beneath it.
 fn domain_rule_matches(host: &str, rule: &str) -> bool {
-    if let Some(suffix) = rule.strip_prefix("*.") {
-        let suffix_match = host == suffix;
-        let subdomain_match = host.ends_with(format!(".{suffix}").as_str());
+    let normalized_host = normalize_domain_text(host);
+    let normalized_rule = normalize_domain_text(rule);
+
+    if let Some(suffix) = normalized_rule.strip_prefix("*.") {
+        let suffix_match = normalized_host == suffix;
+        let subdomain_match = normalized_host.ends_with(format!(".{suffix}").as_str());
         return suffix_match || subdomain_match;
     }
 
-    host == rule
+    normalized_host == normalized_rule
+}
+
+fn normalize_domain_text(value: &str) -> String {
+    let trimmed_value = value.trim();
+    let trimmed_root_label = trimmed_value.trim_end_matches('.');
+    trimmed_root_label.to_ascii_lowercase()
 }
 
 #[cfg(all(test, any(feature = "tool-webfetch", feature = "tool-websearch")))]
@@ -449,5 +461,37 @@ mod tests {
             !must(accepted_request, "test server exited with error"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn validate_http_target_blocks_trailing_dot_localhost_alias() {
+        let url = must(
+            reqwest::Url::parse("http://localhost./"),
+            "parse localhost alias url",
+        );
+        let options = HttpTargetValidationOptions {
+            allow_private_hosts: false,
+            reject_userinfo: true,
+            resolve_dns: false,
+            enforce_allowed_domains: false,
+            allowed_domains: None,
+            blocked_domains: None,
+        };
+
+        let error = validate_http_target(&url, &options, "web.fetch")
+            .expect_err("localhost. should stay blocked when private hosts are disabled");
+
+        assert!(
+            error.contains("localhost"),
+            "expected localhost validation error, got {error}"
+        );
+    }
+
+    #[test]
+    fn domain_rule_matches_treats_wildcard_rules_as_apex_aware() {
+        assert!(domain_rule_matches("example.com", "*.example.com"));
+        assert!(domain_rule_matches("api.example.com", "*.example.com"));
+        assert!(domain_rule_matches("API.EXAMPLE.COM.", "*.example.com."));
+        assert!(!domain_rule_matches("example.net", "*.example.com"));
     }
 }

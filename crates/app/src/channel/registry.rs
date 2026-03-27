@@ -3479,10 +3479,14 @@ fn validate_http_url(
     value: &str,
     policy: super::http::ChannelOutboundHttpPolicy,
     issues: &mut Vec<String>,
-) {
+) -> Option<reqwest::Url> {
     let validation = super::http::validate_outbound_http_target(field, value, policy);
-    if let Err(error) = validation {
-        issues.push(error);
+    match validation {
+        Ok(url) => Some(url),
+        Err(error) => {
+            issues.push(error);
+            None
+        }
     }
 }
 
@@ -4401,29 +4405,6 @@ fn build_imessage_snapshots(
         .collect()
 }
 
-fn redact_endpoint_status_url(raw: Option<String>) -> Option<String> {
-    let raw = raw?;
-    let parsed = reqwest::Url::parse(raw.as_str()).ok()?;
-    let mut redacted = parsed;
-    let _ = redacted.set_username("");
-    let _ = redacted.set_password(None);
-    redacted.set_query(None);
-    redacted.set_fragment(None);
-    Some(redacted.to_string())
-}
-
-fn redact_generic_webhook_status_url(raw: Option<String>) -> Option<String> {
-    let raw = raw?;
-    let parsed = reqwest::Url::parse(raw.as_str()).ok()?;
-    let mut redacted = parsed;
-    let _ = redacted.set_username("");
-    let _ = redacted.set_password(None);
-    redacted.set_path("/");
-    redacted.set_query(None);
-    redacted.set_fragment(None);
-    Some(redacted.to_string())
-}
-
 fn build_dingtalk_snapshot_for_account(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
@@ -4438,9 +4419,9 @@ fn build_dingtalk_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    if let Some(webhook_url) = webhook_url.as_deref() {
-        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
-    }
+    let validated_webhook_url = webhook_url
+        .as_deref()
+        .and_then(|url| validate_http_url("webhook_url", url, http_policy, &mut send_issues));
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4498,7 +4479,10 @@ fn build_dingtalk_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: redact_endpoint_status_url(webhook_url),
+        api_base_url: validated_webhook_url
+            .as_ref()
+            .and(webhook_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -4517,10 +4501,10 @@ fn build_discord_snapshot_for_account(
         send_issues.push("bot_token is missing".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url(
+    let resolved_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_http_url(
         "api_base_url",
-        api_base_url.as_str(),
+        resolved_api_base_url.as_str(),
         http_policy,
         &mut send_issues,
     );
@@ -4578,7 +4562,9 @@ fn build_discord_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: Some(api_base_url),
+        api_base_url: api_base_url
+            .as_ref()
+            .and_then(|_| super::http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -4597,10 +4583,10 @@ fn build_slack_snapshot_for_account(
         send_issues.push("bot_token is missing".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url(
+    let resolved_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_http_url(
         "api_base_url",
-        api_base_url.as_str(),
+        resolved_api_base_url.as_str(),
         http_policy,
         &mut send_issues,
     );
@@ -4658,7 +4644,9 @@ fn build_slack_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: Some(api_base_url),
+        api_base_url: api_base_url
+            .as_ref()
+            .and_then(|_| super::http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -4677,10 +4665,10 @@ fn build_line_snapshot_for_account(
         send_issues.push("channel_access_token is missing".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url(
+    let resolved_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_http_url(
         "api_base_url",
-        api_base_url.as_str(),
+        resolved_api_base_url.as_str(),
         http_policy,
         &mut send_issues,
     );
@@ -4738,7 +4726,9 @@ fn build_line_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: Some(api_base_url),
+        api_base_url: api_base_url
+            .as_ref()
+            .and_then(|_| super::http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -4760,10 +4750,10 @@ fn build_whatsapp_snapshot_for_account(
         send_issues.push("phone_number_id is missing".to_owned());
     }
 
-    let api_base_url = resolved.resolved_api_base_url();
-    validate_http_url(
+    let resolved_api_base_url = resolved.resolved_api_base_url();
+    let api_base_url = validate_http_url(
         "api_base_url",
-        api_base_url.as_str(),
+        resolved_api_base_url.as_str(),
         http_policy,
         &mut send_issues,
     );
@@ -4824,7 +4814,9 @@ fn build_whatsapp_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: Some(api_base_url),
+        api_base_url: api_base_url
+            .as_ref()
+            .and_then(|_| super::http::redact_endpoint_status_url(resolved_api_base_url.as_str())),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -4978,9 +4970,9 @@ fn build_webhook_snapshot_for_account(
     if endpoint_url.is_none() {
         send_issues.push("endpoint_url is missing".to_owned());
     }
-    if let Some(endpoint_url) = endpoint_url.as_deref() {
-        validate_http_url("endpoint_url", endpoint_url, http_policy, &mut send_issues);
-    }
+    let validated_endpoint_url = endpoint_url
+        .as_deref()
+        .and_then(|url| validate_http_url("endpoint_url", url, http_policy, &mut send_issues));
 
     let auth_token = resolved.auth_token();
     let auth_validation = build_webhook_auth_header_from_parts(
@@ -5068,7 +5060,10 @@ fn build_webhook_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: redact_generic_webhook_status_url(endpoint_url),
+        api_base_url: validated_endpoint_url
+            .as_ref()
+            .and(endpoint_url.as_deref())
+            .and_then(super::http::redact_generic_webhook_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5088,9 +5083,9 @@ fn build_google_chat_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    if let Some(webhook_url) = webhook_url.as_deref() {
-        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
-    }
+    let validated_webhook_url = webhook_url
+        .as_deref()
+        .and_then(|url| validate_http_url("webhook_url", url, http_policy, &mut send_issues));
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -5145,7 +5140,10 @@ fn build_google_chat_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: redact_endpoint_status_url(webhook_url),
+        api_base_url: validated_webhook_url
+            .as_ref()
+            .and(webhook_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5165,9 +5163,9 @@ fn build_mattermost_snapshot_for_account(
     if server_url.is_none() {
         send_issues.push("server_url is missing".to_owned());
     }
-    if let Some(server_url) = server_url.as_deref() {
-        validate_http_url("server_url", server_url, http_policy, &mut send_issues);
-    }
+    let validated_server_url = server_url
+        .as_deref()
+        .and_then(|url| validate_http_url("server_url", url, http_policy, &mut send_issues));
     if resolved.bot_token().is_none() {
         send_issues.push("bot_token is missing".to_owned());
     }
@@ -5225,7 +5223,10 @@ fn build_mattermost_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: server_url,
+        api_base_url: validated_server_url
+            .as_ref()
+            .and(server_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5245,9 +5246,9 @@ fn build_nextcloud_talk_snapshot_for_account(
     if server_url.is_none() {
         send_issues.push("server_url is missing".to_owned());
     }
-    if let Some(server_url) = server_url.as_deref() {
-        validate_http_url("server_url", server_url, http_policy, &mut send_issues);
-    }
+    let validated_server_url = server_url
+        .as_deref()
+        .and_then(|url| validate_http_url("server_url", url, http_policy, &mut send_issues));
     if resolved.shared_secret().is_none() {
         send_issues.push("shared_secret is missing".to_owned());
     }
@@ -5305,7 +5306,10 @@ fn build_nextcloud_talk_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: server_url,
+        api_base_url: validated_server_url
+            .as_ref()
+            .and(server_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5325,9 +5329,9 @@ fn build_synology_chat_snapshot_for_account(
     if incoming_url.is_none() {
         send_issues.push("incoming_url is missing".to_owned());
     }
-    if let Some(incoming_url) = incoming_url.as_deref() {
-        validate_http_url("incoming_url", incoming_url, http_policy, &mut send_issues);
-    }
+    let validated_incoming_url = incoming_url
+        .as_deref()
+        .and_then(|url| validate_http_url("incoming_url", url, http_policy, &mut send_issues));
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -5393,7 +5397,10 @@ fn build_synology_chat_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: redact_endpoint_status_url(incoming_url),
+        api_base_url: validated_incoming_url
+            .as_ref()
+            .and(incoming_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5416,9 +5423,9 @@ fn build_signal_snapshot_for_account(
     if service_url.is_none() {
         send_issues.push("service_url is missing".to_owned());
     }
-    if let Some(service_url) = service_url.as_deref() {
-        validate_http_url("service_url", service_url, http_policy, &mut send_issues);
-    }
+    let validated_service_url = service_url
+        .as_deref()
+        .and_then(|url| validate_http_url("service_url", url, http_policy, &mut send_issues));
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -5476,7 +5483,10 @@ fn build_signal_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: service_url,
+        api_base_url: validated_service_url
+            .as_ref()
+            .and(service_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5496,9 +5506,9 @@ fn build_teams_snapshot_for_account(
     if webhook_url.is_none() {
         send_issues.push("webhook_url is missing".to_owned());
     }
-    if let Some(webhook_url) = webhook_url.as_deref() {
-        validate_http_url("webhook_url", webhook_url, http_policy, &mut send_issues);
-    }
+    let validated_webhook_url = webhook_url
+        .as_deref()
+        .and_then(|url| validate_http_url("webhook_url", url, http_policy, &mut send_issues));
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -5565,7 +5575,10 @@ fn build_teams_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: redact_endpoint_status_url(webhook_url),
+        api_base_url: validated_webhook_url
+            .as_ref()
+            .and(webhook_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -5585,9 +5598,9 @@ fn build_imessage_snapshot_for_account(
     if bridge_url.is_none() {
         send_issues.push("bridge_url is missing".to_owned());
     }
-    if let Some(bridge_url) = bridge_url.as_deref() {
-        validate_http_url("bridge_url", bridge_url, http_policy, &mut send_issues);
-    }
+    let validated_bridge_url = bridge_url
+        .as_deref()
+        .and_then(|url| validate_http_url("bridge_url", url, http_policy, &mut send_issues));
     if resolved.bridge_token().is_none() {
         send_issues.push("bridge_token is missing".to_owned());
     }
@@ -5649,7 +5662,10 @@ fn build_imessage_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: bridge_url,
+        api_base_url: validated_bridge_url
+            .as_ref()
+            .and(bridge_url.as_deref())
+            .and_then(super::http::redact_endpoint_status_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }

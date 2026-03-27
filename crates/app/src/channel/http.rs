@@ -83,6 +83,36 @@ pub(super) fn response_body_detail(body: &str) -> String {
     trimmed_body.to_owned()
 }
 
+pub(super) fn redact_endpoint_status_url(raw_url: &str) -> Option<String> {
+    let trimmed_url = raw_url.trim();
+    let parsed_url = reqwest::Url::parse(trimmed_url).ok()?;
+    let has_userinfo = !parsed_url.username().is_empty() || parsed_url.password().is_some();
+    let has_query = parsed_url.query().is_some();
+    let has_fragment = parsed_url.fragment().is_some();
+    if !has_userinfo && !has_query && !has_fragment {
+        return Some(trimmed_url.to_owned());
+    }
+
+    let mut redacted_url = parsed_url;
+    let _ = redacted_url.set_username("");
+    let _ = redacted_url.set_password(None);
+    redacted_url.set_query(None);
+    redacted_url.set_fragment(None);
+    Some(redacted_url.to_string())
+}
+
+pub(super) fn redact_generic_webhook_status_url(raw_url: &str) -> Option<String> {
+    let trimmed_url = raw_url.trim();
+    let parsed_url = reqwest::Url::parse(trimmed_url).ok()?;
+    let mut redacted_url = parsed_url;
+    let _ = redacted_url.set_username("");
+    let _ = redacted_url.set_password(None);
+    redacted_url.set_path("/");
+    redacted_url.set_query(None);
+    redacted_url.set_fragment(None);
+    Some(redacted_url.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
