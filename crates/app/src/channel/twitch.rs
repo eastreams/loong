@@ -217,10 +217,12 @@ async fn resolve_twitch_broadcaster(
         return Err("twitch outbound target id is empty".to_owned());
     }
 
+    let not_found_error = format!("twitch broadcaster `{trimmed_target}` was not found");
     let api_base_url = resolved.resolved_api_base_url();
     let trimmed_api_base_url = api_base_url.trim_end_matches('/');
     let request_url = format!("{trimmed_api_base_url}/users");
     let is_numeric_target = trimmed_target.chars().all(|value| value.is_ascii_digit());
+
     if !is_numeric_target {
         let login_lookup = lookup_twitch_broadcaster(
             client,
@@ -235,9 +237,7 @@ async fn resolve_twitch_broadcaster(
             return Ok(broadcaster);
         }
 
-        return Err(format!(
-            "twitch broadcaster `{trimmed_target}` was not found"
-        ));
+        return Err(not_found_error);
     }
 
     let id_lookup = lookup_twitch_broadcaster(
@@ -249,10 +249,6 @@ async fn resolve_twitch_broadcaster(
         trimmed_target,
     )
     .await?;
-    if let Some(broadcaster) = id_lookup {
-        return Ok(broadcaster);
-    }
-
     let login_lookup = lookup_twitch_broadcaster(
         client,
         request_url.as_str(),
@@ -262,13 +258,21 @@ async fn resolve_twitch_broadcaster(
         trimmed_target,
     )
     .await?;
-    if let Some(broadcaster) = login_lookup {
-        return Ok(broadcaster);
-    }
 
-    Err(format!(
-        "twitch broadcaster `{trimmed_target}` was not found"
-    ))
+    match (id_lookup, login_lookup) {
+        (Some(id_broadcaster), Some(login_broadcaster)) => {
+            if id_broadcaster == login_broadcaster {
+                return Ok(id_broadcaster);
+            }
+
+            Err(format!(
+                "twitch broadcaster `{trimmed_target}` is ambiguous between numeric id and login lookups"
+            ))
+        }
+        (Some(id_broadcaster), None) => Ok(id_broadcaster),
+        (None, Some(login_broadcaster)) => Ok(login_broadcaster),
+        (None, None) => Err(not_found_error),
+    }
 }
 
 async fn lookup_twitch_broadcaster(
@@ -618,7 +622,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_twitch_send_prefers_id_lookup_when_numeric_id_exists() {
+    async fn run_twitch_send_uses_numeric_id_when_login_lookup_is_empty() {
         let state = MockTwitchState::default();
         let router = build_mock_twitch_router(state.clone());
         let (base_url, server) = spawn_mock_twitch_server(router).await;
@@ -647,10 +651,13 @@ mod tests {
         )
         .await;
 
-        send_result.expect("numeric ids should resolve on the first lookup");
+        send_result.expect("numeric ids should resolve when login lookup is empty");
 
         let users_queries = state.users_queries.lock().expect("users queries lock");
-        assert_eq!(users_queries.as_slice(), &[String::from("id=987654")]);
+        assert_eq!(
+            users_queries.as_slice(),
+            &[String::from("id=987654"), String::from("login=987654")]
+        );
 
         let send_bodies = state.send_bodies.lock().expect("send bodies lock");
         assert_eq!(send_bodies.len(), 1);
@@ -658,6 +665,54 @@ mod tests {
             send_bodies[0].get("broadcaster_id").and_then(Value::as_str),
             Some("numeric-id-987654")
         );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn run_twitch_send_rejects_ambiguous_numeric_target() {
+        let state = MockTwitchState::default();
+        let router = build_mock_twitch_router(state.clone());
+        let (base_url, server) = spawn_mock_twitch_server(router).await;
+
+        let resolved = ResolvedTwitchChannelConfig {
+            configured_account_id: "default".to_owned(),
+            configured_account_label: "default".to_owned(),
+            account: crate::config::ChannelAccountIdentity {
+                id: "default".to_owned(),
+                label: "default".to_owned(),
+                source: crate::config::ChannelAccountIdentitySource::Default,
+            },
+            enabled: true,
+            access_token: Some(SecretRef::Inline("twitch-access-token".to_owned())),
+            access_token_env: None,
+            api_base_url: Some(format!("{base_url}/helix")),
+            oauth_base_url: Some(format!("{base_url}/oauth2")),
+            channel_names: Vec::new(),
+        };
+
+        let error = run_twitch_send(
+            &resolved,
+            ChannelOutboundTargetKind::Conversation,
+            "55555",
+            "hello from loongclaw",
+        )
+        .await
+        .expect_err("ambiguous numeric targets should fail");
+
+        assert_eq!(
+            error,
+            "twitch broadcaster `55555` is ambiguous between numeric id and login lookups"
+        );
+
+        let users_queries = state.users_queries.lock().expect("users queries lock");
+        assert_eq!(
+            users_queries.as_slice(),
+            &[String::from("id=55555"), String::from("login=55555")]
+        );
+
+        let send_bodies = state.send_bodies.lock().expect("send bodies lock");
+        assert!(send_bodies.is_empty());
 
         server.abort();
     }
@@ -782,6 +837,8 @@ mod tests {
         let broadcaster_id = match (query_key, query_value.as_str()) {
             ("id", "12345") => None,
             ("login", "12345") => Some("numeric-login-12345"),
+            ("id", "55555") => Some("numeric-id-55555"),
+            ("login", "55555") => Some("numeric-login-55555"),
             ("id", "987654") => Some("numeric-id-987654"),
             ("login", "987654") => None,
             _ => Some("broadcaster-456"),

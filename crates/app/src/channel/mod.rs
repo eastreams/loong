@@ -162,8 +162,6 @@ use super::config::ResolvedMattermostChannelConfig;
 use super::config::ResolvedNextcloudTalkChannelConfig;
 #[cfg(feature = "channel-nostr")]
 use super::config::ResolvedNostrChannelConfig;
-#[cfg(feature = "channel-signal")]
-use super::config::ResolvedSignalChannelConfig;
 #[cfg(feature = "channel-slack")]
 use super::config::ResolvedSlackChannelConfig;
 #[cfg(feature = "channel-synology-chat")]
@@ -172,8 +170,6 @@ use super::config::ResolvedSynologyChatChannelConfig;
 use super::config::ResolvedTeamsChannelConfig;
 #[cfg(feature = "channel-telegram")]
 use super::config::ResolvedTelegramChannelConfig;
-#[cfg(feature = "channel-twitch")]
-use super::config::ResolvedTwitchChannelConfig;
 #[cfg(feature = "channel-webhook")]
 use super::config::ResolvedWebhookChannelConfig;
 #[cfg(feature = "channel-wecom")]
@@ -254,6 +250,8 @@ mod runtime_state;
 pub(crate) mod sdk;
 #[cfg(feature = "channel-signal")]
 mod signal;
+#[cfg(feature = "channel-signal")]
+mod signal_command;
 #[cfg(feature = "channel-slack")]
 mod slack;
 #[cfg(feature = "channel-synology-chat")]
@@ -273,6 +271,8 @@ pub mod traits;
 mod turn_feedback;
 #[cfg(feature = "channel-twitch")]
 mod twitch;
+#[cfg(feature = "channel-twitch")]
+mod twitch_command;
 #[cfg(feature = "channel-webhook")]
 mod webhook;
 mod webhook_auth;
@@ -281,6 +281,8 @@ mod wecom;
 #[cfg(feature = "channel-whatsapp")]
 mod whatsapp;
 
+#[cfg(feature = "channel-twitch")]
+pub use self::twitch_command::run_twitch_send;
 pub use registry::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
     ChannelCatalogCommandFamilyDescriptor, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
@@ -1615,72 +1617,6 @@ fn build_wecom_command_context(
     })
 }
 
-#[cfg(feature = "channel-signal")]
-fn load_signal_command_context(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedSignalChannelConfig>> {
-    let (resolved_path, config) = super::config::load(config_path)?;
-    build_signal_command_context(resolved_path, config, account_id)
-}
-
-#[cfg(feature = "channel-signal")]
-fn build_signal_command_context(
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedSignalChannelConfig>> {
-    let resolved = config.signal.resolve_account(account_id)?;
-    let route = config
-        .signal
-        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
-    if !resolved.enabled {
-        return Err(format!(
-            "signal account `{}` is disabled by configuration",
-            resolved.configured_account_id
-        ));
-    }
-    Ok(ChannelCommandContext {
-        resolved_path,
-        config,
-        resolved,
-        route,
-    })
-}
-
-#[cfg(feature = "channel-twitch")]
-fn load_twitch_command_context(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedTwitchChannelConfig>> {
-    let (resolved_path, config) = super::config::load(config_path)?;
-    build_twitch_command_context(resolved_path, config, account_id)
-}
-
-#[cfg(feature = "channel-twitch")]
-fn build_twitch_command_context(
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedTwitchChannelConfig>> {
-    let resolved = config.twitch.resolve_account(account_id)?;
-    let route = config
-        .twitch
-        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
-    if !resolved.enabled {
-        return Err(format!(
-            "twitch account `{}` is disabled by configuration",
-            resolved.configured_account_id
-        ));
-    }
-    Ok(ChannelCommandContext {
-        resolved_path,
-        config,
-        resolved,
-        route,
-    })
-}
-
 #[cfg(feature = "channel-slack")]
 fn load_slack_command_context(
     config_path: Option<&str>,
@@ -2618,7 +2554,7 @@ pub async fn run_signal_send(
 
     #[cfg(feature = "channel-signal")]
     {
-        let context = load_signal_command_context(config_path, account_id)?;
+        let context = signal_command::load_signal_command_context(config_path, account_id)?;
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2695,61 +2631,6 @@ pub async fn run_nostr_send(
             |context| {
                 format!(
                     "nostr event published (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
-                    context.resolved_path.display(),
-                    context.resolved.configured_account_id,
-                    context.resolved.account.label,
-                    context.route.selected_by_default(),
-                    context.route.default_account_source.as_str(),
-                    target_kind
-                )
-            },
-        )
-        .await
-    }
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-pub async fn run_twitch_send(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-    target: &str,
-    target_kind: ChannelOutboundTargetKind,
-    text: &str,
-) -> CliResult<()> {
-    if !cfg!(feature = "channel-twitch") {
-        return Err("twitch channel is disabled (enable feature `channel-twitch`)".to_owned());
-    }
-
-    #[cfg(not(feature = "channel-twitch"))]
-    {
-        let _ = (config_path, account_id, target, target_kind, text);
-        return Err("twitch channel is disabled (enable feature `channel-twitch`)".to_owned());
-    }
-
-    #[cfg(feature = "channel-twitch")]
-    {
-        let context = load_twitch_command_context(config_path, account_id)?;
-        let target = target.to_owned();
-        let text = text.to_owned();
-        run_channel_send_command(
-            context,
-            ChannelSendCommandSpec {
-                channel_id: "twitch",
-            },
-            |context| {
-                Box::pin(async move {
-                    twitch::run_twitch_send(
-                        &context.resolved,
-                        target_kind,
-                        target.as_str(),
-                        text.as_str(),
-                    )
-                    .await
-                })
-            },
-            |context| {
-                format!(
-                    "twitch message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
                     context.resolved_path.display(),
                     context.resolved.configured_account_id,
                     context.resolved.account.label,
