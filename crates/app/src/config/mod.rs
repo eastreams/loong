@@ -129,7 +129,20 @@ mod tests {
     use loongclaw_contracts::SecretRef;
 
     use super::*;
+    use crate::test_support::ScopedEnv;
     use std::collections::BTreeSet;
+
+    fn clear_config_test_secret_envs(env: &mut ScopedEnv) {
+        for key in [
+            "LOONGCLAW_TEST_API_KEY_REF",
+            "LOONGCLAW_TEST_MISSING_API_KEY",
+            "LOONGCLAW_TEST_LEGACY_FALLBACK",
+            "LOONGCLAW_TEST_TYPED_SECRET_REF",
+            "LOONGCLAW_TEST_TELEGRAM_SECRET_REF",
+        ] {
+            env.remove(key);
+        }
+    }
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
         let mut service_ids = Vec::new();
@@ -880,9 +893,11 @@ mod tests {
         // Use a dedicated env var instead of PATH — Windows PATH contains `;`
         // which `split_secret_candidates` treats as a candidate separator,
         // causing `api_key()` to return only the first segment.
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
         let env_key = "LOONGCLAW_TEST_API_KEY_REF";
         let env_val = "test-secret-value-for-env-ref";
-        crate::process_env::set_var(env_key, env_val);
+        env.set(env_key, env_val);
 
         let cases = vec![
             format!("${{{env_key}}}"),
@@ -909,12 +924,13 @@ mod tests {
                 "authorization_header should resolve env ref for {raw_api_key}"
             );
         }
-
-        crate::process_env::remove_var(env_key);
     }
 
     #[test]
     fn provider_api_key_missing_explicit_env_reference_is_not_treated_as_literal() {
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
+
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
             api_key: Some(SecretRef::Inline(
@@ -930,6 +946,9 @@ mod tests {
 
     #[test]
     fn provider_api_key_missing_explicit_env_reference_does_not_fall_back_to_legacy_env() {
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
+
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
             api_key: Some(SecretRef::Inline(
@@ -947,9 +966,11 @@ mod tests {
     fn provider_api_key_env_legacy_fallback_still_works() {
         // Use a dedicated env var instead of PATH — Windows PATH contains `;`
         // which `split_secret_candidates` treats as a candidate separator.
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
         let env_key = "LOONGCLAW_TEST_LEGACY_FALLBACK";
         let env_val = "test-secret-value-for-legacy";
-        crate::process_env::set_var(env_key, env_val);
+        env.set(env_key, env_val);
 
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
@@ -959,15 +980,15 @@ mod tests {
         };
 
         assert_eq!(config.api_key().as_deref(), Some(env_val));
-
-        crate::process_env::remove_var(env_key);
     }
 
     #[test]
     fn provider_api_key_supports_typed_env_secret_ref() {
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
         let env_key = "LOONGCLAW_TEST_TYPED_SECRET_REF";
         let env_val = "typed-secret-value";
-        crate::process_env::set_var(env_key, env_val);
+        env.set(env_key, env_val);
 
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
@@ -983,8 +1004,6 @@ mod tests {
             config.authorization_header().as_deref(),
             Some("Bearer typed-secret-value")
         );
-
-        crate::process_env::remove_var(env_key);
     }
 
     #[test]
@@ -1608,9 +1627,11 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
     #[test]
     #[cfg(feature = "channel-telegram")]
     fn telegram_bot_token_supports_typed_env_secret_ref() {
+        let mut env = ScopedEnv::new();
+        clear_config_test_secret_envs(&mut env);
         let env_key = "LOONGCLAW_TEST_TELEGRAM_SECRET_REF";
         let env_val = "123456789:telegram-secret";
-        crate::process_env::set_var(env_key, env_val);
+        env.set(env_key, env_val);
 
         let config = TelegramChannelConfig {
             bot_token: Some(SecretRef::Env {
@@ -1621,8 +1642,6 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
         };
 
         assert_eq!(config.bot_token().as_deref(), Some(env_val));
-
-        crate::process_env::remove_var(env_key);
     }
 
     #[test]
