@@ -1036,6 +1036,7 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_email_channel_for_encoding(&mut config.email);
     canonicalize_slack_channel_for_encoding(&mut config.slack);
     canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
+    canonicalize_twitch_channel_for_encoding(&mut config.twitch);
     canonicalize_teams_channel_for_encoding(&mut config.teams);
     canonicalize_imessage_channel_for_encoding(&mut config.imessage);
     canonicalize_whatsapp_channel_for_encoding(&mut config.whatsapp);
@@ -1180,6 +1181,14 @@ fn canonicalize_google_chat_channel_for_encoding(config: &mut GoogleChatChannelC
 
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.webhook_url, &mut account.webhook_url_env);
+    }
+}
+
+fn canonicalize_twitch_channel_for_encoding(config: &mut TwitchChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
     }
 }
 
@@ -2906,6 +2915,9 @@ model = "gpt-5"
         config.slack.bot_token = Some(SecretRef::Inline("${SLACK_BOT_TOKEN}".to_owned()));
         config.slack.bot_token_env = Some(" SLACK_BOT_TOKEN ".to_owned());
 
+        config.twitch.access_token = Some(SecretRef::Inline("${TWITCH_ACCESS_TOKEN}".to_owned()));
+        config.twitch.access_token_env = Some(" TWITCH_ACCESS_TOKEN ".to_owned());
+
         config.whatsapp.access_token =
             Some(SecretRef::Inline("${WHATSAPP_ACCESS_TOKEN}".to_owned()));
         config.whatsapp.access_token_env = Some(" WHATSAPP_ACCESS_TOKEN ".to_owned());
@@ -2921,12 +2933,14 @@ model = "gpt-5"
 
         assert!(raw.contains("bot_token_env = \"DISCORD_BOT_TOKEN\""));
         assert!(raw.contains("bot_token_env = \"SLACK_BOT_TOKEN\""));
+        assert!(raw.contains("access_token_env = \"TWITCH_ACCESS_TOKEN\""));
         assert!(raw.contains("access_token_env = \"WHATSAPP_ACCESS_TOKEN\""));
         assert!(raw.contains("verify_token_env = \"WHATSAPP_VERIFY_TOKEN\""));
         assert!(raw.contains("app_secret_env = \"WHATSAPP_APP_SECRET\""));
 
         assert!(!raw.contains("bot_token = \"${DISCORD_BOT_TOKEN}\""));
         assert!(!raw.contains("bot_token = \"${SLACK_BOT_TOKEN}\""));
+        assert!(!raw.contains("access_token = \"${TWITCH_ACCESS_TOKEN}\""));
         assert!(!raw.contains("access_token = \"${WHATSAPP_ACCESS_TOKEN}\""));
         assert!(!raw.contains("verify_token = \"${WHATSAPP_VERIFY_TOKEN}\""));
         assert!(!raw.contains("app_secret = \"${WHATSAPP_APP_SECRET}\""));
