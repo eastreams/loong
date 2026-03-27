@@ -254,6 +254,74 @@ async fn gateway_owner_state_rejects_second_active_owner_slot() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_second_owner_attempt_preserves_pending_stop_request() {
+    let runtime_dir = unique_runtime_dir("duplicate-start-pending-stop");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    wait_until("first gateway owner", || {
+        load_gateway_owner_status(runtime_dir.as_path())
+            .map(|status| status.running)
+            .unwrap_or(false)
+    })
+    .await;
+
+    let stop_result = request_gateway_stop(runtime_dir.as_path()).expect("request stop");
+    assert_eq!(stop_result, GatewayStopRequestOutcome::Requested);
+
+    let second_hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+    let second_result = run_gateway_run_with_hooks_for_test(
+        None,
+        None,
+        Vec::new(),
+        runtime_dir.as_path(),
+        second_hooks,
+    )
+    .await
+    .expect_err("second gateway owner should be rejected");
+    assert!(
+        second_result.contains("gateway owner already active"),
+        "unexpected duplicate-owner error: {second_result}"
+    );
+
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("first gateway run should still stop")
+        .expect("join gateway run")
+        .expect("first gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_multi_channel_compat_records_wrapper_mode_and_session() {
     let runtime_dir = unique_runtime_dir("compat-wrapper");
     let telegram_runner = idle_background_channel_runner();
