@@ -14,6 +14,7 @@ The Web UI is expected to include:
 - dashboard
 - onboarding
 - a lightweight debug console
+- a client path through the local product control plane
 - localhost-only by default
 - same-origin local product-mode serving
 - an optional install path
@@ -22,6 +23,7 @@ The Web UI is expected to include:
 
 - [ ] The Web UI is treated as one coherent product surface rather than a chat-only browser shell.
 - [ ] The Web UI reuses the same conversation, provider, tool, and memory semantics as CLI surfaces instead of creating a separate assistant runtime.
+- [ ] The Web UI binds through the local product control plane and does not talk to provider or ACP internals through a separate browser-owned session model.
 - [ ] The Web UI includes chat, dashboard, and onboarding as first-class parts of the same experience.
 - [ ] The Web UI can be delivered in a same-origin local product mode and stays localhost-only by default unless future policy and docs explicitly widen that boundary.
 - [ ] The optional install path is documented and supported without making installation mandatory for source users.
