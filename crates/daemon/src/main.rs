@@ -226,12 +226,14 @@ async fn main() {
             fix,
             json,
             skip_model_probe,
+            command,
         } => {
             doctor_cli::run_doctor_cli(doctor_cli::DoctorCommandOptions {
                 config,
                 fix,
                 json,
                 skip_model_probe,
+                command,
             })
             .await
         }

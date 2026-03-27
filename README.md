@@ -312,6 +312,8 @@ survive process restarts.
 ```bash
 loongclaw doctor --config ~/.loongclaw/config.toml
 loongclaw doctor --config ~/.loongclaw/config.toml --json
+loongclaw doctor security --config ~/.loongclaw/config.toml
+loongclaw doctor security --config ~/.loongclaw/config.toml --json
 loongclaw audit recent --config ~/.loongclaw/config.toml
 loongclaw audit recent --config ~/.loongclaw/config.toml --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
 loongclaw audit summary --config ~/.loongclaw/config.toml
@@ -379,6 +381,14 @@ now adds a provider route probe for the active request/models host. That probe
 surfaces the host and port, DNS resolution results, fake-ip-style addresses,
 and a short TCP reachability check so you can separate local proxy/TUN/fake-ip
 instability from true upstream unavailability.
+
+`doctor security` complements the general health check with a security exposure
+and config hygiene audit. It reports `covered`, `partial`, `exposed`, and
+`unknown` findings across durable audit retention, shell execution posture,
+tool file-root confinement, web-fetch egress, external-skills download posture,
+secret storage hygiene, and browser automation surfaces. Use the text output
+for operator review and `--json` when you want a stable machine-readable
+contract for automation or support tooling.
 
 ## We Are Currently Working On
 
