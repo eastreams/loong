@@ -34,7 +34,9 @@ pub mod error;
 pub mod messaging;
 
 // Re-export commonly used types
-pub use calendar::CalendarApi;
+pub use calendar::{Availability, CalendarApi, CalendarEvent, TimeRange};
 pub use documents::{Document, DocumentContent, DocumentsApi};
 pub use error::{ApiError, ApiResult};
-pub use messaging::{Message, MessageContent, MessagingApi, Pagination, SendOptions};
+pub use messaging::{
+    Message, MessageContent, MessagingApi, Pagination, RichMessagingApi, SendOptions,
+};

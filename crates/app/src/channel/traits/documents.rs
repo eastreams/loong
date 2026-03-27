@@ -5,7 +5,7 @@ use super::error::ApiResult;
 use super::messaging::Pagination;
 
 /// Document content types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DocumentContent {
     /// Plain text content
     Text(String),
@@ -18,7 +18,7 @@ pub enum DocumentContent {
 }
 
 /// Document metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     /// Platform-specific document ID
     pub id: String,

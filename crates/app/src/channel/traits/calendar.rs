@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 
-use super::error::ApiResult;
+use super::error::{ApiError, ApiResult};
 use super::messaging::Pagination;
 
 /// Calendar event/appointment
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalendarEvent {
     /// Event ID
     pub id: String,
@@ -30,7 +30,7 @@ pub struct CalendarEvent {
 }
 
 /// Calendar availability/freebusy information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Availability {
     /// User ID
     pub user_id: String,
@@ -39,12 +39,45 @@ pub struct Availability {
 }
 
 /// Time range for availability queries
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimeRange {
     /// Range start
     pub start: DateTime<Utc>,
     /// Range end
     pub end: DateTime<Utc>,
+}
+
+impl TimeRange {
+    /// Create a validated time range with a non-decreasing boundary order.
+    pub fn new(start: DateTime<Utc>, end: DateTime<Utc>) -> ApiResult<Self> {
+        let end_is_before_start = end < start;
+
+        if end_is_before_start {
+            let message = format!("time range end {end} is before start {start}");
+
+            return Err(ApiError::InvalidRequest(message));
+        }
+
+        let time_range = Self { start, end };
+
+        Ok(time_range)
+    }
+
+    /// Create a validated time range from a start instant and duration.
+    pub fn from_duration(start: DateTime<Utc>, duration: Duration) -> ApiResult<Self> {
+        let zero_duration = Duration::zero();
+        let duration_is_negative = duration < zero_duration;
+
+        if duration_is_negative {
+            let message = format!("time range duration {duration:?} must not be negative");
+
+            return Err(ApiError::InvalidRequest(message));
+        }
+
+        let end = start + duration;
+
+        Self::new(start, end)
+    }
 }
 
 /// Trait for calendar management capabilities
@@ -101,4 +134,48 @@ pub trait CalendarApi: Send + Sync {
         start: DateTime<Utc>,
         end: DateTime<Utc>,
     ) -> ApiResult<Vec<TimeRange>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::{Duration, TimeZone, Utc};
+
+    use super::{ApiError, TimeRange};
+
+    #[test]
+    fn time_range_new_rejects_inverted_bounds() {
+        let start = Utc
+            .with_ymd_and_hms(2026, 3, 27, 10, 0, 0)
+            .single()
+            .expect("valid start");
+        let end = Utc
+            .with_ymd_and_hms(2026, 3, 27, 9, 0, 0)
+            .single()
+            .expect("valid end");
+        let error = TimeRange::new(start, end).expect_err("inverted range should fail");
+
+        let ApiError::InvalidRequest(message) = error else {
+            panic!("expected invalid request error");
+        };
+
+        assert!(message.contains("time range end"));
+        assert!(message.contains("is before start"));
+    }
+
+    #[test]
+    fn time_range_from_duration_builds_valid_end_time() {
+        let start = Utc
+            .with_ymd_and_hms(2026, 3, 27, 10, 0, 0)
+            .single()
+            .expect("valid start");
+        let duration = Duration::minutes(45);
+        let time_range = TimeRange::from_duration(start, duration).expect("range should be valid");
+        let expected_end = Utc
+            .with_ymd_and_hms(2026, 3, 27, 10, 45, 0)
+            .single()
+            .expect("valid expected end");
+
+        assert_eq!(time_range.start, start);
+        assert_eq!(time_range.end, expected_end);
+    }
 }
