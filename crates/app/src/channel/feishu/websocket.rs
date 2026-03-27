@@ -458,6 +458,8 @@ mod tests {
 
     use super::*;
     use crate::channel::ChannelPlatform;
+
+    const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
     use crate::config::{FeishuChannelServeMode, LoongClawConfig, ProviderConfig};
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
 
@@ -527,7 +529,7 @@ mod tests {
                         Json(json!({
                             "choices": [{
                                 "message": {
-                                    "content": "structured inbound ack"
+                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
                                 }
                             }]
                         }))
@@ -1053,8 +1055,20 @@ mod tests {
         assert!(
             feishu_requests[1]
                 .body
-                .contains("\\\"text\\\":\\\"structured inbound ack\\\""),
-            "websocket flow should still send the provider reply back through Feishu"
+                .contains("\"msg_type\":\"interactive\""),
+            "websocket flow should send markdown-capable interactive cards"
+        );
+        assert!(
+            feishu_requests[1]
+                .body
+                .contains("\\\"tag\\\":\\\"markdown\\\""),
+            "websocket flow should wrap the provider reply in a markdown card"
+        );
+        assert!(
+            feishu_requests[1]
+                .body
+                .contains("\\\"content\\\":\\\"## structured inbound ack\\\\n\\\\n- rendered\\\""),
+            "websocket flow should preserve provider markdown content"
         );
 
         provider_server.abort();
