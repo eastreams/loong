@@ -909,7 +909,7 @@ fn evaluate_family_readiness(
         accepted_source_integrity,
         warning_pressure,
     ];
-    checks.extend(evaluate_target_specific_readiness(artifacts, evidence));
+    checks.extend(evaluate_target_specific_readiness(artifacts));
     let status = if checks
         .iter()
         .any(|check| check.status == RuntimeCapabilityFamilyReadinessCheckStatus::Blocked)
@@ -928,7 +928,6 @@ fn evaluate_family_readiness(
 
 fn evaluate_target_specific_readiness(
     artifacts: &[RuntimeCapabilityArtifactDocument],
-    evidence: &RuntimeCapabilityEvidenceDigest,
 ) -> Vec<RuntimeCapabilityFamilyReadinessCheck> {
     let Some(target) = artifacts.first().map(|artifact| artifact.proposal.target) else {
         return Vec::new();
@@ -936,7 +935,38 @@ fn evaluate_target_specific_readiness(
 
     match target {
         RuntimeCapabilityTarget::MemoryStageProfile => {
-            vec![evaluate_memory_stage_profile_delta_evidence(evidence)]
+            let accepted_artifacts = artifacts
+                .iter()
+                .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+                .cloned()
+                .collect::<Vec<_>>();
+            let accepted_evidence = if accepted_artifacts.is_empty() {
+                RuntimeCapabilityEvidenceDigest {
+                    total_candidates: 0,
+                    reviewed_candidates: 0,
+                    undecided_candidates: 0,
+                    accepted_candidates: 0,
+                    rejected_candidates: 0,
+                    distinct_source_run_count: 0,
+                    distinct_experiment_count: 0,
+                    latest_candidate_at: None,
+                    latest_reviewed_at: None,
+                    source_decisions: RuntimeCapabilitySourceDecisionRollup {
+                        promoted: 0,
+                        rejected: 0,
+                        undecided: 0,
+                    },
+                    unique_warnings: Vec::new(),
+                    delta_candidate_count: 0,
+                    changed_surfaces: Vec::new(),
+                    metric_ranges: BTreeMap::new(),
+                }
+            } else {
+                build_family_evidence_digest(&accepted_artifacts)
+            };
+            vec![evaluate_memory_stage_profile_delta_evidence(
+                &accepted_evidence,
+            )]
         }
         RuntimeCapabilityTarget::ManagedSkill
         | RuntimeCapabilityTarget::ProgrammaticFlow

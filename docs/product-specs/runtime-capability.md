@@ -35,8 +35,9 @@ experiment should be crystallized into a reusable lower-layer capability.
 - [ ] Each capability family reports readiness as `ready`, `not_ready`, or
       `blocked` from explicit evidence checks rather than opaque heuristics.
 - [ ] `memory_stage_profile` families stay `not_ready` unless accepted
-      candidates include snapshot-delta evidence with at least one
-      memory-or-context-engine changed surface.
+      candidates include snapshot-delta evidence with at least one allowlisted
+      changed surface: `memory_selected`, `memory_policy`,
+      `context_engine_selected`, or `context_engine_compaction`.
 - [ ] `runtime-capability plan` resolves one indexed family into a dry-run
       promotion plan that describes the target lower-layer artifact, stable
       artifact id, blockers, approval checklist, rollback hints, provenance

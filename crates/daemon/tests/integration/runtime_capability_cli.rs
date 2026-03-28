@@ -1780,6 +1780,91 @@ fn runtime_capability_index_marks_memory_stage_profile_not_ready_without_memory_
 }
 
 #[test]
+fn runtime_capability_index_uses_accepted_memory_delta_evidence_only() {
+    let root =
+        unique_temp_dir("loongclaw-runtime-capability-index-memory-stage-profile-accepted-only");
+    let config_path = write_runtime_capability_config(&root);
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "memory-stage-profile-accepted",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(
+        &root,
+        "memory-stage-profile-rejected",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let candidate_a_path =
+        root.join("artifacts/runtime-capability-memory-stage-profile-accepted.json");
+    let candidate_b_path =
+        root.join("artifacts/runtime-capability-memory-stage-profile-rejected.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "memory-stage-profile-accepted",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile,
+        "Promote governed memory pipeline intent into a reusable profile",
+        "Governed memory pipeline promotion intent only",
+        &["memory_read"],
+        &["memory", "pipeline"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "memory-stage-profile-rejected",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile,
+        "Promote governed memory pipeline intent into a reusable profile",
+        "Governed memory pipeline promotion intent only",
+        &["memory_read"],
+        &["memory", "pipeline"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "memory-stage-profile-accepted",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Rejected,
+        "memory-stage-profile-rejected",
+    );
+
+    let report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+
+    let family = report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+    assert_eq!(
+        family.readiness.status,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessStatus::Blocked
+    );
+    assert!(
+        family.readiness.checks.iter().any(|check| {
+            check.dimension == "memory_delta_evidence"
+                && check.status
+                    == loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence
+        }),
+        "memory delta readiness should ignore rejected-only delta evidence"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_index_rejects_malformed_supported_artifact_during_scan() {
     let root = unique_temp_dir("loongclaw-runtime-capability-index-malformed");
     let config_path = write_runtime_capability_config(&root);
@@ -2577,10 +2662,12 @@ fn runtime_capability_plan_marks_memory_stage_profile_promotable_with_memory_del
         "ready memory-stage-profile family should pass memory delta evidence checks"
     );
     assert!(
-        plan.evidence
-            .changed_surfaces
-            .iter()
-            .any(|surface| surface == "memory_policy" || surface == "context_engine_compaction"),
+        plan.evidence.changed_surfaces.iter().any(|surface| {
+            surface == "memory_selected"
+                || surface == "memory_policy"
+                || surface == "context_engine_selected"
+                || surface == "context_engine_compaction"
+        }),
         "memory-stage-profile evidence should include memory/context surfaces"
     );
 
