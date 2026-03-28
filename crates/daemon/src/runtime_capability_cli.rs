@@ -215,14 +215,14 @@ pub struct RuntimeCapabilityMetricRange {
     pub max: f64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimeCapabilitySourceDecisionRollup {
     pub promoted: usize,
     pub rejected: usize,
     pub undecided: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct RuntimeCapabilityEvidenceDigest {
     pub total_candidates: usize,
     pub reviewed_candidates: usize,
@@ -941,26 +941,7 @@ fn evaluate_target_specific_readiness(
                 .cloned()
                 .collect::<Vec<_>>();
             let accepted_evidence = if accepted_artifacts.is_empty() {
-                RuntimeCapabilityEvidenceDigest {
-                    total_candidates: 0,
-                    reviewed_candidates: 0,
-                    undecided_candidates: 0,
-                    accepted_candidates: 0,
-                    rejected_candidates: 0,
-                    distinct_source_run_count: 0,
-                    distinct_experiment_count: 0,
-                    latest_candidate_at: None,
-                    latest_reviewed_at: None,
-                    source_decisions: RuntimeCapabilitySourceDecisionRollup {
-                        promoted: 0,
-                        rejected: 0,
-                        undecided: 0,
-                    },
-                    unique_warnings: Vec::new(),
-                    delta_candidate_count: 0,
-                    changed_surfaces: Vec::new(),
-                    metric_ranges: BTreeMap::new(),
-                }
+                RuntimeCapabilityEvidenceDigest::default()
             } else {
                 build_family_evidence_digest(&accepted_artifacts)
             };
@@ -1601,9 +1582,10 @@ fn build_runtime_capability_rollback_hints(
     planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
 ) -> Vec<String> {
     let capture_hint = match planned_artifact.target_kind {
-        RuntimeCapabilityTarget::MemoryStageProfile => {
-            "capture the current `memory_stage_profiles` state before applying this memory stage profile".to_owned()
-        }
+        RuntimeCapabilityTarget::MemoryStageProfile => format!(
+            "capture the current `{}` state before applying this memory stage profile",
+            planned_artifact.delivery_surface
+        ),
         RuntimeCapabilityTarget::ManagedSkill
         | RuntimeCapabilityTarget::ProgrammaticFlow
         | RuntimeCapabilityTarget::ProfileNoteAddendum => format!(

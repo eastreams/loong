@@ -661,24 +661,6 @@ fn rewrite_runtime_capability_proposal(
     .expect("persist runtime capability artifact");
 }
 
-fn rewrite_runtime_capability_target(candidate_path: &Path, target: &str) {
-    let mut payload = serde_json::from_str::<Value>(
-        &fs::read_to_string(candidate_path).expect("read runtime capability artifact"),
-    )
-    .expect("decode runtime capability artifact");
-    let proposal = payload
-        .as_object_mut()
-        .and_then(|artifact| artifact.get_mut("proposal"))
-        .and_then(Value::as_object_mut)
-        .expect("runtime capability artifact should include proposal");
-    proposal.insert("target".to_owned(), Value::String(target.to_owned()));
-    fs::write(
-        candidate_path,
-        serde_json::to_string_pretty(&payload).expect("encode runtime capability artifact"),
-    )
-    .expect("persist runtime capability artifact");
-}
-
 fn rewrite_runtime_capability_schema(candidate_path: &Path, surface: &str, purpose: &str) {
     let mut payload = serde_json::from_str::<Value>(
         &fs::read_to_string(candidate_path).expect("read runtime capability artifact"),
