@@ -970,17 +970,13 @@ fn search_query_signal_set(raw_query: &str) -> SearchSignalSet {
         .map(trim_structural_token)
         .filter(|token| !token.is_empty())
         .collect::<Vec<_>>();
-    let single_token_query = cleaned_tokens.len() == 1;
     let mut fragments = Vec::new();
 
     for token in cleaned_tokens {
         let has_path_separator = token.contains('/') || token.contains('\\');
-        let ambiguous_single_dot_token = token_is_ambiguous_single_dot_token(token);
         let host_like_path_token = has_path_separator && token_has_host_like_prefix(token);
         let url_like_token = token_looks_like_url(token);
-        let skip_token = url_like_token
-            || host_like_path_token
-            || (single_token_query && ambiguous_single_dot_token);
+        let skip_token = url_like_token || host_like_path_token;
 
         if skip_token {
             continue;
@@ -2224,5 +2220,15 @@ mod tests {
 
         assert!(!version_query.concepts.contains("file"));
         assert!(!numeric_query.concepts.contains("file"));
+    }
+
+    #[test]
+    fn single_dotted_identifier_queries_keep_search_signals() {
+        let query = SearchQuery::new("bash.exec");
+
+        assert!(query.signal.contains_term("bash"));
+        assert!(query.signal.contains_term("exec"));
+        assert!(query.signal.normalized_text.contains("bash.exec"));
+        assert!(!query.concepts.contains("file"));
     }
 }

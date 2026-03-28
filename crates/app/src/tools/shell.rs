@@ -2,13 +2,10 @@ use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
 use serde_json::{Value, json};
 #[cfg(feature = "tool-shell")]
-use std::process::Stdio;
+use std::path::PathBuf;
+
 #[cfg(feature = "tool-shell")]
-use std::time::Duration;
-#[cfg(feature = "tool-shell")]
-use std::{future::Future, path::PathBuf, thread};
-#[cfg(feature = "tool-shell")]
-use tokio::{io::AsyncReadExt, process::Command};
+use super::process_exec;
 
 pub(super) fn execute_shell_tool_with_config(
     request: ToolCoreRequest,
@@ -100,85 +97,24 @@ pub(super) fn execute_shell_tool_with_config(
 }
 
 #[cfg(feature = "tool-shell")]
-const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
-#[cfg(feature = "tool-shell")]
-const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
-#[cfg(feature = "tool-shell")]
-const SHELL_OUTPUT_CAP_BYTES: usize = 1_048_576;
-
-#[cfg(feature = "tool-shell")]
 fn parse_shell_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u64, String> {
     let timeout_ms = match payload.get("timeout_ms") {
         Some(timeout_ms) => timeout_ms
             .as_u64()
             .ok_or_else(|| "shell.exec payload.timeout_ms must be an integer".to_owned())?,
-        None => SHELL_EXEC_DEFAULT_TIMEOUT_MS,
+        None => process_exec::DEFAULT_TIMEOUT_MS,
     };
 
-    Ok(timeout_ms.clamp(1_000, SHELL_EXEC_MAX_TIMEOUT_MS))
+    Ok(timeout_ms.clamp(1_000, process_exec::MAX_TIMEOUT_MS))
 }
 
 #[cfg(feature = "tool-shell")]
 fn run_shell_async<F>(future: F) -> Result<F::Output, String>
 where
-    F: Future + Send,
+    F: std::future::Future + Send,
     F::Output: Send,
 {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            Ok(tokio::task::block_in_place(|| handle.block_on(future)))
-        }
-        Ok(_) => thread::scope(|scope| {
-            scope
-                .spawn(|| {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(|error| {
-                            format!("failed to create tokio runtime for shell tool: {error}")
-                        })?;
-                    Ok(rt.block_on(future))
-                })
-                .join()
-                .map_err(|_panic| "shell tool async worker thread panicked".to_owned())?
-        }),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| {
-                    format!("failed to create tokio runtime for shell tool: {error}")
-                })?;
-            Ok(rt.block_on(future))
-        }
-    }
-}
-
-#[cfg(feature = "tool-shell")]
-async fn read_capped<R>(mut reader: R, cap: usize, stream_name: &str) -> Result<Vec<u8>, String>
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut output = Vec::new();
-    let mut buffer = [0_u8; 8_192];
-
-    loop {
-        let read = reader
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("shell command {stream_name} read failed: {error}"))?;
-        if read == 0 {
-            break;
-        }
-
-        let remaining = cap.saturating_sub(output.len());
-        if remaining > 0 {
-            let to_copy = remaining.min(read);
-            output.extend(buffer.iter().take(to_copy).copied());
-        }
-    }
-
-    Ok(output)
+    process_exec::run_tool_async(future, "shell tool")
 }
 
 #[cfg(feature = "tool-shell")]
@@ -188,62 +124,5 @@ async fn run_shell_command_with_timeout(
     cwd: &std::path::Path,
     timeout_ms: u64,
 ) -> Result<std::process::Output, String> {
-    let mut child = Command::new(command)
-        .args(args)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|error| format!("shell command spawn failed: {error}"))?;
-
-    let duration = Duration::from_millis(timeout_ms.max(1));
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "shell command stdout pipe missing".to_owned())?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| "shell command stderr pipe missing".to_owned())?;
-
-    let stdout_task =
-        tokio::spawn(async move { read_capped(stdout, SHELL_OUTPUT_CAP_BYTES, "stdout").await });
-    let stderr_task =
-        tokio::spawn(async move { read_capped(stderr, SHELL_OUTPUT_CAP_BYTES, "stderr").await });
-
-    match tokio::time::timeout(duration, child.wait()).await {
-        Ok(Ok(status)) => {
-            let (stdout_result, stderr_result) = tokio::join!(stdout_task, stderr_task);
-            let stdout = stdout_result.map_err(|join_error| {
-                format!("shell command stdout reader panicked: {join_error}")
-            })??;
-            let stderr = stderr_result.map_err(|join_error| {
-                format!("shell command stderr reader panicked: {join_error}")
-            })??;
-
-            Ok(std::process::Output {
-                status,
-                stdout,
-                stderr,
-            })
-        }
-        Ok(Err(error)) => {
-            stdout_task.abort();
-            stderr_task.abort();
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = tokio::join!(stdout_task, stderr_task);
-            Err(format!("shell command wait failed: {error}"))
-        }
-        Err(_) => {
-            stdout_task.abort();
-            stderr_task.abort();
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-            let _ = tokio::join!(stdout_task, stderr_task);
-            Err(format!("shell command timed out after {timeout_ms}ms"))
-        }
-    }
+    process_exec::run_process_with_timeout(command, args, cwd, timeout_ms, "shell command").await
 }

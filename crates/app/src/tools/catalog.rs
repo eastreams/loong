@@ -222,6 +222,7 @@ pub enum ToolVisibilityGate {
     Delegate,
     Browser,
     BrowserCompanion,
+    BashRuntime,
     ExternalSkills,
     MemoryFileRoot,
     WebFetch,
@@ -1143,6 +1144,23 @@ fn build_tool_catalog() -> ToolCatalog {
         });
     }
 
+    #[cfg(feature = "tool-shell")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "bash.exec",
+            provider_name: "bash_exec",
+            aliases: &[],
+            description: "Execute bash commands",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BashRuntime,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: bash_exec_definition,
+        });
+    }
+
     #[cfg(feature = "tool-browser")]
     {
         descriptors.push(ToolDescriptor {
@@ -1384,8 +1402,31 @@ pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
     delegate_child_tool_view_for_config_with_delegate(config, false)
 }
 
+pub fn delegate_child_tool_view_for_runtime_config(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+) -> ToolView {
+    delegate_child_tool_view_for_runtime_config_with_delegate(config, runtime_config, false)
+}
+
 pub fn delegate_child_tool_view_for_config_with_delegate(
     config: &ToolConfig,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(config, None, allow_delegate)
+}
+
+pub fn delegate_child_tool_view_for_runtime_config_with_delegate(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+}
+
+fn build_delegate_child_tool_view(
+    config: &ToolConfig,
+    runtime_config: Option<&ToolRuntimeConfig>,
     allow_delegate: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
@@ -1411,10 +1452,10 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
                 }
             }
             name if allowlist.contains(name)
-                && tool_visibility_gate_enabled_for_runtime_view(
+                && tool_visibility_gate_enabled_for_delegate_child(
                     descriptor.visibility_gate,
                     config,
-                    false,
+                    runtime_config,
                 ) =>
             {
                 names.push(name);
@@ -1441,6 +1482,31 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     }
 
     ToolView::from_tool_names(names)
+}
+
+fn tool_visibility_gate_enabled_for_delegate_child(
+    gate: ToolVisibilityGate,
+    config: &ToolConfig,
+    runtime_config: Option<&ToolRuntimeConfig>,
+) -> bool {
+    match gate {
+        ToolVisibilityGate::BashRuntime => runtime_config.is_some_and(|config| {
+            tool_visibility_gate_enabled_for_runtime_policy(ToolVisibilityGate::BashRuntime, config)
+        }),
+        ToolVisibilityGate::Always
+        | ToolVisibilityGate::Sessions
+        | ToolVisibilityGate::SessionMutation
+        | ToolVisibilityGate::Messages
+        | ToolVisibilityGate::Delegate
+        | ToolVisibilityGate::Browser
+        | ToolVisibilityGate::BrowserCompanion
+        | ToolVisibilityGate::ExternalSkills
+        | ToolVisibilityGate::MemoryFileRoot
+        | ToolVisibilityGate::WebFetch
+        | ToolVisibilityGate::WebSearch => {
+            tool_visibility_gate_enabled_for_runtime_view(gate, config, false)
+        }
+    }
 }
 
 pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
@@ -1508,6 +1574,7 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => false,
+        ToolVisibilityGate::BashRuntime => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
         ToolVisibilityGate::MemoryFileRoot => config
             .file_root
@@ -1545,6 +1612,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
+        ToolVisibilityGate::BashRuntime => config.bash_exec.is_runtime_ready(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
         ToolVisibilityGate::MemoryFileRoot => {
             let has_file_root = config
@@ -2444,6 +2512,35 @@ fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn bash_exec_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Bash command to execute."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Optional command timeout in milliseconds. Defaults to 120000 and is clamped to 1000..=600000."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn approval_request_resolve_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3229,6 +3326,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
+        "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
         "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
@@ -3629,6 +3727,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("timeout_ms", "integer"),
             ("cwd", "string"),
         ],
+        "bash.exec" => &[
+            ("command", "string"),
+            ("cwd", "string"),
+            ("timeout_ms", "integer"),
+        ],
         "provider.switch" => &[("selector", "string")],
         "delegate" | "delegate_async" => &[
             ("task", "string"),
@@ -3713,6 +3816,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "file.write" => &["path", "content"],
         "file.edit" => &["path", "old_string", "new_string"],
         "shell.exec" => &["command"],
+        "bash.exec" => &["command"],
         "delegate" | "delegate_async" => &["task"],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[],
         "session_tool_policy_set" => &[],
@@ -3787,6 +3891,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "file.write" => &["file", "write", "filesystem"],
         "file.edit" => &["file", "edit", "filesystem"],
         "shell.exec" => &["shell", "command", "process", "exec"],
+        "bash.exec" => &["bash", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
         "delegate" | "delegate_async" => &["session", "delegate", "child"],
         "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear" => {
@@ -4002,6 +4107,37 @@ mod tests {
         let child_view = delegate_child_tool_view_for_config(&config);
 
         assert!(!child_view.contains("web.fetch"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_hides_allowlisted_bash_exec_without_runtime_visibility() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+
+        let child_view = delegate_child_tool_view_for_config(&config);
+
+        assert!(!child_view.contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_exposes_allowlisted_bash_exec_when_runtime_ready() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                warning: None,
+                login_shell: false,
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        let child_view = delegate_child_tool_view_for_runtime_config(&config, &runtime);
+
+        assert!(child_view.contains("bash.exec"));
     }
 
     #[test]

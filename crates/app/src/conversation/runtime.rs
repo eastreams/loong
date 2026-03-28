@@ -10,8 +10,8 @@ use crate::KernelContext;
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
-    ToolView, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate,
+    ToolView, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_with_delegate,
 };
 
 use super::super::memory;
@@ -265,6 +265,8 @@ fn build_base_tool_view_from_snapshot(
     session_id: &str,
     snapshot: Option<&PersistedSessionSnapshot>,
 ) -> CliResult<ToolView> {
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
     let Some(snapshot) = snapshot else {
         return Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
             config,
@@ -279,8 +281,9 @@ fn build_base_tool_view_from_snapshot(
                 if error.starts_with("session_lineage_broken:")
                     || error.starts_with("session_lineage_cycle_detected:") =>
             {
-                return Ok(delegate_child_tool_view_for_config_with_delegate(
+                return Ok(delegate_child_tool_view_for_runtime_config_with_delegate(
                     &config.tools,
+                    &tool_runtime_config,
                     false,
                 ));
             }
@@ -291,14 +294,18 @@ fn build_base_tool_view_from_snapshot(
             }
         };
         let allow_nested_delegate = depth < config.tools.delegate.max_depth;
-        return Ok(delegate_child_tool_view_for_config_with_delegate(
+        return Ok(delegate_child_tool_view_for_runtime_config_with_delegate(
             &config.tools,
+            &tool_runtime_config,
             allow_nested_delegate,
         ));
     }
 
     if snapshot.is_delegate_child {
-        return Ok(delegate_child_tool_view_for_config(&config.tools));
+        return Ok(delegate_child_tool_view_for_runtime_config(
+            &config.tools,
+            &tool_runtime_config,
+        ));
     }
 
     Ok(crate::tools::runtime_tool_view_from_loongclaw_config(

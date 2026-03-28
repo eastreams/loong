@@ -290,6 +290,62 @@ impl BrowserCompanionRuntimePolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BashExecRuntimePolicy {
+    pub available: bool,
+    pub command: Option<PathBuf>,
+    pub warning: Option<String>,
+    pub login_shell: bool,
+}
+
+impl BashExecRuntimePolicy {
+    #[must_use]
+    pub fn is_runtime_ready(&self) -> bool {
+        self.available && self.command.is_some()
+    }
+}
+
+#[allow(clippy::print_stderr)]
+fn emit_runtime_warning(warning: &str) {
+    eprintln!("warning: {warning}");
+}
+
+#[cfg(feature = "tool-shell")]
+fn cached_bash_exec_runtime_probe() -> BashExecRuntimePolicy {
+    static BASH_RUNTIME_PROBE: OnceLock<BashExecRuntimePolicy> = OnceLock::new();
+
+    BASH_RUNTIME_PROBE
+        .get_or_init(super::bash::detect_bash_runtime_policy)
+        .clone()
+}
+
+#[cfg(feature = "tool-shell")]
+fn emit_bash_runtime_warning_once(warning: &str) {
+    static BASH_RUNTIME_WARNING: OnceLock<()> = OnceLock::new();
+
+    BASH_RUNTIME_WARNING.get_or_init(|| emit_runtime_warning(warning));
+}
+
+fn build_bash_exec_runtime_policy(login_shell: bool) -> BashExecRuntimePolicy {
+    #[cfg(feature = "tool-shell")]
+    {
+        let mut policy = cached_bash_exec_runtime_probe();
+        if let Some(warning) = policy.warning.as_deref() {
+            emit_bash_runtime_warning_once(warning);
+        }
+        policy.login_shell = login_shell;
+        policy
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    {
+        BashExecRuntimePolicy {
+            login_shell,
+            ..BashExecRuntimePolicy::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSelfRuntimePolicy {
     pub max_source_chars: usize,
@@ -518,6 +574,7 @@ pub struct ToolRuntimeConfig {
     pub runtime_self: RuntimeSelfRuntimePolicy,
     pub browser: BrowserRuntimePolicy,
     pub browser_companion: BrowserCompanionRuntimePolicy,
+    pub bash_exec: BashExecRuntimePolicy,
     pub web_fetch: WebFetchRuntimePolicy,
     pub web_search: WebSearchRuntimePolicy,
     pub autonomy_profile: AutonomyProfile,
@@ -545,6 +602,7 @@ impl Default for ToolRuntimeConfig {
             runtime_self: RuntimeSelfRuntimePolicy::default(),
             browser: BrowserRuntimePolicy::default(),
             browser_companion: BrowserCompanionRuntimePolicy::default(),
+            bash_exec: BashExecRuntimePolicy::default(),
             web_fetch: WebFetchRuntimePolicy::default(),
             web_search: WebSearchRuntimePolicy::default(),
             autonomy_profile: AutonomyProfile::default(),
@@ -610,6 +668,7 @@ impl ToolRuntimeConfig {
                     .collect(),
                 browser_companion_enforce_allowed_domains,
             ),
+            bash_exec: build_bash_exec_runtime_policy(config.tools.bash.login_shell),
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
                 allow_private_hosts: config.tools.web.allow_private_hosts,
@@ -822,6 +881,7 @@ impl ToolRuntimeConfig {
             default_timeout_seconds: tool_execution_default_timeout,
             per_tool_timeout: tool_execution_per_tool_timeout,
         };
+        let bash_exec = build_bash_exec_runtime_policy(false);
 
         let browser_companion_allow_private_hosts = web_fetch_allow_private_hosts;
         let browser_companion_allowed_domains = web_fetch_allowed_domains.clone();
@@ -854,6 +914,7 @@ impl ToolRuntimeConfig {
                 browser_companion_blocked_domains,
                 browser_companion_enforce_allowed_domains,
             ),
+            bash_exec,
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
                 allow_private_hosts: web_fetch_allow_private_hosts,
@@ -1548,6 +1609,55 @@ mod tests {
         assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 1);
         assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
         assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
+    }
+
+    #[test]
+    fn tool_runtime_config_default_marks_bash_exec_unavailable() {
+        let config = ToolRuntimeConfig::default();
+
+        assert!(!config.bash_exec.is_runtime_ready());
+        assert!(config.bash_exec.command.is_none());
+        assert!(config.bash_exec.warning.is_none());
+        assert!(!config.bash_exec.login_shell);
+    }
+
+    #[test]
+    fn tool_runtime_config_projects_bash_login_shell_flag() {
+        let config: crate::config::ToolConfig =
+            toml::from_str("[bash]\nlogin_shell = true\n").expect("bash tool config");
+        let loongclaw = crate::config::LoongClawConfig {
+            tools: config,
+            ..crate::config::LoongClawConfig::default()
+        };
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&loongclaw, None);
+
+        assert!(runtime.bash_exec.login_shell);
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    #[test]
+    fn tool_runtime_config_from_loongclaw_config_does_not_probe_bash_when_tool_shell_disabled() {
+        let mut config = crate::config::LoongClawConfig::default();
+        config.tools.bash.login_shell = true;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert!(!runtime.bash_exec.available);
+        assert!(runtime.bash_exec.command.is_none());
+        assert!(runtime.bash_exec.warning.is_none());
+        assert!(runtime.bash_exec.login_shell);
+    }
+
+    #[cfg(not(feature = "tool-shell"))]
+    #[test]
+    fn tool_runtime_config_from_env_does_not_probe_bash_when_tool_shell_disabled() {
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert!(!runtime.bash_exec.available);
+        assert!(runtime.bash_exec.command.is_none());
+        assert!(runtime.bash_exec.warning.is_none());
+        assert!(!runtime.bash_exec.login_shell);
     }
 
     #[test]
