@@ -40,7 +40,7 @@ impl GatewayOwnerMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayOwnerStatus {
     pub runtime_dir: String,
     pub phase: String,

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::net::{IpAddr, SocketAddr};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::CHANNELS_CLI_JSON_LEGACY_VIEWS;
@@ -8,6 +9,8 @@ use crate::CHANNELS_CLI_JSON_SCHEMA_VERSION;
 use crate::RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION;
 use crate::RuntimeSnapshotCliState;
 use crate::mvp;
+
+use super::state::GatewayOwnerStatus;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayChannelInventorySchema {
@@ -212,6 +215,57 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub external_skills: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorControlSurfaceReadModel {
+    pub base_url: Option<String>,
+    pub loopback_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorChannelSurfaceReadModel {
+    pub channel_id: String,
+    pub label: String,
+    pub configured_account_count: usize,
+    pub enabled_account_count: usize,
+    pub misconfigured_account_count: usize,
+    pub ready_send_account_count: usize,
+    pub ready_serve_account_count: usize,
+    pub default_configured_account_id: Option<String>,
+    pub service_enabled: bool,
+    pub service_ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorChannelsSummaryReadModel {
+    pub catalog_channel_count: usize,
+    pub configured_channel_count: usize,
+    pub configured_account_count: usize,
+    pub enabled_account_count: usize,
+    pub misconfigured_account_count: usize,
+    pub runtime_backed_channel_count: usize,
+    pub enabled_service_channel_count: usize,
+    pub ready_service_channel_count: usize,
+    pub surfaces: Vec<GatewayOperatorChannelSurfaceReadModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorRuntimeSummaryReadModel {
+    pub enabled_channel_ids: Vec<String>,
+    pub enabled_service_channel_ids: Vec<String>,
+    pub visible_tool_count: usize,
+    pub capability_snapshot_sha256: String,
+    pub active_provider_profile_id: Option<String>,
+    pub active_provider_label: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatewayOperatorSummaryReadModel {
+    pub owner: GatewayOwnerStatus,
+    pub control_surface: GatewayOperatorControlSurfaceReadModel,
+    pub channels: GatewayOperatorChannelsSummaryReadModel,
+    pub runtime: GatewayOperatorRuntimeSummaryReadModel,
+}
+
 pub fn build_channel_inventory_read_model(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
@@ -335,6 +389,24 @@ pub fn build_runtime_snapshot_read_model(
         tool_runtime,
         tools,
         external_skills,
+    }
+}
+
+pub fn build_operator_summary_read_model(
+    owner_status: &GatewayOwnerStatus,
+    channel_inventory: &GatewayChannelInventoryReadModel,
+    runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+) -> GatewayOperatorSummaryReadModel {
+    let owner = owner_status.clone();
+    let control_surface = build_operator_control_surface_read_model(owner_status);
+    let channels = build_operator_channels_summary_read_model(channel_inventory, runtime_snapshot);
+    let runtime = build_operator_runtime_summary_read_model(runtime_snapshot);
+
+    GatewayOperatorSummaryReadModel {
+        owner,
+        control_surface,
+        channels,
+        runtime,
     }
 }
 
@@ -548,4 +620,206 @@ fn build_acp_dispatch_decision_read_model(
     };
 
     GatewayAcpDispatchDecisionReadModel { session, decision }
+}
+
+fn build_operator_control_surface_read_model(
+    owner_status: &GatewayOwnerStatus,
+) -> GatewayOperatorControlSurfaceReadModel {
+    let base_url = gateway_owner_base_url(owner_status);
+    let loopback_only = gateway_owner_control_is_loopback(owner_status);
+
+    GatewayOperatorControlSurfaceReadModel {
+        base_url,
+        loopback_only,
+    }
+}
+
+fn build_operator_channels_summary_read_model(
+    channel_inventory: &GatewayChannelInventoryReadModel,
+    runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+) -> GatewayOperatorChannelsSummaryReadModel {
+    let catalog_channel_count = channel_inventory.channel_catalog.len();
+    let configured_channel_count = channel_inventory
+        .channel_surfaces
+        .iter()
+        .filter(|surface| !surface.configured_accounts.is_empty())
+        .count();
+    let configured_account_count = channel_inventory.channels.len();
+    let enabled_account_count = channel_inventory
+        .channels
+        .iter()
+        .filter(|account| account.enabled)
+        .count();
+    let misconfigured_account_count = channel_inventory
+        .channels
+        .iter()
+        .filter(|account| channel_account_is_misconfigured(account))
+        .count();
+    let runtime_backed_channel_count = channel_inventory
+        .channel_catalog
+        .iter()
+        .filter(|channel| {
+            channel.implementation_status
+                == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+        })
+        .count();
+    let enabled_service_channel_ids = &runtime_snapshot.channels.enabled_service_channel_ids;
+    let enabled_service_channel_count = enabled_service_channel_ids.len();
+    let surfaces = build_operator_channel_surface_read_models(
+        &channel_inventory.channel_surfaces,
+        enabled_service_channel_ids,
+    );
+    let ready_service_channel_count = surfaces
+        .iter()
+        .filter(|surface| surface.service_ready)
+        .count();
+
+    GatewayOperatorChannelsSummaryReadModel {
+        catalog_channel_count,
+        configured_channel_count,
+        configured_account_count,
+        enabled_account_count,
+        misconfigured_account_count,
+        runtime_backed_channel_count,
+        enabled_service_channel_count,
+        ready_service_channel_count,
+        surfaces,
+    }
+}
+
+fn build_operator_channel_surface_read_models(
+    channel_surfaces: &[mvp::channel::ChannelSurface],
+    enabled_service_channel_ids: &[String],
+) -> Vec<GatewayOperatorChannelSurfaceReadModel> {
+    let mut surfaces = Vec::with_capacity(channel_surfaces.len());
+
+    for channel_surface in channel_surfaces {
+        let surface =
+            build_operator_channel_surface_read_model(channel_surface, enabled_service_channel_ids);
+        surfaces.push(surface);
+    }
+
+    surfaces
+}
+
+fn build_operator_channel_surface_read_model(
+    channel_surface: &mvp::channel::ChannelSurface,
+    enabled_service_channel_ids: &[String],
+) -> GatewayOperatorChannelSurfaceReadModel {
+    let channel_id = channel_surface.catalog.id.to_owned();
+    let label = channel_surface.catalog.label.to_owned();
+    let configured_account_count = channel_surface.configured_accounts.len();
+    let enabled_account_count = channel_surface
+        .configured_accounts
+        .iter()
+        .filter(|account| account.enabled)
+        .count();
+    let misconfigured_account_count = channel_surface
+        .configured_accounts
+        .iter()
+        .filter(|account| channel_account_is_misconfigured(account))
+        .count();
+    let ready_send_account_count = channel_surface
+        .configured_accounts
+        .iter()
+        .filter(|account| {
+            channel_account_operation_is_ready(account, mvp::channel::CHANNEL_OPERATION_SEND_ID)
+        })
+        .count();
+    let ready_serve_account_count = channel_surface
+        .configured_accounts
+        .iter()
+        .filter(|account| {
+            channel_account_operation_is_ready(account, mvp::channel::CHANNEL_OPERATION_SERVE_ID)
+        })
+        .count();
+    let default_configured_account_id = channel_surface.default_configured_account_id.clone();
+    let service_enabled = enabled_service_channel_ids.contains(&channel_id);
+    let service_ready = service_enabled && ready_serve_account_count > 0;
+
+    GatewayOperatorChannelSurfaceReadModel {
+        channel_id,
+        label,
+        configured_account_count,
+        enabled_account_count,
+        misconfigured_account_count,
+        ready_send_account_count,
+        ready_serve_account_count,
+        default_configured_account_id,
+        service_enabled,
+        service_ready,
+    }
+}
+
+fn build_operator_runtime_summary_read_model(
+    runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+) -> GatewayOperatorRuntimeSummaryReadModel {
+    let enabled_channel_ids = runtime_snapshot.channels.enabled_channel_ids.clone();
+    let enabled_service_channel_ids = runtime_snapshot
+        .channels
+        .enabled_service_channel_ids
+        .clone();
+    let visible_tool_count = runtime_snapshot.tools.visible_tool_count;
+    let capability_snapshot_sha256 = runtime_snapshot.tools.capability_snapshot_sha256.clone();
+    let active_provider_profile_id =
+        json_string_field(&runtime_snapshot.provider, "active_profile_id");
+    let active_provider_label = json_string_field(&runtime_snapshot.provider, "active_label");
+
+    GatewayOperatorRuntimeSummaryReadModel {
+        enabled_channel_ids,
+        enabled_service_channel_ids,
+        visible_tool_count,
+        capability_snapshot_sha256,
+        active_provider_profile_id,
+        active_provider_label,
+    }
+}
+
+fn channel_account_is_misconfigured(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    account
+        .operations
+        .iter()
+        .any(|operation| operation.health == mvp::channel::ChannelOperationHealth::Misconfigured)
+}
+
+fn channel_account_operation_is_ready(
+    account: &mvp::channel::ChannelStatusSnapshot,
+    operation_id: &str,
+) -> bool {
+    let operation = account.operation(operation_id);
+    let Some(operation) = operation else {
+        return false;
+    };
+
+    operation.health == mvp::channel::ChannelOperationHealth::Ready
+}
+
+fn gateway_owner_base_url(owner_status: &GatewayOwnerStatus) -> Option<String> {
+    let bind_address = owner_status.bind_address.as_deref()?;
+    let port = owner_status.port?;
+    let ip_address = bind_address.parse::<IpAddr>().ok()?;
+    let socket_address = SocketAddr::new(ip_address, port);
+    let base_url = format!("http://{socket_address}");
+    Some(base_url)
+}
+
+fn gateway_owner_control_is_loopback(owner_status: &GatewayOwnerStatus) -> bool {
+    let bind_address = owner_status.bind_address.as_deref();
+    let Some(bind_address) = bind_address else {
+        return false;
+    };
+
+    let ip_address = bind_address.parse::<IpAddr>();
+    let Ok(ip_address) = ip_address else {
+        return false;
+    };
+
+    ip_address.is_loopback()
+}
+
+fn json_string_field(value: &Value, field: &str) -> Option<String> {
+    let object = value.as_object()?;
+    let value = object.get(field)?;
+    let text = value.as_str()?;
+    Some(text.to_owned())
 }
