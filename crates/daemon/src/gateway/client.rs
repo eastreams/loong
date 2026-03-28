@@ -92,7 +92,11 @@ impl GatewayLocalClient {
     }
 
     pub fn from_discovery(discovery: GatewayLocalDiscovery) -> Self {
-        let http_client = Client::new();
+        let http_client = Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap_or_else(|_| Client::new());
 
         Self {
             discovery,

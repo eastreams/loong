@@ -365,11 +365,22 @@ fn authorize_request(headers: &HeaderMap, expected_token: &str) -> CliResult<()>
         return Err("Authorization header must use Bearer auth".to_owned());
     };
 
-    if provided_token != expected_token {
+    if !constant_time_eq(provided_token.as_bytes(), expected_token.as_bytes()) {
         return Err("invalid gateway bearer token".to_owned());
     }
 
     Ok(())
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
 fn build_gateway_channel_inventory_read_model(
