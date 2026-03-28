@@ -33,7 +33,8 @@ service boundary with unclear ownership and rising integration debt.
 - `multi-channel-serve` should be treated as the first runtime-owner precursor,
   not as the long-term product noun.
 - Gateway is required for the accepted product direction, but the early slices
-  can remain local-first, localhost-only by default, and operator-governed.
+  can remain localhost-only by default, security-governed, and
+  operator-governed while the broader service contract matures.
 
 ## Current Architecture Evidence
 
@@ -253,6 +254,29 @@ The main architectural reasons claw-style systems add an explicit gateway are:
 LoongClaw now faces the same product pressures. The lesson to borrow is unified
 service ownership, not an automatic jump to hosted multi-tenant semantics.
 
+## Security Default, Not Product Retreat
+
+The current localhost-only bind policy should be understood as a security
+default, not as a strategic refusal of broader gateway capability.
+
+More specifically, the current policy means:
+
+- the gateway should not be publicly exposed by default
+- widening bind scope requires an explicit auth, lifecycle, and observability
+  contract
+- current Web UI and operator flows should attach through the daemon-owned
+  gateway surface instead of inventing a second runtime
+
+It does not mean:
+
+- remote browser or mobile pairing is out of scope
+- always-on service ownership is out of scope
+- stable bind and port ownership are out of scope
+- richer long-lived channel runtimes are out of scope
+
+The architectural mistake to avoid is treating "localhost-only by default" as a
+product noun. It is a rollout and security posture for the current slice.
+
 ## Design Goals
 
 1. Add an explicit gateway service boundary above existing daemon/operator
@@ -280,6 +304,8 @@ service ownership, not an automatic jump to hosted multi-tenant semantics.
   polling runtimes should remain supervised tasks where appropriate.
 - Do not force immediate public-internet exposure as part of the first gateway
   slice.
+- Do not treat the current localhost-only default as evidence that future
+  service-mode or remote attachment work is undesired.
 - Do not commit this slice to a hosted multi-tenant SaaS contract.
 
 ## Core Idea
@@ -453,6 +479,18 @@ The protocol crate should remain generic enough to support:
 - future local or remote control channels
 
 without hard-coding gateway business semantics into protocol types.
+
+### 6. Default bind policy is a security boundary
+
+The gateway can remain localhost-only by default for the current slice without
+turning that posture into the long-term product boundary.
+
+That means:
+
+- current slices should prefer loopback-only bind by default
+- future service mode may introduce stable or configurable bind ownership
+- broader exposure must follow explicit auth, token, operator-control, and
+  observability work
 
 ## Proposed Command Surface
 
