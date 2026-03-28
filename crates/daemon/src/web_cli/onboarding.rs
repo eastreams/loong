@@ -254,7 +254,7 @@ fn apply_provider_request_to_config(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        provider.api_key = Some(api_key.to_owned());
+        provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(api_key.to_owned()));
     } else if kind_changed {
         provider.api_key = None;
         provider.set_api_key_env(kind.default_api_key_env().map(str::to_owned));

@@ -18,6 +18,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  BIN_NAME: loongclaw
+  ANDROID_NDK_VERSION: "27.3.13750724"
+  ANDROID_NDK_REVISION: "r27d"
+  ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
+  ANDROID_API_LEVEL: "24"
+
 jobs:
   governance:
     runs-on: ubuntu-latest
@@ -51,6 +58,7 @@ jobs:
           bash -n scripts/release_artifact_lib.sh
           bash -n scripts/bootstrap_release_local_artifacts.sh
           bash -n scripts/test_release_artifact_lib.sh
+          bash -n scripts/test_release_workflow_hardening.sh
           bash -n scripts/test_bootstrap_release_local_artifacts.sh
           bash -n scripts/test_promotion_guard_workflows.sh
           bash -n scripts/check-docs.sh
@@ -68,6 +76,7 @@ jobs:
           bash scripts/test_check_glibc_floor.sh
           bash scripts/test_install_sh.sh
           bash scripts/test_release_artifact_lib.sh
+          bash scripts/test_release_workflow_hardening.sh
           bash scripts/test_bootstrap_release_local_artifacts.sh
           bash scripts/test_promotion_guard_workflows.sh
           bash scripts/test_sync_github_labels.sh
@@ -115,8 +124,12 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   rust-test-default:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:
@@ -154,8 +167,12 @@ jobs:
           channel-cli,channel-telegram,channel-feishu,channel-matrix,config-toml,memory-sqlite,feishu-integration,tool-shell,tool-file,tool-browser,provider-openai,provider-anthropic,provider-bedrock,provider-volcengine
 
   rust-test-all-features:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     permissions:
       contents: read
     steps:
@@ -170,6 +187,56 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features --locked
+
+  android-termux-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
+        with:
+          targets: aarch64-linux-android
+
+      - name: Ensure active toolchain target
+        run: rustup target add aarch64-linux-android
+
+      - name: Cache Cargo Artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+      - name: Install Android NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_zip="android-ndk-${{ env.ANDROID_NDK_REVISION }}-linux.zip"
+          ndk_dir="android-ndk-${{ env.ANDROID_NDK_REVISION }}"
+          curl -fSL "https://dl.google.com/android/repository/${ndk_zip}" -o "${ndk_zip}"
+          echo "${{ env.ANDROID_NDK_LINUX_SHA256 }}  ${ndk_zip}" | shasum -a 256 --check -
+          unzip -q "${ndk_zip}"
+          [ -d "${ndk_dir}" ] || (echo "Missing extracted NDK directory: ${ndk_dir}" && exit 1)
+          rm -f "${ndk_zip}"
+          {
+            echo "ANDROID_NDK_HOME=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_ROOT=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_LATEST_HOME=${PWD}/${ndk_dir}"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release binary (Android/Termux)
+        shell: bash
+        env:
+          LOONGCLAW_RELEASE_BUILD: "1"
+        run: |
+          set -euo pipefail
+          toolchain="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
+          export AR_aarch64_linux_android="${toolchain}/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          cargo build --release --locked -p loongclaw-daemon --bin "${BIN_NAME}" --target aarch64-linux-android
 
   docs-build:
     runs-on: ubuntu-latest
@@ -198,6 +265,7 @@ jobs:
       - rust-test-default
       - rust-check-browser-without-webfetch
       - rust-test-all-features
+      - android-termux-build
       - docs-build
     runs-on: ubuntu-latest
     permissions:
@@ -210,6 +278,7 @@ jobs:
           RUST_TEST_DEFAULT_RESULT: ${{ needs.rust-test-default.result }}
           RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT: ${{ needs.rust-check-browser-without-webfetch.result }}
           RUST_TEST_ALL_FEATURES_RESULT: ${{ needs.rust-test-all-features.result }}
+          ANDROID_TERMUX_BUILD_RESULT: ${{ needs.android-termux-build.result }}
           DOCS_BUILD_RESULT: ${{ needs.docs-build.result }}
         run: |
           set -euo pipefail
@@ -228,4 +297,5 @@ jobs:
           check_result rust-test-default "$RUST_TEST_DEFAULT_RESULT"
           check_result rust-check-browser-without-webfetch "$RUST_CHECK_BROWSER_WITHOUT_WEBFETCH_RESULT"
           check_result rust-test-all-features "$RUST_TEST_ALL_FEATURES_RESULT"
+          check_result android-termux-build "$ANDROID_TERMUX_BUILD_RESULT"
           check_result docs-build "$DOCS_BUILD_RESULT"

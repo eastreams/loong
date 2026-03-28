@@ -95,9 +95,13 @@ mod tests {
     fn resolve_provider_auth_profiles_deduplicates_identical_bearer_headers() {
         let provider = ProviderConfig {
             kind: ProviderKind::Ollama,
-            api_key: Some("same-secret".to_owned()),
+            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                "same-secret".to_owned(),
+            )),
             api_key_env: None,
-            oauth_access_token: Some("same-secret".to_owned()),
+            oauth_access_token: Some(loongclaw_contracts::SecretRef::Inline(
+                "same-secret".to_owned(),
+            )),
             oauth_access_token_env: None,
             ..ProviderConfig::default()
         };
@@ -115,9 +119,13 @@ mod tests {
     fn resolve_provider_auth_profiles_uses_x_api_key_for_native_auth_providers() {
         let provider = ProviderConfig {
             kind: ProviderKind::Anthropic,
-            api_key: Some("anthropic-secret".to_owned()),
+            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                "anthropic-secret".to_owned(),
+            )),
             api_key_env: None,
-            oauth_access_token: Some("ignored-oauth".to_owned()),
+            oauth_access_token: Some(loongclaw_contracts::SecretRef::Inline(
+                "ignored-oauth".to_owned(),
+            )),
             oauth_access_token_env: None,
             ..ProviderConfig::default()
         };
@@ -158,7 +166,9 @@ mod tests {
     fn resolve_provider_auth_profiles_adds_bedrock_sigv4_fallback_after_bearer_profiles() {
         let provider = ProviderConfig {
             kind: ProviderKind::Bedrock,
-            api_key: Some("bedrock-bearer-token".to_owned()),
+            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                "bedrock-bearer-token".to_owned(),
+            )),
             api_key_env: None,
             oauth_access_token: None,
             oauth_access_token_env: None,

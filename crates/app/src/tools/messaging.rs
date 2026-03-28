@@ -1,6 +1,8 @@
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
+use super::payload::required_payload_string;
+
 use crate::config::{LoongClawConfig, ToolConfig};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
@@ -39,7 +41,7 @@ pub(crate) async fn execute_sessions_send_with_config(
             return Err("app_tool_disabled: messaging tools are disabled by config".to_owned());
         }
 
-        let session_id = required_payload_string(&payload, "session_id")?;
+        let session_id = required_payload_string(&payload, "session_id", "sessions_send")?;
         let text = required_payload_text(&payload)?;
         let text_length = text.chars().count();
 
@@ -88,16 +90,6 @@ pub(crate) async fn execute_sessions_send_with_config(
             }),
         })
     }
-}
-
-fn required_payload_string(payload: &Value, field: &str) -> Result<String, String> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("sessions_send requires payload.{field}"))
 }
 
 fn required_payload_text(payload: &Value) -> Result<String, String> {

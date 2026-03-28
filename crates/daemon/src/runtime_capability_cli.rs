@@ -1155,7 +1155,7 @@ fn persist_runtime_capability_artifact(
 }
 
 fn canonicalize_existing_path(path: &Path) -> CliResult<String> {
-    fs::canonicalize(path)
+    dunce::canonicalize(path)
         .map(|resolved| resolved.display().to_string())
         .map_err(|error| {
             format!(

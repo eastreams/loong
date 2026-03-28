@@ -134,6 +134,7 @@ fn bootstrap_kernel_context_with_audit_sink(
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([
             Capability::InvokeTool,
+            Capability::NetworkEgress,
             Capability::MemoryRead,
             Capability::MemoryWrite,
             Capability::FilesystemRead,
@@ -241,6 +242,24 @@ mod tests {
         assert!(
             journal.contains("\"TokenIssued\"") || journal.contains("\"token_id\""),
             "fanout journal should capture token issuance"
+        );
+    }
+
+    #[test]
+    fn bootstrap_kernel_context_with_config_grants_network_egress() {
+        let context =
+            bootstrap_kernel_context_with_config("test-agent", 60, &LoongClawConfig::default())
+                .expect("bootstrap with default config should succeed");
+
+        let allowed_capabilities = &context.token.allowed_capabilities;
+
+        assert!(
+            allowed_capabilities.contains(&Capability::InvokeTool),
+            "bootstrap token should retain invoke tool capability"
+        );
+        assert!(
+            allowed_capabilities.contains(&Capability::NetworkEgress),
+            "bootstrap token should grant network egress for kernel-bound web tools"
         );
     }
 }

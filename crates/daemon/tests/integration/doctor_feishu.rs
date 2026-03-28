@@ -15,8 +15,12 @@ fn sample_feishu_config(dir: &std::path::Path) -> mvp::config::LoongClawConfig {
     let mut config = mvp::config::LoongClawConfig::default();
     config.feishu.enabled = true;
     config.feishu.account_id = Some("feishu_main".to_owned());
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    config.feishu.app_secret = Some("app-secret".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "app-secret".to_owned(),
+    ));
     config.feishu_integration.sqlite_path = dir.join("feishu.sqlite3").display().to_string();
     config
 }

@@ -30,7 +30,9 @@ impl FilePolicyExtension {
 
     fn required_capability(tool_name: &str) -> Option<Capability> {
         match tool_name {
-            "file.read" | "claw.migrate" => Some(Capability::FilesystemRead),
+            "file.read" | "memory_search" | "memory_get" | "claw.migrate" => {
+                Some(Capability::FilesystemRead)
+            }
             "file.write" | "file.edit" => Some(Capability::FilesystemWrite),
             _ => None,
         }
@@ -339,6 +341,72 @@ mod tests {
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params = json!({"tool_name": "claw.migrate", "payload": {"input_path": "config.toml"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn memory_search_requires_filesystem_read() {
+        assert_eq!(
+            FilePolicyExtension::required_capability("memory_search"),
+            Some(Capability::FilesystemRead)
+        );
+
+        let ext = FilePolicyExtension::new(None);
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "memory_search", "payload": {"query": "deploy"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(matches!(
+            ext.authorize_extension(&ctx).unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
+    }
+
+    #[test]
+    fn memory_search_allowed_with_filesystem_read() {
+        let ext = FilePolicyExtension::new(None);
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "memory_search", "payload": {"query": "deploy"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn memory_get_requires_filesystem_read() {
+        let ext = FilePolicyExtension::new(None);
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "memory_get", "payload": {"path": "MEMORY.md"}});
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+        assert!(matches!(
+            ext.authorize_extension(&ctx).unwrap_err(),
+            PolicyError::ExtensionDenied { .. }
+        ));
+    }
+
+    #[test]
+    fn memory_get_allowed_with_filesystem_read() {
+        assert_eq!(
+            FilePolicyExtension::required_capability("memory_get"),
+            Some(Capability::FilesystemRead)
+        );
+
+        let ext = FilePolicyExtension::new(None);
+        let pack = test_pack();
+        let token = token_with_caps(BTreeSet::from([
+            Capability::InvokeTool,
+            Capability::FilesystemRead,
+        ]));
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let params = json!({"tool_name": "memory_get", "payload": {"path": "MEMORY.md"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
     }

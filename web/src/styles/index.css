@@ -908,8 +908,8 @@ html {
 .composer-input {
   width: 100%;
   resize: none;
-  min-height: 7.2rem;
-  max-height: 13rem;
+  min-height: 10.8rem;
+  max-height: 19.5rem;
   padding: 0.92rem 4.1rem 1rem 0.95rem;
   border: 1px solid var(--color-border);
   border-radius: 0.78rem;

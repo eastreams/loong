@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 #[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::config::LoongClawConfig;
 use crate::{CliResult, KernelContext};
@@ -10,9 +10,37 @@ use crate::{CliResult, KernelContext};
 use crate::memory;
 use std::collections::BTreeSet;
 
+#[cfg(feature = "memory-sqlite")]
+use super::compaction::{CompactPolicy, compact_window};
 use super::runtime_binding::ConversationRuntimeBinding;
 
 pub const CONTEXT_ENGINE_API_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContextArtifactKind {
+    SystemPrompt,
+    Profile,
+    Summary,
+    RetrievedMemory,
+    ConversationTurn,
+    ToolResult,
+    ToolHint,
+    RuntimeContract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ToolOutputStreamingPolicy {
+    BufferFull,
+    StreamChunks,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextArtifactDescriptor {
+    pub message_index: usize,
+    pub artifact_kind: ContextArtifactKind,
+    pub maskable: bool,
+    pub streaming_policy: ToolOutputStreamingPolicy,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ContextEngineCapability {
@@ -70,6 +98,7 @@ impl ContextEngineMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AssembledConversationContext {
     pub messages: Vec<Value>,
+    pub artifacts: Vec<ContextArtifactDescriptor>,
     pub estimated_tokens: Option<usize>,
     pub system_prompt_addition: Option<String>,
 }
@@ -78,6 +107,7 @@ impl AssembledConversationContext {
     pub fn from_messages(messages: Vec<Value>) -> Self {
         Self {
             messages,
+            artifacts: Vec::new(),
             estimated_tokens: None,
             system_prompt_addition: None,
         }
@@ -299,6 +329,25 @@ pub struct DefaultContextEngine;
 #[derive(Default)]
 pub struct LegacyContextEngine;
 
+#[cfg(feature = "memory-sqlite")]
+struct CompactionWindowSnapshot {
+    turns: Vec<memory::WindowTurn>,
+    turn_count: Option<usize>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl CompactionWindowSnapshot {
+    fn is_complete_session_snapshot(&self) -> bool {
+        matches!(self.turn_count, Some(turn_count) if turn_count == self.turns.len())
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+enum PersistMemoryWindowOutcome {
+    Persisted,
+    Conflict,
+}
+
 #[async_trait]
 impl ConversationContextEngine for DefaultContextEngine {
     fn id(&self) -> &'static str {
@@ -307,10 +356,123 @@ impl ConversationContextEngine for DefaultContextEngine {
 
     fn metadata(&self) -> ContextEngineMetadata {
         #[cfg(feature = "memory-sqlite")]
-        let capabilities = [ContextEngineCapability::KernelMemoryWindowRead];
+        let capabilities = [
+            ContextEngineCapability::KernelMemoryWindowRead,
+            ContextEngineCapability::ContextCompaction,
+        ];
         #[cfg(not(feature = "memory-sqlite"))]
         let capabilities: [ContextEngineCapability; 0] = [];
         ContextEngineMetadata::new("default", capabilities)
+    }
+
+    async fn compact_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        _messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        #[cfg(feature = "memory-sqlite")]
+        {
+            const MAX_COMPACTION_CONFLICT_RETRIES: usize = 3;
+            let memory_config =
+                memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+            for _ in 0..MAX_COMPACTION_CONFLICT_RETRIES {
+                let context_entries =
+                    load_memory_context_entries(&memory_config, session_id, kernel_ctx).await?;
+                let has_summary_checkpoint = context_entries
+                    .into_iter()
+                    .any(|entry| entry.kind == memory::MemoryContextKind::Summary);
+                if has_summary_checkpoint {
+                    return Ok(());
+                }
+
+                let snapshot = load_memory_window_snapshot(config, session_id, kernel_ctx).await?;
+                if !snapshot.is_complete_session_snapshot() {
+                    return Ok(());
+                }
+                let preserve_recent_turns = config
+                    .conversation
+                    .compact_preserve_recent_turns()
+                    .min(config.memory.sliding_window.saturating_sub(1));
+                if preserve_recent_turns == 0 {
+                    return Ok(());
+                }
+                let Some(compacted) =
+                    compact_window(&snapshot.turns, CompactPolicy::new(preserve_recent_turns))
+                else {
+                    return Ok(());
+                };
+
+                match persist_memory_window(session_id, &compacted, snapshot.turn_count, kernel_ctx)
+                    .await?
+                {
+                    PersistMemoryWindowOutcome::Persisted => return Ok(()),
+                    PersistMemoryWindowOutcome::Conflict => continue,
+                }
+            }
+
+            Err("context compaction aborted after repeated concurrent turn updates".to_owned())
+        }
+
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = (config, session_id, kernel_ctx);
+            Ok(())
+        }
+    }
+
+    async fn assemble_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<AssembledConversationContext> {
+        if !binding.is_kernel_bound() {
+            let projected = crate::provider::build_projected_context_for_session(
+                config,
+                session_id,
+                include_system_prompt,
+            )?;
+            return Ok(AssembledConversationContext {
+                messages: projected.messages,
+                artifacts: projected.artifacts,
+                estimated_tokens: None,
+                system_prompt_addition: None,
+            });
+        }
+
+        #[cfg(feature = "memory-sqlite")]
+        {
+            let kernel_ctx = binding
+                .kernel_context()
+                .ok_or_else(|| "kernel-bound context engine requires kernel context".to_owned())?;
+            let provider_binding = crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx);
+            let envelope = load_stage_envelope(config, session_id, binding).await?;
+            let projected = crate::provider::project_hydrated_memory_context_for_view_with_binding(
+                config,
+                include_system_prompt,
+                &crate::tools::runtime_tool_view(),
+                provider_binding,
+                &envelope.hydrated,
+            )
+            .await;
+            return Ok(AssembledConversationContext {
+                messages: projected.messages,
+                artifacts: projected.artifacts,
+                estimated_tokens: None,
+                system_prompt_addition: None,
+            });
+        }
+
+        #[cfg(not(feature = "memory-sqlite"))]
+        {
+            let _ = binding;
+            crate::provider::build_messages_for_session(config, session_id, include_system_prompt)
+                .map(AssembledConversationContext::from_messages)
+        }
     }
 
     async fn assemble_messages(
@@ -320,35 +482,9 @@ impl ConversationContextEngine for DefaultContextEngine {
         include_system_prompt: bool,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<Vec<Value>> {
-        if !binding.is_kernel_bound() {
-            return crate::provider::build_messages_for_session(
-                config,
-                session_id,
-                include_system_prompt,
-            );
-        }
-
-        #[cfg_attr(not(feature = "memory-sqlite"), allow(unused_mut))]
-        let mut messages = crate::provider::build_base_messages(config, include_system_prompt);
-
-        #[cfg(feature = "memory-sqlite")]
-        {
-            let turns = load_memory_window(config, session_id, binding).await?;
-            for turn in turns {
-                crate::provider::push_history_message(
-                    &mut messages,
-                    turn.role.as_str(),
-                    turn.content.as_str(),
-                );
-            }
-        }
-
-        #[cfg(not(feature = "memory-sqlite"))]
-        {
-            let _ = (session_id, binding);
-        }
-
-        Ok(messages)
+        self.assemble_context(config, session_id, include_system_prompt, binding)
+            .await
+            .map(|assembled| assembled.messages)
     }
 }
 
@@ -373,50 +509,162 @@ impl ConversationContextEngine for LegacyContextEngine {
     }
 }
 
+async fn load_memory_window_snapshot(
+    config: &LoongClawConfig,
+    session_id: &str,
+    kernel_ctx: &KernelContext,
+) -> CliResult<CompactionWindowSnapshot> {
+    const MAX_COMPACTION_WINDOW_TURNS: usize = 512;
+
+    let request = loongclaw_contracts::MemoryCoreRequest {
+        operation: memory::MEMORY_OP_WINDOW.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "limit": MAX_COMPACTION_WINDOW_TURNS,
+            "allow_extended_limit": true,
+        }),
+    };
+    let caps = BTreeSet::from([Capability::MemoryRead]);
+    let outcome = kernel_ctx
+        .kernel
+        .execute_memory_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .map_err(|error| format!("load memory window via kernel failed: {error}"))?;
+
+    if outcome.status != "ok" {
+        return Err(format!(
+            "load memory window via kernel returned non-ok status: {}",
+            outcome.status
+        ));
+    }
+
+    let _ = config;
+    Ok(CompactionWindowSnapshot {
+        turns: memory::decode_window_turns(&outcome.payload),
+        turn_count: memory::decode_window_turn_count(&outcome.payload),
+    })
+}
+
 #[cfg(feature = "memory-sqlite")]
-async fn load_memory_window(
+async fn load_memory_context_entries(
+    config: &memory::runtime_config::MemoryRuntimeConfig,
+    session_id: &str,
+    kernel_ctx: &KernelContext,
+) -> CliResult<Vec<memory::MemoryContextEntry>> {
+    let request = memory::build_read_context_request(session_id, config);
+    let caps = BTreeSet::from([Capability::MemoryRead]);
+    let outcome = kernel_ctx
+        .kernel
+        .execute_memory_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .map_err(|error| format!("load memory context via kernel failed: {error}"))?;
+
+    if outcome.status != "ok" {
+        return Err(format!(
+            "load memory context via kernel returned non-ok status: {}",
+            outcome.status
+        ));
+    }
+
+    Ok(memory::decode_memory_context_entries(&outcome.payload))
+}
+
+async fn persist_memory_window(
+    session_id: &str,
+    turns: &[memory::WindowTurn],
+    expected_turn_count: Option<usize>,
+    kernel_ctx: &KernelContext,
+) -> CliResult<PersistMemoryWindowOutcome> {
+    let request = memory::build_replace_turns_request_with_expectation(
+        session_id,
+        turns,
+        expected_turn_count,
+    );
+    let caps = BTreeSet::from([Capability::MemoryWrite]);
+    let outcome = kernel_ctx
+        .kernel
+        .execute_memory_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .map_err(|error| format!("persist compacted memory window via kernel failed: {error}"))?;
+
+    match outcome.status.as_str() {
+        "ok" => Ok(PersistMemoryWindowOutcome::Persisted),
+        "conflict" => Ok(PersistMemoryWindowOutcome::Conflict),
+        _ => Err(format!(
+            "persist compacted memory window via kernel returned non-ok status: {}",
+            outcome.status
+        )),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn load_stage_envelope(
     config: &LoongClawConfig,
     session_id: &str,
     binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<Vec<memory::WindowTurn>> {
-    use std::collections::BTreeSet;
-
+) -> CliResult<memory::StageEnvelope> {
     if let Some(ctx) = binding.kernel_context() {
-        let request = memory::build_window_request(session_id, config.memory.sliding_window);
+        let runtime_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let workspace_root = config
+            .tools
+            .file_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|_| config.tools.resolved_file_root());
+        let request = memory::build_read_stage_envelope_request_with_workspace_root(
+            session_id,
+            workspace_root.as_deref(),
+            &runtime_config,
+        );
         let caps = BTreeSet::from([Capability::MemoryRead]);
         let outcome = ctx
             .kernel
             .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
             .await
-            .map_err(|error| format!("load memory window via kernel failed: {error}"))?;
+            .map_err(|error| format!("load staged memory envelope via kernel failed: {error}"))?;
 
         if outcome.status != "ok" {
             return Err(format!(
-                "load memory window via kernel returned non-ok status: {}",
+                "load staged memory envelope via kernel returned non-ok status: {}",
                 outcome.status
             ));
         }
 
-        return Ok(memory::decode_window_turns(&outcome.payload));
+        return memory::decode_stage_envelope(&outcome.payload)
+            .ok_or_else(|| "decode staged memory envelope via kernel failed".to_owned());
     }
 
     let runtime_config =
         memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let turns = memory::window_direct(session_id, config.memory.sliding_window, &runtime_config)
-        .map_err(|error| format!("load memory window failed: {error}"))?;
-    Ok(turns
-        .into_iter()
-        .map(|turn| memory::WindowTurn {
-            role: turn.role,
-            content: turn.content,
-            ts: Some(turn.ts),
-        })
-        .collect())
+    memory::hydrate_stage_envelope(session_id, &runtime_config)
+        .map_err(|error| format!("load staged memory envelope failed: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MemoryProfile;
+    use crate::test_support::TurnTestHarness;
 
     #[test]
     fn default_engine_metadata_has_stable_identity() {
@@ -456,5 +704,280 @@ mod tests {
             ContextEngineCapability::SubagentLifecycle.as_str(),
             "subagent_lifecycle"
         );
+    }
+
+    #[test]
+    fn assembled_context_from_messages_defaults_to_empty_artifacts() {
+        let assembled = AssembledConversationContext::from_messages(vec![Value::Null]);
+        assert!(assembled.artifacts.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_assembles_runtime_self_through_kernel_audit_path() {
+        let harness = TurnTestHarness::with_capabilities(std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]));
+        let agents_path = harness.temp_dir.join("AGENTS.md");
+        let agents_text = "Keep runtime self reads on the audited path.";
+
+        std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+
+        let messages = DefaultContextEngine
+            .assemble_messages(
+                &config,
+                "kernel-runtime-self-session",
+                true,
+                ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx)),
+            )
+            .await
+            .expect("assemble messages");
+
+        let system_content = messages[0]["content"].as_str().expect("system content");
+
+        assert!(system_content.contains(agents_text));
+
+        let audit_events = harness.audit.snapshot();
+        let has_tool_plane_event = audit_events.iter().any(|event| {
+            matches!(
+                &event.kind,
+                loongclaw_kernel::AuditEventKind::PlaneInvoked {
+                    plane: loongclaw_contracts::ExecutionPlane::Tool,
+                    ..
+                }
+            )
+        });
+
+        assert!(
+            has_tool_plane_event,
+            "kernel-bound runtime self loading should emit tool-plane audit"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_messages_match_provider_summary_projection() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-summary-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let mut config = LoongClawConfig::default();
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.profile = MemoryProfile::WindowPlusSummary;
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = sqlite_path_text.clone();
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+        memory::append_turn_direct(session_id, "user", "turn 1", &memory_config)
+            .expect("append turn 1 should succeed");
+        memory::append_turn_direct(session_id, "assistant", "turn 2", &memory_config)
+            .expect("append turn 2 should succeed");
+        memory::append_turn_direct(session_id, "user", "turn 3", &memory_config)
+            .expect("append turn 3 should succeed");
+        memory::append_turn_direct(session_id, "assistant", "turn 4", &memory_config)
+            .expect("append turn 4 should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_messages = DefaultContextEngine
+            .assemble_messages(&config, session_id, true, binding)
+            .await
+            .expect("assemble messages");
+        let provider_messages =
+            crate::provider::build_messages_for_session(&config, session_id, true)
+                .expect("build provider messages");
+
+        assert_eq!(
+            kernel_messages, provider_messages,
+            "kernel-bound assembly should preserve summary projection parity"
+        );
+        assert!(
+            kernel_messages.iter().any(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Memory Summary"))
+            }),
+            "expected kernel-bound assembly to keep the summary block"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_messages_match_provider_profile_projection() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-profile-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let profile_note = "Imported ZeroClaw preferences";
+        let mut config = LoongClawConfig::default();
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.profile = MemoryProfile::ProfilePlusWindow;
+        config.memory.profile_note = Some(profile_note.to_owned());
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = sqlite_path_text.clone();
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+        memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
+            .expect("append turn should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_messages = DefaultContextEngine
+            .assemble_messages(&config, session_id, true, binding)
+            .await
+            .expect("assemble messages");
+        let provider_messages =
+            crate::provider::build_messages_for_session(&config, session_id, true)
+                .expect("build provider messages");
+
+        assert_eq!(
+            kernel_messages, provider_messages,
+            "kernel-bound assembly should preserve profile projection parity"
+        );
+        assert!(
+            kernel_messages.iter().any(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains(profile_note))
+            }),
+            "expected kernel-bound assembly to keep the profile block"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_messages_match_provider_durable_recall_projection() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-durable-recall-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let curated_memory_path = harness.temp_dir.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write durable recall");
+
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.sqlite_path = sqlite_path_text;
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_messages = DefaultContextEngine
+            .assemble_messages(&config, session_id, true, binding)
+            .await
+            .expect("assemble messages");
+        let provider_messages =
+            crate::provider::build_messages_for_session(&config, session_id, true)
+                .expect("build provider messages");
+
+        assert_eq!(
+            kernel_messages, provider_messages,
+            "kernel-bound assembly should preserve durable recall projection parity"
+        );
+        assert!(
+            kernel_messages.iter().any(|message| {
+                message["role"] == "system"
+                    && message["content"].as_str().is_some_and(|content| {
+                        content.contains("## Advisory Durable Recall")
+                            && content.contains("Remember the deploy freeze window.")
+                    })
+            }),
+            "expected kernel-bound assembly to keep the durable recall block"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-governed-profile-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let profile_note = "# Identity\n\n- Name: Advisory shadow";
+        let mut config = LoongClawConfig::default();
+
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.profile = MemoryProfile::ProfilePlusWindow;
+        config.memory.profile_note = Some(profile_note.to_owned());
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = sqlite_path_text.clone();
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+        memory::append_turn_direct(session_id, "assistant", "turn 1", &memory_config)
+            .expect("append turn should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let kernel_messages = DefaultContextEngine
+            .assemble_messages(&config, session_id, true, binding)
+            .await
+            .expect("assemble messages");
+        let provider_messages =
+            crate::provider::build_messages_for_session(&config, session_id, true)
+                .expect("build provider messages");
+
+        assert_eq!(
+            kernel_messages, provider_messages,
+            "kernel-bound assembly should preserve governed profile projection parity"
+        );
+
+        let profile_message = kernel_messages
+            .iter()
+            .find(|message| {
+                message["role"] == "system"
+                    && message["content"]
+                        .as_str()
+                        .is_some_and(|content| content.contains("## Session Profile"))
+            })
+            .expect("profile message");
+        let profile_content = profile_message["content"]
+            .as_str()
+            .expect("profile content");
+
+        assert!(profile_content.contains("Advisory reference heading: Identity"));
+        assert!(profile_content.contains("- Name: Advisory shadow"));
+        assert!(!profile_content.contains("\n# Identity\n"));
     }
 }

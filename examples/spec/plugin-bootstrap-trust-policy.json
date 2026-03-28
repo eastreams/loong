@@ -1,0 +1,63 @@
+{
+  "pack": {
+    "pack_id": "plugin-bootstrap-trust-policy-pack",
+    "domain": "platform",
+    "version": "0.1.0",
+    "default_route": {
+      "harness_kind": "EmbeddedPi",
+      "adapter": "pi-local"
+    },
+    "allowed_connectors": [],
+    "granted_capabilities": [],
+    "metadata": {
+      "owner": "platform-team",
+      "stage": "plugin-trust-policy"
+    }
+  },
+  "agent_id": "agent-plugin-bootstrap-trust-policy",
+  "ttl_s": 120,
+  "approval": {
+    "mode": "disabled"
+  },
+  "plugin_scan": {
+    "enabled": true,
+    "roots": [
+      "examples/plugins-process"
+    ]
+  },
+  "bridge_support": {
+    "enabled": true,
+    "supported_bridges": [
+      "process_stdio"
+    ],
+    "supported_adapter_families": [],
+    "enforce_supported": true,
+    "policy_version": "v1",
+    "execute_process_stdio": false,
+    "execute_http_json": false,
+    "allowed_process_commands": [],
+    "enforce_execution_success": false
+  },
+  "bootstrap": {
+    "enabled": true,
+    "allow_http_json_auto_apply": false,
+    "allow_process_stdio_auto_apply": true,
+    "allow_native_ffi_auto_apply": false,
+    "allow_wasm_component_auto_apply": false,
+    "allow_mcp_server_auto_apply": false,
+    "allow_acp_bridge_auto_apply": false,
+    "allow_acp_runtime_auto_apply": false,
+    "block_unverified_high_risk_auto_apply": true,
+    "enforce_ready_execution": true,
+    "max_tasks": 8
+  },
+  "auto_provision": null,
+  "hotfixes": [],
+  "operation": {
+    "kind": "task",
+    "task_id": "plugin-bootstrap-trust-policy-task",
+    "objective": "should block auto-apply for an unverified high-risk plugin until trust review is complete",
+    "required_capabilities": [],
+    "payload": {}
+  }
+}

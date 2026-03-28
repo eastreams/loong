@@ -57,6 +57,7 @@ async fn run_spec_pressure_once_rejects_native_claw_migrate_scenarios() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: loongclaw_spec::OperationSpec::ToolCore {
             tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -105,6 +106,7 @@ async fn run_spec_pressure_once_uses_native_executor_when_present() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: loongclaw_spec::OperationSpec::ToolCore {
             tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -155,6 +157,7 @@ async fn run_spec_pressure_once_errors_when_executor_declines_native_request() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: loongclaw_spec::OperationSpec::ToolCore {
             tool_name: "claw.migrate".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -208,6 +211,7 @@ fn spec_requires_native_tool_executor_detects_claw_migration_extension() {
         bootstrap: None,
         auto_provision: None,
         hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
         operation: loongclaw_spec::OperationSpec::ToolExtension {
             extension_action: "plan".to_owned(),
             required_capabilities: BTreeSet::from([Capability::InvokeTool]),

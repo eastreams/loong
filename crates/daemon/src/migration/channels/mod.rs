@@ -10,6 +10,7 @@ use super::types::{
 mod feishu;
 mod matrix;
 mod telegram;
+mod wecom;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChannelPreview {
@@ -45,6 +46,9 @@ pub struct ChannelNextAction {
     pub command: String,
 }
 
+pub(crate) const CHANNEL_CATALOG_ACTION_ID: &str = "channel_catalog";
+const CHANNEL_CATALOG_ACTION_LABEL: &str = "channels";
+
 struct ChannelAdapter {
     id: &'static str,
     collect_preview:
@@ -57,7 +61,7 @@ struct ChannelAdapter {
     apply_default_env_bindings: fn(&mut mvp::config::LoongClawConfig) -> Vec<String>,
 }
 
-const REGISTRY: [ChannelAdapter; 3] = [
+const REGISTRY: [ChannelAdapter; 4] = [
     ChannelAdapter {
         id: telegram::ID,
         collect_preview: telegram::collect_preview,
@@ -87,6 +91,16 @@ const REGISTRY: [ChannelAdapter; 3] = [
         collect_preflight_checks: matrix::collect_preflight_checks,
         collect_doctor_checks: matrix::collect_doctor_checks,
         apply_default_env_bindings: matrix::apply_default_env_bindings,
+    },
+    ChannelAdapter {
+        id: wecom::ID,
+        collect_preview: wecom::collect_preview,
+        apply: wecom::apply,
+        readiness_state: wecom::readiness_state,
+        apply_import_readiness: wecom::apply_import_readiness,
+        collect_preflight_checks: wecom::collect_preflight_checks,
+        collect_doctor_checks: wecom::collect_doctor_checks,
+        apply_default_env_bindings: wecom::apply_default_env_bindings,
     },
 ];
 
@@ -186,23 +200,60 @@ pub fn collect_channel_next_actions(
     config: &mvp::config::LoongClawConfig,
     config_path: &str,
 ) -> Vec<ChannelNextAction> {
-    enabled_channel_adapters(config)
+    let configured_actions = collect_configured_runtime_channel_next_actions(config, config_path);
+    if !configured_actions.is_empty() {
+        return configured_actions;
+    }
+
+    vec![build_channel_catalog_next_action(config_path)]
+}
+
+fn collect_configured_runtime_channel_next_actions(
+    config: &mvp::config::LoongClawConfig,
+    config_path: &str,
+) -> Vec<ChannelNextAction> {
+    let enabled_channel_ids = collect_enabled_service_channel_ids(config);
+    if enabled_channel_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let inventory = mvp::channel::channel_inventory(config);
+    inventory
+        .channel_surfaces
         .into_iter()
-        .filter_map(|adapter| {
-            mvp::config::channel_descriptor(adapter.id).and_then(|descriptor| {
-                descriptor
-                    .serve_subcommand
-                    .map(|subcommand| ChannelNextAction {
-                        id: adapter.id,
-                        label: descriptor.label,
-                        command: crate::cli_handoff::format_subcommand_with_config(
-                            subcommand,
-                            config_path,
-                        ),
-                    })
+        .filter(|surface| enabled_channel_ids.contains(surface.catalog.id))
+        .filter_map(|surface| {
+            let serve_operation = surface
+                .catalog
+                .operation(mvp::channel::CHANNEL_OPERATION_SERVE_ID)?;
+            if serve_operation.availability
+                != mvp::channel::ChannelCatalogOperationAvailability::Implemented
+            {
+                return None;
+            }
+
+            Some(ChannelNextAction {
+                id: surface.catalog.id,
+                label: surface.catalog.label,
+                command: crate::cli_handoff::format_subcommand_with_config(
+                    serve_operation.command,
+                    config_path,
+                ),
             })
         })
         .collect()
+}
+
+fn collect_enabled_service_channel_ids(config: &mvp::config::LoongClawConfig) -> BTreeSet<String> {
+    config.enabled_service_channel_ids().into_iter().collect()
+}
+
+fn build_channel_catalog_next_action(config_path: &str) -> ChannelNextAction {
+    ChannelNextAction {
+        id: CHANNEL_CATALOG_ACTION_ID,
+        label: CHANNEL_CATALOG_ACTION_LABEL,
+        command: crate::cli_handoff::format_subcommand_with_config("channels", config_path),
+    }
 }
 
 fn enabled_channel_adapters(config: &mvp::config::LoongClawConfig) -> Vec<&'static ChannelAdapter> {

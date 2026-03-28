@@ -1035,44 +1035,11 @@ fn validate_programmatic_circuit_breakers(
                 "connector_circuit_breakers contains an empty connector key",
             ));
         }
-        if policy.failure_threshold == 0 {
+        let validation_context = format!("connector_circuit_breakers[{connector_name}]");
+        if let Err(error) = validate_connector_circuit_breaker_policy(policy, &validation_context) {
             return Err(programmatic_error(
                 ProgrammaticErrorCode::InvalidSpec,
-                format!(
-                    "connector_circuit_breakers[{connector_name}] failure_threshold must be greater than 0"
-                ),
-            ));
-        }
-        if policy.cooldown_ms == 0 {
-            return Err(programmatic_error(
-                ProgrammaticErrorCode::InvalidSpec,
-                format!(
-                    "connector_circuit_breakers[{connector_name}] cooldown_ms must be greater than 0"
-                ),
-            ));
-        }
-        if policy.half_open_max_calls == 0 {
-            return Err(programmatic_error(
-                ProgrammaticErrorCode::InvalidSpec,
-                format!(
-                    "connector_circuit_breakers[{connector_name}] half_open_max_calls must be greater than 0"
-                ),
-            ));
-        }
-        if policy.success_threshold == 0 {
-            return Err(programmatic_error(
-                ProgrammaticErrorCode::InvalidSpec,
-                format!(
-                    "connector_circuit_breakers[{connector_name}] success_threshold must be greater than 0"
-                ),
-            ));
-        }
-        if policy.success_threshold > policy.half_open_max_calls {
-            return Err(programmatic_error(
-                ProgrammaticErrorCode::InvalidSpec,
-                format!(
-                    "connector_circuit_breakers[{connector_name}] success_threshold must be <= half_open_max_calls"
-                ),
+                error,
             ));
         }
     }
@@ -1297,47 +1264,35 @@ pub async fn acquire_programmatic_circuit_slot(
     let mut guard = state.lock().await;
     let entry = guard.entry(connector_name.to_owned()).or_default();
     let now = TokioInstant::now();
+    let acquire_result = acquire_connector_circuit_slot_for_state(policy, entry, now);
 
-    if entry.phase == ProgrammaticCircuitPhase::Open {
-        if let Some(until) = entry.open_until
-            && until > now
-        {
-            let remaining_ms = until.duration_since(now).as_millis();
+    match acquire_result {
+        Ok(phase) => Ok(phase),
+        Err(ConnectorCircuitAcquireError::Open {
+            remaining_cooldown_ms,
+        }) => {
             let call_label = call_id
                 .map(|id| format!(" call_id={id}"))
                 .unwrap_or_default();
-            return Err(programmatic_error(
+            Err(programmatic_error(
                 ProgrammaticErrorCode::CircuitOpen,
                 format!(
-                    "programmatic step {step_id}{call_label} connector {connector_name} is circuit-open (remaining_cooldown_ms={remaining_ms})"
+                    "programmatic step {step_id}{call_label} connector {connector_name} is circuit-open (remaining_cooldown_ms={remaining_cooldown_ms})"
                 ),
-            ));
+            ))
         }
-        entry.phase = ProgrammaticCircuitPhase::HalfOpen;
-        entry.open_until = None;
-        entry.half_open_remaining_calls = policy.half_open_max_calls;
-        entry.half_open_successes = 0;
-    }
-
-    if entry.phase == ProgrammaticCircuitPhase::HalfOpen {
-        if entry.half_open_remaining_calls == 0 {
-            entry.phase = ProgrammaticCircuitPhase::Open;
-            entry.open_until = Some(now + Duration::from_millis(policy.cooldown_ms));
+        Err(ConnectorCircuitAcquireError::HalfOpenReopened) => {
             let call_label = call_id
                 .map(|id| format!(" call_id={id}"))
                 .unwrap_or_default();
-            return Err(programmatic_error(
+            Err(programmatic_error(
                 ProgrammaticErrorCode::CircuitOpen,
                 format!(
                     "programmatic step {step_id}{call_label} connector {connector_name} half-open window exhausted and re-opened"
                 ),
-            ));
+            ))
         }
-        entry.half_open_remaining_calls = entry.half_open_remaining_calls.saturating_sub(1);
-        return Ok("half_open");
     }
-
-    Ok("closed")
 }
 
 pub async fn record_programmatic_circuit_outcome(
@@ -1353,50 +1308,9 @@ pub async fn record_programmatic_circuit_outcome(
     let mut guard = state.lock().await;
     let entry = guard.entry(connector_name.to_owned()).or_default();
     let now = TokioInstant::now();
+    let phase = record_connector_circuit_outcome_for_state(policy, entry, success, now);
 
-    match entry.phase {
-        ProgrammaticCircuitPhase::Closed => {
-            if success {
-                entry.consecutive_failures = 0;
-            } else {
-                entry.consecutive_failures = entry.consecutive_failures.saturating_add(1);
-                if entry.consecutive_failures >= policy.failure_threshold {
-                    entry.phase = ProgrammaticCircuitPhase::Open;
-                    entry.open_until = Some(now + Duration::from_millis(policy.cooldown_ms));
-                    entry.half_open_remaining_calls = 0;
-                    entry.half_open_successes = 0;
-                }
-            }
-        }
-        ProgrammaticCircuitPhase::HalfOpen => {
-            if success {
-                entry.half_open_successes = entry.half_open_successes.saturating_add(1);
-                if entry.half_open_successes >= policy.success_threshold {
-                    entry.phase = ProgrammaticCircuitPhase::Closed;
-                    entry.consecutive_failures = 0;
-                    entry.open_until = None;
-                    entry.half_open_remaining_calls = 0;
-                    entry.half_open_successes = 0;
-                } else if entry.half_open_remaining_calls == 0 {
-                    entry.phase = ProgrammaticCircuitPhase::Open;
-                    entry.open_until = Some(now + Duration::from_millis(policy.cooldown_ms));
-                    entry.half_open_successes = 0;
-                }
-            } else {
-                entry.phase = ProgrammaticCircuitPhase::Open;
-                entry.open_until = Some(now + Duration::from_millis(policy.cooldown_ms));
-                entry.half_open_remaining_calls = 0;
-                entry.half_open_successes = 0;
-            }
-        }
-        ProgrammaticCircuitPhase::Open => {}
-    }
-
-    match entry.phase {
-        ProgrammaticCircuitPhase::Closed => "closed".to_owned(),
-        ProgrammaticCircuitPhase::Open => "open".to_owned(),
-        ProgrammaticCircuitPhase::HalfOpen => "half_open".to_owned(),
-    }
+    phase.to_owned()
 }
 
 fn compute_programmatic_backoff_ms(

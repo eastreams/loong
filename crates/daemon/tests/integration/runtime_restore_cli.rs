@@ -120,7 +120,9 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Openai,
                 model: "gpt-4.1-mini".to_owned(),
-                api_key: Some("${OPENAI_API_KEY}".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "${OPENAI_API_KEY}".to_owned(),
+                )),
                 ..Default::default()
             },
         },
@@ -132,7 +134,9 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some("${RUNTIME_RESTORE_DEEPSEEK_KEY}".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "${RUNTIME_RESTORE_DEEPSEEK_KEY}".to_owned(),
+                )),
                 ..Default::default()
             },
         },
@@ -253,7 +257,9 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Openai,
                 model: "gpt-4.1".to_owned(),
-                api_key: Some("${OPENAI_API_KEY}".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "${OPENAI_API_KEY}".to_owned(),
+                )),
                 ..Default::default()
             },
         },
@@ -321,7 +327,9 @@ fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_s
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some("literal-secret-value".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "literal-secret-value".to_owned(),
+                )),
                 headers: BTreeMap::from([
                     (
                         "anthropic-api-key".to_owned(),
@@ -466,7 +474,9 @@ fn runtime_restore_dry_run_blocks_apply_when_provider_credentials_were_redacted(
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::Deepseek,
                 model: "deepseek-chat".to_owned(),
-                api_key: Some("literal-secret-value".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "literal-secret-value".to_owned(),
+                )),
                 ..Default::default()
             },
         },
@@ -688,7 +698,8 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         config_path.to_str().expect("config path should be utf-8"),
     ))
     .expect("collect restored snapshot");
-    let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
     assert_eq!(payload["provider"]["active_profile_id"], "deepseek-lab");
     assert!(
         payload["external_skills"]["policy"]["enabled"]

@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use super::{MemoryStageFamily, builtin_pre_assembly_stage_families};
+
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
 pub const DEFAULT_MEMORY_SYSTEM_ID: &str = "builtin";
 
@@ -28,6 +30,7 @@ pub struct MemorySystemMetadata {
     pub api_version: u16,
     pub capabilities: BTreeSet<MemorySystemCapability>,
     pub summary: &'static str,
+    pub supported_pre_assembly_stage_families: Vec<MemoryStageFamily>,
 }
 
 impl MemorySystemMetadata {
@@ -41,7 +44,16 @@ impl MemorySystemMetadata {
             api_version: MEMORY_SYSTEM_API_VERSION,
             capabilities: capabilities.into_iter().collect(),
             summary,
+            supported_pre_assembly_stage_families: Vec::new(),
         }
+    }
+
+    pub fn with_supported_pre_assembly_stage_families(
+        mut self,
+        families: impl IntoIterator<Item = MemoryStageFamily>,
+    ) -> Self {
+        self.supported_pre_assembly_stage_families = families.into_iter().collect();
+        self
     }
 
     pub fn capability_names(&self) -> Vec<&'static str> {
@@ -53,6 +65,10 @@ impl MemorySystemMetadata {
             .collect::<Vec<_>>();
         names.sort_unstable();
         names
+    }
+
+    pub fn supports_pre_assembly_stage_family(&self, family: MemoryStageFamily) -> bool {
+        self.supported_pre_assembly_stage_families.contains(&family)
     }
 }
 
@@ -94,12 +110,30 @@ impl MemorySystem for BuiltinMemorySystem {
             ],
             "Built-in SQLite-backed canonical memory with deterministic prompt hydration.",
         )
+        .with_supported_pre_assembly_stage_families(builtin_pre_assembly_stage_families())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StageAwareRegistryMemorySystem;
+
+    impl MemorySystem for StageAwareRegistryMemorySystem {
+        fn id(&self) -> &'static str {
+            "registry-stage-aware"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-stage-aware",
+                [MemorySystemCapability::PromptHydration],
+                "Registry stage-aware test system",
+            )
+            .with_supported_pre_assembly_stage_families([MemoryStageFamily::Retrieve])
+        }
+    }
 
     #[test]
     fn builtin_memory_system_metadata_is_stable() {
@@ -114,6 +148,25 @@ mod tests {
                 "profile_note_projection",
                 "prompt_hydration",
             ]
+        );
+    }
+
+    #[test]
+    fn memory_system_field_exposes_builtin_pre_assembly_stage_families() {
+        let metadata = BuiltinMemorySystem.metadata();
+        assert_eq!(
+            metadata.supported_pre_assembly_stage_families,
+            builtin_pre_assembly_stage_families()
+        );
+    }
+
+    #[test]
+    fn memory_system_field_allows_custom_registry_stage_family_sets() {
+        let custom = StageAwareRegistryMemorySystem.metadata();
+        assert_eq!(custom.id, "registry-stage-aware");
+        assert_eq!(
+            custom.supported_pre_assembly_stage_families,
+            vec![MemoryStageFamily::Retrieve]
         );
     }
 

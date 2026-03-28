@@ -520,7 +520,9 @@ fn codex_import_config_to_loongclaw(
             .kind
             .default_api_key_env()
             .unwrap_or("OPENAI_API_KEY");
-        config.provider.api_key_env = Some(suggested_env.to_owned());
+        config
+            .provider
+            .set_api_key_env_binding(Some(suggested_env.to_owned()));
     }
 
     Ok(Some(config))
@@ -531,9 +533,9 @@ fn baseline_codex_import_provider_config(
 ) -> mvp::config::ProviderConfig {
     let mut provider = mvp::config::ProviderConfig {
         kind: provider_kind,
-        api_key_env: provider_kind.default_api_key_env().map(str::to_owned),
         ..mvp::config::ProviderConfig::default()
     };
+    provider.set_api_key_env_binding(provider_kind.default_api_key_env().map(str::to_owned));
     ImportedProviderTransport::default_for_kind(provider_kind).apply_to_provider(&mut provider);
     provider
 }

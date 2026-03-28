@@ -2,7 +2,9 @@ mod audit;
 mod channels;
 mod conversation;
 mod feishu_integration;
+mod irc;
 mod memory;
+mod outbound_http;
 mod provider;
 mod runtime;
 mod shared;
@@ -12,26 +14,61 @@ mod tools;
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
 pub use channels::{
-    ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
-    ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
-    FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode, FeishuDomain,
-    MatrixAccountConfig, MatrixChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedTelegramChannelConfig, TelegramAccountConfig,
-    TelegramChannelConfig, TelegramStreamingMode, channel_descriptor, service_channel_descriptors,
+    ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
+    ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig, DingtalkAccountConfig,
+    DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig,
+    EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode,
+    FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig,
+    ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig, LineAccountConfig,
+    LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig,
+    MattermostChannelConfig, NextcloudTalkAccountConfig, NextcloudTalkChannelConfig,
+    NostrAccountConfig, NostrChannelConfig, ResolvedDingtalkChannelConfig,
+    ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
+    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
+    SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
+    SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
+    TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig,
+    TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig,
+    WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
+    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
+    DINGTALK_SECRET_ENV, DINGTALK_WEBHOOK_URL_ENV, DISCORD_BOT_TOKEN_ENV, EMAIL_IMAP_PASSWORD_ENV,
+    EMAIL_IMAP_USERNAME_ENV, EMAIL_SMTP_PASSWORD_ENV, EMAIL_SMTP_USERNAME_ENV, EmailSmtpEndpoint,
     FEISHU_APP_ID_ENV, FEISHU_APP_SECRET_ENV, FEISHU_ENCRYPT_KEY_ENV,
-    FEISHU_VERIFICATION_TOKEN_ENV, MATRIX_ACCESS_TOKEN_ENV, TELEGRAM_BOT_TOKEN_ENV,
-    normalize_channel_account_id,
+    FEISHU_VERIFICATION_TOKEN_ENV, GOOGLE_CHAT_WEBHOOK_URL_ENV, IMESSAGE_BRIDGE_TOKEN_ENV,
+    IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV,
+    MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
+    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV,
+    NOSTR_RELAY_URLS_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    TLON_CODE_ENV, TLON_SHIP_ENV, TLON_URL_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
+    WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
+    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
+    WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id, parse_email_smtp_endpoint,
+    parse_nostr_private_key_hex, parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
 pub use feishu_integration::FeishuIntegrationConfig;
+pub(crate) use irc::{
+    IRC_NICKNAME_ENV, IRC_SERVER_ENV, IrcServerEndpoint, IrcServerTransport,
+    parse_irc_server_endpoint,
+};
 #[allow(unused_imports)]
 pub use memory::{
     MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
 };
+#[allow(unused_imports)]
+pub use outbound_http::OutboundHttpConfig;
 #[allow(unused_imports)]
 pub use provider::{
     ModelCatalogProbeRecovery, ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily,
@@ -55,32 +92,85 @@ pub use runtime::{
     validate_file_with_locale, write, write_template,
 };
 pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
+pub(crate) use shared::ConfigValidationIssue;
 #[allow(unused_imports)]
 pub use shared::{CLI_COMMAND_NAME, expand_path};
 #[allow(unused_imports)]
 pub use tools::{
-    BrowserCompanionToolConfig, BrowserToolConfig, DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
-    DEFAULT_BROWSER_MAX_LINKS, DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
+    AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,
+    DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS, DEFAULT_BROWSER_MAX_LINKS,
+    DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
+    DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS, DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS,
     DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES, DEFAULT_WEB_FETCH_MAX_REDIRECTS,
     DEFAULT_WEB_FETCH_TIMEOUT_SECONDS, DEFAULT_WEB_SEARCH_MAX_RESULTS, DEFAULT_WEB_SEARCH_PROVIDER,
     DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, ExternalSkillsConfig, GovernedToolApprovalConfig,
     GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS, MAX_BROWSER_MAX_SESSIONS,
-    MAX_BROWSER_MAX_TEXT_CHARS, MAX_WEB_FETCH_MAX_BYTES, SessionVisibility, ToolConfig,
-    WebSearchToolConfig, WebToolConfig,
+    MAX_BROWSER_MAX_TEXT_CHARS, MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
+    MAX_RUNTIME_SELF_MAX_TOTAL_CHARS, MAX_WEB_FETCH_MAX_BYTES, RuntimeSelfToolConfig,
+    SessionVisibility, ToolConfig, WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV,
+    WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+    WEB_SEARCH_PROVIDER_BRAVE, WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_EXA,
+    WEB_SEARCH_PROVIDER_JINA, WEB_SEARCH_PROVIDER_PERPLEXITY, WEB_SEARCH_PROVIDER_TAVILY,
+    WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV, WebSearchProviderDescriptor,
+    WebSearchToolConfig, WebToolConfig, normalize_web_search_provider, parse_autonomy_profile,
+    web_search_provider_api_key_env_names, web_search_provider_default_api_key_env,
+    web_search_provider_descriptor, web_search_provider_descriptors,
 };
-pub(crate) use tools::{
-    WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_TAVILY_API_KEY_ENV, normalize_web_search_provider,
-};
+pub(crate) use tools::{MIN_RUNTIME_SELF_MAX_SOURCE_CHARS, MIN_RUNTIME_SELF_MAX_TOTAL_CHARS};
 #[cfg(feature = "tool-websearch")]
 pub(crate) use tools::{
-    WEB_SEARCH_PROVIDER_DUCKDUCKGO, WEB_SEARCH_PROVIDER_SCHEMA_VALUES,
-    WEB_SEARCH_PROVIDER_VALID_VALUES, web_search_provider_parameter_description,
+    WEB_SEARCH_PROVIDER_SCHEMA_VALUES, web_search_provider_parameter_description,
 };
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use loongclaw_contracts::SecretRef;
+
     use super::*;
     use std::collections::BTreeSet;
+
+    fn expected_service_channel_ids() -> Vec<&'static str> {
+        let mut service_ids = Vec::new();
+        let catalog = crate::channel::list_channel_catalog();
+
+        for catalog_entry in catalog {
+            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
+                continue;
+            };
+            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
+                continue;
+            }
+            service_ids.push(descriptor.id);
+        }
+
+        service_ids
+    }
+
+    fn config_with_all_service_channels_enabled() -> LoongClawConfig {
+        let default_config = LoongClawConfig::default();
+        let mut config_value =
+            serde_json::to_value(default_config).expect("serialize default config");
+        let config_object = config_value
+            .as_object_mut()
+            .expect("config should serialize to an object");
+        let service_ids = expected_service_channel_ids();
+
+        for channel_id in service_ids {
+            let field_name = channel_id.replace('-', "_");
+            let channel_value = config_object
+                .get_mut(field_name.as_str())
+                .expect("service channel config field");
+            let channel_object = channel_value
+                .as_object_mut()
+                .expect("channel config should serialize to an object");
+            let enabled_value = serde_json::Value::Bool(true);
+            channel_object.insert("enabled".to_owned(), enabled_value);
+        }
+
+        serde_json::from_value(config_value).expect("deserialize enabled config")
+    }
 
     #[test]
     fn endpoint_resolution_for_openai_compatible_is_stable() {
@@ -115,33 +205,137 @@ mod tests {
         assert_eq!(feishu.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(feishu.serve_subcommand, Some("feishu-serve"));
 
+        let wecom = channel_descriptor("wecom").expect("wecom descriptor");
+        assert_eq!(wecom.id, "wecom");
+        assert_eq!(wecom.surface_label, "wecom channel");
+        assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+
+        let discord = channel_descriptor("discord").expect("discord descriptor");
+        assert_eq!(discord.id, "discord");
+        assert_eq!(discord.surface_label, "discord channel");
+        assert_eq!(discord.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(discord.serve_subcommand, None);
+
+        let slack = channel_descriptor("slack").expect("slack descriptor");
+        assert_eq!(slack.id, "slack");
+        assert_eq!(slack.surface_label, "slack channel");
+        assert_eq!(slack.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(slack.serve_subcommand, None);
+
+        let line = channel_descriptor("line").expect("line descriptor");
+        assert_eq!(line.id, "line");
+        assert_eq!(line.surface_label, "line channel");
+        assert_eq!(line.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(line.serve_subcommand, None);
+
+        let dingtalk = channel_descriptor("dingtalk").expect("dingtalk descriptor");
+        assert_eq!(dingtalk.id, "dingtalk");
+        assert_eq!(dingtalk.surface_label, "dingtalk channel");
+        assert_eq!(dingtalk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(dingtalk.serve_subcommand, None);
+
+        let whatsapp = channel_descriptor("whatsapp").expect("whatsapp descriptor");
+        assert_eq!(whatsapp.id, "whatsapp");
+        assert_eq!(whatsapp.surface_label, "whatsapp channel");
+        assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(whatsapp.serve_subcommand, None);
+
+        let email = channel_descriptor("email").expect("email descriptor");
+        assert_eq!(email.id, "email");
+        assert_eq!(email.surface_label, "email channel");
+        assert_eq!(email.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(email.serve_subcommand, None);
+
+        let webhook = channel_descriptor("webhook").expect("webhook descriptor");
+        assert_eq!(webhook.id, "webhook");
+        assert_eq!(webhook.surface_label, "webhook channel");
+        assert_eq!(webhook.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(webhook.serve_subcommand, None);
+
+        let google_chat = channel_descriptor("google-chat").expect("google chat descriptor");
+        assert_eq!(google_chat.id, "google-chat");
+        assert_eq!(google_chat.surface_label, "google chat channel");
+        assert_eq!(google_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(google_chat.serve_subcommand, None);
+
+        let signal = channel_descriptor("signal").expect("signal descriptor");
+        assert_eq!(signal.id, "signal");
+        assert_eq!(signal.surface_label, "signal channel");
+        assert_eq!(signal.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(signal.serve_subcommand, None);
+
+        let irc = channel_descriptor("irc").expect("irc descriptor");
+        assert_eq!(irc.id, "irc");
+        assert_eq!(irc.surface_label, "irc channel");
+        assert_eq!(irc.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(irc.serve_subcommand, None);
+
+        let twitch = channel_descriptor("twitch").expect("twitch descriptor");
+        assert_eq!(twitch.id, "twitch");
+        assert_eq!(twitch.surface_label, "twitch channel");
+        assert_eq!(twitch.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(twitch.serve_subcommand, None);
+
+        let teams = channel_descriptor("teams").expect("teams descriptor");
+        assert_eq!(teams.id, "teams");
+        assert_eq!(teams.surface_label, "teams channel");
+        assert_eq!(teams.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(teams.serve_subcommand, None);
+
+        let mattermost = channel_descriptor("mattermost").expect("mattermost descriptor");
+        assert_eq!(mattermost.id, "mattermost");
+        assert_eq!(mattermost.surface_label, "mattermost channel");
+        assert_eq!(mattermost.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(mattermost.serve_subcommand, None);
+
+        let nextcloud_talk =
+            channel_descriptor("nextcloud-talk").expect("nextcloud talk descriptor");
+        assert_eq!(nextcloud_talk.id, "nextcloud-talk");
+        assert_eq!(nextcloud_talk.surface_label, "nextcloud talk channel");
+        assert_eq!(nextcloud_talk.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(nextcloud_talk.serve_subcommand, None);
+
+        let synology_chat = channel_descriptor("synology-chat").expect("synology chat descriptor");
+        assert_eq!(synology_chat.id, "synology-chat");
+        assert_eq!(synology_chat.surface_label, "synology chat channel");
+        assert_eq!(synology_chat.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(synology_chat.serve_subcommand, None);
+
+        let imessage = channel_descriptor("imessage").expect("imessage descriptor");
+        assert_eq!(imessage.id, "imessage");
+        assert_eq!(imessage.surface_label, "imessage channel");
+        assert_eq!(imessage.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(imessage.serve_subcommand, None);
+
         assert!(channel_descriptor("unknown").is_none());
     }
 
     #[test]
     fn enabled_channel_views_follow_shared_catalog_order() {
-        let mut config = LoongClawConfig::default();
-        assert_eq!(config.enabled_channel_ids(), vec!["cli"]);
-        assert!(config.enabled_service_channel_ids().is_empty());
+        let default_config = LoongClawConfig::default();
+        assert_eq!(default_config.enabled_channel_ids(), vec!["cli"]);
+        assert!(default_config.enabled_service_channel_ids().is_empty());
+        let config = config_with_all_service_channels_enabled();
+        let expected_service_ids = expected_service_channel_ids();
+        let expected_enabled_service_ids = expected_service_ids
+            .iter()
+            .map(|channel_id| (*channel_id).to_owned())
+            .collect::<Vec<_>>();
+        let mut expected_enabled_channel_ids = vec!["cli".to_owned()];
+        expected_enabled_channel_ids.extend(expected_enabled_service_ids.iter().cloned());
 
-        config.telegram.enabled = true;
-        config.feishu.enabled = true;
-        config.matrix.enabled = true;
-
-        assert_eq!(
-            config.enabled_channel_ids(),
-            vec!["cli", "telegram", "feishu", "matrix"]
-        );
+        assert_eq!(config.enabled_channel_ids(), expected_enabled_channel_ids);
         assert_eq!(
             config.enabled_service_channel_ids(),
-            vec!["telegram", "feishu", "matrix"]
+            expected_enabled_service_ids
         );
 
         let service_ids = service_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix"]);
+        assert_eq!(service_ids, expected_service_ids);
     }
 
     #[test]
@@ -154,12 +348,12 @@ mod tests {
     }
 
     #[test]
-    fn service_channel_descriptors_include_matrix_surface() {
+    fn service_channel_descriptors_follow_registry_selection_order() {
         let service_ids = service_channel_descriptors()
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        assert_eq!(service_ids, vec!["telegram", "feishu", "matrix"]);
+        assert_eq!(service_ids, expected_service_channel_ids());
     }
 
     #[test]
@@ -218,6 +412,7 @@ mod tests {
                 "sglang",
                 "siliconflow",
                 "stepfun",
+                "step_plan",
                 "together",
                 "venice",
                 "vercel_ai_gateway",
@@ -323,6 +518,12 @@ mod tests {
             config.default_api_key_env().as_deref(),
             Some("OPENROUTER_API_KEY")
         );
+    }
+
+    #[test]
+    fn provider_display_names_remain_stable_for_tool_contracts() {
+        assert_eq!(ProviderKind::Stepfun.display_name(), "StepFun");
+        assert_eq!(ProviderKind::Zhipu.display_name(), "Zhipu");
     }
 
     #[test]
@@ -645,8 +846,8 @@ mod tests {
     fn openai_codex_oauth_can_override_api_key_auth() {
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
-            oauth_access_token: Some("oauth-token".to_owned()),
-            api_key: Some("api-key-should-not-win".to_owned()),
+            oauth_access_token: Some(SecretRef::Inline("oauth-token".to_owned())),
+            api_key: Some(SecretRef::Inline("api-key-should-not-win".to_owned())),
             ..ProviderConfig::default()
         };
         assert_eq!(
@@ -663,8 +864,8 @@ mod tests {
     fn volcengine_coding_plan_has_no_default_oauth_env_but_accepts_explicit_oauth_token() {
         let config = ProviderConfig {
             kind: ProviderKind::VolcengineCoding,
-            oauth_access_token: Some("vc-oauth-token".to_owned()),
-            api_key: Some("api-key-should-not-win".to_owned()),
+            oauth_access_token: Some(SecretRef::Inline("vc-oauth-token".to_owned())),
+            api_key: Some(SecretRef::Inline("api-key-should-not-win".to_owned())),
             ..ProviderConfig::default()
         };
         assert_eq!(config.default_oauth_access_token_env().as_deref(), None);
@@ -693,7 +894,7 @@ mod tests {
         for raw_api_key in &cases {
             let config = ProviderConfig {
                 kind: ProviderKind::Ollama,
-                api_key: Some(raw_api_key.clone()),
+                api_key: Some(SecretRef::Inline(raw_api_key.clone())),
                 api_key_env: None,
                 ..ProviderConfig::default()
             };
@@ -716,7 +917,9 @@ mod tests {
     fn provider_api_key_missing_explicit_env_reference_is_not_treated_as_literal() {
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
-            api_key: Some("${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned()),
+            api_key: Some(SecretRef::Inline(
+                "${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned(),
+            )),
             api_key_env: None,
             ..ProviderConfig::default()
         };
@@ -729,7 +932,9 @@ mod tests {
     fn provider_api_key_missing_explicit_env_reference_does_not_fall_back_to_legacy_env() {
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
-            api_key: Some("${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned()),
+            api_key: Some(SecretRef::Inline(
+                "${LOONGCLAW_TEST_MISSING_API_KEY}".to_owned(),
+            )),
             api_key_env: Some("PATH".to_owned()),
             ..ProviderConfig::default()
         };
@@ -756,6 +961,47 @@ mod tests {
         assert_eq!(config.api_key().as_deref(), Some(env_val));
 
         crate::process_env::remove_var(env_key);
+    }
+
+    #[test]
+    fn provider_api_key_supports_typed_env_secret_ref() {
+        let env_key = "LOONGCLAW_TEST_TYPED_SECRET_REF";
+        let env_val = "typed-secret-value";
+        crate::process_env::set_var(env_key, env_val);
+
+        let config = ProviderConfig {
+            kind: ProviderKind::Ollama,
+            api_key: Some(SecretRef::Env {
+                env: env_key.to_owned(),
+            }),
+            api_key_env: None,
+            ..ProviderConfig::default()
+        };
+
+        assert_eq!(config.api_key().as_deref(), Some(env_val));
+        assert_eq!(
+            config.authorization_header().as_deref(),
+            Some("Bearer typed-secret-value")
+        );
+
+        crate::process_env::remove_var(env_key);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn provider_toml_parses_secret_ref_file_table() {
+        let raw = r#"
+[provider]
+api_key = { file = "/run/secrets/openai" }
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("secret table should parse");
+
+        assert_eq!(
+            parsed.provider.api_key,
+            Some(SecretRef::File {
+                file: PathBuf::from("/run/secrets/openai"),
+            })
+        );
     }
 
     #[test]
@@ -1019,6 +1265,20 @@ kind = "volcengine_coding"
         assert!(hint.contains("provider.base_url"));
         assert!(hint.contains("https://open.bigmodel.cn"));
         assert!(hint.contains("https://api.z.ai"));
+    }
+
+    #[test]
+    fn zhipu_region_endpoint_info_uses_normalized_family_label_and_ordered_variants() {
+        let region_info = ProviderKind::Zhipu
+            .region_endpoint_info()
+            .expect("zhipu should expose onboarding region info");
+
+        assert_eq!(region_info.family_label, "Z.ai");
+        assert_eq!(region_info.variants.len(), 2);
+        assert_eq!(region_info.variants[0].label, "CN");
+        assert_eq!(region_info.variants[0].base_url, "https://open.bigmodel.cn");
+        assert_eq!(region_info.variants[1].label, "Global");
+        assert_eq!(region_info.variants[1].base_url, "https://api.z.ai");
     }
 
     #[test]
@@ -1336,7 +1596,9 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
     #[cfg(feature = "channel-telegram")]
     fn telegram_token_prefers_inline_secret() {
         let config = TelegramChannelConfig {
-            bot_token: Some("inline-token".to_owned()),
+            bot_token: Some(loongclaw_contracts::SecretRef::Inline(
+                "inline-token".to_owned(),
+            )),
             bot_token_env: Some("SHOULD_NOT_BE_READ".to_owned()),
             ..TelegramChannelConfig::default()
         };
@@ -1344,10 +1606,49 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
     }
 
     #[test]
+    #[cfg(feature = "channel-telegram")]
+    fn telegram_bot_token_supports_typed_env_secret_ref() {
+        let env_key = "LOONGCLAW_TEST_TELEGRAM_SECRET_REF";
+        let env_val = "123456789:telegram-secret";
+        crate::process_env::set_var(env_key, env_val);
+
+        let config = TelegramChannelConfig {
+            bot_token: Some(SecretRef::Env {
+                env: env_key.to_owned(),
+            }),
+            bot_token_env: None,
+            ..TelegramChannelConfig::default()
+        };
+
+        assert_eq!(config.bot_token().as_deref(), Some(env_val));
+
+        crate::process_env::remove_var(env_key);
+    }
+
+    #[test]
+    #[cfg(all(feature = "channel-telegram", feature = "config-toml"))]
+    fn telegram_toml_parses_secret_ref_file_table() {
+        let raw = r#"
+[telegram]
+bot_token = { file = "/run/secrets/telegram" }
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("secret table should parse");
+
+        assert_eq!(
+            parsed.telegram.bot_token,
+            Some(SecretRef::File {
+                file: PathBuf::from("/run/secrets/telegram"),
+            })
+        );
+    }
+
+    #[test]
     fn provider_api_key_candidates_support_delimited_key_pool() {
         let config = ProviderConfig {
             kind: ProviderKind::Ollama,
-            api_key: Some("key-a, key-b;key-c\nkey-d\r\nkey-e".to_owned()),
+            api_key: Some(SecretRef::Inline(
+                "key-a, key-b;key-c\nkey-d\r\nkey-e".to_owned(),
+            )),
             api_key_env: None,
             ..ProviderConfig::default()
         };
@@ -1665,6 +1966,62 @@ reasoning_extra_body_omit_model_hints = ["disable-thinking"]
             .expect_err("bearer-prefixed secret should be rejected");
         assert!(error.contains("provider.api_key_env"));
         assert!(error.contains("secret literal"));
+    }
+
+    #[test]
+    fn config_validation_rejects_uuid_shaped_secret_in_env_pointer() {
+        let mut config = LoongClawConfig::default();
+        config.provider.api_key_env = Some("9f479837-0a12-4b56-89ab-cdef01234567".to_owned());
+
+        let error = config
+            .validate()
+            .expect_err("uuid-shaped provider secrets should be rejected in env pointer fields");
+        assert!(error.contains("provider.api_key_env"));
+        assert!(error.contains("secret literal"));
+    }
+
+    #[test]
+    fn config_validation_rejects_invalid_typed_secret_ref_env_names() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "provider": {
+                "api_key": {
+                    "env": "$OPENAI_API_KEY"
+                }
+            },
+            "telegram": {
+                "bot_token": {
+                    "env": "123456789:AAEZZ_exampleTokenValue"
+                },
+                "accounts": {
+                    "Work Bot": {
+                        "bot_token": {
+                            "env": "export WORK_TELEGRAM_TOKEN=demo"
+                        }
+                    }
+                }
+            },
+            "feishu": {
+                "app_secret": {
+                    "env": "FEISHU APP SECRET"
+                }
+            },
+            "matrix": {
+                "access_token": {
+                    "env": "%MATRIX_ACCESS_TOKEN%"
+                }
+            }
+        }))
+        .expect("deserialize config with invalid typed env refs");
+
+        let error = config
+            .validate()
+            .expect_err("invalid typed env refs should be rejected");
+
+        assert!(error.contains("provider.api_key.env"));
+        assert!(error.contains("telegram.bot_token.env"));
+        assert!(error.contains("telegram.accounts.work-bot.bot_token.env"));
+        assert!(error.contains("feishu.app_secret.env"));
+        assert!(error.contains("matrix.access_token.env"));
     }
 
     #[test]
@@ -2091,6 +2448,18 @@ system = " Builtin "
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn memory_system_id_field_parses_and_normalizes() {
+        let raw = r#"
+[memory]
+system_id = " LuCid "
+"#;
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse memory.system_id");
+        assert_eq!(parsed.memory.system_id.as_deref(), Some("lucid"));
+        assert_eq!(parsed.memory.resolved_system_id(), "lucid");
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn memory_system_field_rejects_unimplemented_future_variant() {
         let raw = r#"
 [memory]
@@ -2112,6 +2481,7 @@ system = " LuCid "
 compact_enabled = true
 compact_min_messages = 6
 compact_trigger_estimated_tokens = 120
+compact_preserve_recent_turns = 4
 compact_fail_open = false
 "#;
         let parsed =
@@ -2122,6 +2492,7 @@ compact_fail_open = false
             parsed.conversation.compact_trigger_estimated_tokens(),
             Some(120)
         );
+        assert_eq!(parsed.conversation.compact_preserve_recent_turns(), 4);
         assert!(!parsed.conversation.compaction_fail_open());
         assert!(!parsed.conversation.should_compact(5));
         assert!(parsed.conversation.should_compact(6));
@@ -2138,14 +2509,31 @@ compact_fail_open = false
     }
 
     #[test]
-    fn conversation_compaction_defaults_are_backward_compatible() {
+    fn conversation_compaction_defaults_require_explicit_thresholds() {
         let config = ConversationConfig::default();
         assert!(config.turn_middleware_ids().is_empty());
         assert!(config.compact_enabled);
         assert!(config.compaction_fail_open());
+        assert_eq!(config.compact_preserve_recent_turns(), 6);
         assert_eq!(config.compact_trigger_estimated_tokens(), None);
-        assert!(config.should_compact(0));
-        assert!(config.should_compact_with_estimate(0, None));
+        assert!(!config.should_compact(0));
+        assert!(!config.should_compact_with_estimate(0, None));
+        assert!(!config.should_compact_with_estimate(100, Some(10_000)));
+    }
+
+    #[test]
+    fn conversation_compaction_enabled_without_thresholds_does_not_trigger() {
+        let config = ConversationConfig {
+            compact_enabled: true,
+            compact_min_messages: None,
+            compact_trigger_estimated_tokens: None,
+            compact_fail_open: true,
+            context_engine: None,
+            ..ConversationConfig::default()
+        };
+
+        assert!(!config.should_compact(1));
+        assert!(!config.should_compact_with_estimate(100, Some(10_000)));
     }
 
     #[test]

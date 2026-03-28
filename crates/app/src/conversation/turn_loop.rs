@@ -1,9 +1,11 @@
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 
 use crate::CliResult;
+use crate::acp::{AcpTurnEventSink, JsonlAcpTurnEventSink};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 use super::super::config::LoongClawConfig;
@@ -15,6 +17,7 @@ use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
     DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
 };
+use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
@@ -127,17 +130,43 @@ impl ConversationTurnLoop {
         );
 
         for round_index in 0..policy.max_rounds {
+            let use_streaming = crate::provider::supports_turn_streaming_events(config);
+            let on_token: crate::provider::StreamingTokenCallback = if use_streaming {
+                let sink = JsonlAcpTurnEventSink::stderr_with_prefix("");
+                Some(Arc::new(
+                    move |data: crate::provider::StreamingCallbackData| {
+                        let event = map_streaming_callback_data_to_token_event(data);
+                        let _ = sink.on_event(&serde_json::to_value(&event).unwrap_or_default());
+                    },
+                ))
+            } else {
+                None
+            };
             let turn = match decide_provider_turn_request_action(
-                runtime
-                    .request_turn(
-                        config,
-                        session_id,
-                        turn_id.as_str(),
-                        &session.messages,
-                        &tool_view,
-                        binding,
-                    )
-                    .await,
+                if use_streaming {
+                    runtime
+                        .request_turn_streaming(
+                            config,
+                            session_id,
+                            turn_id.as_str(),
+                            &session.messages,
+                            &tool_view,
+                            binding,
+                            on_token,
+                        )
+                        .await
+                } else {
+                    runtime
+                        .request_turn(
+                            config,
+                            session_id,
+                            turn_id.as_str(),
+                            &session.messages,
+                            &tool_view,
+                            binding,
+                        )
+                        .await
+                },
                 error_mode,
             ) {
                 ProviderTurnRequestAction::Continue { turn } => turn,
@@ -604,7 +633,9 @@ struct ToolRoundOutcome {
 
 fn tool_round_outcome(turn_result: &TurnResult) -> Option<ToolRoundOutcome> {
     match turn_result {
-        TurnResult::FinalText(text) => Some(ToolRoundOutcome {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => Some(ToolRoundOutcome {
             fingerprint: text_fingerprint("tool_final_text", text),
             failed: false,
         }),

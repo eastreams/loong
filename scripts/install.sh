@@ -128,6 +128,15 @@ else
       LINUX)
         release_linux_target_for_arch_and_libc "$normalized_arch" "gnu"
         ;;
+      ANDROID)
+        case "$normalized_arch" in
+          arm64|aarch64) printf 'aarch64-linux-android\n' ;;
+          *)
+            echo "unsupported Android architecture: ${arch}" >&2
+            return 1
+            ;;
+        esac
+        ;;
       DARWIN)
         case "$normalized_arch" in
           x86_64|amd64) printf 'x86_64-apple-darwin\n' ;;
@@ -154,6 +163,40 @@ else
     esac
   }
 fi
+
+is_termux_environment() {
+  local uname_operating_system
+
+  uname_operating_system="$(uname -o 2>/dev/null || true)"
+  if [[ -n "$uname_operating_system" ]]; then
+    if [[ "$(printf '%s' "$uname_operating_system" | tr '[:lower:]' '[:upper:]')" == "ANDROID" ]]; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if [[ -n "${TERMUX_VERSION:-}" ]]; then
+    return 0
+  fi
+
+  case "${PREFIX:-}" in
+    */com.termux/files/usr) return 0 ;;
+  esac
+
+  return 1
+}
+
+detect_release_host_platform() {
+  local host_platform
+  host_platform="$(uname -s)"
+
+  if [[ "$(printf '%s' "$host_platform" | tr '[:lower:]' '[:upper:]')" == "LINUX" ]] && is_termux_environment; then
+    printf 'Android\n'
+    return 0
+  fi
+
+  printf '%s\n' "$host_platform"
+}
 
 prefix="${HOME}/.local/bin"
 run_onboard=0
@@ -300,7 +343,220 @@ sha256_file() {
 }
 
 lowercase_value() {
-  printf '%s' "${1:?value is required}" | tr '[:upper:]' '[:lower:]'
+  local value="${1-}"
+  printf '%s' "${value}" | tr '[:upper:]' '[:lower:]'
+}
+
+install_web_search_provider_display_name() {
+  local provider="${1:-}"
+  case "$(lowercase_value "${provider:-unknown}")" in
+    ddg|duckduckgo) printf 'DuckDuckGo\n' ;;
+    tavily) printf 'Tavily\n' ;;
+    brave) printf 'Brave Search\n' ;;
+    perplexity) printf 'Perplexity Search\n' ;;
+    exa) printf 'Exa\n' ;;
+    jina) printf 'Jina Search\n' ;;
+    *) printf '%s\n' "${provider}" ;;
+  esac
+}
+
+install_locale_looks_domestic_cn() {
+  local value normalized
+
+  for value in "${LC_ALL:-}" "${LC_MESSAGES:-}" "${LANG:-}"; do
+    if [[ -n "${value}" ]]; then
+      normalized="$(lowercase_value "${value}")"
+      if [[ "${normalized}" == *"zh_cn"* || "${normalized}" == *"zh-hans"* || "${normalized}" == zh-cn* ]]; then
+        return 0
+      fi
+    fi
+  done
+
+  normalized="$(lowercase_value "${TZ:-}")"
+  case "${normalized}" in
+    asia/shanghai|asia/chongqing|asia/harbin|asia/urumqi|asia/beijing) return 0 ;;
+  esac
+
+  return 1
+}
+
+probe_install_duckduckgo_route() {
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  curl -fsSL \
+    --retry 0 \
+    --max-time 2 \
+    -o /dev/null \
+    "https://html.duckduckgo.com/html/?q=loongclaw" >/dev/null 2>&1
+}
+
+probe_install_tavily_route() {
+  local http_code
+
+  if ! command -v curl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  http_code="$(
+    curl -sS \
+      --retry 0 \
+      --max-time 2 \
+      -o /dev/null \
+      -w '%{http_code}' \
+      -H 'Content-Type: application/json' \
+      -d '{"query":"loongclaw","max_results":1}' \
+      "https://api.tavily.com/search" 2>/dev/null || true
+  )"
+
+  case "${http_code}" in
+    2??|3??|4??) return 0 ;;
+  esac
+
+  return 1
+}
+
+install_env_has_non_empty_value() {
+  local env_name="${1:?env_name is required}"
+  local value="${!env_name:-}"
+
+  [[ -n "${value}" && -n "${value//[[:space:]]/}" ]]
+}
+
+install_web_search_provider_has_ready_credential() {
+  local provider="${1:?provider is required}"
+
+  case "$provider" in
+    brave)
+      install_env_has_non_empty_value "BRAVE_API_KEY"
+      ;;
+    tavily)
+      install_env_has_non_empty_value "TAVILY_API_KEY"
+      ;;
+    perplexity)
+      install_env_has_non_empty_value "PERPLEXITY_API_KEY"
+      ;;
+    exa)
+      install_env_has_non_empty_value "EXA_API_KEY"
+      ;;
+    jina)
+      install_env_has_non_empty_value "JINA_API_KEY" \
+        || install_env_has_non_empty_value "JINA_AUTH_TOKEN"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+recommend_onboard_web_search_provider_from_credentials() {
+  local ready_provider=""
+  local ready_count=0
+  local provider=""
+
+  for provider in brave tavily perplexity exa jina; do
+    if ! install_web_search_provider_has_ready_credential "$provider"; then
+      continue
+    fi
+
+    ready_provider="$provider"
+    ready_count=$((ready_count + 1))
+  done
+
+  if [[ "$ready_count" -ne 1 ]]; then
+    return 1
+  fi
+
+  printf '%s\n' "$ready_provider"
+}
+
+format_install_web_search_provider_source() {
+  local source="${1:?source is required}"
+
+  case "$source" in
+    preconfigured)
+      printf 'preconfigured\n'
+      ;;
+    detected-credential)
+      printf 'detected credential\n'
+      ;;
+    detected-signal)
+      printf 'detected\n'
+      ;;
+    *)
+      printf '%s\n' "$source"
+      ;;
+  esac
+}
+
+recommend_onboard_web_search_provider() {
+  local domestic_locale_hint=0
+  local duckduckgo_reachable=0
+  local tavily_reachable=0
+  local credential_provider=""
+
+  if install_locale_looks_domestic_cn; then
+    domestic_locale_hint=1
+  fi
+  credential_provider="$(recommend_onboard_web_search_provider_from_credentials || true)"
+  if [[ -n "$credential_provider" ]]; then
+    printf '%s|%s\n' "$credential_provider" "detected-credential"
+    return 0
+  fi
+  if probe_install_duckduckgo_route; then
+    duckduckgo_reachable=1
+  fi
+  if probe_install_tavily_route; then
+    tavily_reachable=1
+  fi
+
+  if [[ "${domestic_locale_hint}" -eq 1 ]] && [[ "${tavily_reachable}" -eq 1 || "${duckduckgo_reachable}" -eq 0 ]]; then
+    printf '%s|%s\n' "tavily" "detected-signal"
+    return 0
+  fi
+
+  if [[ "${duckduckgo_reachable}" -eq 1 ]]; then
+    printf '%s|%s\n' "duckduckgo" "detected-signal"
+    return 0
+  fi
+
+  if [[ "${tavily_reachable}" -eq 1 ]]; then
+    printf '%s|%s\n' "tavily" "detected-signal"
+    return 0
+  fi
+
+  if [[ "${domestic_locale_hint}" -eq 1 ]]; then
+    printf '%s|%s\n' "tavily" "detected-signal"
+    return 0
+  fi
+
+  printf '%s|%s\n' "duckduckgo" "detected-signal"
+}
+
+run_guided_onboarding() {
+  local selected_provider
+  local provider_source
+  local recommendation
+
+  if [[ -n "${LOONGCLAW_WEB_SEARCH_PROVIDER:-}" ]]; then
+    selected_provider="${LOONGCLAW_WEB_SEARCH_PROVIDER}"
+    provider_source="preconfigured"
+  else
+    recommendation="$(recommend_onboard_web_search_provider)"
+    selected_provider="${recommendation%%|*}"
+    provider_source="${recommendation#*|}"
+  fi
+
+  if [[ -n "${selected_provider}" ]]; then
+    printf '==> Onboarding web search default: %s (%s)\n' \
+      "$(install_web_search_provider_display_name "${selected_provider}")" \
+      "$(format_install_web_search_provider_source "${provider_source}")"
+    "${prefix}/${bin_name}" onboard --web-search-provider "${selected_provider}"
+    return 0
+  fi
+
+  "${prefix}/${bin_name}" onboard
 }
 
 normalize_target_libc() {
@@ -521,7 +777,7 @@ install_from_release() {
   require_command "curl" "Install curl first or use --source inside a repository checkout."
   require_command "install" "Install coreutils or use --source inside a repository checkout."
 
-  host_platform="$(uname -s)"
+  host_platform="$(detect_release_host_platform)"
   host_arch="$(uname -m)"
   target="$(release_target_for_install "${host_platform}" "${host_arch}" "${target_libc}")"
   target_tag="$(normalize_release_tag "${release_version}")"
@@ -580,7 +836,7 @@ printf '==> Installed loongclaw to %s\n' "${prefix}/${bin_name}"
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '==> Running guided onboarding\n'
-  "${prefix}/${bin_name}" onboard
+  run_guided_onboarding
 fi
 
 case ":${PATH}:" in

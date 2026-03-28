@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_WINDOW,
-    runtime_config::MemoryRuntimeConfig,
+    MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW,
+    WindowTurn, runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,8 +109,8 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 4;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 9;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 5;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 10;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SQL_INSERT_TURN: &str = "INSERT INTO turns(session_id, session_turn_index, role, content, ts) VALUES (?1, ?2, ?3, ?4, ?5)";
@@ -122,7 +122,11 @@ const SQL_UPSERT_SESSION_TURN_COUNT: &str =
                  turn_count = memory_session_state.turn_count + 1
              RETURNING turn_count";
 const SQL_DELETE_SESSION_STATE: &str = "DELETE FROM memory_session_state WHERE session_id = ?1";
-const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts
+const SQL_SET_SESSION_TURN_COUNT: &str = "INSERT INTO memory_session_state(session_id, turn_count)
+             VALUES (?1, ?2)
+             ON CONFLICT(session_id) DO UPDATE SET
+                 turn_count = excluded.turn_count";
+const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_turn_index
              FROM turns
              WHERE session_id = ?1
              ORDER BY id DESC
@@ -150,7 +154,8 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_summary_checkpoints',
                         'memory_summary_checkpoint_bodies',
                         'approval_requests',
-                        'approval_grants'
+                        'approval_grants',
+                        'session_tool_policies'
                     ))
                 OR (type = 'index' AND name IN (
                         'idx_turns_session_id',
@@ -347,6 +352,15 @@ struct WindowLoadResult {
     db_path: PathBuf,
     limit: usize,
     turns: Vec<ConversationTurn>,
+    turn_count: Option<usize>,
+}
+
+enum ReplaceTurnsFailure {
+    Conflict {
+        expected_turn_count: usize,
+        actual_turn_count: usize,
+    },
+    Message(String),
 }
 
 #[derive(Debug)]
@@ -485,6 +499,7 @@ pub(super) fn load_window(
             "limit": window.limit,
             "allow_extended_limit": allow_extended_limit,
             "turns": window.turns,
+            "turn_count": window.turn_count,
             "db_path": window.db_path.display().to_string(),
         }),
     })
@@ -535,6 +550,83 @@ pub(super) fn clear_session(
             "deleted_rows": affected,
         }),
     })
+}
+
+pub(super) fn replace_turns(
+    request: MemoryCoreRequest,
+    config: &MemoryRuntimeConfig,
+) -> Result<MemoryCoreOutcome, String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| "memory.replace_turns payload must be an object".to_owned())?;
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "memory.replace_turns requires payload.session_id".to_owned())
+        .and_then(|value| {
+            normalize_required_str(value, "memory.replace_turns requires payload.session_id")
+        })?;
+    let turns = payload
+        .get("turns")
+        .cloned()
+        .ok_or_else(|| "memory.replace_turns requires payload.turns".to_owned())
+        .and_then(|value| {
+            serde_json::from_value::<Vec<WindowTurn>>(value)
+                .map_err(|error| format!("memory.replace_turns payload.turns invalid: {error}"))
+        })?;
+    let expected_turn_count = match payload.get("expected_turn_count") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().ok_or_else(|| {
+            "memory.replace_turns payload.expected_turn_count must be a non-negative integer"
+                .to_owned()
+        })? as usize),
+    };
+
+    match replace_turns_internal(session_id, &turns, expected_turn_count, config) {
+        Ok(replaced) => Ok(MemoryCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "adapter": "sqlite-core",
+                "operation": MEMORY_OP_REPLACE_TURNS,
+                "session_id": session_id,
+                "replaced_turns": replaced,
+            }),
+        }),
+        Err(ReplaceTurnsFailure::Conflict {
+            expected_turn_count,
+            actual_turn_count,
+        }) => Ok(MemoryCoreOutcome {
+            status: "conflict".to_owned(),
+            payload: json!({
+                "adapter": "sqlite-core",
+                "operation": MEMORY_OP_REPLACE_TURNS,
+                "session_id": session_id,
+                "expected_turn_count": expected_turn_count,
+                "actual_turn_count": actual_turn_count,
+            }),
+        }),
+        Err(ReplaceTurnsFailure::Message(error)) => Err(error),
+    }
+}
+
+#[cfg(test)]
+pub(super) fn replace_session_turns_direct(
+    session_id: &str,
+    turns: &[WindowTurn],
+    config: &MemoryRuntimeConfig,
+) -> Result<(), String> {
+    let _ = replace_turns_internal(session_id, turns, None, config)
+        .map_err(|error| match error {
+            ReplaceTurnsFailure::Conflict {
+                expected_turn_count,
+                actual_turn_count,
+            } => format!(
+                "memory.replace_turns conflict: expected turn count {expected_turn_count}, found {actual_turn_count}"
+            ),
+            ReplaceTurnsFailure::Message(message) => message,
+        })?;
+    Ok(())
 }
 
 pub(super) fn append_turn_direct(
@@ -673,6 +765,36 @@ pub(super) fn load_context_snapshot_with_diagnostics(
     })
 }
 
+pub(super) fn load_summary_body_for_durable_flush(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<Option<String>, String> {
+    let window_limit = default_window_size(config);
+    let runtime = acquire_memory_runtime(config)?;
+
+    runtime.with_connection("memory.durable_flush_summary", |conn| {
+        let recent_window =
+            query_recent_prompt_turns_with_overflow_probe(conn, session_id, window_limit, None)?;
+        if recent_window.window_starts_at_session_origin {
+            return Ok(None);
+        }
+
+        let checkpoint_meta = match recent_window.checkpoint_meta_lookup {
+            SummaryCheckpointMetaLookup::Known(checkpoint_meta) => checkpoint_meta,
+            SummaryCheckpointMetaLookup::Unknown => load_summary_checkpoint_meta(conn, session_id)?,
+        };
+        let checkpoint = materialize_summary_checkpoint(
+            conn,
+            session_id,
+            recent_window.summary_before_turn_id,
+            checkpoint_meta,
+            config,
+        )?;
+
+        Ok(checkpoint.map(|value| value.summary_body))
+    })
+}
+
 pub(super) fn ensure_memory_db_ready(
     path: Option<PathBuf>,
     config: &MemoryRuntimeConfig,
@@ -743,6 +865,39 @@ fn lexical_normalize_runtime_db_path(path: &Path) -> PathBuf {
     }
 }
 
+/// Walk up the directory tree to find the deepest existing ancestor, canonicalize it
+/// via [`dunce::canonicalize`], and reattach the remaining path components.  This
+/// resolves Windows 8.3 short names (e.g. `RUNNER~1` -> `runneradmin`) even when
+/// the target file and its immediate parent directory do not yet exist.
+fn canonicalize_existing_ancestor(path: &Path) -> PathBuf {
+    let mut remaining = Vec::new();
+    let mut current = path.to_path_buf();
+
+    while !current.exists() {
+        let Some(name) = current.file_name().map(|n| n.to_os_string()) else {
+            return path.to_path_buf();
+        };
+        remaining.push(name);
+        let Some(parent) = current.parent().map(|p| p.to_path_buf()) else {
+            return path.to_path_buf();
+        };
+        if parent == current {
+            return path.to_path_buf();
+        }
+        current = parent;
+    }
+
+    match dunce::canonicalize(&current) {
+        Ok(mut canonical) => {
+            for component in remaining.into_iter().rev() {
+                canonical.push(component);
+            }
+            canonical
+        }
+        Err(_) => path.to_path_buf(),
+    }
+}
+
 fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
     let absolute = lexical_normalize_runtime_db_path(&absolutize_runtime_db_path(path)?);
     if let Some(normalized_path) = sqlite_runtime_path_alias_registry()
@@ -760,8 +915,7 @@ fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
     test_support::record_runtime_path_normalization_full();
 
     let normalized = if absolute.exists() {
-        absolute
-            .canonicalize()
+        dunce::canonicalize(&absolute)
             .map_err(|error| format!("canonicalize sqlite db path failed: {error}"))?
     } else {
         let Some(file_name) = absolute.file_name() else {
@@ -771,9 +925,9 @@ fn normalize_runtime_db_path(path: &Path) -> Result<PathBuf, String> {
             return Ok(absolute);
         };
 
-        match parent.canonicalize() {
+        match dunce::canonicalize(parent) {
             Ok(canonical_parent) => canonical_parent.join(file_name),
-            Err(_) => absolute.clone(),
+            Err(_) => canonicalize_existing_ancestor(&absolute),
         }
     };
 
@@ -863,6 +1017,97 @@ fn append_turn_internal(
     Ok(AppendTurnResult { db_path: path, ts })
 }
 
+fn replace_turns_internal(
+    session_id: &str,
+    turns: &[WindowTurn],
+    expected_turn_count: Option<usize>,
+    config: &MemoryRuntimeConfig,
+) -> Result<usize, ReplaceTurnsFailure> {
+    let session_id = normalize_required_str(
+        session_id,
+        "memory.replace_turns requires payload.session_id",
+    )
+    .map_err(ReplaceTurnsFailure::Message)?;
+    let runtime = acquire_memory_runtime(config).map_err(ReplaceTurnsFailure::Message)?;
+
+    runtime
+        .with_connection_mut("memory.replace_turns", |conn| {
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(|error| format!("begin memory replace transaction failed: {error}"))?;
+
+            if let Some(expected_turn_count) = expected_turn_count {
+                let actual_turn_count = resolve_actual_turn_count(&tx, session_id)? as usize;
+                if actual_turn_count != expected_turn_count {
+                    return Ok(Err(ReplaceTurnsFailure::Conflict {
+                        expected_turn_count,
+                        actual_turn_count,
+                    }));
+                }
+            }
+
+            {
+                let mut delete_turns = prepare_cached_sqlite_statement(
+                    &tx,
+                    SQL_DELETE_TURNS_FOR_SESSION,
+                    "prepare replace-turns delete statement failed",
+                )?;
+                delete_turns
+                    .execute(rusqlite::params![session_id])
+                    .map_err(|error| format!("delete memory turns failed: {error}"))?;
+            }
+
+            delete_session_state(&tx, session_id)?;
+            delete_summary_checkpoint(&tx, session_id)?;
+
+            if !turns.is_empty() {
+                {
+                    let mut insert_turn = prepare_cached_sqlite_statement(
+                        &tx,
+                        SQL_INSERT_TURN,
+                        "prepare replace-turns insert statement failed",
+                    )?;
+                    for (index, turn) in turns.iter().enumerate() {
+                        let role = normalize_required_str(
+                            &turn.role,
+                            "memory.replace_turns requires turns[*].role",
+                        )?;
+                        let ts = turn.ts.ok_or_else(|| {
+                            "memory.replace_turns requires turns[*].ts".to_owned()
+                        })?;
+                        insert_turn
+                            .execute(rusqlite::params![
+                                session_id,
+                                (index + 1) as i64,
+                                role,
+                                &turn.content,
+                                ts
+                            ])
+                            .map_err(|error| {
+                                format!("insert replaced memory turn failed: {error}")
+                            })?;
+                    }
+                }
+
+                let mut set_turn_count = prepare_cached_sqlite_statement(
+                    &tx,
+                    SQL_SET_SESSION_TURN_COUNT,
+                    "prepare replace-turns session-state statement failed",
+                )?;
+                set_turn_count
+                    .execute(rusqlite::params![session_id, turns.len() as i64])
+                    .map_err(|error| {
+                        format!("upsert replace-turns session state failed: {error}")
+                    })?;
+            }
+
+            tx.commit()
+                .map_err(|error| format!("commit memory replace transaction failed: {error}"))?;
+            Ok(Ok(turns.len()))
+        })
+        .map_err(ReplaceTurnsFailure::Message)?
+}
+
 fn load_window_internal(
     session_id: &str,
     requested_limit: usize,
@@ -880,13 +1125,14 @@ fn load_window_internal(
     };
     let runtime = acquire_memory_runtime(config)?;
     let path = runtime.path().to_path_buf();
-    let turns = runtime.with_connection("memory.window", |conn| {
+    let (turns, turn_count) = runtime.with_connection("memory.window", |conn| {
         query_recent_turns(conn, session_id, effective_limit)
     })?;
     Ok(WindowLoadResult {
         db_path: path,
         limit: effective_limit,
         turns,
+        turn_count,
     })
 }
 
@@ -952,7 +1198,45 @@ fn acquire_sqlite_runtime_with_diagnostics(
         // Lock drops here — cold bootstrap runs without blocking other paths.
     }
 
-    // Slow path: bootstrap outside the lock, then re-acquire to insert.
+    #[cfg(test)]
+    test_support::wait_for_sqlite_runtime_cache_miss(&normalized_path);
+
+    let bootstrap_lock = {
+        let mut bootstrap_registry =
+            sqlite_runtime_bootstrap_lock_registry()
+                .lock()
+                .map_err(|poisoned| {
+                    format!("lock sqlite runtime bootstrap registry failed: {poisoned}")
+                })?;
+        let bootstrap_entry = bootstrap_registry
+            .entry(normalized_path.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())));
+        bootstrap_entry.clone()
+    };
+    let _bootstrap_guard = bootstrap_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    {
+        let registry_lock_started_at = StdInstant::now();
+        let registry = sqlite_runtime_registry()
+            .lock()
+            .map_err(|poisoned| format!("lock sqlite runtime registry failed: {poisoned}"))?;
+        diagnostics.registry_lock_ms += elapsed_ms(registry_lock_started_at);
+
+        let registry_lookup_started_at = StdInstant::now();
+        if let Some(runtime) = registry.get(&normalized_path) {
+            diagnostics.registry_lookup_ms += elapsed_ms(registry_lookup_started_at);
+            diagnostics.cache_hit = true;
+            diagnostics.total_ms = elapsed_ms(total_started_at);
+            return Ok((runtime.clone(), diagnostics));
+        }
+        diagnostics.registry_lookup_ms += elapsed_ms(registry_lookup_started_at);
+    }
+
+    // Slow path: bootstrap outside the global registry lock, but serialize cold
+    // starts for the same normalized path so concurrent callers do not race
+    // each other through connection configuration.
     let runtime_create_started_at = StdInstant::now();
     let (runtime, connection_diagnostics) =
         SqliteRuntime::new_with_diagnostics(normalized_path.clone())?;
@@ -986,6 +1270,13 @@ fn sqlite_runtime_registry() -> &'static Mutex<HashMap<PathBuf, Arc<SqliteRuntim
     static SQLITE_RUNTIME_REGISTRY: OnceLock<Mutex<HashMap<PathBuf, Arc<SqliteRuntime>>>> =
         OnceLock::new();
     SQLITE_RUNTIME_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn sqlite_runtime_bootstrap_lock_registry() -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<()>>>> {
+    static SQLITE_RUNTIME_BOOTSTRAP_LOCK_REGISTRY: OnceLock<
+        Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+    > = OnceLock::new();
+    SQLITE_RUNTIME_BOOTSTRAP_LOCK_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn sqlite_runtime_path_alias_registry() -> &'static Mutex<HashMap<PathBuf, PathBuf>> {
@@ -1080,6 +1371,12 @@ fn open_sqlite_connection_with_diagnostics(
               updated_at INTEGER NOT NULL,
               PRIMARY KEY(scope_session_id, approval_key)
             );
+            CREATE TABLE IF NOT EXISTS session_tool_policies(
+              session_id TEXT PRIMARY KEY,
+              requested_tool_ids_json TEXT NOT NULL,
+              runtime_narrowing_json TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_approval_requests_session_status_requested_at
               ON approval_requests(session_id, status, requested_at DESC, approval_request_id);
             ",
@@ -1091,6 +1388,7 @@ fn open_sqlite_connection_with_diagnostics(
     if user_version < SQLITE_MEMORY_SCHEMA_VERSION {
         ensure_turn_session_index_and_state_metadata(&conn)?;
         ensure_approval_lifecycle_tables(&conn)?;
+        ensure_session_tool_policy_storage(&conn)?;
         ensure_summary_checkpoint_storage_layout(&conn)?;
         write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
     }
@@ -1262,6 +1560,25 @@ fn ensure_approval_lifecycle_tables(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|error| format!("ensure approval lifecycle storage failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_tool_policy_storage(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("session_tool_policy");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS session_tool_policies(
+          session_id TEXT PRIMARY KEY,
+          requested_tool_ids_json TEXT NOT NULL,
+          runtime_narrowing_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        ",
+    )
+    .map_err(|error| format!("ensure session tool policy storage failed: {error}"))?;
 
     Ok(())
 }
@@ -1551,9 +1868,22 @@ fn summary_normalization_count_for_tests() -> usize {
 }
 
 #[cfg(test)]
+fn configure_sqlite_runtime_cache_miss_for_tests(path: &Path, target_waiters: usize) {
+    test_support::configure_sqlite_runtime_cache_miss(path, target_waiters);
+}
+
+#[cfg(test)]
+fn clear_sqlite_runtime_cache_miss_for_tests() {
+    test_support::clear_sqlite_runtime_cache_miss();
+}
+
+#[cfg(test)]
 fn reset_sqlite_runtime_test_state() {
     if let Ok(mut registry) = sqlite_runtime_registry().lock() {
         registry.clear();
+    }
+    if let Ok(mut bootstrap_registry) = sqlite_runtime_bootstrap_lock_registry().lock() {
+        bootstrap_registry.clear();
     }
     if let Ok(mut alias_registry) = sqlite_runtime_path_alias_registry().lock() {
         alias_registry.clear();
@@ -1570,6 +1900,9 @@ pub(super) fn drop_cached_sqlite_runtime(path: &Path) -> Result<bool, String> {
     if removed && let Ok(mut alias_registry) = sqlite_runtime_path_alias_registry().lock() {
         alias_registry.retain(|_key, value| *value != normalized_path);
     }
+    if removed && let Ok(mut bootstrap_registry) = sqlite_runtime_bootstrap_lock_registry().lock() {
+        bootstrap_registry.remove(&normalized_path);
+    }
     Ok(removed)
 }
 
@@ -1582,7 +1915,7 @@ fn query_recent_turns(
     conn: &Connection,
     session_id: &str,
     limit: usize,
-) -> Result<Vec<ConversationTurn>, String> {
+) -> Result<(Vec<ConversationTurn>, Option<usize>), String> {
     let mut stmt = prepare_cached_sqlite_statement(
         conn,
         SQL_QUERY_RECENT_TURNS_NO_ID,
@@ -1592,10 +1925,17 @@ fn query_recent_turns(
         .query(rusqlite::params![session_id, limit as i64])
         .map_err(|error| format!("query memory window failed: {error}"))?;
     let mut turns = Vec::with_capacity(limit);
+    let mut turn_count = None;
     while let Some(row) = rows
         .next()
         .map_err(|error| format!("read memory window row failed: {error}"))?
     {
+        if turn_count.is_none() {
+            turn_count = row
+                .get::<_, Option<i64>>(3)
+                .map_err(|error| format!("decode memory window turn count failed: {error}"))?
+                .map(|value| value.max(0) as usize);
+        }
         turns.push(ConversationTurn {
             role: row
                 .get(0)
@@ -1609,7 +1949,7 @@ fn query_recent_turns(
         });
     }
     turns.reverse();
-    Ok(turns)
+    Ok((turns, turn_count))
 }
 
 #[cfg(test)]
@@ -1802,6 +2142,22 @@ fn query_session_turn_count(conn: &Connection, session_id: &str) -> Result<Optio
             }
         })
         .map_err(|error| format!("query session turn count failed: {error}"))
+}
+
+fn resolve_actual_turn_count(conn: &Connection, session_id: &str) -> Result<i64, String> {
+    if let Some(turn_count) = query_session_turn_count(conn, session_id)? {
+        return Ok(turn_count.max(0));
+    }
+
+    conn.query_row(
+        "SELECT COALESCE(MAX(session_turn_index), 0)
+         FROM turns
+         WHERE session_id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|turn_count| turn_count.max(0))
+    .map_err(|error| format!("query fallback session turn count failed: {error}"))
 }
 
 fn query_recent_prompt_turns_with_known_overflow(
@@ -3117,12 +3473,180 @@ mod tests {
     }
 
     #[test]
+    fn load_window_includes_turn_count_in_payload() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-window-turn-count-payload-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("window-turn-count.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("window-turn-count-session", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("window-turn-count-session", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("window-turn-count-session", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let outcome = load_window(
+            crate::memory::build_window_request("window-turn-count-session", 2),
+            &config,
+        )
+        .expect("window load should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["turn_count"], 3);
+        assert_eq!(
+            outcome.payload["turns"]
+                .as_array()
+                .expect("window payload turns")
+                .len(),
+            2
+        );
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn replace_turns_requires_object_payload() {
+        let error = replace_turns(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_REPLACE_TURNS.to_owned(),
+                payload: json!("not-an-object"),
+            },
+            &MemoryRuntimeConfig::default(),
+        )
+        .expect_err("replace_turns should reject non-object payloads");
+
+        assert_eq!(error, "memory.replace_turns payload must be an object");
+    }
+
+    #[test]
+    fn replace_turns_rejects_malformed_expected_turn_count() {
+        let error = replace_turns(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_REPLACE_TURNS.to_owned(),
+                payload: json!({
+                    "session_id": "replace-turns-invalid-expected-count",
+                    "turns": [],
+                    "expected_turn_count": "invalid",
+                }),
+            },
+            &MemoryRuntimeConfig::default(),
+        )
+        .expect_err("replace_turns should reject malformed expected_turn_count");
+
+        assert_eq!(
+            error,
+            "memory.replace_turns payload.expected_turn_count must be a non-negative integer"
+        );
+    }
+
+    #[test]
+    fn replace_turns_uses_turn_rows_when_session_state_metadata_is_missing() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-replace-turns-fallback-count-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("replace-turns-fallback-count.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..MemoryRuntimeConfig::default()
+        };
+        let session_id = "replace-turns-fallback-count-session";
+
+        append_turn_direct(session_id, "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct(session_id, "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct(session_id, "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let runtime = acquire_memory_runtime(&config).expect("acquire runtime");
+        runtime
+            .with_connection_mut("test.delete_turn_count_before_replace", |conn| {
+                conn.execute(
+                    "DELETE FROM memory_session_state WHERE session_id = ?1",
+                    rusqlite::params![session_id],
+                )
+                .map_err(|error| format!("delete session turn count metadata failed: {error}"))
+            })
+            .expect("delete turn count metadata");
+
+        let outcome = replace_turns(
+            MemoryCoreRequest {
+                operation: MEMORY_OP_REPLACE_TURNS.to_owned(),
+                payload: json!({
+                    "session_id": session_id,
+                    "turns": [
+                        {"role": "user", "content": "replacement 1", "ts": 11},
+                        {"role": "assistant", "content": "replacement 2", "ts": 12},
+                    ],
+                    "expected_turn_count": 3,
+                }),
+            },
+            &config,
+        )
+        .expect("replace_turns should fall back to turn rows when session metadata is missing");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["replaced_turns"], 2);
+        assert_eq!(
+            read_session_turn_count(&config, session_id).expect("read session turn count"),
+            Some(2)
+        );
+        assert_eq!(
+            window_direct(session_id, 4, &config)
+                .expect("load replacement turns")
+                .into_iter()
+                .map(|turn| turn.content)
+                .collect::<Vec<_>>(),
+            vec!["replacement 1".to_owned(), "replacement 2".to_owned()]
+        );
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn memory_operations_reuse_cached_sqlite_runtime_for_same_path() {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3157,12 +3681,77 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_same_path_bootstrap_reuses_one_cold_runtime() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-sqlite-runtime-concurrent-bootstrap-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("runtime-concurrent.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        configure_sqlite_runtime_cache_miss_for_tests(&db_path, 2);
+
+        let start_barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let thread_a_barrier = start_barrier.clone();
+        let thread_a_path = db_path.clone();
+        let thread_a_config = config.clone();
+        let thread_a = std::thread::spawn(move || {
+            thread_a_barrier.wait();
+            ensure_memory_db_ready(Some(thread_a_path), &thread_a_config)
+        });
+
+        let thread_b_barrier = start_barrier.clone();
+        let thread_b_path = db_path.clone();
+        let thread_b_config = config;
+        let thread_b = std::thread::spawn(move || {
+            thread_b_barrier.wait();
+            ensure_memory_db_ready(Some(thread_b_path), &thread_b_config)
+        });
+
+        start_barrier.wait();
+
+        let thread_a_result = thread_a.join().expect("join bootstrap thread a");
+        let thread_b_result = thread_b.join().expect("join bootstrap thread b");
+
+        clear_sqlite_runtime_cache_miss_for_tests();
+
+        thread_a_result.expect("bootstrap thread a should succeed");
+        thread_b_result.expect("bootstrap thread b should succeed");
+
+        assert_eq!(
+            sqlite_bootstrap_count_for_tests(&db_path),
+            1,
+            "expected concurrent cold access to serialize same-path bootstrap work"
+        );
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn distinct_sqlite_paths_get_distinct_runtime_bootstraps() {
         use crate::config::{MemoryMode, MemoryProfile};
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3216,7 +3805,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3258,7 +3847,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3320,7 +3909,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3362,6 +3951,7 @@ mod tests {
             "expected normalized bootstrap count to be recorded under the canonical path"
         );
 
+        drop(_cwd_guard);
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -3372,7 +3962,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3415,6 +4005,7 @@ mod tests {
             "expected normalized bootstrap count to land on the canonical db path"
         );
 
+        drop(_cwd_guard);
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -3425,7 +4016,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3467,7 +4058,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3514,6 +4105,7 @@ mod tests {
             "expected repeated same-path runtime lookups to reuse the existing cached sqlite runtime"
         );
 
+        drop(_cwd_guard);
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -3524,7 +4116,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3572,7 +4164,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3619,7 +4211,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -3664,7 +4256,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -3707,7 +4299,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -3768,7 +4360,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -3872,7 +4464,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -3945,7 +4537,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4001,7 +4593,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4062,7 +4654,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -4165,7 +4757,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
 
@@ -4265,7 +4857,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4347,7 +4939,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4422,7 +5014,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4522,7 +5114,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4615,7 +5207,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -4709,7 +5301,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4812,7 +5404,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -4892,7 +5484,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5147,7 +5739,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
 
@@ -5253,7 +5845,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5326,7 +5918,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5431,7 +6023,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -5549,7 +6141,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5602,7 +6194,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5708,7 +6300,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_summary_materialization_metrics_for_tests();
 
@@ -5811,7 +6403,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -5911,7 +6503,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6000,7 +6592,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6064,7 +6656,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6138,7 +6730,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6280,7 +6872,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
 
         let tmp = std::env::temp_dir().join(format!(
@@ -6492,7 +7084,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -6578,7 +7170,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -6679,7 +7271,7 @@ mod tests {
 
         let _guard = sqlite_runtime_test_lock()
             .lock()
-            .expect("runtime test lock");
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         reset_sqlite_runtime_test_state();
         reset_cached_prepare_metrics_for_tests();
         let _metrics = begin_sqlite_metric_capture_for_tests();
@@ -6785,6 +7377,7 @@ mod tests {
 #[cfg(test)]
 mod test_support {
     use super::*;
+    use std::sync::Condvar;
 
     #[derive(Default)]
     struct SqliteMetricCapture {
@@ -6792,6 +7385,14 @@ mod test_support {
         cached_prepare_counts: HashMap<&'static str, usize>,
         summary_materialization_counts: HashMap<&'static str, usize>,
         runtime_path_normalization_counts: HashMap<&'static str, usize>,
+    }
+
+    #[derive(Default)]
+    struct SqliteRuntimeCacheMissGate {
+        path: Option<PathBuf>,
+        target_waiters: usize,
+        waiting_threads: usize,
+        released: bool,
     }
 
     fn bootstrap_counts() -> &'static Mutex<HashMap<PathBuf, usize>> {
@@ -6813,6 +7414,19 @@ mod test_support {
     fn sqlite_metric_capture() -> &'static Mutex<SqliteMetricCapture> {
         static SQLITE_METRIC_CAPTURE: OnceLock<Mutex<SqliteMetricCapture>> = OnceLock::new();
         SQLITE_METRIC_CAPTURE.get_or_init(|| Mutex::new(SqliteMetricCapture::default()))
+    }
+
+    fn sqlite_runtime_cache_miss_gate() -> &'static (Mutex<SqliteRuntimeCacheMissGate>, Condvar) {
+        static SQLITE_RUNTIME_CACHE_MISS_GATE: OnceLock<(
+            Mutex<SqliteRuntimeCacheMissGate>,
+            Condvar,
+        )> = OnceLock::new();
+        SQLITE_RUNTIME_CACHE_MISS_GATE.get_or_init(|| {
+            (
+                Mutex::new(SqliteRuntimeCacheMissGate::default()),
+                Condvar::new(),
+            )
+        })
     }
 
     fn lock_sqlite_metric_capture() -> std::sync::MutexGuard<'static, SqliteMetricCapture> {
@@ -6946,6 +7560,61 @@ mod test_support {
             .get("alias_hit")
             .copied()
             .unwrap_or_default()
+    }
+
+    pub(super) fn configure_sqlite_runtime_cache_miss(path: &Path, target_waiters: usize) {
+        let normalized_path = normalize_runtime_db_path_best_effort(path);
+        let (gate_lock, gate_condvar) = sqlite_runtime_cache_miss_gate();
+        let mut gate = gate_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        gate.path = Some(normalized_path);
+        gate.target_waiters = target_waiters;
+        gate.waiting_threads = 0;
+        gate.released = false;
+        gate_condvar.notify_all();
+    }
+
+    pub(super) fn wait_for_sqlite_runtime_cache_miss(path: &Path) {
+        let normalized_path = normalize_runtime_db_path_best_effort(path);
+        let (gate_lock, gate_condvar) = sqlite_runtime_cache_miss_gate();
+        let mut gate = gate_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(configured_path) = gate.path.as_ref() else {
+            return;
+        };
+        if *configured_path != normalized_path {
+            return;
+        }
+        if gate.released {
+            return;
+        }
+
+        gate.waiting_threads += 1;
+        if gate.waiting_threads >= gate.target_waiters {
+            gate.released = true;
+            gate_condvar.notify_all();
+            return;
+        }
+
+        while !gate.released {
+            gate = gate_condvar
+                .wait(gate)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    pub(super) fn clear_sqlite_runtime_cache_miss() {
+        let (gate_lock, gate_condvar) = sqlite_runtime_cache_miss_gate();
+        let mut gate = gate_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        gate.path = None;
+        gate.target_waiters = 0;
+        gate.waiting_threads = 0;
+        gate.released = false;
+        gate_condvar.notify_all();
     }
 
     pub(super) fn record_summary_streaming_query(kind: &'static str) {
@@ -7124,5 +7793,6 @@ mod test_support {
         end_sqlite_metric_capture();
         reset_cached_prepare_metrics();
         reset_summary_materialization_metrics();
+        clear_sqlite_runtime_cache_miss();
     }
 }

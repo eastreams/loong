@@ -484,8 +484,12 @@ mod tests {
                 "work".to_owned(),
                 crate::config::FeishuAccountConfig {
                     account_id: Some("feishu_shared".to_owned()),
-                    app_id: Some("cli_work".to_owned()),
-                    app_secret: Some("app-secret-work".to_owned()),
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "cli_work".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "app-secret-work".to_owned(),
+                    )),
                     ..crate::config::FeishuAccountConfig::default()
                 },
             )]),
@@ -513,8 +517,12 @@ mod tests {
                     "Work Bot".to_owned(),
                     crate::config::FeishuAccountConfig {
                         account_id: Some("feishu_shared".to_owned()),
-                        app_id: Some("cli_work".to_owned()),
-                        app_secret: Some("app-secret-work".to_owned()),
+                        app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                            "cli_work".to_owned(),
+                        )),
+                        app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            "app-secret-work".to_owned(),
+                        )),
                         ..crate::config::FeishuAccountConfig::default()
                     },
                 ),
@@ -522,8 +530,12 @@ mod tests {
                     "Alerts Bot".to_owned(),
                     crate::config::FeishuAccountConfig {
                         account_id: Some("feishu_shared".to_owned()),
-                        app_id: Some("cli_alerts".to_owned()),
-                        app_secret: Some("app-secret-alerts".to_owned()),
+                        app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                            "cli_alerts".to_owned(),
+                        )),
+                        app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                            "app-secret-alerts".to_owned(),
+                        )),
                         ..crate::config::FeishuAccountConfig::default()
                     },
                 ),

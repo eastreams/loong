@@ -167,6 +167,24 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
 }
 
 #[test]
+fn chat_without_config_runs_onboard_for_default_enter() {
+    let fixture = ChatCliFixture::new("default-enter");
+    let output = fixture.run_chat_command_with_fake_onboard(None, Some(b"\n"), Some(0));
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "default enter should now accept onboarding, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        fixture.onboard_log().contains("onboard"),
+        "default enter should invoke `loongclaw onboard`: {:?}",
+        fixture.onboard_log()
+    );
+}
+
+#[test]
 fn chat_without_config_forwards_explicit_config_path_to_onboard() {
     let fixture = ChatCliFixture::new("explicit-config");
     let explicit_config = fixture.root.join("custom-config.toml");
@@ -196,13 +214,15 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
     let fixture = ChatCliFixture::new("decline-explicit-config");
     let explicit_config = fixture.root.join("custom-config.toml");
 
-    let output = fixture.run_chat_command(Some(&explicit_config), Some(b"\n"));
+    let output = fixture.run_chat_command(Some(&explicit_config), Some(b"n\n"));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
     let expected_hint = format!(
         "You can run 'loongclaw onboard --output {}' later to get started.",
         explicit_config.display()
     );
+    let compacted_stdout = stdout.split_whitespace().collect::<String>();
+    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -214,31 +234,31 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains(&expected_hint),
+        compacted_stdout.contains(&compacted_expected_hint),
         "decline hint should preserve the explicit config path: {stdout:?}"
     );
 }
 
 #[test]
-fn chat_without_config_treats_blank_line_as_decline() {
-    let fixture = ChatCliFixture::new("blank-line");
+fn chat_without_config_treats_explicit_no_as_decline() {
+    let fixture = ChatCliFixture::new("explicit-no");
 
-    let output = fixture.run_chat_command(None, Some(b"\n"));
+    let output = fixture.run_chat_command(None, Some(b"n\n"));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
 
     assert!(
         output.status.success(),
-        "blank input should exit cleanly, stdout={stdout:?}, stderr={stderr:?}"
+        "explicit no should exit cleanly, stdout={stdout:?}, stderr={stderr:?}"
     );
     assert!(
         fixture.onboard_log().is_empty(),
-        "blank input should not auto-run onboarding: {:?}",
+        "explicit no should not auto-run onboarding: {:?}",
         fixture.onboard_log()
     );
     assert!(
         stdout.contains("You can run 'loongclaw onboard' later to get started."),
-        "blank input should leave a follow-up hint: {stdout:?}"
+        "explicit no should leave a follow-up hint: {stdout:?}"
     );
 }
 

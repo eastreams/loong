@@ -1,10 +1,14 @@
+use std::path::Path;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::config::MemorySystemKind;
+use crate::config::MemoryMode;
 
 use super::{
-    MemoryContextEntry, WindowTurn, load_prompt_context, runtime_config::MemoryRuntimeConfig,
+    DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextEntry, MemoryRetrievalRequest,
+    MemoryScope, MemoryStageFamily, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
+    StageOutcome, WindowTurn, builtin_pre_assembly_stage_families, describe_memory_system,
+    load_prompt_context, runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +20,7 @@ pub struct HydratedMemoryContext {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryDiagnostics {
-    pub system_id: &'static str,
+    pub system_id: String,
     pub fail_open: bool,
     pub strict_mode_requested: bool,
     pub strict_mode_active: bool,
@@ -25,6 +29,12 @@ pub struct MemoryDiagnostics {
     pub retrieval_error: Option<String>,
     pub recent_window_count: usize,
     pub entry_count: usize,
+}
+
+impl MemoryDiagnostics {
+    pub fn normalize_system_id(raw: &str) -> Option<String> {
+        super::normalize_system_id(raw)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -102,33 +112,105 @@ impl Drop for ScopedMemoryOrchestratorTestFaults {
 }
 
 impl BuiltinMemoryOrchestrator {
+    pub fn hydrate_stage_envelope(
+        &self,
+        session_id: &str,
+        workspace_root: Option<&Path>,
+        config: &MemoryRuntimeConfig,
+        metadata: &MemorySystemMetadata,
+    ) -> Result<StageEnvelope, String> {
+        let recent_window = recent_window_records(session_id, config)?;
+        let mut entries = load_prompt_context(session_id, config)?;
+        let retrieval_request = metadata
+            .supports_pre_assembly_stage_family(MemoryStageFamily::Retrieve)
+            .then(|| build_builtin_retrieval_request(session_id, config))
+            .flatten();
+
+        let derive = run_pre_assembly_stage(MemoryStageFamily::Derive, metadata, config, || {
+            run_derivation_stage(session_id, config, &recent_window)
+        })?;
+        entries.extend(derive.records);
+
+        let retrieve =
+            run_pre_assembly_stage(MemoryStageFamily::Retrieve, metadata, config, || {
+                run_retrieval_stage(session_id, workspace_root, config, &recent_window)
+            })?;
+        entries.extend(retrieve.records);
+
+        let rank = run_rank_stage(entries, metadata);
+        let diagnostics = vec![derive.diagnostics, retrieve.diagnostics, rank.diagnostics];
+
+        Ok(StageEnvelope {
+            hydrated: HydratedMemoryContext::from_stage_parts(
+                rank.records,
+                recent_window,
+                diagnostics.as_slice(),
+                metadata.id,
+                config,
+            ),
+            retrieval_request,
+            diagnostics,
+        })
+    }
+
     pub fn hydrate(
         &self,
         session_id: &str,
+        workspace_root: Option<&Path>,
         config: &MemoryRuntimeConfig,
+        metadata: &MemorySystemMetadata,
     ) -> Result<HydratedMemoryContext, String> {
-        let recent_window = recent_window_records(session_id, config)?;
-        let mut entries = load_prompt_context(session_id, config)?;
-        let mut derivation_error = None;
-        let mut retrieval_error = None;
-        let fail_open = config.effective_fail_open();
+        Ok(self
+            .hydrate_stage_envelope(session_id, workspace_root, config, metadata)?
+            .hydrated)
+    }
+}
 
-        match run_derivation_stage(session_id, config, &recent_window) {
-            Ok(extra_entries) => entries.extend(extra_entries),
-            Err(error) if fail_open => derivation_error = Some(error),
-            Err(error) => return Err(format!("memory derivation stage failed: {error}")),
+impl HydratedMemoryContext {
+    fn from_stage_parts(
+        entries: Vec<MemoryContextEntry>,
+        recent_window: Vec<WindowTurn>,
+        stage_diagnostics: &[StageDiagnostics],
+        system_id: &str,
+        config: &MemoryRuntimeConfig,
+    ) -> Self {
+        let diagnostics = MemoryDiagnostics::from_stage_diagnostics(
+            config,
+            &recent_window,
+            &entries,
+            stage_diagnostics,
+            system_id,
+        );
+
+        Self {
+            entries,
+            recent_window,
+            diagnostics,
         }
+    }
+}
 
-        match run_retrieval_stage(session_id, config, &recent_window) {
-            Ok(extra_entries) => entries.extend(extra_entries),
-            Err(error) if fail_open => retrieval_error = Some(error),
-            Err(error) => return Err(format!("memory retrieval stage failed: {error}")),
-        }
+impl MemoryDiagnostics {
+    fn from_stage_diagnostics(
+        config: &MemoryRuntimeConfig,
+        recent_window: &[WindowTurn],
+        entries: &[MemoryContextEntry],
+        stage_diagnostics: &[StageDiagnostics],
+        system_id: &str,
+    ) -> Self {
+        let derivation_error = stage_error_message(stage_diagnostics, MemoryStageFamily::Derive);
+        let retrieval_error = stage_error_message(stage_diagnostics, MemoryStageFamily::Retrieve);
+        let degraded = stage_diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.outcome,
+                StageOutcome::Fallback | StageOutcome::Failed
+            )
+        });
 
-        let degraded = derivation_error.is_some() || retrieval_error.is_some();
-        let diagnostics = MemoryDiagnostics {
-            system_id: config.system.as_str(),
-            fail_open,
+        Self {
+            system_id: MemoryDiagnostics::normalize_system_id(system_id)
+                .unwrap_or_else(|| system_id.to_owned()),
+            fail_open: config.effective_fail_open(),
             strict_mode_requested: config.strict_mode_requested(),
             strict_mode_active: config.strict_mode_active(),
             degraded,
@@ -136,14 +218,184 @@ impl BuiltinMemoryOrchestrator {
             retrieval_error,
             recent_window_count: recent_window.len(),
             entry_count: entries.len(),
-        };
-
-        Ok(HydratedMemoryContext {
-            entries,
-            recent_window,
-            diagnostics,
-        })
+        }
     }
+}
+
+struct StageRunResult {
+    records: Vec<MemoryContextEntry>,
+    diagnostics: StageDiagnostics,
+}
+
+fn run_pre_assembly_stage<F>(
+    family: MemoryStageFamily,
+    metadata: &MemorySystemMetadata,
+    config: &MemoryRuntimeConfig,
+    runner: F,
+) -> Result<StageRunResult, String>
+where
+    F: FnOnce() -> Result<Vec<MemoryContextEntry>, String>,
+{
+    if !metadata.supports_pre_assembly_stage_family(family) {
+        return Ok(StageRunResult {
+            records: Vec::new(),
+            diagnostics: skipped_stage_diagnostics(family, None),
+        });
+    }
+
+    match runner() {
+        Ok(records) => Ok(StageRunResult {
+            records,
+            diagnostics: StageDiagnostics::succeeded(family),
+        }),
+        Err(error) if config.effective_fail_open() => Ok(StageRunResult {
+            records: Vec::new(),
+            diagnostics: StageDiagnostics {
+                family,
+                outcome: StageOutcome::Fallback,
+                budget_ms: None,
+                elapsed_ms: None,
+                fallback_activated: true,
+                message: Some(error),
+            },
+        }),
+        Err(error) => Err(format!("memory {} stage failed: {error}", family.as_str())),
+    }
+}
+
+fn run_rank_stage(
+    entries: Vec<MemoryContextEntry>,
+    metadata: &MemorySystemMetadata,
+) -> StageRunResult {
+    if !metadata.supports_pre_assembly_stage_family(MemoryStageFamily::Rank) {
+        return StageRunResult {
+            records: entries,
+            diagnostics: skipped_stage_diagnostics(MemoryStageFamily::Rank, None),
+        };
+    }
+
+    // Slice 1 keeps ranking as an identity stage until compaction and external
+    // ranking hooks graduate beyond the built-in pipeline contract.
+    StageRunResult {
+        records: entries,
+        diagnostics: StageDiagnostics::succeeded(MemoryStageFamily::Rank),
+    }
+}
+
+fn skipped_stage_diagnostics(
+    family: MemoryStageFamily,
+    message: Option<String>,
+) -> StageDiagnostics {
+    StageDiagnostics {
+        family,
+        outcome: StageOutcome::Skipped,
+        budget_ms: None,
+        elapsed_ms: None,
+        fallback_activated: false,
+        message,
+    }
+}
+
+pub async fn run_compact_stage(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageDiagnostics, String> {
+    let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
+        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+
+    match selected_system_id.as_str() {
+        DEFAULT_MEMORY_SYSTEM_ID => {
+            run_builtin_compact_stage(session_id, workspace_root, config).await
+        }
+        _ => Ok(skipped_stage_diagnostics(
+            MemoryStageFamily::Compact,
+            Some(
+                "memory system is registered but has no compact-stage execution adapter yet"
+                    .to_owned(),
+            ),
+        )),
+    }
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+async fn run_builtin_compact_stage(
+    _session_id: &str,
+    _workspace_root: Option<&Path>,
+    _config: &MemoryRuntimeConfig,
+) -> Result<StageDiagnostics, String> {
+    Ok(StageDiagnostics {
+        family: MemoryStageFamily::Compact,
+        outcome: StageOutcome::Skipped,
+        budget_ms: None,
+        elapsed_ms: None,
+        fallback_activated: false,
+        message: None,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn run_builtin_compact_stage(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageDiagnostics, String> {
+    match super::flush_pre_compaction_durable_memory(session_id, workspace_root, config).await {
+        Ok(super::durable_flush::PreCompactionDurableFlushOutcome::Flushed { .. }) => {
+            Ok(StageDiagnostics::succeeded(MemoryStageFamily::Compact))
+        }
+        Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedDuplicate)
+        | Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedMissingWorkspaceRoot)
+        | Ok(super::durable_flush::PreCompactionDurableFlushOutcome::SkippedNoSummary) => {
+            Ok(StageDiagnostics {
+                family: MemoryStageFamily::Compact,
+                outcome: StageOutcome::Skipped,
+                budget_ms: None,
+                elapsed_ms: None,
+                fallback_activated: false,
+                message: None,
+            })
+        }
+        Err(error) if config.effective_fail_open() => Ok(StageDiagnostics {
+            family: MemoryStageFamily::Compact,
+            outcome: StageOutcome::Fallback,
+            budget_ms: None,
+            elapsed_ms: None,
+            fallback_activated: true,
+            message: Some(error),
+        }),
+        Err(error) => Err(format!("memory compact stage failed: {error}")),
+    }
+}
+
+fn build_builtin_retrieval_request(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Option<MemoryRetrievalRequest> {
+    if !matches!(config.mode, MemoryMode::WindowPlusSummary) {
+        return None;
+    }
+
+    Some(MemoryRetrievalRequest {
+        session_id: session_id.to_owned(),
+        query: None,
+        scopes: vec![MemoryScope::Session],
+        budget_items: config.sliding_window,
+        allowed_kinds: vec![DerivedMemoryKind::Summary],
+    })
+}
+
+fn stage_error_message(
+    stage_diagnostics: &[StageDiagnostics],
+    family: MemoryStageFamily,
+) -> Option<String> {
+    stage_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.family == family)
+        .and_then(|diagnostic| match diagnostic.outcome {
+            StageOutcome::Fallback | StageOutcome::Failed => diagnostic.message.clone(),
+            StageOutcome::Succeeded | StageOutcome::Skipped => None,
+        })
 }
 
 fn run_derivation_stage(
@@ -163,6 +415,7 @@ fn run_derivation_stage(
 
 fn run_retrieval_stage(
     _session_id: &str,
+    workspace_root: Option<&Path>,
     _config: &MemoryRuntimeConfig,
     _recent_window: &[WindowTurn],
 ) -> Result<Vec<MemoryContextEntry>, String> {
@@ -173,16 +426,90 @@ fn run_retrieval_stage(
         return Err(error);
     }
 
-    Ok(Vec::new())
+    super::load_durable_recall_entries(workspace_root, _config)
 }
 
 pub fn hydrate_memory_context(
     session_id: &str,
     config: &MemoryRuntimeConfig,
 ) -> Result<HydratedMemoryContext, String> {
-    match config.system {
-        MemorySystemKind::Builtin => BuiltinMemoryOrchestrator.hydrate(session_id, config),
+    hydrate_memory_context_with_workspace_root(session_id, None, config)
+}
+
+pub fn hydrate_memory_context_with_workspace_root(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<HydratedMemoryContext, String> {
+    Ok(hydrate_stage_envelope_with_workspace_root(session_id, workspace_root, config)?.hydrated)
+}
+
+pub fn hydrate_stage_envelope(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageEnvelope, String> {
+    hydrate_stage_envelope_with_workspace_root(session_id, None, config)
+}
+
+pub(crate) fn hydrate_stage_envelope_with_workspace_root(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+) -> Result<StageEnvelope, String> {
+    let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
+        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
+    let metadata = describe_memory_system(Some(selected_system_id.as_str()))?;
+
+    if metadata.id == DEFAULT_MEMORY_SYSTEM_ID {
+        return BuiltinMemoryOrchestrator.hydrate_stage_envelope(
+            session_id,
+            workspace_root,
+            config,
+            &metadata,
+        );
     }
+
+    hydrate_stage_envelope_without_execution_adapter(session_id, config, &metadata)
+}
+
+fn hydrate_stage_envelope_without_execution_adapter(
+    session_id: &str,
+    config: &MemoryRuntimeConfig,
+    metadata: &MemorySystemMetadata,
+) -> Result<StageEnvelope, String> {
+    let recent_window = recent_window_records(session_id, config)?;
+    let entries = recent_window
+        .iter()
+        .map(|turn| MemoryContextEntry {
+            kind: super::MemoryContextKind::Turn,
+            role: turn.role.clone(),
+            content: turn.content.clone(),
+        })
+        .collect::<Vec<_>>();
+    let diagnostics = builtin_pre_assembly_stage_families()
+        .into_iter()
+        .map(|family| {
+            let message = metadata
+                .supports_pre_assembly_stage_family(family)
+                .then(|| {
+                    "memory system is registered but has no pre-assembly execution adapter yet"
+                        .to_owned()
+                });
+            skipped_stage_diagnostics(family, message)
+        })
+        .collect::<Vec<_>>();
+
+    Ok(StageEnvelope {
+        hydrated: HydratedMemoryContext::from_stage_parts(
+            entries,
+            recent_window,
+            &diagnostics,
+            metadata.id,
+            config,
+        ),
+        retrieval_request: None,
+        diagnostics,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -214,7 +541,28 @@ fn recent_window_records(
 mod tests {
     use super::*;
     use crate::config::{MemoryMode, MemoryProfile};
-    use crate::memory::{MemoryContextKind, append_turn_direct};
+    use crate::memory::{
+        MemoryContextKind, MemoryStageFamily, MemorySystem, MemorySystemCapability,
+        MemorySystemMetadata, StageOutcome, append_turn_direct,
+        builtin_pre_assembly_stage_families, register_memory_system,
+    };
+
+    struct RegistryRetrieveOnlyMemorySystem;
+
+    impl MemorySystem for RegistryRetrieveOnlyMemorySystem {
+        fn id(&self) -> &'static str {
+            "registry-retrieve-only"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-retrieve-only",
+                [MemorySystemCapability::PromptHydration],
+                "Registry system without an execution adapter yet",
+            )
+            .with_supported_pre_assembly_stage_families([MemoryStageFamily::Retrieve])
+        }
+    }
 
     fn hydrated_memory_temp_dir(prefix: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()))
@@ -368,6 +716,459 @@ mod tests {
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_emits_builtin_stage_diagnostics_in_order() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-order");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("stage-order.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("stage-order", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("stage-order", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("stage-order", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let envelope =
+            hydrate_stage_envelope("stage-order", &config).expect("hydrate staged envelope");
+
+        assert_eq!(
+            envelope
+                .diagnostics
+                .iter()
+                .map(|diag| diag.family)
+                .collect::<Vec<_>>(),
+            vec![
+                MemoryStageFamily::Derive,
+                MemoryStageFamily::Retrieve,
+                MemoryStageFamily::Rank,
+            ]
+        );
+        assert!(
+            envelope
+                .diagnostics
+                .iter()
+                .all(|diag| diag.outcome == StageOutcome::Succeeded)
+        );
+        assert_eq!(
+            envelope
+                .retrieval_request
+                .as_ref()
+                .map(|req| req.budget_items),
+            Some(config.sliding_window)
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_fail_open_marks_fallback_without_losing_recent_window() {
+        let session_id = "stage-fail-open-derivation";
+        let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
+            session_id: Some(session_id.to_owned()),
+            derivation_error: Some("synthetic derivation failure".to_owned()),
+            ..MemoryOrchestratorTestFaults::default()
+        });
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-fallback");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("stage-fallback.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct(session_id, "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct(session_id, "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct(session_id, "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope(session_id, &config)
+            .expect("fail-open staged hydration should succeed");
+
+        assert_eq!(envelope.diagnostics[0].family, MemoryStageFamily::Derive);
+        assert_eq!(envelope.diagnostics[0].outcome, StageOutcome::Fallback);
+        assert!(envelope.diagnostics[0].fallback_activated);
+        assert_eq!(
+            envelope.diagnostics[0].message.as_deref(),
+            Some("synthetic derivation failure")
+        );
+        assert_eq!(envelope.hydrated.recent_window.len(), 2);
+        assert_eq!(envelope.hydrated.recent_window[0].content, "turn 2");
+        assert_eq!(envelope.hydrated.recent_window[1].content, "turn 3");
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_window_plus_summary_keeps_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-window-plus-summary");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-plus-summary.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope = hydrate_stage_envelope("stage-window-plus-summary", &config)
+            .expect("hydrate staged envelope");
+
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("window-plus-summary should advertise retrieval request");
+        assert_eq!(retrieval_request.budget_items, config.sliding_window);
+        assert_eq!(
+            retrieval_request.allowed_kinds,
+            vec![DerivedMemoryKind::Summary]
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_window_only_omits_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-window-only");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-only.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope =
+            hydrate_stage_envelope("stage-window-only", &config).expect("hydrate staged envelope");
+
+        assert_eq!(envelope.retrieval_request, None);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_profile_plus_window_omits_summary_retrieval_request() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-profile-plus-window");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile-plus-window.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            profile_note: Some("Imported ZeroClaw preferences".to_owned()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        let envelope = hydrate_stage_envelope("stage-profile-plus-window", &config)
+            .expect("hydrate staged envelope");
+
+        assert_eq!(envelope.retrieval_request, None);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn registry_selected_system_skips_builtin_pre_assembly_execution() {
+        register_memory_system("registry-retrieve-only", || {
+            Box::new(RegistryRetrieveOnlyMemorySystem)
+        })
+        .expect("register registry-selected memory system");
+
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-registry-selected");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("registry-selected.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id = Some("registry-retrieve-only".to_owned());
+
+        append_turn_direct("registry-selected", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("registry-selected", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("registry-selected", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope("registry-selected", &config)
+            .expect("hydrate staged envelope for registry-selected system");
+
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            "registry-retrieve-only"
+        );
+        assert_eq!(envelope.hydrated.recent_window.len(), 2);
+        assert_eq!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .filter(|entry| entry.kind == MemoryContextKind::Turn)
+                .map(|entry| (entry.role.as_str(), entry.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("assistant", "turn 2"), ("user", "turn 3")]
+        );
+        assert_eq!(envelope.retrieval_request, None);
+        assert_eq!(
+            envelope
+                .diagnostics
+                .iter()
+                .map(|diag| (diag.family, diag.outcome))
+                .collect::<Vec<_>>(),
+            builtin_pre_assembly_stage_families()
+                .into_iter()
+                .map(|family| (family, StageOutcome::Skipped))
+                .collect::<Vec<_>>()
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn unknown_registry_selected_system_falls_back_to_builtin_hydration() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-unknown-selected");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("unknown-selected.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id = Some("lucid".to_owned());
+
+        append_turn_direct("unknown-selected", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("unknown-selected", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("unknown-selected", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope("unknown-selected", &config)
+            .expect("unknown selected system should fall back to builtin");
+
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            DEFAULT_MEMORY_SYSTEM_ID
+        );
+        assert!(
+            envelope
+                .hydrated
+                .entries
+                .iter()
+                .any(|entry| entry.kind == MemoryContextKind::Summary),
+            "builtin summary projection should remain available after fallback"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_emits_succeeded_diagnostics_when_durable_flush_runs() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-succeeded");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("compact-stage-succeeded", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-succeeded", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("compact-stage-succeeded", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let diagnostics =
+            run_compact_stage("compact-stage-succeeded", Some(tmp.as_path()), &config)
+                .await
+                .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_skips_when_workspace_root_is_absent() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-skipped");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage-skipped.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("compact-stage-skipped", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-skipped", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+
+        let diagnostics = run_compact_stage("compact-stage-skipped", None, &config)
+            .await
+            .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_skips_when_durable_flush_is_duplicate() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-duplicate");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage-duplicate.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct("compact-stage-duplicate", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-duplicate", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("compact-stage-duplicate", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        run_compact_stage("compact-stage-duplicate", Some(tmp.as_path()), &config)
+            .await
+            .expect("first compact stage run");
+
+        let diagnostics =
+            run_compact_stage("compact-stage-duplicate", Some(tmp.as_path()), &config)
+                .await
+                .expect("second compact stage run");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_skips_for_registry_selected_system_without_executor() {
+        register_memory_system("registry-retrieve-only", || {
+            Box::new(RegistryRetrieveOnlyMemorySystem)
+        })
+        .expect("register registry-selected memory system");
+
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-registry-selected");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage-registry-selected.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id = Some("registry-retrieve-only".to_owned());
+
+        append_turn_direct("compact-stage-registry-selected", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct(
+            "compact-stage-registry-selected",
+            "assistant",
+            "turn 2",
+            &config,
+        )
+        .expect("append turn 2 should succeed");
+        append_turn_direct("compact-stage-registry-selected", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let diagnostics = run_compact_stage(
+            "compact-stage-registry-selected",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .await
+        .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[cfg(feature = "memory-sqlite")]

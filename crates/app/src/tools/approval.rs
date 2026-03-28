@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 #[cfg(feature = "memory-sqlite")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
+
 #[cfg(feature = "memory-sqlite")]
 use crate::config::SessionVisibility;
 use crate::config::ToolConfig;
@@ -494,7 +496,8 @@ fn execute_approval_request_status(
     config: &MemoryRuntimeConfig,
     tool_config: &ToolConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    let approval_request_id = required_payload_string(&payload, "approval_request_id")?;
+    let approval_request_id =
+        required_payload_string(&payload, "approval_request_id", "approval tool")?;
     let repo = SessionRepository::new(config)?;
     let request = repo
         .load_approval_request(&approval_request_id)?
@@ -804,8 +807,16 @@ fn parse_approval_request_resolve_request(
     payload: &Value,
 ) -> Result<ApprovalRequestResolveRequest, String> {
     Ok(ApprovalRequestResolveRequest {
-        approval_request_id: required_payload_string(payload, "approval_request_id")?,
-        decision: parse_approval_decision(&required_payload_string(payload, "decision")?)?,
+        approval_request_id: required_payload_string(
+            payload,
+            "approval_request_id",
+            "approval tool",
+        )?,
+        decision: parse_approval_decision(&required_payload_string(
+            payload,
+            "decision",
+            "approval tool",
+        )?)?,
     })
 }
 
@@ -845,33 +856,6 @@ fn ensure_visible(
     Err(format!(
         "visibility_denied: session `{target_session_id}` is not visible from `{current_session_id}`"
     ))
-}
-
-fn required_payload_string(payload: &Value, field: &str) -> Result<String, String> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("approval tool requires payload.{field}"))
-}
-
-fn optional_payload_string(payload: &Value, field: &str) -> Option<String> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn optional_payload_limit(payload: &Value, field: &str, default: usize, max: usize) -> usize {
-    payload
-        .get(field)
-        .and_then(Value::as_u64)
-        .map(|value| value.clamp(1, max as u64) as usize)
-        .unwrap_or(default)
 }
 
 #[cfg(feature = "memory-sqlite")]

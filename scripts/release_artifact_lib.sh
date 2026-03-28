@@ -114,6 +114,15 @@ release_target_for_platform() {
     LINUX)
       release_linux_target_for_arch_and_libc "$normalized_arch" "gnu"
       ;;
+    ANDROID)
+      case "$normalized_arch" in
+        arm64|aarch64) printf 'aarch64-linux-android\n' ;;
+        *)
+          echo "unsupported Android architecture: ${arch}" >&2
+          return 1
+          ;;
+      esac
+      ;;
     DARWIN)
       case "$normalized_arch" in
         x86_64|amd64) printf 'x86_64-apple-darwin\n' ;;
@@ -232,12 +241,29 @@ compare_prerelease_identifiers() {
 version_is_greater() {
   local left="${1:?left version is required}"
   local right="${2:?right version is required}"
+  local left_parts=()
+  local right_parts=()
+  local parsed_part
   local left_major left_minor left_patch left_prerelease
   local right_major right_minor right_patch right_prerelease
   local prerelease_cmp
 
-  mapfile -t left_parts < <(parse_release_version "$left")
-  mapfile -t right_parts < <(parse_release_version "$right")
+  while IFS= read -r parsed_part; do
+    left_parts+=("$parsed_part")
+  done < <(parse_release_version "$left")
+  while IFS= read -r parsed_part; do
+    right_parts+=("$parsed_part")
+  done < <(parse_release_version "$right")
+
+  if (( ${#left_parts[@]} != 4 )); then
+    echo "invalid parsed release version: ${left}" >&2
+    return 1
+  fi
+  if (( ${#right_parts[@]} != 4 )); then
+    echo "invalid parsed release version: ${right}" >&2
+    return 1
+  fi
+
   left_major="${left_parts[0]}"
   left_minor="${left_parts[1]}"
   left_patch="${left_parts[2]}"

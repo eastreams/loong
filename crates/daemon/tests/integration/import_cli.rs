@@ -17,6 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static IMPORT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
+}
+
 fn assert_compact_loongclaw_header(lines: &[String], context: &str) {
     assert!(
         lines
@@ -39,7 +43,9 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         .expect("system time before unix epoch")
         .as_nanos();
     let counter = IMPORT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    canonical_temp_dir.join(format!(
         "loongclaw-import-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
@@ -95,7 +101,9 @@ fn sample_import_candidate() -> loongclaw_daemon::migration::types::ImportCandid
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openrouter;
     config.provider.model = "openrouter/openai/gpt-5.1".to_owned();
-    config.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
+    config
+        .provider
+        .set_api_key_env_binding(Some("OPENROUTER_API_KEY".to_owned()));
     config.cli.system_prompt = "Imported CLI prompt".to_owned();
     config.telegram.enabled = true;
     config.telegram.bot_token_env = Some("TELEGRAM_BOT_TOKEN".to_owned());
@@ -175,7 +183,10 @@ fn import_candidate_with_provider(
     candidate.config.provider.base_url = profile.base_url.to_owned();
     candidate.config.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     candidate.config.provider.model = model.to_owned();
-    candidate.config.provider.api_key_env = Some(credential_env.to_owned());
+    candidate
+        .config
+        .provider
+        .set_api_key_env_binding(Some(credential_env.to_owned()));
     candidate.domains.retain(|domain| {
         domain.kind != loongclaw_daemon::migration::types::SetupDomainKind::Provider
     });
@@ -626,7 +637,7 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
     assert!(
         lines.iter().any(|line| {
             line
-                == "also available: telegram · loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+                == "also available: Telegram · loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
         }),
         "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
     );
@@ -659,7 +670,7 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
     );
     assert!(
         rendered.contains(
-            "also available: telegram · loongclaw telegram-serve --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "also available: Telegram · loongclaw telegram-serve --config '/tmp/loongclaw'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
@@ -992,8 +1003,12 @@ fn import_cli_render_preview_keeps_provider_choice_transport_visible_on_wide_wid
 #[test]
 fn import_cli_json_preview_redacts_config_secrets() {
     let mut candidate = sample_import_candidate();
-    candidate.config.provider.api_key = Some("super-secret-provider-key".to_owned());
-    candidate.config.telegram.bot_token = Some("123456:telegram-secret".to_owned());
+    candidate.config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "super-secret-provider-key".to_owned(),
+    ));
+    candidate.config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:telegram-secret".to_owned(),
+    ));
 
     let payload = loongclaw_daemon::import_cli::render_import_preview_json(&[candidate])
         .expect("json preview should render");
@@ -1242,11 +1257,11 @@ model = "deepseek-chat"
         "runtime import should explain that the Codex source filter still matched multiple configs: {error}"
     );
     assert!(
-        error.contains(".codex/config.toml"),
+        normalized_path_text(&error).contains(".codex/config.toml"),
         "runtime import should surface the base Codex config path: {error}"
     );
     assert!(
-        error.contains(".codex/agents/loongclaw/config.toml"),
+        normalized_path_text(&error).contains(".codex/agents/loongclaw/config.toml"),
         "runtime import should surface the agent-scoped Codex config path: {error}"
     );
 }
@@ -1308,13 +1323,15 @@ model = "deepseek-chat"
     );
     assert_eq!(imported.provider.model, "deepseek-chat");
     assert_eq!(
-        imported.provider.api_key, None,
-        "source-path-selected provider should not keep the legacy inline api_key field once the env name field is persisted"
+        imported.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        }),
+        "source-path-selected provider should keep its credential binding in the canonical api_key field"
     );
     assert_eq!(
-        imported.provider.api_key_env.as_deref(),
-        Some("DEEPSEEK_API_KEY"),
-        "source-path-selected provider should retain its provider-specific credential binding as an env name field"
+        imported.provider.api_key_env, None,
+        "source-path-selected provider should not keep the legacy api_key_env field once the canonical api_key binding is persisted"
     );
     assert_eq!(
         imported.provider.authorization_header().as_deref(),
@@ -1422,13 +1439,15 @@ requires_openai_auth = true
         mvp::config::ProviderWireApi::Responses
     );
     assert_eq!(
-        imported.provider.api_key, None,
-        "codex import should not keep the legacy inline api_key field once the env name field is persisted"
+        imported.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        }),
+        "codex import should keep OpenAI auth in the canonical api_key field"
     );
     assert_eq!(
-        imported.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY"),
-        "codex import should persist OpenAI auth as an env name field"
+        imported.provider.api_key_env, None,
+        "codex import should not keep the legacy api_key_env field once the canonical api_key binding is persisted"
     );
 
     let models = mvp::provider::fetch_available_models(&imported)
@@ -1917,7 +1936,13 @@ fn import_cli_provider_selection_accepts_manual_choice_for_unresolved_recommende
 
     assert_eq!(provider.kind, mvp::config::ProviderKind::Deepseek);
     assert_eq!(provider.model, "deepseek-chat");
-    assert_eq!(provider.api_key_env.as_deref(), Some("DEEPSEEK_API_KEY"));
+    assert_eq!(
+        provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        })
+    );
+    assert_eq!(provider.api_key_env, None);
 }
 
 #[test]

@@ -71,12 +71,7 @@ pub(super) fn apply(
 }
 
 pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
-    if crate::doctor_cli::resolve_secret_value(
-        config.telegram.bot_token.as_deref(),
-        config.telegram.bot_token_env.as_deref(),
-    )
-    .is_some()
-    {
+    if config.telegram.bot_token().is_some() {
         ChannelCredentialState::Ready
     } else {
         ChannelCredentialState::Missing

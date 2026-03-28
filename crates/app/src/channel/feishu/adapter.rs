@@ -10,6 +10,8 @@ use crate::feishu::FeishuClient;
 use crate::feishu::resources::messages::{self, FeishuOutboundMessageBody};
 use crate::feishu::{FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body};
 
+const FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES: usize = 30 * 1024;
+
 pub(super) struct FeishuAdapter {
     client: FeishuClient,
     receive_id_type: String,
@@ -172,10 +174,11 @@ impl FeishuAdapter {
                 .await?;
                 Ok(())
             }
-            ChannelOutboundTargetKind::Conversation => Err(
-                "feishu adapter does not support conversation targets for outbound sends"
-                    .to_owned(),
-            ),
+            ChannelOutboundTargetKind::Conversation
+            | ChannelOutboundTargetKind::Address
+            | ChannelOutboundTargetKind::Endpoint => {
+                Err("feishu adapter only supports message_reply or receive_id targets".to_owned())
+            }
         }
     }
 }
@@ -188,6 +191,31 @@ fn channel_outbound_message_from_body(body: FeishuOutboundMessageBody) -> Channe
         FeishuOutboundMessageBody::Image(image_key) => ChannelOutboundMessage::Image { image_key },
         FeishuOutboundMessageBody::File(file_key) => ChannelOutboundMessage::File { file_key },
     }
+}
+
+pub(super) fn outbound_reply_message_from_text(text: String) -> ChannelOutboundMessage {
+    let trimmed_text = text.trim();
+    if trimmed_text.is_empty() {
+        return ChannelOutboundMessage::Text(text);
+    }
+
+    let reply_fits_markdown_card = reply_text_fits_markdown_card(trimmed_text);
+    if reply_fits_markdown_card {
+        let markdown_card_text = trimmed_text.to_owned();
+        return ChannelOutboundMessage::MarkdownCard(markdown_card_text);
+    }
+
+    ChannelOutboundMessage::Text(text)
+}
+
+fn reply_text_fits_markdown_card(text: &str) -> bool {
+    let card = crate::feishu::resources::cards::build_markdown_card(text);
+    let encoded_card = match serde_json::to_string(&card) {
+        Ok(encoded_card) => encoded_card,
+        Err(_) => return false,
+    };
+    let encoded_card_len = encoded_card.len();
+    encoded_card_len <= FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES
 }
 
 #[async_trait]
@@ -271,12 +299,20 @@ mod tests {
         let mut config = LoongClawConfig::default();
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_work".to_owned());
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("secret-123".to_owned());
+        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+            "cli_a1b2c3".to_owned(),
+        ));
+        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "secret-123".to_owned(),
+        ));
         config.feishu.base_url = Some(base_url.to_owned());
         config.feishu.receive_id_type = "chat_id".to_owned();
-        config.feishu.verification_token = Some("verify-token".to_owned());
-        config.feishu.encrypt_key = Some("encrypt-key".to_owned());
+        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "verify-token".to_owned(),
+        ));
+        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "encrypt-key".to_owned(),
+        ));
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
         config
             .feishu
@@ -605,5 +641,53 @@ mod tests {
         );
 
         server.abort();
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_prefers_markdown_cards_within_limit() {
+        let reply_message = outbound_reply_message_from_text("## done\n\n- rendered".to_owned());
+
+        assert_eq!(
+            reply_message,
+            ChannelOutboundMessage::MarkdownCard("## done\n\n- rendered".to_owned())
+        );
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_trims_markdown_cards_before_returning() {
+        let reply_message =
+            outbound_reply_message_from_text("  ## done\n\n- rendered  ".to_owned());
+
+        assert_eq!(
+            reply_message,
+            ChannelOutboundMessage::MarkdownCard("## done\n\n- rendered".to_owned())
+        );
+    }
+
+    #[test]
+    fn outbound_reply_message_from_text_respects_card_limit_boundary() {
+        let fitting_reply_len = max_reply_text_len_for_markdown_card();
+        let fitting_reply = "a".repeat(fitting_reply_len);
+        let overflowing_reply = format!("{fitting_reply}a");
+        let fitting_message = outbound_reply_message_from_text(fitting_reply.clone());
+        let overflowing_message = outbound_reply_message_from_text(overflowing_reply.clone());
+
+        assert_eq!(
+            fitting_message,
+            ChannelOutboundMessage::MarkdownCard(fitting_reply)
+        );
+        assert_eq!(
+            overflowing_message,
+            ChannelOutboundMessage::Text(overflowing_reply)
+        );
+    }
+
+    fn max_reply_text_len_for_markdown_card() -> usize {
+        let empty_card = crate::feishu::resources::cards::build_markdown_card("");
+        let encoded_empty_card =
+            serde_json::to_string(&empty_card).expect("encode empty markdown card");
+        let empty_card_len = encoded_empty_card.len();
+
+        FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES.saturating_sub(empty_card_len)
     }
 }

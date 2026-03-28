@@ -1,5 +1,7 @@
 use std::{
     fs,
+    fs::OpenOptions,
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -44,6 +46,7 @@ struct PersistedChannelOperationRuntime {
     pid: Option<u32>,
     account_id: Option<String>,
     account_label: Option<String>,
+    owner_token: Option<String>,
 }
 
 impl PersistedChannelOperationRuntime {
@@ -73,6 +76,13 @@ impl PersistedChannelOperationRuntime {
 pub(crate) struct ChannelOperationRuntimeTracker {
     path: PathBuf,
     state: Arc<Mutex<PersistedChannelOperationRuntime>>,
+    stopped: Arc<AtomicBool>,
+    heartbeat_task: Mutex<Option<JoinHandle<()>>>,
+}
+
+pub(crate) struct ChannelOperationExclusiveGuard {
+    path: PathBuf,
+    owner_token: String,
     stopped: Arc<AtomicBool>,
     heartbeat_task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -170,6 +180,7 @@ impl ChannelOperationRuntimeTracker {
             pid: Some(process_id),
             account_id: normalize_optional_account_value(account_id),
             account_label: normalize_optional_account_value(account_label),
+            owner_token: None,
         };
         write_runtime_state(&path, &initial)?;
 
@@ -257,6 +268,126 @@ impl ChannelOperationRuntimeTracker {
             state.clone()
         };
         write_runtime_state(&self.path, &snapshot)
+    }
+}
+
+impl ChannelOperationExclusiveGuard {
+    pub(crate) async fn acquire(
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: &str,
+        account_label: &str,
+    ) -> CliResult<Self> {
+        Self::acquire_in_dir_impl(
+            &default_channel_runtime_state_dir(),
+            platform,
+            operation_id,
+            account_id,
+            account_label,
+            CHANNEL_RUNTIME_HEARTBEAT_MS,
+            std::process::id(),
+        )
+        .await
+    }
+
+    async fn acquire_in_dir_impl(
+        runtime_dir: &Path,
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: &str,
+        account_label: &str,
+        heartbeat_ms: u64,
+        process_id: u32,
+    ) -> CliResult<Self> {
+        let path = channel_operation_runtime_path(
+            runtime_dir,
+            platform,
+            operation_id,
+            Some(account_id),
+            None,
+        );
+        let now = now_ms();
+        let owner_token = new_runtime_owner_token(process_id);
+        let initial = PersistedChannelOperationRuntime {
+            running: true,
+            busy: true,
+            active_runs: 1,
+            last_run_activity_at: Some(now),
+            last_heartbeat_at: Some(now),
+            pid: Some(process_id),
+            account_id: normalize_optional_account_value(Some(account_id)),
+            account_label: normalize_optional_account_value(Some(account_label)),
+            owner_token: Some(owner_token.clone()),
+        };
+        let mut heartbeat_file = acquire_exclusive_runtime_state(path.as_path(), &initial)?;
+
+        let heartbeat_state = Arc::new(Mutex::new(initial));
+        let stopped = Arc::new(AtomicBool::new(false));
+        let heartbeat_stopped = stopped.clone();
+        let task = tokio::spawn(async move {
+            while !heartbeat_stopped.load(Ordering::SeqCst) {
+                sleep(Duration::from_millis(heartbeat_ms)).await;
+                if heartbeat_stopped.load(Ordering::SeqCst) {
+                    break;
+                }
+                let snapshot = {
+                    let Ok(mut state) = heartbeat_state.lock() else {
+                        break;
+                    };
+                    let heartbeat_now = now_ms();
+                    state.last_run_activity_at = Some(heartbeat_now);
+                    state.last_heartbeat_at = Some(heartbeat_now);
+                    state.clone()
+                };
+                let write_result = write_runtime_state_to_file(&mut heartbeat_file, &snapshot);
+                if write_result.is_err() {
+                    break;
+                }
+            }
+        });
+
+        Ok(Self {
+            path,
+            owner_token,
+            stopped,
+            heartbeat_task: Mutex::new(Some(task)),
+        })
+    }
+
+    #[cfg(test)]
+    async fn acquire_in_dir_with_account_and_pid(
+        runtime_dir: &Path,
+        platform: ChannelPlatform,
+        operation_id: &'static str,
+        account_id: &str,
+        account_label: &str,
+        heartbeat_ms: u64,
+        process_id: u32,
+    ) -> CliResult<Self> {
+        Self::acquire_in_dir_impl(
+            runtime_dir,
+            platform,
+            operation_id,
+            account_id,
+            account_label,
+            heartbeat_ms,
+            process_id,
+        )
+        .await
+    }
+}
+
+impl Drop for ChannelOperationExclusiveGuard {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::SeqCst);
+        if let Ok(mut task) = self.heartbeat_task.lock() {
+            let task = task.take();
+            if let Some(task) = task {
+                task.abort();
+            }
+        }
+        let _ =
+            remove_exclusive_runtime_state_if_owned(self.path.as_path(), self.owner_token.as_str());
     }
 }
 
@@ -430,6 +561,11 @@ fn prune_inactive_channel_operation_runtime_files_for_optional_account_from_dir(
         match fs::remove_file(path.as_path()) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // On Windows, another process/task may hold the file open, causing
+            // ERROR_ACCESS_DENIED (PermissionDenied). Unlike Unix, Windows does not
+            // allow unlinking an open file. Silently skip; the next prune cycle will retry.
+            #[cfg(windows)]
+            Err(ref error) if error.kind() == std::io::ErrorKind::PermissionDenied => {}
             Err(error) => {
                 return Err(format!(
                     "remove inactive channel runtime state failed for {}: {error}",
@@ -485,9 +621,13 @@ fn matches_channel_operation_runtime_file(file_name: &str, prefix: &str) -> bool
 }
 
 fn read_runtime_state(path: &Path, now_ms: u64) -> Option<ChannelOperationRuntime> {
-    let raw = fs::read_to_string(path).ok()?;
-    let state = serde_json::from_str::<PersistedChannelOperationRuntime>(&raw).ok()?;
+    let state = read_persisted_runtime_state(path)?;
     Some(state.to_runtime_view(now_ms))
+}
+
+fn read_persisted_runtime_state(path: &Path) -> Option<PersistedChannelOperationRuntime> {
+    let raw = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<PersistedChannelOperationRuntime>(&raw).ok()
 }
 
 fn runtime_state_path_is_inactive(path: &Path, now_ms: u64) -> bool {
@@ -534,6 +674,121 @@ fn normalize_optional_account_value(value: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn acquire_exclusive_runtime_state(
+    path: &Path,
+    state: &PersistedChannelOperationRuntime,
+) -> CliResult<fs::File> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create channel runtime state directory failed: {error}"))?;
+    }
+
+    let encoded = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("serialize channel runtime owner state failed: {error}"))?;
+
+    let mut attempts = 0_u8;
+    loop {
+        attempts = attempts.saturating_add(1);
+        let open_result = OpenOptions::new().write(true).create_new(true).open(path);
+        let mut file = match open_result {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let now = now_ms();
+                let existing = read_runtime_state(path, now);
+                let is_inactive = existing
+                    .as_ref()
+                    .map(|runtime| !runtime.running)
+                    .unwrap_or(false);
+                if is_inactive && attempts < 3 {
+                    match fs::remove_file(path) {
+                        Ok(()) => {}
+                        Err(remove_error)
+                            if remove_error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(remove_error) => {
+                            let display_path = path.display();
+                            return Err(format!(
+                                "remove inactive exclusive channel runtime owner failed for {display_path}: {remove_error}"
+                            ));
+                        }
+                    }
+                    continue;
+                }
+
+                let existing_pid = existing
+                    .as_ref()
+                    .and_then(|runtime| runtime.pid)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "unknown".to_owned());
+                let display_path = path.display();
+                return Err(format!(
+                    "exclusive channel runtime owner already active at {display_path} (pid={existing_pid})"
+                ));
+            }
+            Err(error) => {
+                let display_path = path.display();
+                return Err(format!(
+                    "create exclusive channel runtime owner failed for {display_path}: {error}"
+                ));
+            }
+        };
+
+        let write_result = file.write_all(encoded.as_bytes());
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(path);
+            let display_path = path.display();
+            return Err(format!(
+                "write exclusive channel runtime owner failed for {display_path}: {error}"
+            ));
+        }
+
+        let sync_result = file.sync_all();
+        if let Err(error) = sync_result {
+            let _ = fs::remove_file(path);
+            let display_path = path.display();
+            return Err(format!(
+                "sync exclusive channel runtime owner failed for {display_path}: {error}"
+            ));
+        }
+
+        return Ok(file);
+    }
+}
+
+fn write_runtime_state_to_file(
+    file: &mut fs::File,
+    state: &PersistedChannelOperationRuntime,
+) -> CliResult<()> {
+    let encoded = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("serialize channel runtime owner state failed: {error}"))?;
+    file.set_len(0)
+        .map_err(|error| format!("truncate channel runtime owner file failed: {error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("seek channel runtime owner file failed: {error}"))?;
+    file.write_all(encoded.as_bytes())
+        .map_err(|error| format!("write channel runtime owner file failed: {error}"))?;
+    file.sync_all()
+        .map_err(|error| format!("sync channel runtime owner file failed: {error}"))
+}
+
+fn remove_exclusive_runtime_state_if_owned(path: &Path, owner_token: &str) -> CliResult<()> {
+    let current_owner_token =
+        read_persisted_runtime_state(path).and_then(|state| state.owner_token);
+    if current_owner_token.as_deref() != Some(owner_token) {
+        return Ok(());
+    }
+
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "remove exclusive channel runtime owner failed for {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn write_runtime_state(path: &Path, state: &PersistedChannelOperationRuntime) -> CliResult<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -544,6 +799,14 @@ fn write_runtime_state(path: &Path, state: &PersistedChannelOperationRuntime) ->
     let encoded = serde_json::to_string_pretty(state)
         .map_err(|error| format!("serialize channel runtime state failed: {error}"))?;
     fs::write(path, encoded).map_err(|error| format!("write channel runtime state failed: {error}"))
+}
+
+fn new_runtime_owner_token(process_id: u32) -> String {
+    let now_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("{process_id}-{now_nanos}")
 }
 
 fn now_ms() -> u64 {
@@ -575,6 +838,7 @@ pub(crate) fn write_runtime_state_for_test(
         pid,
         account_id: None,
         account_label: None,
+        owner_token: None,
     };
     write_runtime_state(&path, &state)
 }
@@ -603,6 +867,7 @@ pub(crate) fn write_runtime_state_for_test_with_pid(
         pid,
         account_id: None,
         account_label: None,
+        owner_token: None,
     };
     write_runtime_state(&path, &state)
 }
@@ -637,6 +902,7 @@ pub(crate) fn write_runtime_state_for_test_with_account_and_pid(
         pid,
         account_id: Some(account_id.to_owned()),
         account_label: Some(test_account_label(account_id)),
+        owner_token: None,
     };
     write_runtime_state(&path, &state)
 }
@@ -655,6 +921,7 @@ fn test_account_label(account_id: &str) -> String {
 mod tests {
     use super::*;
     use crate::channel::CHANNEL_OPERATION_SERVE_ID;
+    const TEST_OWNER_OPERATION_ID: &str = "owner";
 
     fn temp_runtime_dir(suffix: &str) -> PathBuf {
         let unique = format!(
@@ -1081,5 +1348,161 @@ mod tests {
         assert_eq!(runtime.running_instances, 2);
         assert_eq!(runtime.stale_instances, 0);
         assert_eq!(runtime.pid, Some(4004));
+    }
+
+    #[tokio::test]
+    async fn exclusive_guard_blocks_second_live_owner() {
+        let runtime_dir = temp_runtime_dir("exclusive-owner-conflict");
+        let first = ChannelOperationExclusiveGuard::acquire_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            &test_account_label("wecom_ops"),
+            20,
+            7001,
+        )
+        .await
+        .expect("acquire first owner guard");
+
+        let acquire_result = ChannelOperationExclusiveGuard::acquire_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            &test_account_label("wecom_ops"),
+            20,
+            7002,
+        )
+        .await;
+        let error = match acquire_result {
+            Ok(_guard) => panic!("second owner guard should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("exclusive channel runtime owner already active"));
+        assert!(error.contains("pid=7001"));
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            now_ms(),
+        )
+        .expect("load first owner runtime");
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(7001));
+
+        drop(first);
+    }
+
+    #[tokio::test]
+    async fn exclusive_guard_reclaims_stale_owner_file() {
+        let runtime_dir = temp_runtime_dir("exclusive-owner-stale");
+        let stale_now = now_ms();
+        let stale_path = channel_operation_runtime_path(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            Some("wecom_ops"),
+            None,
+        );
+        let stale_state = PersistedChannelOperationRuntime {
+            running: true,
+            busy: true,
+            active_runs: 1,
+            last_run_activity_at: Some(stale_now.saturating_sub(30_000)),
+            last_heartbeat_at: Some(stale_now.saturating_sub(30_000)),
+            pid: Some(8001),
+            account_id: Some("wecom_ops".to_owned()),
+            account_label: Some(test_account_label("wecom_ops")),
+            owner_token: Some("stale-owner".to_owned()),
+        };
+        write_runtime_state(stale_path.as_path(), &stale_state)
+            .expect("write stale exclusive owner");
+
+        let guard = ChannelOperationExclusiveGuard::acquire_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            &test_account_label("wecom_ops"),
+            20,
+            8002,
+        )
+        .await
+        .expect("acquire owner guard after stale cleanup");
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            now_ms(),
+        )
+        .expect("load reclaimed owner");
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(8002));
+
+        drop(guard);
+    }
+
+    #[tokio::test]
+    async fn exclusive_guard_drop_keeps_reclaimed_owner_file() {
+        let runtime_dir = temp_runtime_dir("exclusive-owner-reclaimed-drop");
+        let first = ChannelOperationExclusiveGuard::acquire_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            &test_account_label("wecom_ops"),
+            60_000,
+            8101,
+        )
+        .await
+        .expect("acquire first owner guard");
+
+        let owner_path = channel_operation_runtime_path(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            Some("wecom_ops"),
+            None,
+        );
+        let mut stale_state =
+            read_persisted_runtime_state(owner_path.as_path()).expect("read first owner state");
+        let stale_now = now_ms();
+        stale_state.last_run_activity_at = Some(stale_now.saturating_sub(30_000));
+        stale_state.last_heartbeat_at = Some(stale_now.saturating_sub(30_000));
+        write_runtime_state(owner_path.as_path(), &stale_state)
+            .expect("rewrite first owner state as stale");
+
+        let second = ChannelOperationExclusiveGuard::acquire_in_dir_with_account_and_pid(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            &test_account_label("wecom_ops"),
+            60_000,
+            8102,
+        )
+        .await
+        .expect("acquire second owner guard");
+
+        drop(first);
+
+        let runtime = load_channel_operation_runtime_for_account_from_dir(
+            &runtime_dir,
+            ChannelPlatform::Wecom,
+            TEST_OWNER_OPERATION_ID,
+            "wecom_ops",
+            now_ms(),
+        )
+        .expect("load reclaimed owner after first guard drop");
+        assert!(runtime.running);
+        assert_eq!(runtime.pid, Some(8102));
+
+        drop(second);
     }
 }

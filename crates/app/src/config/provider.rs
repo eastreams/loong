@@ -1,10 +1,14 @@
 use std::{collections::BTreeMap, env, path::PathBuf};
 
+use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::shared::{
     ConfigValidationIssue, EnvPointerValidationHint, default_loongclaw_home, expand_path,
-    parse_explicit_env_reference, validate_env_pointer_field,
+    validate_env_pointer_field, validate_secret_ref_env_pointer_field,
+};
+use crate::secrets::{
+    SecretLookup, has_configured_secret_ref, resolve_secret_lookup, secret_ref_env_name,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +124,25 @@ pub enum ModelCatalogProbeRecovery {
     RequiresExplicitModel {
         recommended_onboarding_model: Option<&'static str>,
     },
+}
+
+/// Information about a provider's region endpoint variants.
+/// Used to allow users to select between different regional endpoints (e.g., CN vs Global).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRegionEndpointInfo {
+    /// Display name for the provider family (e.g., "MiniMax", "Moonshot Kimi").
+    pub family_label: &'static str,
+    /// Region variants ordered with the default endpoint first.
+    pub variants: Vec<RegionVariant>,
+}
+
+/// A region endpoint variant with label and base URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionVariant {
+    /// Label for the region (e.g., "CN", "Global").
+    pub label: &'static str,
+    /// Base URL for the region endpoint.
+    pub base_url: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,6 +447,8 @@ pub enum ProviderKind {
     Siliconflow,
     #[serde(alias = "stepfun_compatible")]
     Stepfun,
+    #[serde(alias = "stepfun_step_plan", alias = "step_plan")]
+    StepPlan,
     #[serde(alias = "together_compatible", alias = "together_ai")]
     Together,
     #[serde(alias = "venice_compatible")]
@@ -511,13 +536,13 @@ pub struct ProviderConfig {
     #[serde(skip_serializing, default)]
     pub models_endpoint_explicit: bool,
     #[serde(default)]
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretRef>,
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(skip_serializing, default)]
     pub api_key_env_explicit: bool,
     #[serde(default)]
-    pub oauth_access_token: Option<String>,
+    pub oauth_access_token: Option<SecretRef>,
     #[serde(default)]
     pub oauth_access_token_env: Option<String>,
     #[serde(skip_serializing, default)]
@@ -670,11 +695,11 @@ impl<'de> Deserialize<'de> for ProviderConfig {
             #[serde(default)]
             models_endpoint: Option<String>,
             #[serde(default)]
-            api_key: Option<String>,
+            api_key: Option<SecretRef>,
             #[serde(default)]
             api_key_env: Option<String>,
             #[serde(default)]
-            oauth_access_token: Option<String>,
+            oauth_access_token: Option<SecretRef>,
             #[serde(default)]
             oauth_access_token_env: Option<String>,
             #[serde(default)]
@@ -844,9 +869,63 @@ impl ProviderConfig {
         self.api_key_env = api_key_env;
     }
 
+    pub fn set_api_key_env_binding(&mut self, api_key_env: Option<String>) {
+        let normalized = api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        self.api_key = normalized.map(|env| SecretRef::Env { env });
+        self.set_api_key_env(None);
+    }
+
+    pub fn clear_api_key_env_binding(&mut self) {
+        if secret_ref_env_name(self.api_key.as_ref()).is_some() {
+            self.api_key = None;
+        }
+        self.set_api_key_env(None);
+    }
+
     pub fn set_oauth_access_token_env(&mut self, oauth_access_token_env: Option<String>) {
         self.oauth_access_token_env_explicit = oauth_access_token_env.is_some();
         self.oauth_access_token_env = oauth_access_token_env;
+    }
+
+    pub fn set_oauth_access_token_env_binding(&mut self, oauth_access_token_env: Option<String>) {
+        let normalized = oauth_access_token_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        self.oauth_access_token = normalized.map(|env| SecretRef::Env { env });
+        self.set_oauth_access_token_env(None);
+    }
+
+    pub fn clear_oauth_access_token_env_binding(&mut self) {
+        if secret_ref_env_name(self.oauth_access_token.as_ref()).is_some() {
+            self.oauth_access_token = None;
+        }
+        self.set_oauth_access_token_env(None);
+    }
+
+    pub fn canonicalize_configured_auth_env_bindings(&mut self) {
+        let configured_api_key_env = self.configured_api_key_env_override();
+        let api_key_has_non_env_secret = has_configured_secret_ref(self.api_key.as_ref())
+            && secret_ref_env_name(self.api_key.as_ref()).is_none();
+        if api_key_has_non_env_secret {
+            self.set_api_key_env(None);
+        } else {
+            self.set_api_key_env_binding(configured_api_key_env);
+        }
+
+        let configured_oauth_env = self.configured_oauth_access_token_env_override();
+        let oauth_has_non_env_secret = has_configured_secret_ref(self.oauth_access_token.as_ref())
+            && secret_ref_env_name(self.oauth_access_token.as_ref()).is_none();
+        if oauth_has_non_env_secret {
+            self.set_oauth_access_token_env(None);
+        } else {
+            self.set_oauth_access_token_env_binding(configured_oauth_env);
+        }
     }
 
     pub fn fresh_for_kind(kind: ProviderKind) -> Self {
@@ -882,6 +961,17 @@ impl ProviderConfig {
         ) {
             issues.push(*issue);
         }
+        if let Err(issue) = validate_secret_ref_env_pointer_field(
+            api_key_inline_field_path.as_str(),
+            self.api_key.as_ref(),
+            EnvPointerValidationHint {
+                inline_field_path: api_key_inline_field_path.as_str(),
+                example_env_name: api_key_example,
+                detect_telegram_token_shape: false,
+            },
+        ) {
+            issues.push(*issue);
+        }
         let oauth_env_field_path = format!("{field_prefix}.oauth_access_token_env");
         let oauth_inline_field_path = format!("{field_prefix}.oauth_access_token");
         let oauth_example = self
@@ -891,6 +981,17 @@ impl ProviderConfig {
         if let Err(issue) = validate_env_pointer_field(
             oauth_env_field_path.as_str(),
             self.oauth_access_token_env.as_deref(),
+            EnvPointerValidationHint {
+                inline_field_path: oauth_inline_field_path.as_str(),
+                example_env_name: oauth_example,
+                detect_telegram_token_shape: false,
+            },
+        ) {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_secret_ref_env_pointer_field(
+            oauth_inline_field_path.as_str(),
+            self.oauth_access_token.as_ref(),
             EnvPointerValidationHint {
                 inline_field_path: oauth_inline_field_path.as_str(),
                 example_env_name: oauth_example,
@@ -1006,11 +1107,11 @@ impl ProviderConfig {
     pub fn resolved_auth_env_name(&self) -> Option<String> {
         match self.kind.auth_scheme() {
             ProviderAuthScheme::Bearer => {
-                if self
-                    .oauth_access_token
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                {
+                let oauth_env_name = secret_ref_env_name(self.oauth_access_token.as_ref());
+                if let Some(oauth_env_name) = oauth_env_name {
+                    return Some(oauth_env_name);
+                }
+                if has_configured_secret_ref(self.oauth_access_token.as_ref()) {
                     return None;
                 }
                 if let Some(env_name) =
@@ -1018,21 +1119,21 @@ impl ProviderConfig {
                 {
                     return Some(env_name);
                 }
-                if self
-                    .api_key
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                {
+                let api_key_env_name = secret_ref_env_name(self.api_key.as_ref());
+                if let Some(api_key_env_name) = api_key_env_name {
+                    return Some(api_key_env_name);
+                }
+                if has_configured_secret_ref(self.api_key.as_ref()) {
                     return None;
                 }
                 first_non_empty_env_name(&self.api_key_env_names())
             }
             ProviderAuthScheme::XApiKey => {
-                if self
-                    .api_key
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty())
-                {
+                let api_key_env_name = secret_ref_env_name(self.api_key.as_ref());
+                if let Some(api_key_env_name) = api_key_env_name {
+                    return Some(api_key_env_name);
+                }
+                if has_configured_secret_ref(self.api_key.as_ref()) {
                     return None;
                 }
                 first_non_empty_env_name(&self.api_key_env_names())
@@ -1042,8 +1143,8 @@ impl ProviderConfig {
 
     pub fn auth_hint_env_names(&self) -> Vec<String> {
         let mut env_names = Vec::new();
-        push_inline_env_reference(&mut env_names, self.oauth_access_token.as_deref());
-        push_inline_env_reference(&mut env_names, self.api_key.as_deref());
+        push_secret_ref_env_name(&mut env_names, self.oauth_access_token.as_ref());
+        push_secret_ref_env_name(&mut env_names, self.api_key.as_ref());
         for env_name in self.credential_env_names() {
             push_unique_env_key(&mut env_names, Some(env_name.as_str()));
         }
@@ -1085,10 +1186,13 @@ impl ProviderConfig {
         if let Some(hint) = self.alternative_auth_configuration_hint() {
             configuration_paths.push(hint);
         }
-        let mut message = format!(
-            "provider credentials are missing; {}",
-            join_guidance_options(&configuration_paths)
-        );
+        let mut message = "provider credentials are missing".to_owned();
+        if let Some(detail) = self.missing_auth_runtime_detail() {
+            message.push_str("; ");
+            message.push_str(detail.as_str());
+        }
+        message.push_str("; ");
+        message.push_str(join_guidance_options(&configuration_paths).as_str());
         if let Some(hint) = self.auth_guidance_hint() {
             message.push(' ');
             message.push_str(hint.as_str());
@@ -1408,15 +1512,11 @@ impl ProviderConfig {
     }
 
     pub fn oauth_access_token(&self) -> Option<String> {
-        if let Some(raw) = self.oauth_access_token.as_deref() {
-            let value = raw.trim();
-            if !value.is_empty() {
-                return match resolve_inline_secret(value) {
-                    InlineSecretResolution::Resolved(secret) => Some(secret),
-                    InlineSecretResolution::ExplicitEnvMissing => None,
-                    InlineSecretResolution::NotInlineEnvReference => Some(value.to_owned()),
-                };
-            }
+        let secret_lookup = resolve_secret_lookup(self.oauth_access_token.as_ref());
+        match secret_lookup {
+            SecretLookup::Value(value) => return Some(value),
+            SecretLookup::Missing => return None,
+            SecretLookup::Absent => {}
         }
 
         first_non_empty_env_value(&self.oauth_access_token_env_names())
@@ -1475,15 +1575,11 @@ impl ProviderConfig {
     }
 
     pub fn api_key_candidates(&self) -> Vec<String> {
-        if let Some(raw) = self.api_key.as_deref() {
-            let value = raw.trim();
-            if !value.is_empty() {
-                return match resolve_inline_secret(value) {
-                    InlineSecretResolution::Resolved(secret) => split_secret_candidates(&secret),
-                    InlineSecretResolution::ExplicitEnvMissing => Vec::new(),
-                    InlineSecretResolution::NotInlineEnvReference => split_secret_candidates(value),
-                };
-            }
+        let secret_lookup = resolve_secret_lookup(self.api_key.as_ref());
+        match secret_lookup {
+            SecretLookup::Value(value) => return split_secret_candidates(value.as_str()),
+            SecretLookup::Missing => return Vec::new(),
+            SecretLookup::Absent => {}
         }
 
         let mut env_keys = Vec::new();
@@ -1701,10 +1797,8 @@ impl ProviderConfig {
         push_unique_env_key(&mut env_keys, configured_oauth_env);
         if configured_oauth_env.is_none()
             && self.configured_api_key_env_name().is_none()
-            && self
-                .api_key
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
+            && !has_configured_secret_ref(self.api_key.as_ref())
+            && !has_configured_secret_ref(self.oauth_access_token.as_ref())
         {
             push_unique_env_key(&mut env_keys, self.kind.default_oauth_access_token_env());
             for alias in self.kind.oauth_access_token_env_aliases() {
@@ -1742,13 +1836,76 @@ impl ProviderConfig {
         Some(env_name)
     }
 
+    fn missing_auth_source_runtime_detail(
+        &self,
+        label: &str,
+        secret_ref: Option<&SecretRef>,
+        configured_env_name: Option<&str>,
+    ) -> Option<String> {
+        match resolve_secret_lookup(secret_ref) {
+            SecretLookup::Value(_) => return None,
+            SecretLookup::Missing => {
+                if let Some(env_name) = secret_ref_env_name(secret_ref) {
+                    return Some(format!(
+                        "configured provider {label} env `{env_name}` is unset, empty, or not visible to the current process"
+                    ));
+                }
+                if has_configured_secret_ref(secret_ref) {
+                    return Some(format!(
+                        "configured provider {label} secret reference could not be resolved at runtime"
+                    ));
+                }
+            }
+            SecretLookup::Absent => {}
+        }
+
+        let env_name = configured_env_name?;
+        match env::var(env_name) {
+            Ok(value) if !value.trim().is_empty() => None,
+            _ => Some(format!(
+                "configured provider {label} env `{env_name}` is unset, empty, or not visible to the current process"
+            )),
+        }
+    }
+
     pub fn configured_api_key_env_override(&self) -> Option<String> {
+        let explicit_secret_env = secret_ref_env_name(self.api_key.as_ref());
+        if let Some(explicit_secret_env) = explicit_secret_env {
+            return Some(explicit_secret_env);
+        }
         self.configured_api_key_env_name().map(str::to_owned)
     }
 
     pub fn configured_oauth_access_token_env_override(&self) -> Option<String> {
+        let explicit_secret_env = secret_ref_env_name(self.oauth_access_token.as_ref());
+        if let Some(explicit_secret_env) = explicit_secret_env {
+            return Some(explicit_secret_env);
+        }
         self.configured_oauth_access_token_env_name()
             .map(str::to_owned)
+    }
+
+    fn missing_auth_runtime_detail(&self) -> Option<String> {
+        match self.kind.auth_scheme() {
+            ProviderAuthScheme::Bearer => self
+                .missing_auth_source_runtime_detail(
+                    "oauth access token",
+                    self.oauth_access_token.as_ref(),
+                    self.configured_oauth_access_token_env_name(),
+                )
+                .or_else(|| {
+                    self.missing_auth_source_runtime_detail(
+                        "api key",
+                        self.api_key.as_ref(),
+                        self.configured_api_key_env_name(),
+                    )
+                }),
+            ProviderAuthScheme::XApiKey => self.missing_auth_source_runtime_detail(
+                "api key",
+                self.api_key.as_ref(),
+                self.configured_api_key_env_name(),
+            ),
+        }
     }
 
     pub fn normalized_for_persistence(&self) -> Self {
@@ -1764,15 +1921,37 @@ impl ProviderConfig {
                 default_provider_base_url().as_str(),
             ),
         );
+        let api_key_has_explicit_env_reference =
+            self.api_key_env_explicit || secret_ref_env_name(self.api_key.as_ref()).is_some();
+        let oauth_has_explicit_env_reference = self.oauth_access_token_env_explicit
+            || secret_ref_env_name(self.oauth_access_token.as_ref()).is_some();
 
         let mut normalized = self.clone();
         normalized.base_url = base_url;
         normalized.chat_completions_path = chat_completions_path;
         normalized.endpoint = self.normalized_endpoint_for_persistence();
         normalized.models_endpoint = self.normalized_models_endpoint_for_persistence();
+        normalized.api_key = self.normalized_api_key_for_persistence();
         normalized.api_key_env = self.normalized_api_key_env_for_persistence();
+        normalized.oauth_access_token = self.normalized_oauth_access_token_for_persistence();
         normalized.oauth_access_token_env =
             self.normalized_oauth_access_token_env_for_persistence();
+        if api_key_has_explicit_env_reference {
+            canonicalize_secret_env_reference_for_persistence(
+                &mut normalized.api_key,
+                &mut normalized.api_key_env,
+            );
+        } else {
+            normalized.api_key_env = None;
+        }
+        if oauth_has_explicit_env_reference {
+            canonicalize_secret_env_reference_for_persistence(
+                &mut normalized.oauth_access_token,
+                &mut normalized.oauth_access_token_env,
+            );
+        } else {
+            normalized.oauth_access_token_env = None;
+        }
         normalized
     }
 
@@ -1790,7 +1969,15 @@ impl ProviderConfig {
         None
     }
 
+    fn normalized_api_key_for_persistence(&self) -> Option<SecretRef> {
+        normalize_secret_ref_for_persistence(self.api_key.as_ref(), self.api_key_env.as_deref())
+    }
+
     fn normalized_api_key_env_for_persistence(&self) -> Option<String> {
+        let explicit_secret_env = secret_ref_env_name(self.api_key.as_ref());
+        if let Some(explicit_secret_env) = explicit_secret_env {
+            return Some(explicit_secret_env);
+        }
         let configured = non_empty(self.api_key_env.as_deref()).map(str::to_owned);
         if self.api_key_env_explicit {
             return configured;
@@ -1801,7 +1988,18 @@ impl ProviderConfig {
         self.kind.default_api_key_env().map(str::to_owned)
     }
 
+    fn normalized_oauth_access_token_for_persistence(&self) -> Option<SecretRef> {
+        normalize_secret_ref_for_persistence(
+            self.oauth_access_token.as_ref(),
+            self.oauth_access_token_env.as_deref(),
+        )
+    }
+
     fn normalized_oauth_access_token_env_for_persistence(&self) -> Option<String> {
+        let explicit_secret_env = secret_ref_env_name(self.oauth_access_token.as_ref());
+        if let Some(explicit_secret_env) = explicit_secret_env {
+            return Some(explicit_secret_env);
+        }
         let configured = non_empty(self.oauth_access_token_env.as_deref()).map(str::to_owned);
         if self.oauth_access_token_env_explicit {
             return configured;
@@ -1968,6 +2166,7 @@ impl ProviderKind {
             ProviderKind::Sglang => "SGLang",
             ProviderKind::Siliconflow => "SiliconFlow",
             ProviderKind::Stepfun => "StepFun",
+            ProviderKind::StepPlan => "Step Plan",
             ProviderKind::Together => "Together",
             ProviderKind::Venice => "Venice",
             ProviderKind::VercelAiGateway => "Vercel AI Gateway",
@@ -2017,6 +2216,7 @@ impl ProviderKind {
             sglang,
             siliconflow,
             stepfun,
+            step_plan,
             together,
             venice,
             vercel_ai_gateway,
@@ -2060,6 +2260,7 @@ impl ProviderKind {
             ProviderKind::Sglang => sglang,
             ProviderKind::Siliconflow => siliconflow,
             ProviderKind::Stepfun => stepfun,
+            ProviderKind::StepPlan => step_plan,
             ProviderKind::Together => together,
             ProviderKind::Venice => venice,
             ProviderKind::VercelAiGateway => vercel_ai_gateway,
@@ -2223,6 +2424,17 @@ impl ProviderKind {
                     base_url: "https://api.z.ai",
                 },
             }),
+            ProviderKind::Stepfun => Some(ProviderRegionEndpointGuide {
+                family_label: "Stepfun",
+                default_variant: ProviderRegionEndpointVariant {
+                    label: "CN",
+                    base_url: "https://api.stepfun.com",
+                },
+                alternate_variant: ProviderRegionEndpointVariant {
+                    label: "Global",
+                    base_url: "https://api.stepfun.ai",
+                },
+            }),
             ProviderKind::Anthropic
             | ProviderKind::Bedrock
             | ProviderKind::Byteplus
@@ -2251,7 +2463,7 @@ impl ProviderKind {
             | ProviderKind::Sambanova
             | ProviderKind::Sglang
             | ProviderKind::Siliconflow
-            | ProviderKind::Stepfun
+            | ProviderKind::StepPlan
             | ProviderKind::Together
             | ProviderKind::Venice
             | ProviderKind::VercelAiGateway
@@ -2274,10 +2486,33 @@ impl ProviderKind {
         if matches!(self, ProviderKind::Deepseek) {
             Some("deepseek-chat")
         } else if matches!(self, ProviderKind::Minimax) {
-            Some("MiniMax-M2.5")
+            Some("MiniMax-M2.7")
         } else {
             None
         }
+    }
+
+    pub fn region_endpoint_info(self) -> Option<ProviderRegionEndpointInfo> {
+        let guide = self.region_endpoint_guide()?;
+        let family_label = if matches!(self, ProviderKind::Zai | ProviderKind::Zhipu) {
+            "Z.ai"
+        } else {
+            guide.family_label
+        };
+        let variants = vec![
+            RegionVariant {
+                label: guide.default_variant.label,
+                base_url: guide.default_variant.base_url,
+            },
+            RegionVariant {
+                label: guide.alternate_variant.label,
+                base_url: guide.alternate_variant.base_url,
+            },
+        ];
+        Some(ProviderRegionEndpointInfo {
+            family_label,
+            variants,
+        })
     }
 }
 
@@ -2299,7 +2534,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -2331,6 +2566,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
     ProviderKind::Sglang,
     ProviderKind::Siliconflow,
     ProviderKind::Stepfun,
+    ProviderKind::StepPlan,
     ProviderKind::Together,
     ProviderKind::Venice,
     ProviderKind::VercelAiGateway,
@@ -2342,7 +2578,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 40] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 40] = [
+const PROVIDER_PROFILES: [ProviderProfile; 41] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -2886,6 +3122,23 @@ const PROVIDER_PROFILES: [ProviderProfile; 40] = [
         feature_family: ProviderFeatureFamily::OpenAiCompatible,
     },
     ProviderProfile {
+        kind: ProviderKind::StepPlan,
+        id: "step_plan",
+        aliases: &["stepfun_step_plan", "step_plan"],
+        base_url: "https://api.stepfun.ai",
+        chat_completions_path: "/step_plan/v1/chat/completions",
+        models_path: Some("/step_plan/v1/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("STEP_API_KEY"),
+        api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
         kind: ProviderKind::Together,
         id: "together",
         aliases: &["together_compatible", "together_ai", "together-ai"],
@@ -3193,11 +3446,12 @@ fn push_unique_env_key(keys: &mut Vec<String>, maybe_key: Option<&str>) {
     keys.push(trimmed.to_owned());
 }
 
-fn push_inline_env_reference(keys: &mut Vec<String>, maybe_secret: Option<&str>) {
-    let Some(secret) = non_empty(maybe_secret) else {
+fn push_secret_ref_env_name(keys: &mut Vec<String>, maybe_secret: Option<&SecretRef>) {
+    let env_name = secret_ref_env_name(maybe_secret);
+    let Some(env_name) = env_name else {
         return;
     };
-    push_unique_env_key(keys, parse_explicit_env_reference(secret));
+    push_unique_env_key(keys, Some(env_name.as_str()));
 }
 
 fn join_guidance_options(options: &[String]) -> String {
@@ -3244,28 +3498,52 @@ fn clamp_usize_at_least_one(value: usize, max: usize) -> usize {
     value.clamp(1, max)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum InlineSecretResolution {
-    Resolved(String),
-    ExplicitEnvMissing,
-    NotInlineEnvReference,
+fn normalize_secret_ref_for_persistence(
+    secret_ref: Option<&SecretRef>,
+    env_name: Option<&str>,
+) -> Option<SecretRef> {
+    let secret_ref = secret_ref.filter(|value| value.is_configured());
+    let explicit_secret_env = secret_ref_env_name(secret_ref);
+    let Some(explicit_secret_env) = explicit_secret_env.as_deref() else {
+        return secret_ref.cloned();
+    };
+
+    let configured_env_name = non_empty(env_name);
+    match configured_env_name {
+        None => None,
+        Some(configured_env_name) if configured_env_name == explicit_secret_env => None,
+        Some(_) => secret_ref.cloned(),
+    }
 }
 
-fn resolve_inline_secret(raw: &str) -> InlineSecretResolution {
-    let Some(env_key) = parse_explicit_env_reference(raw) else {
-        return InlineSecretResolution::NotInlineEnvReference;
-    };
-    match env::var(env_key) {
-        Ok(value) => {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                InlineSecretResolution::ExplicitEnvMissing
-            } else {
-                InlineSecretResolution::Resolved(trimmed.to_owned())
-            }
-        }
-        Err(_) => InlineSecretResolution::ExplicitEnvMissing,
+fn canonicalize_secret_env_reference_for_persistence(
+    secret_ref: &mut Option<SecretRef>,
+    env_name: &mut Option<String>,
+) {
+    if let Some(explicit_env_name) = secret_ref_env_name(secret_ref.as_ref()) {
+        *secret_ref = Some(SecretRef::Env {
+            env: explicit_env_name,
+        });
+        *env_name = None;
+        return;
     }
+
+    if secret_ref.as_ref().is_some_and(SecretRef::is_configured) {
+        *env_name = None;
+        return;
+    }
+
+    let normalized_env_name = env_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    if let Some(normalized_env_name) = normalized_env_name {
+        *secret_ref = Some(SecretRef::Env {
+            env: normalized_env_name,
+        });
+    }
+    *env_name = None;
 }
 
 fn split_secret_candidates(raw: &str) -> Vec<String> {
@@ -3395,6 +3673,7 @@ fn derive_responses_path(chat_path: &str) -> String {
 mod tests {
     use super::*;
     use crate::test_support::ScopedEnv;
+    use loongclaw_contracts::SecretRef;
 
     #[test]
     fn provider_profile_lookup_matches_kind() {
@@ -3426,7 +3705,7 @@ mod tests {
 
         let config = ProviderConfig {
             kind: ProviderKind::Openai,
-            api_key: Some("${OPENAI_API_KEY}".to_owned()),
+            api_key: Some(SecretRef::Inline("${OPENAI_API_KEY}".to_owned())),
             ..ProviderConfig::default()
         };
 
@@ -3469,6 +3748,88 @@ api_key_env = "OPENAI_API_KEY"
     }
 
     #[test]
+    fn normalized_for_persistence_canonicalizes_legacy_api_key_env_binding() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let normalized = config.normalized_for_persistence();
+
+        assert_eq!(
+            normalized.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(normalized.api_key_env, None);
+        assert_eq!(normalized.oauth_access_token, None);
+        assert_eq!(normalized.oauth_access_token_env, None);
+    }
+
+    #[test]
+    fn normalized_for_persistence_keeps_secret_ref_env_binding_canonical() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.api_key = Some(SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        });
+
+        let normalized = config.normalized_for_persistence();
+
+        assert_eq!(
+            normalized.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(normalized.api_key_env, None);
+    }
+
+    #[test]
+    fn normalized_for_persistence_keeps_implicit_provider_auth_defaults_unset() {
+        let config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+
+        let normalized = config.normalized_for_persistence();
+
+        assert_eq!(normalized.api_key, None);
+        assert_eq!(normalized.api_key_env, None);
+        assert_eq!(normalized.oauth_access_token, None);
+        assert_eq!(normalized.oauth_access_token_env, None);
+    }
+
+    #[test]
+    fn canonicalize_configured_auth_env_bindings_rewrites_inline_env_templates() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+        config.api_key = Some(SecretRef::Inline("${OPENAI_API_KEY}".to_owned()));
+
+        config.canonicalize_configured_auth_env_bindings();
+
+        assert_eq!(
+            config.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(config.api_key_env, None);
+    }
+
+    #[test]
+    fn canonicalize_configured_auth_env_bindings_treats_blank_inline_secret_as_absent() {
+        let mut config = ProviderConfig::fresh_for_kind(ProviderKind::Openai);
+        config.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+        config.api_key = Some(SecretRef::Inline("   ".to_owned()));
+
+        config.canonicalize_configured_auth_env_bindings();
+
+        assert_eq!(
+            config.api_key,
+            Some(SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(config.api_key_env, None);
+    }
+
+    #[test]
     fn fresh_minimax_provider_does_not_seed_hidden_preferred_models() {
         let config = ProviderConfig::fresh_for_kind(ProviderKind::Minimax);
 
@@ -3501,7 +3862,7 @@ api_key_env = "OPENAI_API_KEY"
         );
         assert_eq!(
             ProviderKind::Minimax.recommended_onboarding_model(),
-            Some("MiniMax-M2.5")
+            Some("MiniMax-M2.7")
         );
         assert_eq!(
             ProviderKind::KimiCoding.recommended_onboarding_model(),

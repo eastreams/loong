@@ -15,9 +15,10 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use kernel::{
-    Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, TaskIntent, ToolCoreOutcome,
-    ToolCoreRequest,
+    BootstrapTaskStatus, Capability, ConnectorCommand, FixedClock, InMemoryAuditSink,
+    PluginActivationStatus, TaskIntent, ToolCoreOutcome, ToolCoreRequest,
 };
+use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -28,6 +29,9 @@ pub use loongclaw_spec::spec_execution::*;
 pub use loongclaw_spec::spec_runtime::*;
 pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bootstrap};
 
+pub use self::channel_send_target_kind::{
+    default_twitch_send_target_kind, parse_twitch_send_target_kind,
+};
 pub use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
@@ -73,11 +77,15 @@ pub use sha2;
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+#[cfg(test)]
+mod channel_send_cli_tests;
+mod channel_send_target_kind;
 mod cli_handoff;
 pub mod completions_cli;
 pub mod doctor_cli;
 pub mod feishu_cli;
 pub mod feishu_support;
+pub mod gateway;
 pub mod import_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
@@ -85,19 +93,34 @@ pub mod migrate_cli;
 pub mod migration;
 pub mod next_actions;
 pub mod onboard_cli;
+mod onboard_finalize;
+mod onboard_preflight;
 pub mod onboard_presentation;
+mod onboard_types;
+mod onboard_web_search;
+mod onboarding_model_policy;
+pub mod plugins_cli;
+mod provider_credential_policy;
+mod provider_model_probe_policy;
 pub mod provider_presentation;
 mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+mod runtime_snapshot_support;
 pub mod skills_cli;
 pub mod source_presentation;
+pub mod supervisor;
+mod tlon_cli;
 pub mod web_cli;
 
+pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
+pub use runtime_snapshot_support::*;
+pub use tlon_cli::TLON_SEND_CLI_SPEC;
+use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 
 #[allow(
     clippy::expect_used,
@@ -122,11 +145,45 @@ pub fn native_spec_tool_executor(
 
 pub type ChannelCliCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'a>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BridgeSupportProfileArg {
+    NativeBalanced,
+    OpenclawEcosystemBalanced,
+}
+
+impl BridgeSupportProfileArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeBalanced => "native-balanced",
+            Self::OpenclawEcosystemBalanced => "openclaw-ecosystem-balanced",
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone, Default)]
+pub struct RunSpecBridgeSupportArgs {
+    /// Optional JSON file containing a bridge support policy override for this spec run
+    #[arg(long, conflicts_with_all = ["bridge_profile", "bridge_support_delta"])]
+    pub bridge_support: Option<String>,
+    /// Optional bundled bridge support profile override for this spec run
+    #[arg(long, value_enum, conflicts_with_all = ["bridge_support", "bridge_support_delta"])]
+    pub bridge_profile: Option<BridgeSupportProfileArg>,
+    /// Optional delta artifact JSON file derived from a bundled bridge support profile
+    #[arg(long, conflicts_with_all = ["bridge_support", "bridge_profile"])]
+    pub bridge_support_delta: Option<String>,
+    /// Optional sha256 pin for the resolved bridge support policy override
+    #[arg(long)]
+    pub bridge_support_sha256: Option<String>,
+    /// Optional sha256 pin for the bridge support delta artifact override
+    #[arg(long)]
+    pub bridge_support_delta_sha256: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelSendCliArgs<'a> {
     pub config_path: Option<&'a str>,
     pub account: Option<&'a str>,
-    pub target: &'a str,
+    pub target: Option<&'a str>,
     pub target_kind: mvp::channel::ChannelOutboundTargetKind,
     pub text: &'a str,
     pub as_card: bool,
@@ -143,7 +200,7 @@ pub struct ChannelServeCliArgs<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub struct ChannelSendCliSpec {
-    pub family: mvp::channel::ChannelCommandFamilyDescriptor,
+    pub family: mvp::channel::ChannelCatalogCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelSendCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
 }
 
@@ -151,6 +208,20 @@ pub struct ChannelSendCliSpec {
 pub struct ChannelServeCliSpec {
     pub family: mvp::channel::ChannelCommandFamilyDescriptor,
     pub run: for<'a> fn(ChannelServeCliArgs<'a>) -> ChannelCliCommandFuture<'a>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MultiChannelServeChannelAccount {
+    pub channel_id: String,
+    pub account_id: String,
+}
+
+impl std::str::FromStr for MultiChannelServeChannelAccount {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        parse_multi_channel_serve_channel_account(raw)
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -162,6 +233,13 @@ pub struct ChannelServeCliSpec {
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub enum InitSpecPreset {
+    #[default]
+    Default,
+    PluginTrustGuard,
 }
 
 #[derive(Subcommand, Debug)]
@@ -193,6 +271,8 @@ pub enum Commands {
     InitSpec {
         #[arg(long, default_value = "loongclaw.spec.json")]
         output: String,
+        #[arg(long, value_enum, default_value_t = InitSpecPreset::Default)]
+        preset: InitSpecPreset,
     },
     /// Run a full workflow from a JSON spec (task/connector/runtime/tool/memory)
     RunSpec {
@@ -200,6 +280,10 @@ pub enum Commands {
         spec: String,
         #[arg(long, default_value_t = false)]
         print_audit: bool,
+        #[arg(long, default_value_t = false)]
+        render_summary: bool,
+        #[command(flatten)]
+        bridge_support: RunSpecBridgeSupportArgs,
     },
     /// Run pressure benchmarks for programmatic orchestration and optional regression gate checks
     BenchmarkProgrammaticPressure {
@@ -331,6 +415,15 @@ pub enum Commands {
         /// Provider credential environment variable name, for example OPENAI_API_KEY
         #[arg(long = "api-key", alias = "api-key-env")]
         api_key_env: Option<String>,
+        #[arg(
+            long = "web-search-provider",
+            value_name = "PROVIDER",
+            help = mvp::config::WEB_SEARCH_PROVIDER_VALID_VALUES
+        )]
+        web_search_provider: Option<String>,
+        /// Web search credential environment variable name, for example TAVILY_API_KEY
+        #[arg(long = "web-search-api-key", alias = "web-search-api-key-env")]
+        web_search_api_key_env: Option<String>,
         /// Select a native prompt personality in non-interactive mode
         #[arg(long)]
         personality: Option<String>,
@@ -451,6 +544,17 @@ pub enum Commands {
         json: bool,
         #[command(subcommand)]
         command: skills_cli::SkillsCommands,
+    },
+    #[command(
+        visible_alias = "plugin",
+        about = "Inspect plugin governance truth and deduplicated operator action plans",
+        long_about = "Operator-facing plugin governance namespace for scanning one or more plugin roots, evaluating profile-aware preflight, and consuming the deduplicated operator action plan.\n\nThis command does not introduce a second policy engine. It reuses the existing spec `plugin_preflight` surface and exposes one thin CLI over the same governance contract."
+    )]
+    Plugins {
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[command(subcommand)]
+        command: plugins_cli::PluginsCommands,
     },
     /// List compiled channel surfaces, aliases, and readiness status
     Channels {
@@ -734,6 +838,345 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Send one WeCom AIBot proactive message
+    WecomSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_wecom_send_target_kind(),
+            value_parser = parse_wecom_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run WeCom AIBot long-connection reply loop
+    WecomServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+    },
+    /// Send one Discord channel message
+    DiscordSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_discord_send_target_kind(),
+            value_parser = parse_discord_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one DingTalk custom robot webhook message
+    DingtalkSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_dingtalk_send_target_kind(),
+            value_parser = parse_dingtalk_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Slack channel message
+    SlackSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_slack_send_target_kind(),
+            value_parser = parse_slack_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one LINE push message
+    LineSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_line_send_target_kind(),
+            value_parser = parse_line_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one WhatsApp business message
+    WhatsappSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_whatsapp_send_target_kind(),
+            value_parser = parse_whatsapp_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one SMTP email message
+    EmailSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_email_send_target_kind(),
+            value_parser = parse_email_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one generic webhook POST message
+    WebhookSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_webhook_send_target_kind(),
+            value_parser = parse_webhook_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Google Chat incoming webhook message
+    GoogleChatSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_google_chat_send_target_kind(),
+            value_parser = parse_google_chat_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Microsoft Teams incoming webhook message
+    TeamsSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_teams_send_target_kind(),
+            value_parser = parse_teams_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Tlon direct message or group post
+    TlonSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_tlon_send_target_kind(),
+            value_parser = parse_tlon_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Signal direct message
+    SignalSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_signal_send_target_kind(),
+            value_parser = parse_signal_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Twitch chat message
+    TwitchSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_twitch_send_target_kind(),
+            value_parser = parse_twitch_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Mattermost channel post
+    MattermostSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_mattermost_send_target_kind(),
+            value_parser = parse_mattermost_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Nextcloud Talk bot room message
+    NextcloudTalkSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_nextcloud_talk_send_target_kind(),
+            value_parser = parse_nextcloud_talk_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one Synology Chat incoming webhook message
+    SynologyChatSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_synology_chat_send_target_kind(),
+            value_parser = parse_synology_chat_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one IRC message to a channel or nick
+    IrcSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_irc_send_target_kind(),
+            value_parser = parse_irc_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Send one iMessage chat through BlueBubbles
+    ImessageSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: String,
+        #[arg(
+            long,
+            default_value_t = default_imessage_send_target_kind(),
+            value_parser = parse_imessage_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Publish one signed Nostr text note
+    NostrSend {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long = "target")]
+        target: Option<String>,
+        #[arg(
+            long,
+            default_value_t = default_nostr_send_target_kind(),
+            value_parser = parse_nostr_send_target_kind
+        )]
+        target_kind: mvp::channel::ChannelOutboundTargetKind,
+        #[arg(long)]
+        text: String,
+    },
+    /// Run the multi-channel supervisor for coordinated runtime-backed service-channel serving
+    MultiChannelServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: String,
+        #[arg(long = "channel-account", value_name = "CHANNEL=ACCOUNT")]
+        channel_account: Vec<MultiChannelServeChannelAccount>,
+    },
     /// Run the Feishu integration namespace
     Feishu {
         #[command(subcommand)]
@@ -758,6 +1201,108 @@ pub enum ValidateConfigOutput {
     ProblemJson,
 }
 
+fn parse_multi_channel_serve_channel_account(
+    raw: &str,
+) -> Result<MultiChannelServeChannelAccount, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("multi-channel channel-account entries cannot be empty".to_owned());
+    }
+
+    let (raw_channel_id, raw_account_id) = trimmed.split_once('=').ok_or_else(|| {
+        format!("multi-channel channel-account `{trimmed}` must use CHANNEL=ACCOUNT syntax")
+    })?;
+
+    let channel_token = raw_channel_id.trim();
+    if channel_token.is_empty() {
+        return Err(format!(
+            "multi-channel channel-account `{trimmed}` is missing a channel id"
+        ));
+    }
+
+    let supported_channel_ids = supported_multi_channel_serve_channel_ids();
+    let supported_channels = supported_channel_ids.join(", ");
+    let runtime_descriptor = mvp::channel::resolve_channel_runtime_command_descriptor(channel_token)
+        .ok_or_else(|| {
+            format!(
+                "unrecognized multi-channel service channel `{channel_token}` (available runtime-backed channels: {supported_channels})"
+            )
+        })?;
+    let runtime_channel_id = runtime_descriptor.channel_id;
+    let runtime_is_supported = supported_channel_ids.contains(&runtime_channel_id);
+    if !runtime_is_supported {
+        return Err(format!(
+            "multi-channel service channel `{channel_token}` resolves to `{runtime_channel_id}` but is not supported in this build (expected one of: {supported_channels})"
+        ));
+    }
+
+    let account_token = raw_account_id.trim();
+    if account_token.is_empty() {
+        return Err(format!(
+            "multi-channel channel-account `{trimmed}` is missing an account id"
+        ));
+    }
+
+    Ok(MultiChannelServeChannelAccount {
+        channel_id: runtime_descriptor.channel_id.to_owned(),
+        account_id: account_token.to_owned(),
+    })
+}
+
+fn supported_multi_channel_serve_channel_ids() -> Vec<&'static str> {
+    let supported_channels = mvp::channel::background_channel_runtime_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.channel_id)
+        .collect::<BTreeSet<_>>();
+    supported_channels.into_iter().collect()
+}
+
+#[cfg(test)]
+mod multi_channel_serve_tests {
+    use std::collections::BTreeSet;
+
+    use super::*;
+
+    #[test]
+    fn supported_multi_channel_serve_channel_ids_follow_background_runtime_registry() {
+        let expected_ids = mvp::channel::background_channel_runtime_descriptors()
+            .into_iter()
+            .map(|descriptor| descriptor.channel_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let actual_ids = supported_multi_channel_serve_channel_ids();
+
+        assert_eq!(actual_ids, expected_ids);
+    }
+
+    #[test]
+    fn parse_multi_channel_serve_channel_account_rejects_compiled_out_matrix_runtime() {
+        let supported_channel_ids = supported_multi_channel_serve_channel_ids();
+        let matrix_is_supported = supported_channel_ids.contains(&"matrix");
+        if matrix_is_supported {
+            return;
+        }
+
+        let error = parse_multi_channel_serve_channel_account("matrix=bridge-sync")
+            .expect_err("compiled-out matrix runtime should be rejected");
+
+        assert!(
+            error.contains(
+                "multi-channel service channel `matrix` resolves to `matrix` but is not supported in this build"
+            )
+        );
+    }
+
+    #[test]
+    fn parse_multi_channel_serve_channel_account_rejects_unknown_runtime_channel() {
+        let error = parse_multi_channel_serve_channel_account("unknown=bridge-sync")
+            .expect_err("unknown runtime channel should be rejected");
+
+        assert!(error.contains("unrecognized multi-channel service channel `unknown`"));
+    }
+}
+
 fn resolved_default_entry_config_path() -> PathBuf {
     std::env::var_os("LOONGCLAW_CONFIG_PATH")
         .map(PathBuf::from)
@@ -774,6 +1319,8 @@ fn default_onboard_command() -> Commands {
         provider: None,
         model: None,
         api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
         personality: None,
         memory_profile: None,
         system_prompt: None,
@@ -1137,22 +1684,248 @@ pub async fn run_audit_demo() -> CliResult<()> {
     Ok(())
 }
 
-pub fn init_spec_cli(output_path: &str) -> CliResult<()> {
-    let spec = RunnerSpec::template();
+pub fn init_spec_cli(output_path: &str, preset: InitSpecPreset) -> CliResult<()> {
+    let spec = match preset {
+        InitSpecPreset::Default => RunnerSpec::template(),
+        InitSpecPreset::PluginTrustGuard => RunnerSpec::plugin_trust_guard_template(),
+    };
     write_json_file(output_path, &spec)?;
     println!("spec template written to {}", output_path);
     Ok(())
 }
 
-pub async fn run_spec_cli(spec_path: &str, print_audit: bool) -> CliResult<()> {
-    let spec = read_spec_file(spec_path)?;
-    let report =
-        execute_spec_with_native_tool_executor(&spec, print_audit, Some(native_spec_tool_executor))
-            .await;
+pub async fn run_spec_cli(
+    spec_path: &str,
+    print_audit: bool,
+    render_summary: bool,
+    bridge_support: &RunSpecBridgeSupportArgs,
+) -> CliResult<()> {
+    validate_run_spec_bridge_support_args(bridge_support)?;
+    let resolved = read_spec_file_with_bridge_support_resolution(
+        spec_path,
+        run_spec_bridge_support_selection(bridge_support).as_ref(),
+    )?;
+    let report = execute_spec_with_native_tool_executor_and_bridge_support_provenance(
+        &resolved.spec,
+        print_audit,
+        Some(native_spec_tool_executor),
+        resolved.bridge_support_source,
+        resolved.bridge_support_delta_source,
+        resolved.bridge_support_delta_sha256,
+    )
+    .await;
+    if render_summary {
+        eprintln!("{}", render_spec_run_summary(&report));
+    }
     let pretty = serde_json::to_string_pretty(&report)
         .map_err(|error| format!("serialize spec run report failed: {error}"))?;
     println!("{pretty}");
     Ok(())
+}
+
+fn validate_run_spec_bridge_support_args(args: &RunSpecBridgeSupportArgs) -> CliResult<()> {
+    let has_policy_source = args.bridge_support.is_some()
+        || args.bridge_profile.is_some()
+        || args.bridge_support_delta.is_some();
+    let has_sha256_pin =
+        args.bridge_support_sha256.is_some() || args.bridge_support_delta_sha256.is_some();
+
+    if has_policy_source || !has_sha256_pin {
+        return Ok(());
+    }
+
+    Err(
+        "run-spec bridge support sha256 pins require --bridge-support, --bridge-profile, or --bridge-support-delta"
+            .to_owned(),
+    )
+}
+
+fn render_spec_run_summary(report: &SpecRunReport) -> String {
+    let mut lines = vec![format!(
+        "run-spec summary pack={} agent={} status={} operation={}",
+        report.pack_id,
+        report.agent_id,
+        spec_run_status_label(report),
+        report.operation_kind
+    )];
+
+    if let Some(blocked_reason) = report.blocked_reason.as_deref() {
+        lines.push(format!(
+            "blocked_reason={}",
+            sanitize_summary_field(blocked_reason)
+        ));
+    }
+
+    if report.plugin_trust_summary.scanned_plugins > 0 {
+        let trust = &report.plugin_trust_summary;
+        lines.push(format!(
+            "plugin_trust scanned={} official={} verified_community={} unverified={} high_risk={} high_risk_unverified={} blocked_auto_apply={} review_required={}",
+            trust.scanned_plugins,
+            trust.official_plugins,
+            trust.verified_community_plugins,
+            trust.unverified_plugins,
+            trust.high_risk_plugins,
+            trust.high_risk_unverified_plugins,
+            trust.blocked_auto_apply_plugins,
+            trust.review_required_plugins.len()
+        ));
+
+        for entry in trust.review_required_plugins.iter().take(3) {
+            lines.push(render_plugin_trust_review_summary(entry));
+        }
+        if trust.review_required_plugins.len() > 3 {
+            lines.push(format!(
+                "plugin_review remaining={}",
+                trust.review_required_plugins.len() - 3
+            ));
+        }
+    }
+
+    if let Some(summary) = report.tool_search_summary.as_ref() {
+        lines.push(format!(
+            "tool_search {}",
+            sanitize_summary_field(&summary.headline)
+        ));
+
+        if summary.trust_filter_summary.applied {
+            lines.push(format!(
+                "tool_search_filters query_requested={} structured_requested={} effective={} conflicting={} filtered_out_by_tier={}",
+                format_string_list_or_dash(&summary.trust_filter_summary.query_requested_tiers),
+                format_string_list_or_dash(&summary.trust_filter_summary.structured_requested_tiers),
+                format_string_list_or_dash(&summary.trust_filter_summary.effective_tiers),
+                summary.trust_filter_summary.conflicting_requested_tiers,
+                format_usize_rollup(&summary.trust_filter_summary.filtered_out_tier_counts)
+            ));
+        }
+
+        for (index, entry) in summary.top_results.iter().enumerate() {
+            lines.push(format!(
+                "tool_search_top[{}] provider={} connector={} tool_id={} trust={} bridge={} score={} setup_ready={} loaded={} deferred={}",
+                index + 1,
+                entry.provider_id,
+                entry.connector_name,
+                entry.tool_id,
+                entry.trust_tier.as_deref().unwrap_or("-"),
+                entry.bridge_kind,
+                entry.score,
+                entry.setup_ready,
+                entry.loaded,
+                entry.deferred
+            ));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn spec_run_status_label(report: &SpecRunReport) -> &'static str {
+    if report.blocked_reason.is_some() || report.operation_kind == "blocked" {
+        "blocked"
+    } else {
+        "ok"
+    }
+}
+
+fn render_plugin_trust_review_summary(entry: &PluginTrustReviewEntry) -> String {
+    format!(
+        "plugin_review plugin={} tier={} bridge={} activation={} bootstrap={} source={} provenance={} reason={}",
+        entry.plugin_id,
+        entry.trust_tier.as_str(),
+        entry.bridge_kind.as_str(),
+        plugin_activation_status_label(entry.activation_status),
+        entry
+            .bootstrap_status
+            .map(bootstrap_task_status_label)
+            .unwrap_or("-"),
+        sanitize_summary_field(&entry.source_path),
+        sanitize_summary_field(&entry.provenance_summary),
+        sanitize_summary_field(&entry.reason)
+    )
+}
+
+fn plugin_activation_status_label(status: PluginActivationStatus) -> &'static str {
+    match status {
+        PluginActivationStatus::Ready => "ready",
+        PluginActivationStatus::SetupIncomplete => "setup_incomplete",
+        PluginActivationStatus::BlockedUnsupportedBridge => "blocked_unsupported_bridge",
+        PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
+            "blocked_unsupported_adapter_family"
+        }
+        PluginActivationStatus::BlockedCompatibilityMode => "blocked_compatibility_mode",
+        PluginActivationStatus::BlockedIncompatibleHost => "blocked_incompatible_host",
+        PluginActivationStatus::BlockedSlotClaimConflict => "blocked_slot_claim_conflict",
+        PluginActivationStatus::Unknown => "unknown",
+    }
+}
+
+fn bootstrap_task_status_label(status: BootstrapTaskStatus) -> &'static str {
+    match status {
+        BootstrapTaskStatus::Applied => "applied",
+        BootstrapTaskStatus::DeferredUnsupportedAutoApply => "deferred_unsupported_auto_apply",
+        BootstrapTaskStatus::SkippedNotReady => "skipped_not_ready",
+        BootstrapTaskStatus::SkippedByPolicyLimit => "skipped_by_policy_limit",
+    }
+}
+
+fn format_string_list_or_dash(values: &[String]) -> String {
+    if values.is_empty() {
+        return "-".to_owned();
+    }
+
+    values.join(",")
+}
+
+fn sanitize_summary_field(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn run_spec_bridge_support_selection(
+    args: &RunSpecBridgeSupportArgs,
+) -> Option<BridgeSupportSelectionInput> {
+    let selection = BridgeSupportSelectionInput {
+        path: args.bridge_support.clone(),
+        bundled_profile: args
+            .bridge_profile
+            .map(BridgeSupportProfileArg::as_str)
+            .map(str::to_owned),
+        delta_artifact: args.bridge_support_delta.clone(),
+        expected_sha256: args.bridge_support_sha256.clone(),
+        expected_delta_sha256: args.bridge_support_delta_sha256.clone(),
+    };
+    (selection.path.is_some()
+        || selection.bundled_profile.is_some()
+        || selection.delta_artifact.is_some())
+    .then_some(selection)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RunnerSpecFileInput {
+    #[serde(flatten)]
+    spec: RunnerSpec,
+    #[serde(default)]
+    bridge_support_selection: Option<BridgeSupportSelectionInput>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BridgeSupportSelectionInput {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub bundled_profile: Option<String>,
+    #[serde(default)]
+    pub delta_artifact: Option<String>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_delta_sha256: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedRunnerSpecFile {
+    pub spec: RunnerSpec,
+    pub bridge_support_source: Option<String>,
+    pub bridge_support_delta_source: Option<String>,
+    pub bridge_support_delta_sha256: Option<String>,
 }
 
 pub fn run_validate_config_cli(
@@ -1328,1099 +2101,6 @@ pub async fn run_list_models_cli(config_path: Option<&str>, as_json: bool) -> Cl
 pub const RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotCliState {
-    pub config: String,
-    pub provider: RuntimeSnapshotProviderState,
-    pub context_engine: mvp::conversation::ContextEngineRuntimeSnapshot,
-    pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
-    pub acp: mvp::acp::AcpRuntimeSnapshot,
-    pub enabled_channel_ids: Vec<String>,
-    pub enabled_service_channel_ids: Vec<String>,
-    pub channels: mvp::channel::ChannelInventory,
-    pub tool_runtime: mvp::tools::runtime_config::ToolRuntimeConfig,
-    pub visible_tool_names: Vec<String>,
-    pub capability_snapshot: String,
-    pub capability_snapshot_sha256: String,
-    pub external_skills: RuntimeSnapshotExternalSkillsState,
-    pub restore_spec: RuntimeSnapshotRestoreSpec,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderState {
-    pub active_profile_id: String,
-    pub active_label: String,
-    pub last_provider_id: Option<String>,
-    pub saved_profile_ids: Vec<String>,
-    pub profiles: Vec<RuntimeSnapshotProviderProfileState>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotProviderProfileState {
-    pub profile_id: String,
-    pub is_active: bool,
-    pub default_for_kind: bool,
-    pub kind: mvp::config::ProviderKind,
-    pub model: String,
-    pub wire_api: mvp::config::ProviderWireApi,
-    pub base_url: String,
-    pub endpoint: String,
-    pub models_endpoint: String,
-    pub protocol_family: &'static str,
-    pub credential_resolved: bool,
-    pub auth_env: Option<String>,
-    pub reasoning_effort: Option<String>,
-    pub temperature: f64,
-    pub max_tokens: Option<u32>,
-    pub request_timeout_ms: u64,
-    pub retry_max_attempts: usize,
-    pub header_names: Vec<String>,
-    pub preferred_models: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeSnapshotInventoryStatus {
-    Ok,
-    Disabled,
-    Error,
-}
-
-impl RuntimeSnapshotInventoryStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::Disabled => "disabled",
-            Self::Error => "error",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RuntimeSnapshotExternalSkillsState {
-    pub policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
-    pub override_active: bool,
-    pub inventory_status: RuntimeSnapshotInventoryStatus,
-    pub inventory_error: Option<String>,
-    pub inventory: Value,
-    pub resolved_skill_count: usize,
-    pub shadowed_skill_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeSnapshotArtifactMetadata {
-    pub created_at: String,
-    pub label: Option<String>,
-    pub experiment_id: Option<String>,
-    pub parent_snapshot_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSnapshotArtifactLineage {
-    pub snapshot_id: String,
-    pub created_at: String,
-    pub label: Option<String>,
-    pub experiment_id: Option<String>,
-    pub parent_snapshot_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RuntimeSnapshotRestoreSpec {
-    pub provider: RuntimeSnapshotRestoreProviderSpec,
-    pub conversation: mvp::config::ConversationConfig,
-    pub memory: mvp::config::MemoryConfig,
-    pub acp: mvp::config::AcpConfig,
-    pub tools: mvp::config::ToolConfig,
-    pub external_skills: mvp::config::ExternalSkillsConfig,
-    pub managed_skills: RuntimeSnapshotRestoreManagedSkillsSpec,
-    pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RuntimeSnapshotRestoreProviderSpec {
-    pub active_provider: Option<String>,
-    pub last_provider: Option<String>,
-    pub profiles: BTreeMap<String, mvp::config::ProviderProfileConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct RuntimeSnapshotRestoreManagedSkillsSpec {
-    pub skills: Vec<RuntimeSnapshotRestoreManagedSkillSpec>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSnapshotRestoreManagedSkillSpec {
-    pub skill_id: String,
-    pub display_name: String,
-    pub summary: String,
-    pub source_kind: String,
-    pub source_path: String,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RuntimeSnapshotArtifactSchema {
-    pub version: u32,
-    pub surface: String,
-    pub purpose: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct RuntimeSnapshotArtifactDocument {
-    pub config: String,
-    pub schema: RuntimeSnapshotArtifactSchema,
-    pub lineage: RuntimeSnapshotArtifactLineage,
-    pub provider: Value,
-    pub context_engine: Value,
-    pub memory_system: Value,
-    pub acp: Value,
-    pub channels: Value,
-    pub tool_runtime: Value,
-    pub tools: Value,
-    pub external_skills: Value,
-    pub restore_spec: RuntimeSnapshotRestoreSpec,
-}
-
-pub fn run_runtime_snapshot_cli(
-    config_path: Option<&str>,
-    as_json: bool,
-    output_path: Option<&str>,
-    label: Option<&str>,
-    experiment_id: Option<&str>,
-    parent_snapshot_id: Option<&str>,
-) -> CliResult<()> {
-    let snapshot = collect_runtime_snapshot_cli_state(config_path)?;
-    let metadata =
-        runtime_snapshot_artifact_metadata_now(label, experiment_id, parent_snapshot_id)?;
-    let artifact_payload = build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)?;
-
-    if let Some(output_path) = output_path {
-        persist_runtime_snapshot_artifact(output_path, &artifact_payload)?;
-    }
-
-    if as_json {
-        let pretty = serde_json::to_string_pretty(&artifact_payload).map_err(|error| {
-            format!("serialize runtime snapshot artifact output failed: {error}")
-        })?;
-        println!("{pretty}");
-        return Ok(());
-    }
-
-    println!(
-        "{}",
-        render_runtime_snapshot_artifact_text(&snapshot, &artifact_payload)
-    );
-    Ok(())
-}
-
-pub fn collect_runtime_snapshot_cli_state(
-    config_path: Option<&str>,
-) -> CliResult<RuntimeSnapshotCliState> {
-    let (resolved_path, config) = mvp::config::load(config_path)?;
-    let config_display = resolved_path.display().to_string();
-    let provider = collect_runtime_snapshot_provider_state(&config);
-    let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(&config)?;
-    let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(&config)?;
-    let acp = mvp::acp::collect_acp_runtime_snapshot(&config)?;
-    let enabled_channel_ids = config.enabled_channel_ids();
-    let enabled_service_channel_ids = config.enabled_service_channel_ids();
-    let channels = mvp::channel::channel_inventory(&config);
-    let tool_runtime = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
-        &config,
-        Some(resolved_path.as_path()),
-    );
-    let (external_skills, snapshot_tool_runtime) =
-        collect_runtime_snapshot_external_skills_state(&tool_runtime);
-    let tool_view = mvp::tools::runtime_tool_view_for_runtime_config(&snapshot_tool_runtime);
-    let visible_tool_names = tool_view
-        .tool_names()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
-    let capability_snapshot_sha256 =
-        runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
-    let restore_spec = build_runtime_snapshot_restore_spec(&config, &external_skills);
-
-    Ok(RuntimeSnapshotCliState {
-        config: config_display,
-        provider,
-        context_engine,
-        memory_system,
-        acp,
-        enabled_channel_ids,
-        enabled_service_channel_ids,
-        channels,
-        tool_runtime: snapshot_tool_runtime,
-        visible_tool_names,
-        capability_snapshot,
-        capability_snapshot_sha256,
-        external_skills,
-        restore_spec,
-    })
-}
-
-fn collect_runtime_snapshot_provider_state(
-    config: &mvp::config::LoongClawConfig,
-) -> RuntimeSnapshotProviderState {
-    let active_profile_id = config
-        .active_provider_id()
-        .unwrap_or(config.provider.kind.profile().id)
-        .to_owned();
-    let saved_profile_ids = provider_presentation::saved_provider_profile_ids(config);
-    let profiles = if config.providers.is_empty() {
-        vec![build_runtime_snapshot_provider_profile_state(
-            active_profile_id.as_str(),
-            &mvp::config::ProviderProfileConfig {
-                default_for_kind: true,
-                provider: config.provider.clone(),
-            },
-            true,
-        )]
-    } else {
-        saved_profile_ids
-            .iter()
-            .filter_map(|profile_id| {
-                config.providers.get(profile_id).map(|profile| {
-                    build_runtime_snapshot_provider_profile_state(
-                        profile_id,
-                        profile,
-                        profile_id == &active_profile_id,
-                    )
-                })
-            })
-            .collect::<Vec<_>>()
-    };
-
-    RuntimeSnapshotProviderState {
-        active_profile_id,
-        active_label: provider_presentation::active_provider_detail_label(config),
-        last_provider_id: config.last_provider_id().map(str::to_owned),
-        saved_profile_ids,
-        profiles,
-    }
-}
-
-fn build_runtime_snapshot_provider_profile_state(
-    profile_id: &str,
-    profile: &mvp::config::ProviderProfileConfig,
-    is_active: bool,
-) -> RuntimeSnapshotProviderProfileState {
-    let provider = &profile.provider;
-    let mut header_names = provider.headers.keys().cloned().collect::<Vec<_>>();
-    header_names.sort();
-
-    RuntimeSnapshotProviderProfileState {
-        profile_id: profile_id.to_owned(),
-        is_active,
-        default_for_kind: profile.default_for_kind,
-        kind: provider.kind,
-        model: provider.model.clone(),
-        wire_api: provider.wire_api,
-        base_url: provider.resolved_base_url(),
-        endpoint: provider.endpoint(),
-        models_endpoint: provider.models_endpoint(),
-        protocol_family: provider.kind.profile().protocol_family.as_str(),
-        credential_resolved: runtime_snapshot_provider_credentials_resolved(provider),
-        auth_env: provider.resolved_auth_env_name(),
-        reasoning_effort: provider
-            .reasoning_effort
-            .map(|value| value.as_str().to_owned()),
-        temperature: provider.temperature,
-        max_tokens: provider.max_tokens,
-        request_timeout_ms: provider.request_timeout_ms,
-        retry_max_attempts: provider.retry_max_attempts,
-        header_names,
-        preferred_models: provider.preferred_models.clone(),
-    }
-}
-
-fn runtime_snapshot_provider_credentials_resolved(provider: &mvp::config::ProviderConfig) -> bool {
-    if provider.resolved_auth_secret().is_some() {
-        return true;
-    }
-
-    ["authorization", "x-api-key"].iter().any(|header_name| {
-        provider
-            .header_value(header_name)
-            .is_some_and(|value| !value.trim().is_empty())
-    })
-}
-
-fn collect_runtime_snapshot_external_skills_state(
-    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> (
-    RuntimeSnapshotExternalSkillsState,
-    mvp::tools::runtime_config::ToolRuntimeConfig,
-) {
-    let empty_inventory = json!({
-        "skills": [],
-        "shadowed_skills": [],
-    });
-
-    let (effective_policy, override_active) =
-        match runtime_snapshot_effective_external_skills_policy(tool_runtime) {
-            Ok(policy_state) => policy_state,
-            Err(error) => {
-                return (
-                    RuntimeSnapshotExternalSkillsState {
-                        policy: tool_runtime.external_skills.clone(),
-                        override_active: false,
-                        inventory_status: RuntimeSnapshotInventoryStatus::Error,
-                        inventory_error: Some(error.clone()),
-                        inventory: json!({
-                            "skills": [],
-                            "shadowed_skills": [],
-                            "error": error,
-                        }),
-                        resolved_skill_count: 0,
-                        shadowed_skill_count: 0,
-                    },
-                    tool_runtime.clone(),
-                );
-            }
-        };
-
-    let mut effective_tool_runtime = tool_runtime.clone();
-    effective_tool_runtime.external_skills = effective_policy.clone();
-
-    if !effective_policy.enabled {
-        return (
-            RuntimeSnapshotExternalSkillsState {
-                policy: effective_policy,
-                override_active,
-                inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
-                inventory_error: None,
-                inventory: empty_inventory,
-                resolved_skill_count: 0,
-                shadowed_skill_count: 0,
-            },
-            effective_tool_runtime,
-        );
-    }
-
-    match mvp::tools::execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "external_skills.list".to_owned(),
-            payload: json!({}),
-        },
-        &effective_tool_runtime,
-    ) {
-        Ok(outcome) => (
-            RuntimeSnapshotExternalSkillsState {
-                policy: effective_policy,
-                override_active,
-                inventory_status: RuntimeSnapshotInventoryStatus::Ok,
-                inventory_error: None,
-                resolved_skill_count: json_array_len(outcome.payload.get("skills")),
-                shadowed_skill_count: json_array_len(outcome.payload.get("shadowed_skills")),
-                inventory: outcome.payload,
-            },
-            effective_tool_runtime,
-        ),
-        Err(error) => (
-            RuntimeSnapshotExternalSkillsState {
-                policy: effective_policy,
-                override_active,
-                inventory_status: RuntimeSnapshotInventoryStatus::Error,
-                inventory_error: Some(error.clone()),
-                inventory: json!({
-                    "skills": [],
-                    "shadowed_skills": [],
-                    "error": error,
-                }),
-                resolved_skill_count: 0,
-                shadowed_skill_count: 0,
-            },
-            effective_tool_runtime,
-        ),
-    }
-}
-
-fn runtime_snapshot_effective_external_skills_policy(
-    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<
-    (
-        mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
-        bool,
-    ),
-    String,
-> {
-    let outcome = mvp::tools::execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "external_skills.policy".to_owned(),
-            payload: json!({
-                "action": "get",
-            }),
-        },
-        tool_runtime,
-    )
-    .map_err(|error| format!("resolve effective external skills policy failed: {error}"))?;
-
-    let policy = runtime_snapshot_external_skills_policy_from_payload(&outcome.payload)?;
-    let override_active = outcome
-        .payload
-        .get("override_active")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok((policy, override_active))
-}
-
-fn runtime_snapshot_external_skills_policy_from_payload(
-    payload: &Value,
-) -> Result<mvp::tools::runtime_config::ExternalSkillsRuntimePolicy, String> {
-    let policy = payload
-        .get("policy")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            "runtime snapshot external skills policy payload missing `policy`".to_owned()
-        })?;
-
-    Ok(mvp::tools::runtime_config::ExternalSkillsRuntimePolicy {
-        enabled: policy
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `enabled`".to_owned()
-            })?,
-        require_download_approval: policy
-            .get("require_download_approval")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `require_download_approval`"
-                    .to_owned()
-            })?,
-        allowed_domains: json_string_array_to_set(
-            policy.get("allowed_domains"),
-            "runtime snapshot external skills policy.allowed_domains",
-        )?,
-        blocked_domains: json_string_array_to_set(
-            policy.get("blocked_domains"),
-            "runtime snapshot external skills policy.blocked_domains",
-        )?,
-        install_root: policy
-            .get("install_root")
-            .and_then(Value::as_str)
-            .map(Path::new)
-            .map(Path::to_path_buf),
-        auto_expose_installed: policy
-            .get("auto_expose_installed")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `auto_expose_installed`".to_owned()
-            })?,
-    })
-}
-
-fn runtime_snapshot_tool_digest(
-    visible_tool_names: &[String],
-    capability_snapshot: &str,
-) -> CliResult<String> {
-    let serialized = serde_json::to_vec(&json!({
-        "visible_tool_names": visible_tool_names,
-        "capability_snapshot": capability_snapshot,
-    }))
-    .map_err(|error| format!("serialize runtime snapshot tool digest input failed: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(serialized)))
-}
-
-fn json_array_len(value: Option<&Value>) -> usize {
-    value.and_then(Value::as_array).map_or(0, Vec::len)
-}
-
-fn json_string_array_to_set(
-    value: Option<&Value>,
-    context: &str,
-) -> Result<BTreeSet<String>, String> {
-    let items = value
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("{context} must be an array"))?;
-    items
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("{context} must contain only strings"))
-        })
-        .collect()
-}
-
-fn build_runtime_snapshot_restore_spec(
-    config: &mvp::config::LoongClawConfig,
-    external_skills: &RuntimeSnapshotExternalSkillsState,
-) -> RuntimeSnapshotRestoreSpec {
-    let mut warnings = Vec::new();
-    let mut profiles = runtime_snapshot_restore_provider_profiles(config);
-    for (profile_id, profile) in &mut profiles {
-        normalize_runtime_snapshot_restore_provider_profile(profile_id, profile, &mut warnings);
-    }
-
-    RuntimeSnapshotRestoreSpec {
-        provider: RuntimeSnapshotRestoreProviderSpec {
-            active_provider: config.active_provider_id().map(str::to_owned),
-            last_provider: config.last_provider_id().map(str::to_owned),
-            profiles,
-        },
-        conversation: config.conversation.clone(),
-        memory: config.memory.clone(),
-        acp: config.acp.clone(),
-        tools: config.tools.clone(),
-        external_skills: config.external_skills.clone(),
-        managed_skills: build_runtime_snapshot_restore_managed_skills_spec(
-            external_skills,
-            &mut warnings,
-        ),
-        warnings,
-    }
-}
-
-fn runtime_snapshot_restore_provider_profiles(
-    config: &mvp::config::LoongClawConfig,
-) -> BTreeMap<String, mvp::config::ProviderProfileConfig> {
-    if !config.providers.is_empty() {
-        return config.providers.clone();
-    }
-
-    let profile_id = config
-        .active_provider_id()
-        .unwrap_or(config.provider.kind.profile().id)
-        .to_owned();
-    BTreeMap::from([(
-        profile_id,
-        mvp::config::ProviderProfileConfig {
-            default_for_kind: true,
-            provider: config.provider.clone(),
-        },
-    )])
-}
-
-fn normalize_runtime_snapshot_restore_provider_profile(
-    profile_id: &str,
-    profile: &mut mvp::config::ProviderProfileConfig,
-    warnings: &mut Vec<String>,
-) {
-    runtime_snapshot_migrate_provider_env_reference(
-        &mut profile.provider.api_key,
-        &mut profile.provider.api_key_env,
-    );
-    runtime_snapshot_migrate_provider_env_reference(
-        &mut profile.provider.oauth_access_token,
-        &mut profile.provider.oauth_access_token_env,
-    );
-
-    if runtime_snapshot_redact_provider_secret_field(
-        profile.provider.api_key.as_mut(),
-        profile_id,
-        "api_key",
-        warnings,
-    ) {
-        profile.provider.api_key = None;
-    }
-    if runtime_snapshot_redact_provider_secret_field(
-        profile.provider.oauth_access_token.as_mut(),
-        profile_id,
-        "oauth_access_token",
-        warnings,
-    ) {
-        profile.provider.oauth_access_token = None;
-    }
-
-    let header_keys_to_remove = profile
-        .provider
-        .headers
-        .iter()
-        .filter(|(header_name, header_value)| {
-            !runtime_snapshot_provider_header_is_safe_to_persist(
-                profile.provider.kind,
-                header_name,
-                header_value,
-            )
-        })
-        .map(|(header_name, _)| header_name.clone())
-        .collect::<Vec<_>>();
-    for header_name in header_keys_to_remove {
-        profile.provider.headers.remove(&header_name);
-        warnings.push(format!(
-            "restore spec redacted inline provider header `{header_name}` for profile `{profile_id}`"
-        ));
-    }
-}
-
-fn runtime_snapshot_redact_provider_secret_field(
-    raw: Option<&mut String>,
-    profile_id: &str,
-    field_name: &str,
-    warnings: &mut Vec<String>,
-) -> bool {
-    let Some(raw) = raw else {
-        return false;
-    };
-    if raw.trim().is_empty() || runtime_snapshot_is_env_reference_literal(raw) {
-        return false;
-    }
-    warnings.push(format!(
-        "restore spec redacted inline provider credential `{field_name}` for profile `{profile_id}`"
-    ));
-    true
-}
-
-fn runtime_snapshot_provider_header_is_safe_to_persist(
-    provider_kind: mvp::config::ProviderKind,
-    header_name: &str,
-    header_value: &str,
-) -> bool {
-    if header_value.trim().is_empty() || runtime_snapshot_is_env_reference_literal(header_value) {
-        return true;
-    }
-
-    let normalized = header_name.trim().to_ascii_lowercase();
-    matches!(
-        normalized.as_str(),
-        "accept"
-            | "accept-charset"
-            | "accept-encoding"
-            | "accept-language"
-            | "anthropic-version"
-            | "cache-control"
-            | "content-language"
-            | "content-type"
-            | "pragma"
-            | "user-agent"
-            | "anthropic-beta"
-            | "openai-beta"
-    ) || provider_kind
-        .default_headers()
-        .iter()
-        .any(|(default_name, _)| default_name.eq_ignore_ascii_case(&normalized))
-}
-
-fn runtime_snapshot_migrate_provider_env_reference(
-    inline_secret: &mut Option<String>,
-    env_name: &mut Option<String>,
-) {
-    let Some(explicit_env_name) = inline_secret
-        .as_deref()
-        .and_then(runtime_snapshot_parse_env_reference)
-        .map(str::to_owned)
-    else {
-        return;
-    };
-    let configured_env_name = env_name.as_deref();
-    let configured_env_name = configured_env_name.map(str::trim);
-    let configured_env_name = configured_env_name.filter(|value| !value.is_empty());
-    if configured_env_name.is_none() {
-        *env_name = Some(explicit_env_name);
-    }
-    *inline_secret = None;
-}
-
-fn runtime_snapshot_is_env_reference_literal(raw: &str) -> bool {
-    runtime_snapshot_parse_env_reference(raw).is_some()
-}
-
-fn runtime_snapshot_parse_env_reference(raw: &str) -> Option<&str> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if let Some(inner) = trimmed
-        .strip_prefix("${")
-        .and_then(|value| value.strip_suffix('}'))
-    {
-        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
-    }
-
-    if let Some(inner) = trimmed.strip_prefix('$') {
-        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
-    }
-
-    if let Some(inner) = trimmed.strip_prefix("env:") {
-        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
-    }
-
-    if let Some(inner) = trimmed
-        .strip_prefix('%')
-        .and_then(|value| value.strip_suffix('%'))
-    {
-        return runtime_snapshot_is_valid_env_name(inner).then_some(inner);
-    }
-
-    None
-}
-
-fn runtime_snapshot_is_valid_env_name(raw: &str) -> bool {
-    let mut chars = raw.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !(first == '_' || first.is_ascii_alphabetic()) {
-        return false;
-    }
-    chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
-fn build_runtime_snapshot_restore_managed_skills_spec(
-    external_skills: &RuntimeSnapshotExternalSkillsState,
-    warnings: &mut Vec<String>,
-) -> RuntimeSnapshotRestoreManagedSkillsSpec {
-    match external_skills.inventory_status {
-        RuntimeSnapshotInventoryStatus::Disabled => {
-            warnings.push(
-                "restore spec could not enumerate managed external skills because runtime inventory is disabled"
-                    .to_owned(),
-            );
-            return RuntimeSnapshotRestoreManagedSkillsSpec::default();
-        }
-        RuntimeSnapshotInventoryStatus::Error => {
-            warnings.push(
-                "restore spec could not enumerate managed external skills because runtime inventory collection failed"
-                    .to_owned(),
-            );
-            return RuntimeSnapshotRestoreManagedSkillsSpec::default();
-        }
-        RuntimeSnapshotInventoryStatus::Ok => {}
-    }
-
-    let Some(skills) = external_skills
-        .inventory
-        .get("skills")
-        .and_then(Value::as_array)
-    else {
-        return RuntimeSnapshotRestoreManagedSkillsSpec::default();
-    };
-
-    let mut managed_skills = skills
-        .iter()
-        .filter(|skill| skill.get("scope").and_then(Value::as_str) == Some("managed"))
-        .filter_map(|skill| {
-            let skill_id = skill.get("skill_id").and_then(Value::as_str)?;
-            let display_name = skill
-                .get("display_name")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let summary = skill
-                .get("summary")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let source_kind = skill.get("source_kind").and_then(Value::as_str)?;
-            let source_path = skill.get("source_path").and_then(Value::as_str)?;
-            let sha256 = skill.get("sha256").and_then(Value::as_str)?;
-            Some(RuntimeSnapshotRestoreManagedSkillSpec {
-                skill_id: skill_id.to_owned(),
-                display_name: display_name.to_owned(),
-                summary: summary.to_owned(),
-                source_kind: source_kind.to_owned(),
-                source_path: source_path.to_owned(),
-                sha256: sha256.to_owned(),
-            })
-        })
-        .collect::<Vec<_>>();
-    managed_skills.sort_by(|left, right| left.skill_id.cmp(&right.skill_id));
-    RuntimeSnapshotRestoreManagedSkillsSpec {
-        skills: managed_skills,
-    }
-}
-
-#[cfg(test)]
-mod runtime_snapshot_restore_spec_tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn runtime_snapshot_restore_managed_skills_keeps_entries_without_display_metadata() {
-        let mut warnings = Vec::new();
-        let spec = build_runtime_snapshot_restore_managed_skills_spec(
-            &RuntimeSnapshotExternalSkillsState {
-                policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy::default(),
-                override_active: false,
-                inventory_status: RuntimeSnapshotInventoryStatus::Ok,
-                inventory_error: None,
-                inventory: json!({
-                    "skills": [{
-                        "scope": "managed",
-                        "skill_id": "demo-skill",
-                        "source_kind": "directory",
-                        "source_path": "/tmp/demo-skill",
-                        "sha256": "deadbeef"
-                    }]
-                }),
-                resolved_skill_count: 1,
-                shadowed_skill_count: 0,
-            },
-            &mut warnings,
-        );
-
-        assert!(warnings.is_empty());
-        assert_eq!(spec.skills.len(), 1);
-        assert_eq!(spec.skills[0].skill_id, "demo-skill");
-        assert!(spec.skills[0].display_name.is_empty());
-        assert!(spec.skills[0].summary.is_empty());
-    }
-
-    #[test]
-    fn runtime_snapshot_provider_header_safety_uses_explicit_safe_names_only() {
-        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Anthropic,
-            "anthropic-version",
-            "2023-06-01",
-        ));
-        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Deepseek,
-            "anthropic-version",
-            "2023-06-01",
-        ));
-        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Anthropic,
-            "anthropic-beta",
-            "prompt-caching-2024-07-31",
-        ));
-        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Openai,
-            "openai-beta",
-            "assistants=v2",
-        ));
-        assert!(runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Deepseek,
-            "x-goog-api-key",
-            "${GOOGLE_API_KEY}",
-        ));
-        assert!(!runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Deepseek,
-            "x-secret-beta",
-            "literal-secret",
-        ));
-        assert!(!runtime_snapshot_provider_header_is_safe_to_persist(
-            mvp::config::ProviderKind::Deepseek,
-            "x-secret-version",
-            "literal-secret",
-        ));
-    }
-
-    #[test]
-    fn runtime_snapshot_restore_normalization_keeps_provider_env_name_fields() {
-        let mut warnings = Vec::new();
-        let mut profile = mvp::config::ProviderProfileConfig {
-            default_for_kind: true,
-            provider: mvp::config::ProviderConfig {
-                kind: mvp::config::ProviderKind::Openai,
-                model: "openai/gpt-5.1-codex".to_owned(),
-                api_key_env: Some("OPENAI_API_KEY".to_owned()),
-                oauth_access_token_env: Some("OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
-                ..Default::default()
-            },
-        };
-
-        normalize_runtime_snapshot_restore_provider_profile(
-            "openai-main",
-            &mut profile,
-            &mut warnings,
-        );
-
-        assert_eq!(profile.provider.api_key, None);
-        assert_eq!(
-            profile.provider.api_key_env.as_deref(),
-            Some("OPENAI_API_KEY")
-        );
-        assert_eq!(profile.provider.oauth_access_token, None);
-        assert_eq!(
-            profile.provider.oauth_access_token_env.as_deref(),
-            Some("OPENAI_CODEX_OAUTH_TOKEN")
-        );
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn runtime_snapshot_restore_normalization_prefers_existing_env_name_fields() {
-        let mut warnings = Vec::new();
-        let mut profile = mvp::config::ProviderProfileConfig {
-            default_for_kind: true,
-            provider: mvp::config::ProviderConfig {
-                kind: mvp::config::ProviderKind::Openai,
-                model: "openai/gpt-5.1-codex".to_owned(),
-                api_key: Some("${INLINE_OPENAI_API_KEY}".to_owned()),
-                api_key_env: Some("CONFIGURED_OPENAI_API_KEY".to_owned()),
-                oauth_access_token: Some("$INLINE_OPENAI_OAUTH_TOKEN".to_owned()),
-                oauth_access_token_env: Some("CONFIGURED_OPENAI_OAUTH_TOKEN".to_owned()),
-                ..Default::default()
-            },
-        };
-
-        normalize_runtime_snapshot_restore_provider_profile(
-            "openai-main",
-            &mut profile,
-            &mut warnings,
-        );
-
-        assert_eq!(profile.provider.api_key, None);
-        assert_eq!(
-            profile.provider.api_key_env.as_deref(),
-            Some("CONFIGURED_OPENAI_API_KEY")
-        );
-        assert_eq!(profile.provider.oauth_access_token, None);
-        assert_eq!(
-            profile.provider.oauth_access_token_env.as_deref(),
-            Some("CONFIGURED_OPENAI_OAUTH_TOKEN")
-        );
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn runtime_snapshot_tool_runtime_json_reports_browser_execution_tiers() {
-        let mut runtime = mvp::tools::runtime_config::ToolRuntimeConfig::default();
-        runtime.browser_companion.enabled = true;
-        runtime.browser_companion.ready = true;
-        runtime.browser_companion.command = Some("browser-companion".to_owned());
-
-        let json = runtime_snapshot_tool_runtime_json(&runtime);
-
-        assert_eq!(json["browser"]["execution_tier"], json!("restricted"));
-        assert_eq!(
-            json["browser_companion"]["execution_tier"],
-            json!("balanced")
-        );
-    }
-}
-
-fn runtime_snapshot_artifact_metadata_now(
-    label: Option<&str>,
-    experiment_id: Option<&str>,
-    parent_snapshot_id: Option<&str>,
-) -> CliResult<RuntimeSnapshotArtifactMetadata> {
-    let created_at = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .map_err(|error| format!("format runtime snapshot artifact timestamp failed: {error}"))?;
-    Ok(RuntimeSnapshotArtifactMetadata {
-        created_at,
-        label: runtime_snapshot_optional_arg(label),
-        experiment_id: runtime_snapshot_optional_arg(experiment_id),
-        parent_snapshot_id: runtime_snapshot_optional_arg(parent_snapshot_id),
-    })
-}
-
-fn runtime_snapshot_optional_arg(raw: Option<&str>) -> Option<String> {
-    raw.map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn persist_runtime_snapshot_artifact(output_path: &str, payload: &Value) -> CliResult<()> {
-    let output_path = PathBuf::from(output_path);
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "create runtime snapshot artifact directory {} failed: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let encoded = serde_json::to_string_pretty(payload)
-        .map_err(|error| format!("serialize runtime snapshot artifact failed: {error}"))?;
-    fs::write(&output_path, encoded).map_err(|error| {
-        format!(
-            "write runtime snapshot artifact {} failed: {error}",
-            output_path.display()
-        )
-    })?;
-    Ok(())
-}
-
-pub fn build_runtime_snapshot_artifact_json_payload(
-    snapshot: &RuntimeSnapshotCliState,
-    metadata: &RuntimeSnapshotArtifactMetadata,
-) -> CliResult<Value> {
-    let base_payload = build_runtime_snapshot_cli_json_payload(snapshot);
-    let lineage = runtime_snapshot_artifact_lineage(snapshot, metadata)?;
-    let document = RuntimeSnapshotArtifactDocument {
-        config: snapshot.config.clone(),
-        schema: RuntimeSnapshotArtifactSchema {
-            version: RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION,
-            surface: "runtime_snapshot".to_owned(),
-            purpose: "experiment_reproducibility".to_owned(),
-        },
-        lineage,
-        provider: base_payload.get("provider").cloned().unwrap_or(Value::Null),
-        context_engine: base_payload
-            .get("context_engine")
-            .cloned()
-            .unwrap_or(Value::Null),
-        memory_system: base_payload
-            .get("memory_system")
-            .cloned()
-            .unwrap_or(Value::Null),
-        acp: base_payload.get("acp").cloned().unwrap_or(Value::Null),
-        channels: base_payload.get("channels").cloned().unwrap_or(Value::Null),
-        tool_runtime: base_payload
-            .get("tool_runtime")
-            .cloned()
-            .unwrap_or(Value::Null),
-        tools: base_payload.get("tools").cloned().unwrap_or(Value::Null),
-        external_skills: base_payload
-            .get("external_skills")
-            .cloned()
-            .unwrap_or(Value::Null),
-        restore_spec: snapshot.restore_spec.clone(),
-    };
-    serde_json::to_value(document)
-        .map_err(|error| format!("serialize runtime snapshot artifact payload failed: {error}"))
-}
-
-fn runtime_snapshot_artifact_lineage(
-    snapshot: &RuntimeSnapshotCliState,
-    metadata: &RuntimeSnapshotArtifactMetadata,
-) -> CliResult<RuntimeSnapshotArtifactLineage> {
-    let serialized = serde_json::to_vec(&json!({
-        "config": snapshot.config,
-        "created_at": metadata.created_at,
-        "label": metadata.label,
-        "experiment_id": metadata.experiment_id,
-        "parent_snapshot_id": metadata.parent_snapshot_id,
-        "capability_snapshot_sha256": snapshot.capability_snapshot_sha256,
-        "active_provider": snapshot.provider.active_profile_id,
-    }))
-    .map_err(|error| format!("serialize runtime snapshot lineage input failed: {error}"))?;
-    Ok(RuntimeSnapshotArtifactLineage {
-        snapshot_id: format!("{:x}", Sha256::digest(serialized)),
-        created_at: metadata.created_at.clone(),
-        label: metadata.label.clone(),
-        experiment_id: metadata.experiment_id.clone(),
-        parent_snapshot_id: metadata.parent_snapshot_id.clone(),
-    })
-}
-
-fn render_runtime_snapshot_artifact_text(
-    snapshot: &RuntimeSnapshotCliState,
-    artifact_payload: &Value,
-) -> String {
-    let lineage = artifact_payload
-        .get("lineage")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let schema_version = artifact_payload
-        .get("schema")
-        .and_then(|schema| schema.get("version"))
-        .and_then(Value::as_u64)
-        .unwrap_or(u64::from(RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION));
-
-    [
-        format!("schema.version={schema_version}"),
-        format!("snapshot_id={}", json_string_field(&lineage, "snapshot_id")),
-        format!("created_at={}", json_string_field(&lineage, "created_at")),
-        format!("label={}", json_string_field(&lineage, "label")),
-        format!(
-            "experiment_id={}",
-            json_string_field(&lineage, "experiment_id")
-        ),
-        format!(
-            "parent_snapshot_id={}",
-            json_string_field(&lineage, "parent_snapshot_id")
-        ),
-        format!("restore_warnings={}", snapshot.restore_spec.warnings.len()),
-        render_runtime_snapshot_text(snapshot),
-    ]
-    .join("\n")
-}
-
 pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
     let (resolved_path, config) = mvp::config::load(config_path)?;
     let inventory = mvp::channel::channel_inventory(&config);
@@ -2441,24 +2121,6 @@ pub fn run_channels_cli(config_path: Option<&str>, as_json: bool) -> CliResult<(
     Ok(())
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ChannelsCliJsonSchema {
-    pub version: u32,
-    pub primary_channel_view: &'static str,
-    pub catalog_view: &'static str,
-    pub legacy_channel_views: &'static [&'static str],
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ChannelsCliJsonPayload {
-    pub config: String,
-    pub schema: ChannelsCliJsonSchema,
-    pub channels: Vec<mvp::channel::ChannelStatusSnapshot>,
-    pub catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
-    pub channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
-    pub channel_surfaces: Vec<mvp::channel::ChannelSurface>,
-}
-
 pub const CHANNELS_CLI_JSON_SCHEMA_VERSION: u32 = 1;
 pub const CHANNELS_CLI_JSON_LEGACY_VIEWS: &[&str] = &["channels", "catalog_only_channels"];
 
@@ -2466,19 +2128,7 @@ pub fn build_channels_cli_json_payload(
     config_path: &str,
     inventory: &mvp::channel::ChannelInventory,
 ) -> ChannelsCliJsonPayload {
-    ChannelsCliJsonPayload {
-        config: config_path.to_owned(),
-        schema: ChannelsCliJsonSchema {
-            version: CHANNELS_CLI_JSON_SCHEMA_VERSION,
-            primary_channel_view: "channel_surfaces",
-            catalog_view: "channel_catalog",
-            legacy_channel_views: CHANNELS_CLI_JSON_LEGACY_VIEWS,
-        },
-        channels: inventory.channels.clone(),
-        catalog_only_channels: inventory.catalog_only_channels.clone(),
-        channel_catalog: inventory.channel_catalog.clone(),
-        channel_surfaces: inventory.channel_surfaces.clone(),
-    }
+    gateway::read_models::build_channel_inventory_read_model(config_path, inventory)
 }
 
 pub fn render_channel_surfaces_text(
@@ -2656,10 +2306,12 @@ pub fn push_channel_surface_header(
     };
     let target_kinds = render_channel_target_kind_ids(&surface.catalog.supported_target_kinds);
     lines.push(format!(
-        "{} [{}] implementation_status={} capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
+        "{} [{}] implementation_status={} selection_order={} selection_label=\"{}\" capabilities={} aliases={} transport={} target_kinds={} configured_accounts={} default_configured_account={}",
         surface.catalog.label,
         surface.catalog.id,
         surface.catalog.implementation_status.as_str(),
+        surface.catalog.selection_order,
+        surface.catalog.selection_label,
         capabilities,
         aliases,
         surface.catalog.transport,
@@ -2670,6 +2322,7 @@ pub fn push_channel_surface_header(
             .as_deref()
             .unwrap_or("-")
     ));
+    lines.push(format!("  blurb: {}", surface.catalog.blurb));
 }
 
 pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
@@ -2965,14 +2618,15 @@ pub async fn run_acp_status_cli(
         .await?;
 
     if as_json {
-        let payload = json!({
-            "config": resolved_path.display().to_string(),
-            "requested_session": session_key,
-            "requested_conversation_id": conversation_id,
-            "requested_route_session_id": route_session_id,
-            "resolved_session_key": resolved_session_key,
-            "status": acp_session_status_json(&status),
-        });
+        let config_display = resolved_path.display().to_string();
+        let payload = gateway::read_models::build_acp_status_read_model(
+            config_display.as_str(),
+            session_key,
+            conversation_id,
+            route_session_id,
+            resolved_session_key.as_str(),
+            &status,
+        );
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize ACP status output failed: {error}"))?;
         println!("{pretty}");
@@ -3019,10 +2673,11 @@ pub async fn run_acp_observability_cli(config_path: Option<&str>, as_json: bool)
     let snapshot = manager.observability_snapshot(&config).await?;
 
     if as_json {
-        let payload = json!({
-            "config": resolved_path.display().to_string(),
-            "snapshot": acp_manager_observability_json(&snapshot),
-        });
+        let config_display = resolved_path.display().to_string();
+        let payload = gateway::read_models::build_acp_observability_read_model(
+            config_display.as_str(),
+            &snapshot,
+        );
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize ACP observability output failed: {error}"))?;
         println!("{pretty}");
@@ -3271,17 +2926,13 @@ pub fn run_acp_dispatch_cli(
     let decision = mvp::acp::evaluate_acp_conversation_dispatch_for_address(&config, &address)?;
 
     if as_json {
-        let payload = json!({
-            "config": resolved_path.display().to_string(),
-            "address": {
-                "session_id": address.session_id,
-                "channel_id": address.channel_id,
-                "account_id": address.account_id,
-                "conversation_id": address.conversation_id,
-                "thread_id": address.thread_id,
-            },
-            "dispatch": acp_dispatch_decision_json(session_id.as_str(), &decision),
-        });
+        let config_display = resolved_path.display().to_string();
+        let payload = gateway::read_models::build_acp_dispatch_read_model(
+            config_display.as_str(),
+            &address,
+            session_id.as_str(),
+            &decision,
+        );
         let pretty = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize ACP dispatch output failed: {error}"))?;
         println!("{pretty}");
@@ -3538,18 +3189,108 @@ pub async fn wait_for_shutdown_signal() -> CliResult<()> {
 }
 
 pub const TELEGRAM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_telegram_send_cli_impl,
 };
 
 pub const FEISHU_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_feishu_send_cli_impl,
 };
 
 pub const MATRIX_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
-    family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+    family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_send_cli_impl,
+};
+
+pub const WECOM_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_wecom_send_cli_impl,
+};
+
+pub const DISCORD_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_discord_send_cli_impl,
+};
+
+pub const DINGTALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_dingtalk_send_cli_impl,
+};
+
+pub const SLACK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_slack_send_cli_impl,
+};
+
+pub const LINE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_line_send_cli_impl,
+};
+
+pub const WHATSAPP_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_send_cli_impl,
+};
+
+pub const EMAIL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_email_send_cli_impl,
+};
+
+pub const WEBHOOK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_webhook_send_cli_impl,
+};
+
+pub const GOOGLE_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_google_chat_send_cli_impl,
+};
+
+pub const TEAMS_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_teams_send_cli_impl,
+};
+
+pub const SIGNAL_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_signal_send_cli_impl,
+};
+
+pub const TWITCH_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_twitch_send_cli_impl,
+};
+
+pub const MATTERMOST_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_mattermost_send_cli_impl,
+};
+
+pub const NEXTCLOUD_TALK_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_nextcloud_talk_send_cli_impl,
+};
+
+pub const SYNOLOGY_CHAT_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_synology_chat_send_cli_impl,
+};
+
+pub const IRC_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_irc_send_cli_impl,
+};
+
+pub const IMESSAGE_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_imessage_send_cli_impl,
+};
+
+pub const NOSTR_SEND_CLI_SPEC: ChannelSendCliSpec = ChannelSendCliSpec {
+    family: mvp::channel::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_nostr_send_cli_impl,
 };
 
 pub const TELEGRAM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
@@ -3565,6 +3306,11 @@ pub const FEISHU_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
 pub const MATRIX_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     run: run_matrix_serve_cli_impl,
+};
+
+pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_wecom_serve_cli_impl,
 };
 
 pub async fn run_channel_send_cli(
@@ -3583,13 +3329,23 @@ pub async fn run_channel_serve_cli(
     (spec.run)(args).await
 }
 
+fn require_channel_send_target<'a>(command: &str, target: Option<&'a str>) -> CliResult<&'a str> {
+    let target = target.map(str::trim).filter(|value| !value.is_empty());
+    let Some(target) = target else {
+        return Err(format!("{command} requires --target"));
+    };
+
+    Ok(target)
+}
+
 pub fn run_telegram_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
         mvp::channel::run_telegram_send(
             args.config_path,
             args.account,
-            args.target,
+            target,
             args.target_kind,
             args.text,
         )
@@ -3599,11 +3355,12 @@ pub fn run_telegram_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCom
 
 pub fn run_feishu_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
+        let target = args.target.unwrap_or_default();
         mvp::channel::run_feishu_send(
             args.config_path,
             args.account,
             &mvp::channel::FeishuChannelSendRequest {
-                receive_id: args.target.to_owned(),
+                receive_id: target.to_owned(),
                 receive_id_type: Some(args.target_kind.as_str().to_owned()),
                 text: Some(args.text.to_owned()),
                 post_json: None,
@@ -3623,10 +3380,279 @@ pub fn run_feishu_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliComma
 pub fn run_matrix_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
         let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
         mvp::channel::run_matrix_send(
             args.config_path,
             args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_wecom_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_wecom_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_discord_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_discord_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_dingtalk_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_dingtalk_send(
+            args.config_path,
+            args.account,
             args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_slack_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_slack_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_line_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_line_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_whatsapp_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_whatsapp_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_email_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("email-send", args.target)?;
+        mvp::channel::run_email_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_webhook_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_webhook_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_google_chat_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_google_chat_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_teams_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_teams_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_mattermost_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("mattermost-send", args.target)?;
+        mvp::channel::run_mattermost_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_nextcloud_talk_send_cli_impl(
+    args: ChannelSendCliArgs<'_>,
+) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("nextcloud-talk-send", args.target)?;
+        mvp::channel::run_nextcloud_talk_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_synology_chat_send_cli_impl(
+    args: ChannelSendCliArgs<'_>,
+) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_synology_chat_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_irc_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("irc-send", args.target)?;
+        mvp::channel::run_irc_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_imessage_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("imessage-send", args.target)?;
+        mvp::channel::run_imessage_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_nostr_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        mvp::channel::run_nostr_send(
+            args.config_path,
+            args.account,
+            args.target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_signal_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = args.target.unwrap_or_default();
+        mvp::channel::run_signal_send(
+            args.config_path,
+            args.account,
+            target,
+            args.target_kind,
+            args.text,
+        )
+        .await
+    })
+}
+
+pub fn run_twitch_send_cli_impl(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.as_card;
+        let target = require_channel_send_target("twitch-send", args.target)?;
+        mvp::channel::run_twitch_send(
+            args.config_path,
+            args.account,
+            target,
             args.target_kind,
             args.text,
         )
@@ -3649,7 +3675,7 @@ pub fn run_telegram_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliC
 pub fn default_channel_send_target_kind(
     spec: ChannelSendCliSpec,
 ) -> mvp::channel::ChannelOutboundTargetKind {
-    spec.family.default_send_target_kind()
+    spec.family.default_send_target_kind
 }
 
 pub fn parse_channel_send_target_kind(
@@ -3657,8 +3683,8 @@ pub fn parse_channel_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     let target_kind = raw.parse::<mvp::channel::ChannelOutboundTargetKind>()?;
-    let channel_id = spec.family.channel_id();
-    let operation = spec.family.send();
+    let channel_id = spec.family.channel_id;
+    let operation = spec.family.send;
     if !operation.supports_target_kind(target_kind) {
         let supported = operation
             .supported_target_kinds
@@ -3695,6 +3721,16 @@ pub fn parse_matrix_send_target_kind(
     parse_channel_send_target_kind(MATRIX_SEND_CLI_SPEC, raw)
 }
 
+pub fn default_wecom_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(WECOM_SEND_CLI_SPEC)
+}
+
+pub fn parse_wecom_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(WECOM_SEND_CLI_SPEC, raw)
+}
+
 pub fn default_feishu_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
     default_channel_send_target_kind(FEISHU_SEND_CLI_SPEC)
 }
@@ -3703,6 +3739,166 @@ pub fn parse_feishu_send_target_kind(
     raw: &str,
 ) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
     parse_channel_send_target_kind(FEISHU_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_discord_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(DISCORD_SEND_CLI_SPEC)
+}
+
+pub fn parse_discord_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(DISCORD_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_dingtalk_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(DINGTALK_SEND_CLI_SPEC)
+}
+
+pub fn parse_dingtalk_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(DINGTALK_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_slack_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(SLACK_SEND_CLI_SPEC)
+}
+
+pub fn parse_slack_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(SLACK_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_line_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(LINE_SEND_CLI_SPEC)
+}
+
+pub fn parse_line_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(LINE_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_whatsapp_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(WHATSAPP_SEND_CLI_SPEC)
+}
+
+pub fn parse_whatsapp_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(WHATSAPP_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_email_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(EMAIL_SEND_CLI_SPEC)
+}
+
+pub fn parse_email_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(EMAIL_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_webhook_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(WEBHOOK_SEND_CLI_SPEC)
+}
+
+pub fn parse_webhook_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(WEBHOOK_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_google_chat_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(GOOGLE_CHAT_SEND_CLI_SPEC)
+}
+
+pub fn parse_google_chat_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(GOOGLE_CHAT_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_teams_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(TEAMS_SEND_CLI_SPEC)
+}
+
+pub fn parse_teams_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(TEAMS_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_signal_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC)
+}
+
+pub fn parse_signal_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(SIGNAL_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_mattermost_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(MATTERMOST_SEND_CLI_SPEC)
+}
+
+pub fn parse_mattermost_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(MATTERMOST_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_nextcloud_talk_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(NEXTCLOUD_TALK_SEND_CLI_SPEC)
+}
+
+pub fn parse_nextcloud_talk_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(NEXTCLOUD_TALK_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_synology_chat_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(SYNOLOGY_CHAT_SEND_CLI_SPEC)
+}
+
+pub fn parse_synology_chat_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(SYNOLOGY_CHAT_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_irc_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(IRC_SEND_CLI_SPEC)
+}
+
+pub fn parse_irc_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(IRC_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_imessage_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(IMESSAGE_SEND_CLI_SPEC)
+}
+
+pub fn parse_imessage_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(IMESSAGE_SEND_CLI_SPEC, raw)
+}
+
+pub fn default_nostr_send_target_kind() -> mvp::channel::ChannelOutboundTargetKind {
+    default_channel_send_target_kind(NOSTR_SEND_CLI_SPEC)
+}
+
+pub fn parse_nostr_send_target_kind(
+    raw: &str,
+) -> Result<mvp::channel::ChannelOutboundTargetKind, String> {
+    parse_channel_send_target_kind(NOSTR_SEND_CLI_SPEC, raw)
 }
 
 pub fn run_feishu_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
@@ -3729,36 +3925,40 @@ pub fn run_matrix_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCom
     })
 }
 
+pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        // WeCom AIBot uses a long connection only. `args.once`,
+        // `args.bind_override`, and `args.path_override` are intentionally
+        // discarded because single-run mode and HTTP bind/path overrides do not
+        // apply to this transport.
+        let _ = (args.once, args.bind_override, args.path_override);
+        with_graceful_shutdown(mvp::channel::run_wecom_channel(
+            args.config_path,
+            args.account,
+        ))
+        .await
+    })
+}
+
+pub async fn run_multi_channel_serve_cli(
+    config_path: Option<&str>,
+    session: &str,
+    channel_accounts: Vec<MultiChannelServeChannelAccount>,
+) -> CliResult<()> {
+    supervisor::run_multi_channel_serve(config_path, session, channel_accounts).await
+}
+
 pub fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
     serde_json::from_str(raw).map_err(|error| format!("invalid JSON for {context}: {error}"))
 }
 
-pub fn build_runtime_snapshot_cli_json_payload(snapshot: &RuntimeSnapshotCliState) -> Value {
-    json!({
-        "config": snapshot.config,
-        "schema": {
-            "version": RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION,
-            "surface": "runtime_snapshot",
-            "purpose": "experiment_reproducibility",
-        },
-        "provider": runtime_snapshot_provider_json(&snapshot.provider),
-        "context_engine": runtime_snapshot_context_engine_json(&snapshot.context_engine),
-        "memory_system": runtime_snapshot_memory_system_json(&snapshot.memory_system),
-        "acp": runtime_snapshot_acp_json(&snapshot.acp),
-        "channels": {
-            "enabled_channel_ids": snapshot.enabled_channel_ids,
-            "enabled_service_channel_ids": snapshot.enabled_service_channel_ids,
-            "inventory": build_channels_cli_json_payload(&snapshot.config, &snapshot.channels),
-        },
-        "tool_runtime": runtime_snapshot_tool_runtime_json(&snapshot.tool_runtime),
-        "tools": {
-            "visible_tool_count": snapshot.visible_tool_names.len(),
-            "visible_tool_names": snapshot.visible_tool_names,
-            "capability_snapshot_sha256": snapshot.capability_snapshot_sha256,
-            "capability_snapshot": snapshot.capability_snapshot,
-        },
-        "external_skills": runtime_snapshot_external_skills_json(&snapshot.external_skills),
-    })
+pub fn build_runtime_snapshot_cli_json_payload(
+    snapshot: &RuntimeSnapshotCliState,
+) -> CliResult<Value> {
+    let read_model = gateway::read_models::build_runtime_snapshot_read_model(snapshot);
+    let payload = serde_json::to_value(read_model)
+        .map_err(|error| format!("serialize runtime snapshot read model failed: {error}"))?;
+    Ok(payload)
 }
 
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
@@ -4221,6 +4421,12 @@ pub fn memory_system_metadata_json(
     metadata: &mvp::memory::MemorySystemMetadata,
     source: Option<&str>,
 ) -> Value {
+    let supported_pre_assembly_stage_families = metadata
+        .supported_pre_assembly_stage_families
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
     let mut payload = serde_json::Map::new();
     payload.insert("id".to_owned(), json!(metadata.id));
     payload.insert("api_version".to_owned(), json!(metadata.api_version));
@@ -4228,11 +4434,24 @@ pub fn memory_system_metadata_json(
         "capabilities".to_owned(),
         json!(metadata.capability_names()),
     );
+    payload.insert(
+        "supported_pre_assembly_stage_families".to_owned(),
+        json!(supported_pre_assembly_stage_families),
+    );
     payload.insert("summary".to_owned(), json!(metadata.summary));
     if let Some(source) = source {
         payload.insert("source".to_owned(), json!(source));
     }
     Value::Object(payload)
+}
+
+fn format_memory_stage_family_names(families: &[mvp::memory::MemoryStageFamily]) -> String {
+    let names = families
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
+    render_string_list(names)
 }
 
 pub fn memory_system_policy_json(policy: &mvp::memory::MemorySystemPolicySnapshot) -> Value {
@@ -4271,14 +4490,21 @@ pub fn render_memory_system_snapshot_text(
     config_path: &str,
     snapshot: &mvp::memory::MemorySystemRuntimeSnapshot,
 ) -> String {
+    let selected_capabilities = snapshot.selected_metadata.capability_names();
+    let selected_pre_assembly_stages = format_memory_stage_family_names(
+        &snapshot
+            .selected_metadata
+            .supported_pre_assembly_stage_families,
+    );
     let mut lines = vec![
         format!("config={config_path}"),
         format!(
-            "selected={} source={} api_version={} capabilities={} summary={}",
+            "selected={} source={} api_version={} capabilities={} pre_assembly_stages={} summary={}",
             snapshot.selected_metadata.id,
             snapshot.selected.source.as_str(),
             snapshot.selected_metadata.api_version,
-            format_capability_names(&snapshot.selected_metadata.capability_names()),
+            format_capability_names(&selected_capabilities),
+            selected_pre_assembly_stages,
             snapshot.selected_metadata.summary
         ),
         format!(
@@ -4296,11 +4522,15 @@ pub fn render_memory_system_snapshot_text(
     ];
 
     for metadata in &snapshot.available {
+        let capabilities = metadata.capability_names();
+        let pre_assembly_stages =
+            format_memory_stage_family_names(&metadata.supported_pre_assembly_stage_families);
         lines.push(format!(
-            "- {} api_version={} capabilities={} summary={}",
+            "- {} api_version={} capabilities={} pre_assembly_stages={} summary={}",
             metadata.id,
             metadata.api_version,
-            format_capability_names(&metadata.capability_names()),
+            format_capability_names(&capabilities),
+            pre_assembly_stages,
             metadata.summary
         ));
     }
@@ -4607,9 +4837,156 @@ pub fn format_usize_rollup(values: &BTreeMap<String, usize>) -> String {
 }
 
 pub fn read_spec_file(path: &str) -> CliResult<RunnerSpec> {
+    read_spec_file_with_bridge_support_resolution(path, None).map(|resolved| resolved.spec)
+}
+
+pub fn read_spec_file_with_bridge_support_selection(
+    path: &str,
+    bridge_support_selection_override: Option<&BridgeSupportSelectionInput>,
+) -> CliResult<RunnerSpec> {
+    read_spec_file_with_bridge_support_resolution(path, bridge_support_selection_override)
+        .map(|resolved| resolved.spec)
+}
+
+pub fn read_spec_file_with_bridge_support_resolution(
+    path: &str,
+    bridge_support_selection_override: Option<&BridgeSupportSelectionInput>,
+) -> CliResult<ResolvedRunnerSpecFile> {
+    let mut input = read_spec_file_input(path)?;
+    let spec_has_bridge_support_config =
+        input.spec.bridge_support.is_some() || input.bridge_support_selection.is_some();
+
+    if let Some(selection) = bridge_support_selection_override {
+        if spec_has_bridge_support_config {
+            return Err(format!(
+                "spec file {path} accepts either file-local bridge support configuration or CLI bridge support selection overrides, not both"
+            ));
+        }
+        let override_selection = resolve_process_relative_bridge_support_selection(selection)?;
+        input.bridge_support_selection = Some(override_selection);
+    }
+
+    resolve_spec_file_input(path, input)
+}
+
+fn resolve_process_relative_bridge_support_selection(
+    selection: &BridgeSupportSelectionInput,
+) -> CliResult<BridgeSupportSelectionInput> {
+    let path = selection
+        .path
+        .as_deref()
+        .map(resolve_process_relative_path)
+        .transpose()?;
+    let delta_artifact = selection
+        .delta_artifact
+        .as_deref()
+        .map(resolve_process_relative_path)
+        .transpose()?;
+
+    Ok(BridgeSupportSelectionInput {
+        path,
+        bundled_profile: selection.bundled_profile.clone(),
+        delta_artifact,
+        expected_sha256: selection.expected_sha256.clone(),
+        expected_delta_sha256: selection.expected_delta_sha256.clone(),
+    })
+}
+
+fn read_spec_file_input(path: &str) -> CliResult<RunnerSpecFileInput> {
     let raw = fs::read_to_string(path)
         .map_err(|error| format!("failed to read spec file {path}: {error}"))?;
     serde_json::from_str(&raw).map_err(|error| format!("failed to parse spec file {path}: {error}"))
+}
+
+fn resolve_spec_file_input(
+    path: &str,
+    mut input: RunnerSpecFileInput,
+) -> CliResult<ResolvedRunnerSpecFile> {
+    if let Some(selection) = input.bridge_support_selection.take() {
+        if input.spec.bridge_support.is_some() {
+            return Err(format!(
+                "spec file {path} accepts either inline `bridge_support` or `bridge_support_selection`, not both"
+            ));
+        }
+
+        let policy_path = selection
+            .path
+            .as_deref()
+            .map(|value| resolve_spec_relative_path(path, value));
+        let delta_artifact_path = selection
+            .delta_artifact
+            .as_deref()
+            .map(|value| resolve_spec_relative_path(path, value));
+        let resolved = resolve_bridge_support_selection(
+            policy_path.as_deref(),
+            selection.bundled_profile.as_deref(),
+            delta_artifact_path.as_deref(),
+            selection.expected_sha256.as_deref(),
+            selection.expected_delta_sha256.as_deref(),
+        )
+        .map_err(|error| {
+            format!("failed to resolve bridge support selection in {path}: {error}")
+        })?;
+        let bridge_support_source = resolved
+            .as_ref()
+            .map(|selection| selection.policy.source.clone());
+        let bridge_support_delta_source = resolved
+            .as_ref()
+            .and_then(|selection| selection.delta_source.clone());
+        let bridge_support_delta_sha256 = resolved.as_ref().and_then(|selection| {
+            selection
+                .delta_artifact
+                .as_ref()
+                .map(|artifact| artifact.sha256.clone())
+        });
+        input.spec.bridge_support = resolved.map(|selection| selection.policy.profile);
+        return Ok(ResolvedRunnerSpecFile {
+            spec: input.spec,
+            bridge_support_source,
+            bridge_support_delta_source,
+            bridge_support_delta_sha256,
+        });
+    }
+
+    let bridge_support_source = input
+        .spec
+        .bridge_support
+        .as_ref()
+        .map(|_| format!("inline:{path}"));
+
+    Ok(ResolvedRunnerSpecFile {
+        spec: input.spec,
+        bridge_support_source,
+        bridge_support_delta_source: None,
+        bridge_support_delta_sha256: None,
+    })
+}
+
+fn resolve_process_relative_path(value: &str) -> CliResult<String> {
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        return Ok(value.to_owned());
+    }
+
+    let current_dir = std::env::current_dir()
+        .map_err(|error| format!("resolve current directory failed: {error}"))?;
+    let resolved = current_dir.join(candidate);
+
+    Ok(resolved.display().to_string())
+}
+
+fn resolve_spec_relative_path(spec_path: &str, value: &str) -> String {
+    let candidate = Path::new(value);
+    if candidate.is_absolute() {
+        return value.to_owned();
+    }
+
+    Path::new(spec_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(candidate)
+        .display()
+        .to_string()
 }
 
 pub fn write_json_file<T: Serialize>(path: &str, value: &T) -> CliResult<()> {

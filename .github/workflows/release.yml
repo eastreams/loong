@@ -17,6 +17,10 @@ env:
   LINUX_ARM64_ZIG_VERSION: "0.13.0"
   LINUX_ARM64_ZIG_SHA256: "d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea"
   CARGO_ZIGBUILD_VERSION: "0.22.1"
+  ANDROID_NDK_VERSION: "27.3.13750724"
+  ANDROID_NDK_REVISION: "r27d"
+  ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
+  ANDROID_API_LEVEL: "24"
 
 jobs:
   verify-release:
@@ -83,6 +87,11 @@ jobs:
             ext: ""
             archive: tar.gz
             use_zig: true
+          - os: ubuntu-latest
+            target: aarch64-linux-android
+            ext: ""
+            archive: tar.gz
+            use_android_ndk: true
           - os: macos-14
             target: x86_64-apple-darwin
             ext: ""
@@ -116,7 +125,6 @@ jobs:
         if: matrix.install_musl_tools == true
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      # 为 aarch64-unknown-linux-gnu 安装 Zig 和 cargo-zigbuild
       - name: Install Zig and cargo-zigbuild
         if: matrix.use_zig == true
         run: |
@@ -132,7 +140,24 @@ jobs:
           rm -f "$zig_tarball"
           cargo install "cargo-zigbuild" --version "${{ env.CARGO_ZIGBUILD_VERSION }}" --locked
 
-      # 使用 cargo-zigbuild 构建 aarch64 目标（指定 glibc 2.17）
+      - name: Install Android NDK
+        if: matrix.use_android_ndk == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          ndk_zip="android-ndk-${{ env.ANDROID_NDK_REVISION }}-linux.zip"
+          ndk_dir="android-ndk-${{ env.ANDROID_NDK_REVISION }}"
+          curl -fSL "https://dl.google.com/android/repository/${ndk_zip}" -o "${ndk_zip}"
+          echo "${{ env.ANDROID_NDK_LINUX_SHA256 }}  ${ndk_zip}" | shasum -a 256 --check -
+          unzip -q "${ndk_zip}"
+          [ -d "${ndk_dir}" ] || (echo "Missing extracted NDK directory: ${ndk_dir}" && exit 1)
+          rm -f "${ndk_zip}"
+          {
+            echo "ANDROID_NDK_HOME=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_ROOT=${PWD}/${ndk_dir}"
+            echo "ANDROID_NDK_LATEST_HOME=${PWD}/${ndk_dir}"
+          } >> "$GITHUB_ENV"
+
       - name: Build release binary with cargo-zigbuild
         if: matrix.use_zig == true
         env:
@@ -141,9 +166,22 @@ jobs:
           cargo zigbuild --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} \
             --target "${{ matrix.target }}.${{ env.LINUX_ARM64_GLIBC_FLOOR }}"
 
-      # 其他目标使用普通 cargo build
+      - name: Build release binary (Android/Termux)
+        if: matrix.use_android_ndk == true
+        shell: bash
+        env:
+          LOONGCLAW_RELEASE_BUILD: "1"
+        run: |
+          set -euo pipefail
+          toolchain="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
+          export AR_aarch64_linux_android="${toolchain}/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
+          cargo build --release --locked -p loongclaw-daemon --bin "${BIN_NAME}" --target "${{ matrix.target }}"
+
       - name: Build release binary (native)
-        if: matrix.use_zig != true
+        if: matrix.use_zig != true && matrix.use_android_ndk != true
         env:
           LOONGCLAW_RELEASE_BUILD: "1"
         run: cargo build --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} --target ${{ matrix.target }}

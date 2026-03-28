@@ -160,6 +160,14 @@ solving team problems earlier instead of postponing them.
 The install script prefers the matching GitHub Release binary, verifies its SHA256 checksum,
 installs `loongclaw`, and can drop you straight into guided onboarding.
 
+When you pass `--onboard`, the installer now seeds onboarding with a recommended
+web search default. It keeps DuckDuckGo as the general key-free fallback, and
+prefers Tavily when domestic Chinese locale/network hints suggest that direct
+DuckDuckGo access may be a worse default. If the shell already exposes exactly
+one ready credential-backed search provider such as `PERPLEXITY_API_KEY` or
+`TAVILY_API_KEY`, the installer prefers that provider before falling back to
+locale and route heuristics.
+
 On Linux x86_64, the installer now treats GNU and musl as distinct release artifacts:
 
 - it prefers `x86_64-unknown-linux-gnu` when the host glibc satisfies the declared GNU floor
@@ -170,11 +178,11 @@ On Linux x86_64, the installer now treats GNU and musl as distinct release artif
 <summary>Linux / macOS</summary>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.sh | bash -s -- --onboard
+curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --onboard
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.sh | bash -s -- --target-libc musl
+curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --target-libc musl
 ```
 
 </details>
@@ -184,7 +192,7 @@ curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts
 
 ```powershell
 $script = Join-Path $env:TEMP "loongclaw-install.ps1"
-Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/main/scripts/install.ps1 -OutFile $script
+Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.ps1 -OutFile $script
 pwsh $script -Onboard
 ```
 
@@ -280,7 +288,15 @@ loongclaw completions elvish >> ~/.config/elvish/rc.elv
 
    ```bash
    loongclaw audit recent --limit 20
+   loongclaw audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
    loongclaw audit summary --limit 200 --json
+   loongclaw audit discovery --limit 50 --triage-label conflict
+   loongclaw audit discovery --since-epoch-s 1700010000 --until-epoch-s 1700013600
+   loongclaw audit discovery --group-by pack
+   loongclaw audit summary --pack-id sales-intel --agent-id agent-search
+   loongclaw audit summary --group-by pack
+   loongclaw audit recent --event-id evt-123 --token-id token-abc
+   loongclaw audit token-trail --token-id token-abc
    ```
 
 Channel setup comes after the base CLI path is healthy.
@@ -297,7 +313,15 @@ survive process restarts.
 loongclaw doctor --config ~/.loongclaw/config.toml
 loongclaw doctor --config ~/.loongclaw/config.toml --json
 loongclaw audit recent --config ~/.loongclaw/config.toml
+loongclaw audit recent --config ~/.loongclaw/config.toml --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
 loongclaw audit summary --config ~/.loongclaw/config.toml
+loongclaw audit discovery --config ~/.loongclaw/config.toml --query-contains "trust:official" --trust-tier official
+loongclaw audit discovery --config ~/.loongclaw/config.toml --group-by agent
+loongclaw audit summary --config ~/.loongclaw/config.toml --since-epoch-s 1700010000 --until-epoch-s 1700013600
+loongclaw audit recent --config ~/.loongclaw/config.toml --pack-id sales-intel --agent-id agent-search
+loongclaw audit summary --config ~/.loongclaw/config.toml --group-by token
+loongclaw audit recent --config ~/.loongclaw/config.toml --event-id evt-123 --token-id token-abc
+loongclaw audit token-trail --config ~/.loongclaw/config.toml --token-id token-abc
 loongclaw audit recent --config ~/.loongclaw/config.toml --json
 if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
@@ -308,7 +332,47 @@ addition to the existing runtime checks. For durable modes (`fanout` or
 `doctor --fix` can pre-create it when you want a clean preflight. Use
 `audit recent` when you want the bounded last-N event window and
 `audit summary` when you want a compact kind/count rollup plus last-seen
-fields. Raw `tail` remains a fallback when you need the original JSONL lines.
+fields. Use `audit discovery` when you specifically need trust-aware tool
+search triage, trust-scope rollups, and the last filtered discovery context
+without composing `--kind ToolSearchEvaluated` by hand. Use `audit token-trail`
+when you need one token lifecycle reconstructed as a retained timeline with
+issued/denied/revoked summary fields and an explicit truncation signal when the
+selected `--limit` is too small to keep the full trail in view. `audit summary`
+also accepts `--group-by pack|agent|token` when you need the filtered window
+collapsed into grouped rollups with per-group event-kind counts, triage counts,
+and last-seen metadata. `audit discovery` now also accepts `--group-by pack|agent`
+so trust-aware tool-search failures can be collapsed into per-pack or per-agent
+trust/triage rollups before you jump into one filtered window or token trail.
+Each grouped discovery entry also carries a ready-to-run `drill_down_command`
+that replays the same retained window through `audit recent` with the group
+identity and active trust-aware filters already applied. `audit recent` now
+also accepts `--query-contains` and `--trust-tier`, so that handoff stays
+aligned with the exact discovery slice that produced the hotspot. Grouped
+discovery rows also carry a `correlated_summary_command` that broadens the same
+time window and workload identity into `audit summary`, so operators can pivot
+from one trust-aware hotspot to the wider audit context without rebuilding the
+command. Those rows now also include a compact correlated summary preview, so
+you can see whether the same workload window also contains adjacent triage like
+authorization denial or provider failover before switching commands. That
+preview now also emits a focused signal layer with `additional_events`,
+non-discovery event/triage counts, and an `attention_hint`, so adjacent audit
+degradation is emphasized instead of being buried inside the full widened
+summary. That focused layer now also emits a `remediation_hint`, so grouped
+discovery can point from adjacent audit symptoms directly to the next operator
+action instead of only telling you what widened. It now also emits a
+`correlated_remediation_command`, so the strongest adjacent signal can jump
+straight into the most relevant next retained-audit view instead of stopping at
+advice text.
+All four commands also
+accept `--since-epoch-s` and `--until-epoch-s` so retained audit review can be
+bounded to a concrete epoch-second window; the bounds are inclusive and are
+rendered back in both text and JSON output. They also accept `--pack-id` and
+`--agent-id` so retained review can collapse to one workload or one operator
+session without post-processing the raw journal. When you need an exact
+incident drill-down, they also accept `--event-id` and `--token-id`; the token
+filter follows typed token-bearing events like `TokenIssued`, `TokenRevoked`,
+and `AuthorizationDenied` instead of relying on raw string scans. Raw `tail`
+remains a fallback when you need the original JSONL lines.
 
 When provider model probing fails before any HTTP status is returned, `doctor`
 now adds a provider route probe for the active request/models host. That probe
@@ -316,9 +380,38 @@ surfaces the host and port, DNS resolution results, fake-ip-style addresses,
 and a short TCP reachability check so you can separate local proxy/TUN/fake-ip
 instability from true upstream unavailability.
 
+## We Are Currently Working On
+
+<details>
+<summary><strong>1. Web UI</strong></summary>
+<br>
+
+   We are currently building the first usable local LoongClaw Web UI.
+
+   It is an optional install surface, and the current scope includes:
+
+   - chat
+   - dashboard
+   - onboarding
+
+   The initial product mode stays same-origin and local by default.
+
+   That local-first boundary is the current operating slice, not the long-term
+   architecture endpoint.
+
+   The long-term direction is to keep Web UI attached to the same daemon-owned
+   gateway/service runtime rather than creating a second assistant runtime.
+
+   This surface is still evolving and should be understood as an active MVP rather than a fully finished product interface.
+
+   If you would like to help us continue improving it, please switch to the `web` branch and share feedback there.
+
+</details>
+
+
 ## Configuration
 
-`loongclaw onboard` uses `provider.api_key_env` to reference provider credentials, so secrets stay
+`loongclaw onboard` uses `provider.api_key = { env = "..." }` to reference provider credentials, so secrets stay
 outside the config file:
 
 ```toml
@@ -326,7 +419,31 @@ active_provider = "openai"
 
 [providers.openai]
 kind = "openai"
-api_key_env = "PROVIDER_API_KEY"
+api_key = { env = "PROVIDER_API_KEY" }
+```
+
+Guided onboarding now also lets you choose the default web search backend.
+Supported providers are `duckduckgo`, `brave`, `tavily`, `perplexity`, `exa`,
+and `jina`. If you keep the default choice, LoongClaw uses DuckDuckGo for the
+general case, or Tavily when domestic Chinese locale/network hints suggest it
+is the safer first-run default. When the selected provider requires a key,
+onboarding immediately asks which environment variable should back that
+credential and writes the config as an env reference such as
+`"${TAVILY_API_KEY}"`, instead of asking users to paste the secret inline.
+Non-interactive onboarding also accepts `--web-search-provider <provider>` and
+`--web-search-api-key <ENV_NAME>`. Explicit choices stay explicit: LoongClaw no
+longer silently falls back to DuckDuckGo when the operator explicitly selected
+a credential-backed provider.
+
+```toml
+[tools.web_search]
+default_provider = "duckduckgo"
+# brave_api_key = "${BRAVE_API_KEY}"
+# tavily_api_key = "${TAVILY_API_KEY}"
+# perplexity_api_key = "${PERPLEXITY_API_KEY}"
+# exa_api_key = "${EXA_API_KEY}"
+# jina_api_key = "${JINA_API_KEY}"
+# or "${JINA_AUTH_TOKEN}"
 ```
 
 Volcengine / ARK example:
@@ -341,12 +458,12 @@ active_provider = "volcengine"
 [providers.volcengine]
 kind = "volcengine"
 model = "your-coding-plan-model-id"
-api_key_env = "ARK_API_KEY"
+api_key = { env = "ARK_API_KEY" }
 base_url = "https://ark.cn-beijing.volces.com"
 chat_completions_path = "/api/v3/chat/completions"
 ```
 
-Both `volcengine` and `volcengine_coding` use `api_key_env = "ARK_API_KEY"`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
+Both `volcengine` and `volcengine_coding` use `api_key = { env = "ARK_API_KEY" }`. LoongClaw resolves that environment variable and sends it as `Authorization: Bearer <ARK_API_KEY>` on the OpenAI-compatible Volcengine path; AK/SK request signing is not used there.
 
 Feishu channel example (webhook mode):
 
@@ -393,6 +510,8 @@ loongclaw feishu-serve --config ~/.loongclaw/config.toml
 
 Webhook secrets are not required in websocket mode. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
 
+Assistant replies sent through `loongclaw feishu-serve` use Feishu markdown cards when the reply fits the platform card payload limit, so Markdown renders natively in chat; oversized replies automatically fall back to plain text.
+
 Matrix channel example:
 
 ```bash
@@ -413,6 +532,32 @@ loongclaw matrix-serve --config ~/.loongclaw/config.toml --once
 
 By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs often contain `:`, so the runtime preserves structured Matrix route/session IDs without relying on Matrix-specific path hacks.
 
+### Multi-Channel Serve
+
+Use `multi-channel-serve` when you want one process to keep an interactive CLI
+session in the foreground while supervising every enabled runtime-backed
+service channel in the same runtime.
+
+Today this command is the attached runtime-owner precursor to a broader
+daemon-owned gateway service surface. The current slice keeps CLI in the
+foreground, but the longer-term direction is to decouple CLI lifecycle from
+service lifecycle and let one service host own routes, status, logs, pairing,
+and richer channel runtimes.
+
+```bash
+loongclaw multi-channel-serve \
+  --session cli-supervisor \
+  --channel-account telegram=bot_123456 \
+  --channel-account lark=alerts \
+  --channel-account matrix=bridge-sync \
+  --channel-account wecom=robot-prod \
+  --config ~/.loongclaw/config.toml
+```
+
+`--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
+
+`loongclaw channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
+
 Tool policy stays explicit:
 
 ```toml
@@ -431,17 +576,21 @@ blocked_domains = ["*.internal.example"]
 
 [tools.web_search]
 enabled = true
-default_provider = "duckduckgo" # or "ddg", "brave", "tavily"
+default_provider = "duckduckgo" # or "ddg", "brave", "tavily", "perplexity", "exa", "jina"
 timeout_seconds = 30
 max_results = 5
 # brave_api_key = "${BRAVE_API_KEY}"
 # tavily_api_key = "${TAVILY_API_KEY}"
+# perplexity_api_key = "${PERPLEXITY_API_KEY}"
+# exa_api_key = "${EXA_API_KEY}"
+# jina_api_key = "${JINA_API_KEY}"
+# or "${JINA_AUTH_TOKEN}"
 ```
 
 Further references:
 
-- `default_provider` accepts `duckduckgo` (or `ddg`), `brave`, and `tavily`
-- `BRAVE_API_KEY` and `TAVILY_API_KEY` stay supported as environment fallbacks
+- `default_provider` accepts `duckduckgo` (or `ddg`), `brave`, `tavily`, `perplexity` (or `perplexity_search`), `exa`, and `jina` (or `jinaai` / `jina-ai`)
+- `BRAVE_API_KEY`, `TAVILY_API_KEY`, `PERPLEXITY_API_KEY`, `EXA_API_KEY`, `JINA_API_KEY`, and `JINA_AUTH_TOKEN` stay supported as environment fallbacks
 - [Tool Surface Spec](docs/product-specs/tool-surface.md)
 - [Product Specs](docs/product-specs/index.md)
 - `loongclaw validate-config --config ~/.loongclaw/config.toml --json`

@@ -66,13 +66,14 @@ pub fn build_provider_selection_plan_for_candidate(
         else {
             continue;
         };
+        let incoming_config = canonicalized_provider_config(&candidate.config.provider);
 
         let incoming = ImportedProviderChoice {
             profile_id: String::new(),
             kind: candidate.config.provider.kind,
             source: candidate.source.clone(),
             summary: provider_domain.summary.clone(),
-            config: candidate.config.provider.clone(),
+            config: incoming_config,
         };
         if let Some(existing) = imported_choices.iter_mut().find(|choice| {
             provider_profile_merge_key(&choice.config)
@@ -145,16 +146,24 @@ pub fn resolve_provider_config_from_selection(
         .iter()
         .find(|choice| choice.kind == selected_kind)
     {
-        return choice.config.clone();
+        return canonicalized_provider_config(&choice.config);
     }
     if current_provider.kind == selected_kind {
-        return current_provider.clone();
+        return canonicalized_provider_config(current_provider);
     }
     fresh_provider_config_for_kind(selected_kind)
 }
 
 fn fresh_provider_config_for_kind(kind: mvp::config::ProviderKind) -> mvp::config::ProviderConfig {
     mvp::config::ProviderConfig::fresh_for_kind(kind)
+}
+
+fn canonicalized_provider_config(
+    provider: &mvp::config::ProviderConfig,
+) -> mvp::config::ProviderConfig {
+    let mut provider = provider.clone();
+    provider.canonicalize_configured_auth_env_bindings();
+    provider
 }
 
 pub fn provider_profile_merge_key(provider: &mvp::config::ProviderConfig) -> String {
@@ -181,21 +190,18 @@ pub fn merge_provider_config(
     incoming: &mvp::config::ProviderConfig,
 ) -> mvp::config::ProviderConfig {
     let mut merged = existing.clone();
+    merged.canonicalize_configured_auth_env_bindings();
+    let mut incoming = incoming.clone();
+    incoming.canonicalize_configured_auth_env_bindings();
     if merged.model.trim().is_empty() || merged.model.eq_ignore_ascii_case("auto") {
         merged.model = incoming.model.clone();
     }
-    super::provider_transport::supplement_provider_transport(&mut merged, incoming);
+    super::provider_transport::supplement_provider_transport(&mut merged, &incoming);
     if merged.api_key.is_none() {
         merged.api_key = incoming.api_key.clone();
     }
-    if merged.api_key_env.is_none() {
-        merged.api_key_env = incoming.api_key_env.clone();
-    }
     if merged.oauth_access_token.is_none() {
         merged.oauth_access_token = incoming.oauth_access_token.clone();
-    }
-    if merged.oauth_access_token_env.is_none() {
-        merged.oauth_access_token_env = incoming.oauth_access_token_env.clone();
     }
     if merged.endpoint.is_none() {
         merged.endpoint = incoming.endpoint.clone();
@@ -490,4 +496,106 @@ fn normalize_provider_profile_id_segment(raw: &str) -> Option<String> {
         normalized.pop();
     }
     (!normalized.is_empty()).then_some(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::migration::types::{DomainPreview, PreviewDecision};
+
+    fn provider_candidate(
+        source_kind: ImportSourceKind,
+        source: &str,
+        kind: mvp::config::ProviderKind,
+        credential_env: &str,
+    ) -> ImportCandidate {
+        let mut provider = mvp::config::ProviderConfig::fresh_for_kind(kind);
+        provider.set_api_key_env(Some(credential_env.to_owned()));
+
+        let config = mvp::config::LoongClawConfig {
+            provider,
+            ..mvp::config::LoongClawConfig::default()
+        };
+
+        ImportCandidate {
+            source_kind,
+            source: source.to_owned(),
+            config,
+            surfaces: Vec::new(),
+            domains: vec![DomainPreview {
+                kind: SetupDomainKind::Provider,
+                status: PreviewStatus::Ready,
+                decision: Some(PreviewDecision::UseDetected),
+                source: source.to_owned(),
+                summary: String::new(),
+            }],
+            channel_candidates: Vec::new(),
+            workspace_guidance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn merge_provider_config_canonicalizes_legacy_api_key_env_binding() {
+        let existing =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        let mut incoming =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        incoming.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let merged = merge_provider_config(&existing, &incoming);
+
+        assert_eq!(
+            merged.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(merged.api_key_env, None);
+    }
+
+    #[test]
+    fn build_provider_selection_plan_canonicalizes_single_choice() {
+        let selected = provider_candidate(
+            ImportSourceKind::Environment,
+            "your current environment",
+            mvp::config::ProviderKind::Deepseek,
+            "DEEPSEEK_API_KEY",
+        );
+
+        let plan = build_provider_selection_plan_for_candidate(&selected, &[]);
+
+        let choice = plan
+            .imported_choices
+            .first()
+            .expect("single provider choice should exist");
+
+        assert_eq!(
+            choice.config.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "DEEPSEEK_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(choice.config.api_key_env, None);
+    }
+
+    #[test]
+    fn resolve_provider_config_from_selection_canonicalizes_current_provider() {
+        let mut current =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        current.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let resolved = resolve_provider_config_from_selection(
+            &current,
+            &ProviderSelectionPlan::default(),
+            mvp::config::ProviderKind::Openai,
+        );
+
+        assert_eq!(
+            resolved.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(resolved.api_key_env, None);
+    }
 }

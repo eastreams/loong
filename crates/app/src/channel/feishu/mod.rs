@@ -6,7 +6,7 @@ use axum::{Router, routing::post};
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
-    ChannelAdapter, ChannelOutboundTarget, FeishuChannelSendRequest,
+    ChannelAdapter, ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
     runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{
@@ -74,6 +74,7 @@ pub(super) async fn run_feishu_channel(
     path_override: Option<&str>,
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
+    stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
     if resolved.mode == crate::config::FeishuChannelServeMode::Websocket {
         return websocket::run_feishu_websocket_channel(
@@ -84,6 +85,7 @@ pub(super) async fn run_feishu_channel(
             default_account_source,
             kernel_ctx,
             runtime,
+            stop,
         )
         .await;
     }
@@ -135,6 +137,9 @@ pub(super) async fn run_feishu_channel(
     );
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            stop.wait().await;
+        })
         .await
         .map_err(|error| format!("feishu webhook server stopped: {error}"))
 }
@@ -198,12 +203,20 @@ mod tests {
         let mut config = LoongClawConfig::default();
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_work".to_owned());
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("secret-123".to_owned());
+        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+            "cli_a1b2c3".to_owned(),
+        ));
+        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "secret-123".to_owned(),
+        ));
         config.feishu.base_url = Some(base_url.to_owned());
         config.feishu.receive_id_type = "chat_id".to_owned();
-        config.feishu.verification_token = Some("verify-token".to_owned());
-        config.feishu.encrypt_key = Some("encrypt-key".to_owned());
+        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "verify-token".to_owned(),
+        ));
+        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "encrypt-key".to_owned(),
+        ));
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
         config
             .feishu

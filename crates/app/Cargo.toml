@@ -6,11 +6,30 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
+default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
 channel-cli = []
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
 channel-matrix = []
+channel-wecom = ["dep:rustls", "dep:tokio-tungstenite"]
+channel-discord = []
+channel-dingtalk = []
+channel-slack = []
+channel-webhook = []
+channel-google-chat = []
+channel-line = []
+channel-signal = []
+channel-twitch = []
+channel-teams = []
+channel-tlon = []
+channel-whatsapp = []
+channel-email = []
+channel-mattermost = []
+channel-nextcloud-talk = []
+channel-synology-chat = []
+channel-irc = ["dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls"]
+channel-imessage = []
+channel-nostr = ["dep:tokio-tungstenite"]
 provider-openai = []
 provider-anthropic = []
 provider-bedrock = ["dep:aws-config", "dep:aws-credential-types", "dep:aws-sigv4", "dep:http"]
@@ -22,13 +41,16 @@ tool-shell = []
 tool-file = []
 tool-browser = ["dep:scraper"]
 tool-webfetch = []
-tool-websearch = ["dep:regex"]
+tool-websearch = []
 test-support = []
 
 [dependencies]
 loongclaw-contracts = { path = "../contracts" }
 loongclaw-kernel = { path = "../kernel" }
+bytes = "1"
 async-trait.workspace = true
+console.workspace = true
+dunce = "1"
 rand.workspace = true
 chrono.workspace = true
 serde.workspace = true
@@ -38,11 +60,16 @@ toml = { workspace = true, optional = true }
 reqwest.workspace = true
 scraper = { version = "0.26", optional = true }
 sha2.workspace = true
+hmac = "0.12"
+hex = "0.4"
+subtle = "2.6"
 flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
+lettre = { version = "0.11.19", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 futures-util.workspace = true
 base64.workspace = true
+bech32.workspace = true
 aws-config = { version = "1.8.15", optional = true }
 aws-credential-types = { version = "1.2.14", optional = true }
 aws-sigv4 = { version = "1.4.2", optional = true }
@@ -56,10 +83,18 @@ cbc = { version = "0.1", optional = true }
 wait-timeout = "0.2"
 tempfile = "3"
 which.workspace = true
-regex = { workspace = true, optional = true }
-prost = { version = "0.13", optional = true }
+unicode-normalization = "0.1"
+unicode-segmentation = "1.12"
+# Kept unconditional because conversation/turn_shared.rs uses Regex to strip
+# leaked <think> tags even when tool-websearch is compiled out.
+regex.workspace = true
+prost = { version = "0.14", optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
-tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"], optional = true }
+rustls-native-certs = { version = "0.8.3", optional = true }
+secp256k1.workspace = true
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
+tokio-rustls = { version = "0.26.4", optional = true }
+libc = "0.2"
 
 [dev-dependencies]
 axum.workspace = true

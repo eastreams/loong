@@ -57,6 +57,9 @@ EOF
     "loongclaw-v0.1.2-aarch64-unknown-linux-gnu.tar.gz" \
     "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-unknown-linux-gnu")"
   assert_equals \
+    "loongclaw-v0.1.2-aarch64-linux-android.tar.gz" \
+    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-linux-android")"
+  assert_equals \
     "loongclaw-v0.1.2-x86_64-unknown-linux-musl.tar.gz" \
     "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-unknown-linux-musl")"
   assert_equals \
@@ -74,6 +77,13 @@ EOF
   assert_equals \
     "aarch64-unknown-linux-gnu" \
     "$(release_target_for_platform "Linux" "arm64")"
+  assert_equals \
+    "aarch64-linux-android" \
+    "$(release_target_for_platform "Android" "arm64")"
+  if release_target_for_platform "Android" "x86_64" >/dev/null 2>&1; then
+    echo "expected release_target_for_platform to reject unsupported Android x86_64 hosts" >&2
+    exit 1
+  fi
   assert_equals \
     $'gnu\nmusl' \
     "$(release_supported_linux_libcs_for_arch "x86_64")"

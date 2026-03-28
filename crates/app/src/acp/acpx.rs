@@ -1484,6 +1484,27 @@ where
     }
 }
 
+#[cfg(test)]
+#[allow(clippy::disallowed_methods)]
+fn retry_executable_file_busy_blocking<T, F>(mut operation: F) -> std::io::Result<T>
+where
+    F: FnMut() -> std::io::Result<T>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error)
+                if should_retry_spawn_error(&error) && attempt < ACPX_SPAWN_RETRY_ATTEMPTS =>
+            {
+                std::thread::sleep(ACPX_SPAWN_RETRY_DELAY);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn should_retry_spawn_error(error: &std::io::Error) -> bool {
     error.kind() == ErrorKind::ExecutableFileBusy
 }
@@ -1810,7 +1831,7 @@ mod tests {
         write_executable_script_atomically(
             &script_path,
             &format!(
-                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
+                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nargs_contain() {{\n  haystack=$1\n  needle=$2\n  case \"$haystack\" in\n    *\"$needle\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  while IFS= read -r line || [ -n \"${{line:-}}\" ]; do\n    :\n  done\n}}\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
                 log_path.display(),
                 body
             ),
@@ -1846,6 +1867,60 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
             .count();
         assert_eq!(staging_entries, 0, "staging files should be cleaned up");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fake_acpx_script_helpers_work_with_empty_path() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let temp_dir = unique_temp_dir("loongclaw-acpx-script-builtins");
+        let log_path = temp_dir.join("calls.log");
+        let script_path = write_fake_acpx_script(
+            &temp_dir,
+            "fake-acpx",
+            &log_path,
+            r#"
+if args_contain "$*" 'prompt --session'; then
+  drain_stdin
+  echo '{"type":"text","content":"builtins ok"}'
+  echo '{"type":"done"}'
+  exit 0
+fi
+
+exit 0
+"#,
+        );
+
+        let mut command = Command::new(&script_path);
+        command
+            .args(["prompt", "--session", "sess-builtins", "--file", "-"])
+            .current_dir(&temp_dir)
+            .env("PATH", "")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = retry_executable_file_busy_blocking(|| command.spawn())
+            .expect("spawn fake acpx script");
+        let mut stdin = child.stdin.take().expect("fake acpx stdin");
+        stdin
+            .write_all(b"payload without trailing newline")
+            .expect("write fake acpx stdin");
+        drop(stdin);
+
+        let output = child.wait_with_output().expect("wait for fake acpx script");
+        assert!(output.status.success(), "fake acpx script should succeed");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("{\"type\":\"text\",\"content\":\"builtins ok\"}"),
+            "expected built-in helper response in stdout: {stdout}"
+        );
+        assert!(
+            stdout.contains("{\"type\":\"done\"}"),
+            "expected done event in stdout: {stdout}"
+        );
     }
 
     #[tokio::test]
@@ -1891,6 +1966,52 @@ mod tests {
             Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
         })
         .await
+        .expect_err("persistent executable-file-busy errors should stop after the retry budget");
+
+        assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
+        assert_eq!(attempts.load(Ordering::Relaxed), ACPX_SPAWN_RETRY_ATTEMPTS);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_retries_until_success() {
+        let attempts = AtomicUsize::new(0);
+
+        let result = retry_executable_file_busy_blocking(|| {
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed);
+            if attempt < 2 {
+                Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        })
+        .expect("retry should recover once the executable is no longer busy");
+
+        assert_eq!(result, "spawned");
+        assert_eq!(attempts.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_surfaces_non_retryable_error_immediately() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy_blocking::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::other("boom"))
+        })
+        .expect_err("non-retryable spawn errors should surface immediately");
+
+        assert_eq!(error.kind(), ErrorKind::Other);
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn retry_executable_file_busy_blocking_stops_after_retry_budget() {
+        let attempts = AtomicUsize::new(0);
+
+        let error = retry_executable_file_busy_blocking::<(), _>(|| {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            Err(std::io::Error::from(ErrorKind::ExecutableFileBusy))
+        })
         .expect_err("persistent executable-file-busy errors should stop after the retry budget");
 
         assert_eq!(error.kind(), ErrorKind::ExecutableFileBusy);
@@ -2083,18 +2204,18 @@ case "$*" in
     ;;
 esac
 
-if printf '%s' "$*" | grep -q 'config show'; then
+if args_contain "$*" 'config show'; then
   echo '{"agents":{"codex":{"command":"npx @zed-industries/codex-acp"}}}'
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+if args_contain "$*" 'sessions ensure --name'; then
   echo '{"acpxSessionId":"sess-mcp","agentSessionId":"agent-mcp","acpxRecordId":"record-mcp"}'
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'prompt --session'; then
-  cat >/dev/null
+if args_contain "$*" 'prompt --session'; then
+  drain_stdin
   echo '{"type":"text","content":"proxy ok"}'
   echo '{"type":"done"}'
   exit 0
@@ -2252,13 +2373,13 @@ case "$*" in
     ;;
 esac
 
-if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+if args_contain "$*" 'sessions ensure --name'; then
   echo '{"acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'prompt --session'; then
-  cat >/dev/null
+if args_contain "$*" 'prompt --session'; then
+  drain_stdin
   echo '{"type":"text","content":"hello "}'
   echo '{"type":"text","content":"world"}'
   echo '{"type":"usage_update","used":7,"size":128}'
@@ -2266,7 +2387,7 @@ if printf '%s' "$*" | grep -q 'prompt --session'; then
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'status --session'; then
+if args_contain "$*" 'status --session'; then
   echo '{"status":"ready","acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
   exit 0
 fi
@@ -2430,13 +2551,13 @@ case "$*" in
     ;;
 esac
 
-if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+if args_contain "$*" 'sessions ensure --name'; then
   echo '{"acpxSessionId":"sess-abort","agentSessionId":"agent-abort","acpxRecordId":"record-abort"}'
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'prompt --session'; then
-  cat >/dev/null
+if args_contain "$*" 'prompt --session'; then
+  drain_stdin
   sleep 30
   exit 0
 fi
@@ -2527,12 +2648,12 @@ case "$*" in
     ;;
 esac
 
-if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+if args_contain "$*" 'sessions ensure --name'; then
   echo '{}'
   exit 0
 fi
 
-if printf '%s' "$*" | grep -q 'sessions new --name'; then
+if args_contain "$*" 'sessions new --name'; then
   echo '{"acpxSessionId":"sess-fallback","agentSessionId":"agent-fallback","acpxRecordId":"record-fallback"}'
   exit 0
 fi

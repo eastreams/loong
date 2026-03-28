@@ -607,21 +607,8 @@ mod tests {
         fs::create_dir_all(&root).expect("create root");
 
         let config = ToolRuntimeConfig {
-            shell_allow: Default::default(),
-            shell_deny: Default::default(),
-            shell_default_mode: crate::tools::shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root),
-            config_path: None,
-            sessions_enabled: true,
-            messages_enabled: true,
-            delegate_enabled: true,
-            browser: Default::default(),
-            browser_companion: Default::default(),
-            web_fetch: Default::default(),
-            web_search: Default::default(),
-            external_skills: Default::default(),
-            #[cfg(feature = "feishu-integration")]
-            feishu: None,
+            ..ToolRuntimeConfig::default()
         };
         let error = resolve_safe_path_with_config("../outside.toml", &config)
             .expect_err("escape should be denied");

@@ -78,6 +78,19 @@ format_percent_growth() {
   awk -v current="$current" -v previous="$previous" 'BEGIN { printf "%.1f%%", ((current - previous) / previous) * 100 }'
 }
 
+join_by_comma() {
+  local item
+  local output=""
+  for item in "$@"; do
+    [[ -z "$item" ]] && continue
+    if [[ -n "$output" ]]; then
+      output="${output}, "
+    fi
+    output="${output}${item}"
+  done
+  printf '%s\n' "$output"
+}
+
 growth_slo_status() {
   local current="$1"
   local previous="$2"
@@ -93,7 +106,9 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
 BASELINE_PATH="$(resolve_baseline_path)"
 if [[ -f "$BASELINE_PATH" ]]; then
   BASELINE_LABEL="$BASELINE_PATH"
+  BASELINE_AVAILABLE=1
 else
+  BASELINE_AVAILABLE=0
   if [[ -n "$EXPLICIT_BASELINE" ]]; then
     BASELINE_LABEL="missing: $BASELINE_PATH"
   else
@@ -109,9 +124,17 @@ hotspot_breach=0
 boundary_breach=0
 hotspot_count=0
 boundary_count=0
+breach_hotspots=()
+tight_hotspots=()
+watch_hotspots=()
+mixed_class_hotspots=()
+breach_hotspot_summary="none"
+tight_hotspot_summary="none"
+watch_hotspot_summary="none"
+mixed_class_hotspot_summary="none"
 hotspot_rows="$(architecture_hotspot_rows)" || exit 1
 
-while IFS='|' read -r key file lines max_lines line_status functions max_functions fn_status; do
+while IFS='|' read -r key file classes lines max_lines _line_status functions max_functions _fn_status peak_usage pressure; do
   [[ -z "$key" ]] && continue
   hotspot_count=$((hotspot_count + 1))
   prev_lines="$(baseline_hotspot_value "$BASELINE_PATH" "$key" lines || true)"
@@ -123,12 +146,42 @@ while IFS='|' read -r key file lines max_lines line_status functions max_functio
   fi
   line_headroom=$((max_lines - lines))
   fn_headroom=$((max_functions - functions))
-  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
-    "$key" "$file" "$lines" "$max_lines" "$line_headroom" "$functions" "$max_functions" "$fn_headroom" \
-    "${prev_lines:-n/a}" "$line_growth" "$growth_status" "${prev_functions:-n/a}" >>"$tmp_hotspots"
+  case "$pressure" in
+    BREACH)
+      breach_hotspots+=("${key} (${peak_usage})")
+      ;;
+    TIGHT)
+      tight_hotspots+=("${key} (${peak_usage})")
+      ;;
+    WATCH)
+      watch_hotspots+=("${key} (${peak_usage})")
+      ;;
+  esac
+  if [[ "$classes" == *,* ]]; then
+    mixed_class_hotspots+=("$key")
+  fi
+  printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+    "$key" "$classes" "$file" "$lines" "$max_lines" "$line_headroom" "$functions" "$max_functions" "$fn_headroom" \
+    "$peak_usage" "$pressure" "${prev_lines:-n/a}" "$line_growth" "$growth_status" "${prev_functions:-n/a}" >>"$tmp_hotspots"
 done <<EOF_HOTSPOTS
 ${hotspot_rows}
 EOF_HOTSPOTS
+
+if (( ${#breach_hotspots[@]} > 0 )); then
+  breach_hotspot_summary="$(join_by_comma "${breach_hotspots[@]}")"
+fi
+
+if (( ${#tight_hotspots[@]} > 0 )); then
+  tight_hotspot_summary="$(join_by_comma "${tight_hotspots[@]}")"
+fi
+
+if (( ${#watch_hotspots[@]} > 0 )); then
+  watch_hotspot_summary="$(join_by_comma "${watch_hotspots[@]}")"
+fi
+
+if (( ${#mixed_class_hotspots[@]} > 0 )); then
+  mixed_class_hotspot_summary="$(join_by_comma "${mixed_class_hotspots[@]}")"
+fi
 
 while IFS= read -r boundary_key; do
   [[ -z "$boundary_key" ]] && continue
@@ -165,13 +218,29 @@ fi
   echo "- SLO status: ${overall_status}"
   echo
   echo "## Hotspot Metrics"
-  echo "| Key | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Prev Lines | Line Growth | Growth SLO | Prev Functions |"
-  echo "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|"
-  while IFS='|' read -r key file lines max_lines line_headroom functions max_functions fn_headroom prev_lines line_growth growth_status prev_functions; do
-    echo "| ${key} | \`${file}\` | ${lines} | ${max_lines} | ${line_headroom} | ${functions} | ${max_functions} | ${fn_headroom} | ${prev_lines} | ${line_growth} | ${growth_status} | ${prev_functions} |"
-  done <"$tmp_hotspots"
+  echo
+  if [[ "$BASELINE_AVAILABLE" -eq 1 ]]; then
+    echo "| Key | Classes | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Peak Usage | Pressure | Prev Lines | Line Growth | Growth SLO | Prev Functions |"
+    echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---|---:|"
+    while IFS='|' read -r key classes file lines max_lines line_headroom functions max_functions fn_headroom peak_usage pressure prev_lines line_growth growth_status prev_functions; do
+      echo "| ${key} | \`${classes}\` | \`${file}\` | ${lines} | ${max_lines} | ${line_headroom} | ${functions} | ${max_functions} | ${fn_headroom} | ${peak_usage} | ${pressure} | ${prev_lines} | ${line_growth} | ${growth_status} | ${prev_functions} |"
+    done <"$tmp_hotspots"
+  else
+    echo "| Key | Classes | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Peak Usage | Pressure |"
+    echo "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---|"
+    while IFS='|' read -r key classes file lines max_lines line_headroom functions max_functions fn_headroom peak_usage pressure _prev_lines _line_growth _growth_status _prev_functions; do
+      echo "| ${key} | \`${classes}\` | \`${file}\` | ${lines} | ${max_lines} | ${line_headroom} | ${functions} | ${max_functions} | ${fn_headroom} | ${peak_usage} | ${pressure} |"
+    done <"$tmp_hotspots"
+  fi
+  echo
+  echo "## Prioritization Signals"
+  echo "- BREACH hotspots (>100% of any tracked budget): ${breach_hotspot_summary}"
+  echo "- TIGHT hotspots (>=95% of any tracked budget): ${tight_hotspot_summary}"
+  echo "- WATCH hotspots (>=85% and <95% of any tracked budget): ${watch_hotspot_summary}"
+  echo "- Mixed-class hotspots (size plus operational density): ${mixed_class_hotspot_summary}"
   echo
   echo "## Boundary Checks"
+  echo
   echo "| Check | Status | Previous Status | Detail |"
   echo "|---|---|---|---|"
   while IFS='|' read -r key status previous_status detail; do
@@ -201,7 +270,7 @@ fi
   echo "- [Release template](TEMPLATE.md)"
   echo "- [CI workflow](../../.github/workflows/ci.yml)"
   echo
-  while IFS='|' read -r key _file lines _max_lines _line_headroom functions _max_functions _fn_headroom _prev_lines _line_growth _growth_status _prev_functions; do
+  while IFS='|' read -r key _classes _file lines _max_lines _line_headroom functions _max_functions _fn_headroom _peak_usage _pressure _prev_lines _line_growth _growth_status _prev_functions; do
     echo "<!-- arch-hotspot key=${key} lines=${lines} functions=${functions} -->"
   done <"$tmp_hotspots"
   while IFS='|' read -r key status _previous_status _detail; do

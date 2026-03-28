@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionKind {
@@ -212,6 +213,21 @@ pub struct NewApprovalGrantRecord {
     pub scope_session_id: String,
     pub approval_key: String,
     pub created_by_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionToolPolicyRecord {
+    pub session_id: String,
+    pub requested_tool_ids: Vec<String>,
+    pub runtime_narrowing: ToolRuntimeNarrowing,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSessionToolPolicyRecord {
+    pub session_id: String,
+    pub requested_tool_ids: Vec<String>,
+    pub runtime_narrowing: ToolRuntimeNarrowing,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1238,6 +1254,97 @@ impl SessionRepository {
         raw.map(ApprovalGrantRecord::try_from_raw).transpose()
     }
 
+    pub fn upsert_session_tool_policy(
+        &self,
+        record: NewSessionToolPolicyRecord,
+    ) -> Result<SessionToolPolicyRecord, String> {
+        let session_id = normalize_required_text(&record.session_id, "session_id")?;
+        let session_exists = self
+            .load_session_summary_with_legacy_fallback(&session_id)?
+            .is_some();
+        if !session_exists {
+            return Err(format!("session `{session_id}` not found"));
+        }
+
+        let requested_tool_ids = normalize_tool_id_list(record.requested_tool_ids);
+        let encoded_requested_tool_ids = serde_json::to_string(&requested_tool_ids)
+            .map_err(|error| format!("encode session tool policy tool ids failed: {error}"))?;
+        let encoded_runtime_narrowing = serde_json::to_string(&record.runtime_narrowing)
+            .map_err(|error| format!("encode session tool policy narrowing failed: {error}"))?;
+        let updated_at = unix_ts_now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO session_tool_policies(
+                session_id,
+                requested_tool_ids_json,
+                runtime_narrowing_json,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(session_id) DO UPDATE SET
+                requested_tool_ids_json = excluded.requested_tool_ids_json,
+                runtime_narrowing_json = excluded.runtime_narrowing_json,
+                updated_at = excluded.updated_at",
+            params![
+                session_id,
+                encoded_requested_tool_ids,
+                encoded_runtime_narrowing,
+                updated_at,
+            ],
+        )
+        .map_err(|error| format!("upsert session tool policy failed: {error}"))?;
+
+        self.load_session_tool_policy(&record.session_id)?
+            .ok_or_else(|| {
+                format!(
+                    "session tool policy `{}` disappeared after upsert",
+                    record.session_id
+                )
+            })
+    }
+
+    pub fn load_session_tool_policy(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionToolPolicyRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        let raw = conn
+            .query_row(
+                "SELECT
+                    session_id,
+                    requested_tool_ids_json,
+                    runtime_narrowing_json,
+                    updated_at
+                 FROM session_tool_policies
+                 WHERE session_id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(RawSessionToolPolicyRecord {
+                        session_id: row.get(0)?,
+                        requested_tool_ids_json: row.get(1)?,
+                        runtime_narrowing_json: row.get(2)?,
+                        updated_at: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load session tool policy failed: {error}"))?;
+        raw.map(SessionToolPolicyRecord::try_from_raw).transpose()
+    }
+
+    pub fn delete_session_tool_policy(&self, session_id: &str) -> Result<bool, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let conn = self.open_connection()?;
+        let affected = conn
+            .execute(
+                "DELETE FROM session_tool_policies
+                 WHERE session_id = ?1",
+                params![session_id],
+            )
+            .map_err(|error| format!("delete session tool policy failed: {error}"))?;
+        Ok(affected > 0)
+    }
+
     pub fn upsert_terminal_outcome(
         &self,
         session_id: &str,
@@ -1958,6 +2065,14 @@ struct RawApprovalGrantRecord {
     updated_at: i64,
 }
 
+#[derive(Debug)]
+struct RawSessionToolPolicyRecord {
+    session_id: String,
+    requested_tool_ids_json: String,
+    runtime_narrowing_json: String,
+    updated_at: i64,
+}
+
 impl SessionRecord {
     fn try_from_raw(raw: RawSessionRecord) -> Result<Self, String> {
         Ok(Self {
@@ -2058,6 +2173,22 @@ impl ApprovalGrantRecord {
     }
 }
 
+impl SessionToolPolicyRecord {
+    fn try_from_raw(raw: RawSessionToolPolicyRecord) -> Result<Self, String> {
+        let requested_tool_ids: Vec<String> = serde_json::from_str(&raw.requested_tool_ids_json)
+            .map_err(|error| format!("decode session tool policy tool ids failed: {error}"))?;
+        let runtime_narrowing: ToolRuntimeNarrowing =
+            serde_json::from_str(&raw.runtime_narrowing_json)
+                .map_err(|error| format!("decode session tool policy narrowing failed: {error}"))?;
+        Ok(Self {
+            session_id: raw.session_id,
+            requested_tool_ids: normalize_tool_id_list(requested_tool_ids),
+            runtime_narrowing,
+            updated_at: raw.updated_at,
+        })
+    }
+}
+
 fn normalize_required_text(value: &str, field_name: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -2071,6 +2202,18 @@ fn normalize_optional_text(value: Option<String>) -> Option<String> {
         let trimmed = raw.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
+}
+
+fn normalize_tool_id_list(tool_ids: Vec<String>) -> Vec<String> {
+    let mut normalized = BTreeSet::new();
+    for tool_id in tool_ids {
+        let trimmed = tool_id.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        normalized.insert(trimmed.to_owned());
+    }
+    normalized.into_iter().collect()
 }
 
 fn unix_ts_now() -> i64 {
@@ -2099,6 +2242,7 @@ fn sort_session_summaries(sessions: &mut [SessionSummaryRecord]) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::sync::Arc;
     use std::thread;
@@ -2108,6 +2252,7 @@ mod tests {
 
     use crate::memory::append_turn_direct;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
+    use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
     use super::*;
 
@@ -3380,6 +3525,73 @@ mod tests {
             .expect("load approval grant")
             .expect("approval grant row");
         assert_eq!(loaded, created);
+    }
+
+    #[test]
+    fn session_tool_policy_repository_round_trips_and_deletes_policy() {
+        let config = isolated_memory_config("session-tool-policy");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let created = repo
+            .upsert_session_tool_policy(NewSessionToolPolicyRecord {
+                session_id: "root-session".to_owned(),
+                requested_tool_ids: vec![
+                    "tool.search".to_owned(),
+                    "file.read".to_owned(),
+                    "tool.search".to_owned(),
+                ],
+                runtime_narrowing: ToolRuntimeNarrowing {
+                    browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+                        max_sessions: Some(1),
+                        ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+                    },
+                    web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+                        allow_private_hosts: Some(false),
+                        enforce_allowed_domains: false,
+                        allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                        blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
+                        timeout_seconds: Some(5),
+                        max_bytes: Some(4_096),
+                        max_redirects: Some(2),
+                    },
+                },
+            })
+            .expect("upsert session tool policy");
+
+        assert_eq!(created.session_id, "root-session");
+        assert_eq!(
+            created.requested_tool_ids,
+            vec!["file.read".to_owned(), "tool.search".to_owned()]
+        );
+        assert_eq!(created.runtime_narrowing.browser.max_sessions, Some(1));
+        assert_eq!(
+            created.runtime_narrowing.web_fetch.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+
+        let loaded = repo
+            .load_session_tool_policy("root-session")
+            .expect("load session tool policy")
+            .expect("session tool policy");
+        assert_eq!(loaded, created);
+
+        let deleted = repo
+            .delete_session_tool_policy("root-session")
+            .expect("delete session tool policy");
+        assert!(deleted);
+        assert!(
+            repo.load_session_tool_policy("root-session")
+                .expect("load session tool policy after delete")
+                .is_none()
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@ use super::*;
 use crate::KernelContext;
 use crate::config::{LoongClawConfig, ProviderConfig, ReasoningEffort};
 use crate::test_support::ScopedEnv;
-use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind};
+use loongclaw_contracts::{Capability, ExecutionRoute, HarnessKind, SecretRef};
 use loongclaw_kernel::{
     AuditEventKind, FixedClock, InMemoryAuditSink, LoongClawKernel, StaticPolicyEngine,
     VerticalPackManifest,
@@ -138,7 +138,7 @@ async fn provider_auth_ready_accepts_x_api_key_providers() {
     let config = LoongClawConfig {
         provider: ProviderConfig {
             kind: ProviderKind::Anthropic,
-            api_key: Some("anthropic-secret".to_owned()),
+            api_key: Some(SecretRef::Inline("anthropic-secret".to_owned())),
             ..ProviderConfig::default()
         },
         ..LoongClawConfig::default()
@@ -291,7 +291,7 @@ async fn fetch_available_models_enriches_volcengine_auth_failures_with_ark_guida
         kind: ProviderKind::VolcengineCoding,
         base_url: format!("http://{addr}"),
         model: "auto".to_owned(),
-        api_key: Some("bad-ark-key".to_owned()),
+        api_key: Some(SecretRef::Inline("bad-ark-key".to_owned())),
         api_key_env: None,
         ..ProviderConfig::default()
     });
@@ -448,6 +448,84 @@ fn bedrock_missing_auth_configuration_message_mentions_sigv4_fallback() {
     assert!(message.contains("AWS_REGION"));
 }
 
+#[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_env_secret_ref() {
+    let mut env = ScopedEnv::new();
+    env.remove("DEEPSEEK_API_KEY");
+    let provider = ProviderConfig {
+        kind: ProviderKind::Deepseek,
+        api_key: Some(SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        }),
+        ..ProviderConfig::default()
+    };
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("DEEPSEEK_API_KEY"));
+    assert!(message.contains("current process"));
+}
+
+#[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_oauth_env_secret_ref() {
+    let mut env = ScopedEnv::new();
+    env.remove("OPENAI_CODEX_OAUTH_TOKEN");
+    let provider = ProviderConfig {
+        kind: ProviderKind::Openai,
+        oauth_access_token: Some(SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        }),
+        ..ProviderConfig::default()
+    };
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("oauth access token"));
+    assert!(message.contains("OPENAI_CODEX_OAUTH_TOKEN"));
+    assert!(message.contains("current process"));
+}
+
+#[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_api_key_env_field() {
+    let mut env = ScopedEnv::new();
+    env.remove("DEEPSEEK_API_KEY");
+    let provider: ProviderConfig = toml::from_str(
+        r#"
+kind = "deepseek"
+api_key_env = "DEEPSEEK_API_KEY"
+"#,
+    )
+    .expect("deserialize provider config");
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("DEEPSEEK_API_KEY"));
+    assert!(message.contains("current process"));
+}
+
+#[test]
+fn missing_auth_configuration_message_mentions_current_process_for_explicit_oauth_env_field() {
+    let mut env = ScopedEnv::new();
+    env.remove("OPENAI_CODEX_OAUTH_TOKEN");
+    let provider: ProviderConfig = toml::from_str(
+        r#"
+kind = "openai"
+oauth_access_token_env = "OPENAI_CODEX_OAUTH_TOKEN"
+"#,
+    )
+    .expect("deserialize provider config");
+
+    let message = provider.missing_auth_configuration_message();
+
+    assert!(message.contains("provider credentials are missing"));
+    assert!(message.contains("oauth access token"));
+    assert!(message.contains("OPENAI_CODEX_OAUTH_TOKEN"));
+    assert!(message.contains("current process"));
+}
+
 fn cleanup_sqlite_artifacts(path: &Path) {
     let _ = std::fs::remove_file(path);
     let wal = format!("{}-wal", path.display());
@@ -473,8 +551,8 @@ fn test_config(provider: ProviderConfig) -> LoongClawConfig {
 fn resolve_provider_auth_profiles_prefers_oauth_then_api_key() {
     let provider = ProviderConfig {
         kind: ProviderKind::Ollama,
-        oauth_access_token: Some("oauth-token".to_owned()),
-        api_key: Some("api-key".to_owned()),
+        oauth_access_token: Some(SecretRef::Inline("oauth-token".to_owned())),
+        api_key: Some(SecretRef::Inline("api-key".to_owned())),
         api_key_env: None,
         oauth_access_token_env: None,
         ..ProviderConfig::default()
@@ -500,7 +578,9 @@ fn resolve_provider_auth_profiles_prefers_oauth_then_api_key() {
 fn resolve_provider_auth_profiles_expands_delimited_api_key_pool() {
     let provider = ProviderConfig {
         kind: ProviderKind::Ollama,
-        api_key: Some("api-key-a, api-key-b;api-key-c".to_owned()),
+        api_key: Some(SecretRef::Inline(
+            "api-key-a, api-key-b;api-key-c".to_owned(),
+        )),
         api_key_env: None,
         ..ProviderConfig::default()
     };
@@ -913,9 +993,13 @@ fn provider_profile_state_persistence_metrics_track_outcomes() {
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::StaleSkipped);
     record_provider_profile_state_persist_outcome(ProviderProfileStatePersistOutcome::Failed);
     let after = provider_profile_state_persistence_metrics_snapshot();
-    assert_eq!(after.persisted, before.persisted + 1);
-    assert_eq!(after.stale_skipped, before.stale_skipped + 1);
-    assert_eq!(after.failed, before.failed + 1);
+    let expected_persisted = before.persisted.saturating_add(1);
+    let expected_stale_skipped = before.stale_skipped.saturating_add(1);
+    let expected_failed = before.failed.saturating_add(1);
+
+    assert_eq!(after.persisted, expected_persisted);
+    assert_eq!(after.stale_skipped, expected_stale_skipped);
+    assert_eq!(after.failed, expected_failed);
 }
 
 #[test]
@@ -1173,7 +1257,7 @@ fn bedrock_completion_body_uses_converse_shape() {
 fn anthropic_headers_use_native_auth_and_version() {
     let provider = ProviderConfig {
         kind: ProviderKind::Anthropic,
-        api_key: Some("anthropic-test-key".to_owned()),
+        api_key: Some(SecretRef::Inline("anthropic-test-key".to_owned())),
         ..ProviderConfig::default()
     };
     let headers = transport::build_request_headers(&provider).expect("headers");
@@ -1737,6 +1821,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         openai_contract.transport_mode,
         ProviderTransportMode::OpenAiChatCompletions
     );
+    assert!(!openai_contract.supports_turn_streaming_events());
     assert_eq!(
         openai_contract.profile_health_mode,
         ProviderProfileHealthMode::EnforceUnusableWindows
@@ -1796,10 +1881,22 @@ fn provider_runtime_contract_defaults_are_stable() {
         anthropic_contract.transport_mode,
         ProviderTransportMode::AnthropicMessages
     );
+    assert!(anthropic_contract.supports_turn_streaming_events());
     assert_eq!(
         anthropic_contract.default_reasoning_field,
         ReasoningField::Omit
     );
+
+    let responses_contract = provider_runtime_contract(&ProviderConfig {
+        kind: ProviderKind::Openai,
+        wire_api: crate::config::ProviderWireApi::Responses,
+        ..ProviderConfig::default()
+    });
+    assert_eq!(
+        responses_contract.transport_mode,
+        ProviderTransportMode::Responses
+    );
+    assert!(!responses_contract.supports_turn_streaming_events());
 
     let bedrock_contract = provider_runtime_contract(&ProviderConfig {
         kind: ProviderKind::Bedrock,
@@ -1813,6 +1910,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         bedrock_contract.transport_mode,
         ProviderTransportMode::BedrockConverse
     );
+    assert!(!bedrock_contract.supports_turn_streaming_events());
     assert_eq!(
         bedrock_contract.default_reasoning_field,
         ReasoningField::Omit
@@ -1845,6 +1943,7 @@ fn provider_runtime_contract_defaults_are_stable() {
         kimi_coding_contract.transport_mode,
         ProviderTransportMode::KimiApi
     );
+    assert!(!kimi_coding_contract.supports_turn_streaming_events());
     assert!(!kimi_coding_contract.validation.forbid_kimi_coding_endpoint);
     assert!(
         kimi_coding_contract
@@ -1917,6 +2016,35 @@ fn provider_runtime_contract_defaults_are_stable() {
     assert_eq!(
         openai_observe_only_contract.profile_health_mode,
         ProviderProfileHealthMode::ObserveOnly
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_turn_streaming_rejects_unsupported_transport_modes() {
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        ..ProviderConfig::default()
+    });
+
+    assert!(!supports_turn_streaming_events(&config));
+
+    let error = request_turn_streaming(
+        &config,
+        "session-provider-test",
+        "turn-provider-test",
+        &[json!({
+            "role": "user",
+            "content": "turn ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+        None,
+    )
+    .await
+    .expect_err("unsupported transports should be rejected before any request is prepared");
+
+    assert!(
+        error.contains("does not support live turn streaming events"),
+        "the provider error should explain the unsupported transport: {error}"
     );
 }
 
@@ -2175,7 +2303,7 @@ async fn responses_completion_falls_back_to_chat_completions_for_compatible_endp
         base_url: format!("http://{addr}"),
         model: "deepseek-chat".to_owned(),
         wire_api: crate::config::ProviderWireApi::Responses,
-        api_key: Some("deepseek-test-key".to_owned()),
+        api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
 
@@ -2258,7 +2386,7 @@ async fn responses_turn_falls_back_to_chat_completions_for_compatible_endpoints(
         base_url: format!("http://{addr}"),
         model: "deepseek-chat".to_owned(),
         wire_api: crate::config::ProviderWireApi::Responses,
-        api_key: Some("deepseek-test-key".to_owned()),
+        api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
 
@@ -2328,7 +2456,7 @@ async fn responses_turn_does_not_fallback_for_generic_gateway_failures() {
         base_url: format!("http://{addr}"),
         model: "deepseek-chat".to_owned(),
         wire_api: crate::config::ProviderWireApi::Responses,
-        api_key: Some("deepseek-test-key".to_owned()),
+        api_key: Some(SecretRef::Inline("deepseek-test-key".to_owned())),
         ..ProviderConfig::default()
     });
 

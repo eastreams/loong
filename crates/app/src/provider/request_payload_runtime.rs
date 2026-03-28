@@ -42,16 +42,23 @@ pub(super) fn build_completion_request_body_with_capability(
 ) -> Value {
     match runtime_contract.transport_mode {
         ProviderTransportMode::Responses => {
-            build_responses_request_body(config, messages, model, payload_mode, false, &[])
+            build_responses_request_body(config, messages, model, payload_mode, false, &[], false)
         }
         ProviderTransportMode::AnthropicMessages => {
-            build_anthropic_request_body(config, messages, model, payload_mode, false, &[])
+            build_anthropic_request_body(config, messages, model, payload_mode, false, &[], false)
         }
         ProviderTransportMode::BedrockConverse => {
             build_bedrock_request_body(config, messages, payload_mode, false, &[])
         }
         ProviderTransportMode::OpenAiChatCompletions | ProviderTransportMode::KimiApi => {
-            build_chat_completions_request_body(config, messages, model, payload_mode, capability)
+            build_chat_completions_request_body(
+                config,
+                messages,
+                model,
+                payload_mode,
+                capability,
+                false,
+            )
         }
     }
 }
@@ -62,17 +69,29 @@ fn build_chat_completions_request_body(
     model: &str,
     payload_mode: CompletionPayloadMode,
     capability: ProviderCapabilityContract,
+    streaming: bool,
 ) -> Value {
     match config.provider.kind.protocol_family() {
-        ProviderProtocolFamily::AnthropicMessages => {
-            build_anthropic_request_body(config, messages, model, payload_mode, false, &[])
-        }
+        ProviderProtocolFamily::AnthropicMessages => build_anthropic_request_body(
+            config,
+            messages,
+            model,
+            payload_mode,
+            false,
+            &[],
+            streaming,
+        ),
         ProviderProtocolFamily::BedrockConverse => {
             build_bedrock_request_body(config, messages, payload_mode, false, &[])
         }
-        ProviderProtocolFamily::OpenAiChatCompletions => {
-            build_openai_compatible_request_body(config, messages, model, payload_mode, capability)
-        }
+        ProviderProtocolFamily::OpenAiChatCompletions => build_openai_compatible_request_body(
+            config,
+            messages,
+            model,
+            payload_mode,
+            capability,
+            streaming,
+        ),
     }
 }
 
@@ -98,6 +117,7 @@ pub(super) fn build_turn_request_body(
         capability,
         include_tool_schema,
         tool_definitions,
+        false,
     )
 }
 
@@ -110,6 +130,7 @@ pub(super) fn build_turn_request_body_with_capability(
     capability: ProviderCapabilityContract,
     include_tool_schema: bool,
     tool_definitions: &[Value],
+    streaming: bool,
 ) -> Value {
     match runtime_contract.transport_mode {
         ProviderTransportMode::Responses => build_responses_request_body(
@@ -119,6 +140,7 @@ pub(super) fn build_turn_request_body_with_capability(
             payload_mode,
             include_tool_schema,
             tool_definitions,
+            streaming,
         ),
         ProviderTransportMode::AnthropicMessages => build_anthropic_request_body(
             config,
@@ -127,6 +149,7 @@ pub(super) fn build_turn_request_body_with_capability(
             payload_mode,
             include_tool_schema,
             tool_definitions,
+            streaming,
         ),
         ProviderTransportMode::BedrockConverse => build_bedrock_request_body(
             config,
@@ -142,6 +165,7 @@ pub(super) fn build_turn_request_body_with_capability(
                 model,
                 payload_mode,
                 capability,
+                streaming,
             );
             if include_tool_schema
                 && !tool_definitions.is_empty()
@@ -161,11 +185,12 @@ fn build_openai_compatible_request_body(
     model: &str,
     payload_mode: CompletionPayloadMode,
     capability: ProviderCapabilityContract,
+    streaming: bool,
 ) -> Value {
     let mut body = serde_json::Map::new();
     body.insert("model".to_owned(), json!(model));
     body.insert("messages".to_owned(), Value::Array(messages.to_vec()));
-    body.insert("stream".to_owned(), Value::Bool(false));
+    body.insert("stream".to_owned(), Value::Bool(streaming));
     apply_common_payload_fields(&mut body, config, payload_mode, capability);
 
     Value::Object(body)
@@ -178,12 +203,13 @@ fn build_anthropic_request_body(
     payload_mode: CompletionPayloadMode,
     include_tool_schema: bool,
     tool_definitions: &[Value],
+    streaming: bool,
 ) -> Value {
     let mut body = serde_json::Map::new();
     let (system, adapted_messages) = adapt_messages_for_anthropic(messages);
     body.insert("model".to_owned(), json!(model));
     body.insert("messages".to_owned(), Value::Array(adapted_messages));
-    body.insert("stream".to_owned(), Value::Bool(false));
+    body.insert("stream".to_owned(), Value::Bool(streaming));
     body.insert(
         "max_tokens".to_owned(),
         json!(
@@ -604,10 +630,11 @@ fn build_responses_request_body(
     payload_mode: CompletionPayloadMode,
     include_tool_schema: bool,
     tool_definitions: &[Value],
+    streaming: bool,
 ) -> Value {
     let mut body = serde_json::Map::new();
     body.insert("model".to_owned(), json!(model));
-    body.insert("stream".to_owned(), Value::Bool(false));
+    body.insert("stream".to_owned(), Value::Bool(streaming));
 
     let (instructions, input_items) = build_responses_input_items(messages);
     if let Some(instructions) = instructions {

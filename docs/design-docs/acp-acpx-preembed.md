@@ -21,6 +21,9 @@ OpenClaw's latest ACP architecture makes the split explicit:
 If LoongClaw collapses these layers too early, future ACP/ACPX integration will require a large
 refactor across config, manager, channel routing, and daemon observability.
 
+For the outer localhost product surface that should consume ACP without
+replacing it, see [Local Product Control Plane](local-product-control-plane.md).
+
 ## OpenClaw design signals that matter
 
 The following patterns appear consistently in OpenClaw upstream:

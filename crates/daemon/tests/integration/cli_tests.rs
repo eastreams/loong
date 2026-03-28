@@ -17,12 +17,7 @@ fn channel_default_send_target_kind(raw: &str) -> mvp::channel::ChannelOutboundT
 
 #[test]
 fn root_help_uses_onboarding_language() {
-    let mut command = Cli::command();
-    let mut rendered = Vec::new();
-    command
-        .write_long_help(&mut rendered)
-        .expect("render root help");
-    let help = String::from_utf8(rendered).expect("help is valid utf-8");
+    let help = render_cli_help([]);
 
     assert!(help.contains("onboarding"));
     assert!(
@@ -35,15 +30,7 @@ fn root_help_uses_onboarding_language() {
 
 #[test]
 fn welcome_subcommand_help_advertises_first_run_shortcuts() {
-    let mut command = Cli::command();
-    let welcome = command
-        .find_subcommand_mut("welcome")
-        .expect("welcome subcommand should exist");
-    let mut rendered = Vec::new();
-    welcome
-        .write_long_help(&mut rendered)
-        .expect("render welcome help");
-    let help = String::from_utf8(rendered).expect("help is valid utf-8");
+    let help = render_cli_help(["welcome"]);
 
     assert!(
         help.contains("quick commands"),
@@ -69,7 +56,7 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 
 #[test]
 fn setup_subcommand_is_removed() {
-    let error = Cli::try_parse_from(["loongclaw", "setup"])
+    let error = try_parse_cli(["loongclaw", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
     assert!(
         error
@@ -80,7 +67,7 @@ fn setup_subcommand_is_removed() {
 
 #[test]
 fn migrate_cli_parses_discover_mode_with_defaults() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "migrate",
         "--mode",
@@ -111,7 +98,7 @@ fn migrate_cli_parses_discover_mode_with_defaults() {
 
 #[test]
 fn migrate_cli_requires_mode_flag() {
-    let error = Cli::try_parse_from(["loongclaw", "migrate", "--input", "/tmp/legacy-root"])
+    let error = try_parse_cli(["loongclaw", "migrate", "--input", "/tmp/legacy-root"])
         .expect_err("`migrate` without --mode should fail");
     let rendered = error.to_string();
 
@@ -123,7 +110,7 @@ fn migrate_cli_requires_mode_flag() {
 
 #[test]
 fn migrate_cli_parses_apply_selected_flags() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "migrate",
         "--mode",
@@ -174,6 +161,64 @@ fn migrate_cli_parses_apply_selected_flags() {
 }
 
 #[test]
+fn run_spec_cli_parses_bridge_support_delta_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "run-spec",
+        "--spec",
+        "/tmp/runner.spec.json",
+        "--bridge-support-delta",
+        "/tmp/bridge-support.delta.json",
+        "--bridge-support-delta-sha256",
+        "abc123",
+    ])
+    .expect("run-spec with bridge support delta override should parse");
+
+    match cli.command {
+        Some(Commands::RunSpec {
+            spec,
+            print_audit,
+            bridge_support,
+            ..
+        }) => {
+            assert_eq!(spec, "/tmp/runner.spec.json");
+            assert!(!print_audit);
+            assert_eq!(
+                bridge_support.bridge_support_delta.as_deref(),
+                Some("/tmp/bridge-support.delta.json")
+            );
+            assert_eq!(
+                bridge_support.bridge_support_delta_sha256.as_deref(),
+                Some("abc123")
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn run_spec_help_mentions_bridge_support_overrides() {
+    let help = render_cli_help(["run-spec"]);
+
+    assert!(
+        help.contains("--bridge-support <BRIDGE_SUPPORT>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-profile <BRIDGE_PROFILE>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-support-delta <BRIDGE_SUPPORT_DELTA>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("--bridge-support-delta-sha256 <BRIDGE_SUPPORT_DELTA_SHA256>"),
+        "help: {help}"
+    );
+}
+
+#[test]
 fn safe_lane_summary_cli_rejects_zero_limit() {
     let error = run_safe_lane_summary_cli(None, Some("session-a"), 0, false)
         .expect_err("zero limit must be rejected");
@@ -182,7 +227,7 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 
 #[test]
 fn onboard_cli_accepts_generic_api_key_flag() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "onboard",
         "--non-interactive",
@@ -202,7 +247,7 @@ fn onboard_cli_accepts_generic_api_key_flag() {
 
 #[test]
 fn onboard_cli_keeps_legacy_api_key_env_alias() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "onboard",
         "--non-interactive",
@@ -221,8 +266,54 @@ fn onboard_cli_keeps_legacy_api_key_env_alias() {
 }
 
 #[test]
+fn onboard_cli_accepts_web_search_provider_flag() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--web-search-provider",
+        "tavily",
+    ])
+    .expect("`--web-search-provider` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard {
+            web_search_provider,
+            ..
+        }) => {
+            assert_eq!(web_search_provider.as_deref(), Some("tavily"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn onboard_cli_accepts_web_search_api_key_flag() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--web-search-api-key",
+        "TAVILY_API_KEY",
+    ])
+    .expect("`--web-search-api-key` should parse");
+
+    match cli.command {
+        Some(Commands::Onboard {
+            web_search_api_key_env,
+            ..
+        }) => {
+            assert_eq!(web_search_api_key_env.as_deref(), Some("TAVILY_API_KEY"));
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn onboard_cli_accepts_personality_flag() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "onboard",
         "--non-interactive",
@@ -242,7 +333,7 @@ fn onboard_cli_accepts_personality_flag() {
 
 #[test]
 fn onboard_cli_accepts_memory_profile_flag() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "onboard",
         "--non-interactive",
@@ -262,7 +353,7 @@ fn onboard_cli_accepts_memory_profile_flag() {
 
 #[test]
 fn benchmark_memory_context_cli_parses_custom_knobs() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "benchmark-memory-context",
         "--output",
@@ -328,7 +419,7 @@ fn benchmark_memory_context_cli_parses_custom_knobs() {
 
 #[test]
 fn benchmark_memory_context_cli_uses_stable_default_sample_sizes() {
-    let cli = Cli::try_parse_from(["loongclaw", "benchmark-memory-context"])
+    let cli = try_parse_cli(["loongclaw", "benchmark-memory-context"])
         .expect("benchmark-memory-context CLI should parse with defaults");
 
     match cli.command {
@@ -350,7 +441,7 @@ fn benchmark_memory_context_cli_uses_stable_default_sample_sizes() {
 
 #[test]
 fn memory_systems_cli_parses() {
-    let cli = Cli::try_parse_from(["loongclaw", "list-memory-systems"])
+    let cli = try_parse_cli(["loongclaw", "list-memory-systems"])
         .expect("`list-memory-systems` should parse");
 
     match cli.command {
@@ -364,7 +455,7 @@ fn memory_systems_cli_parses() {
 
 #[test]
 fn runtime_snapshot_cli_parses() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "runtime-snapshot",
         "--config",
@@ -403,7 +494,7 @@ fn runtime_snapshot_cli_parses() {
 
 #[test]
 fn runtime_restore_cli_parses() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "runtime-restore",
         "--config",
@@ -433,7 +524,7 @@ fn runtime_restore_cli_parses() {
 
 #[test]
 fn runtime_experiment_cli_parses_restore() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "restore",
@@ -475,7 +566,7 @@ fn runtime_experiment_cli_parses_restore() {
 
 #[test]
 fn runtime_experiment_cli_parses_start_finish_and_show() {
-    let start = Cli::try_parse_from([
+    let start = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "start",
@@ -521,7 +612,7 @@ fn runtime_experiment_cli_parses_start_finish_and_show() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let finish = Cli::try_parse_from([
+    let finish = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "finish",
@@ -587,7 +678,7 @@ fn runtime_experiment_cli_parses_start_finish_and_show() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let show = Cli::try_parse_from([
+    let show = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "show",
@@ -616,7 +707,7 @@ fn runtime_experiment_cli_parses_start_finish_and_show() {
 
 #[test]
 fn runtime_experiment_cli_parses_compare() {
-    let compare = Cli::try_parse_from([
+    let compare = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "compare",
@@ -660,7 +751,7 @@ fn runtime_experiment_cli_parses_compare() {
 
 #[test]
 fn runtime_experiment_cli_parses_compare_with_recorded_snapshots() {
-    let compare = Cli::try_parse_from([
+    let compare = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "compare",
@@ -695,7 +786,7 @@ fn runtime_experiment_cli_parses_compare_with_recorded_snapshots() {
 
 #[test]
 fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths() {
-    let error = Cli::try_parse_from([
+    let error = try_parse_cli([
         "loongclaw",
         "runtime-experiment",
         "compare",
@@ -714,7 +805,7 @@ fn runtime_experiment_cli_rejects_compare_recorded_snapshots_with_manual_paths()
 
 #[test]
 fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
-    let propose = Cli::try_parse_from([
+    let propose = try_parse_cli([
         "loongclaw",
         "runtime-capability",
         "propose",
@@ -787,7 +878,7 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let review = Cli::try_parse_from([
+    let review = try_parse_cli([
         "loongclaw",
         "runtime-capability",
         "review",
@@ -835,7 +926,7 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let show = Cli::try_parse_from([
+    let show = try_parse_cli([
         "loongclaw",
         "runtime-capability",
         "show",
@@ -865,7 +956,7 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let index = Cli::try_parse_from([
+    let index = try_parse_cli([
         "loongclaw",
         "runtime-capability",
         "index",
@@ -893,7 +984,7 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
         other => panic!("unexpected command parsed: {other:?}"),
     }
 
-    let plan = Cli::try_parse_from([
+    let plan = try_parse_cli([
         "loongclaw",
         "runtime-capability",
         "plan",
@@ -1020,7 +1111,7 @@ fn format_acp_event_summary_includes_routing_intent_and_provenance() {
 
 #[test]
 fn chat_cli_accepts_acp_runtime_option_flags() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "chat",
         "--session",
@@ -1060,7 +1151,7 @@ fn chat_cli_accepts_acp_runtime_option_flags() {
 
 #[test]
 fn feishu_send_cli_accepts_generic_target_and_target_kind() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         channel_send_command("feishu"),
         "--target",
@@ -1092,7 +1183,7 @@ fn feishu_send_cli_accepts_generic_target_and_target_kind() {
 
 #[test]
 fn feishu_send_cli_keeps_receive_id_alias() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         channel_send_command("feishu"),
         "--receive-id",
@@ -1122,7 +1213,7 @@ fn feishu_send_cli_keeps_receive_id_alias() {
 
 #[test]
 fn feishu_send_cli_rejects_unsupported_conversation_target_kind() {
-    let error = Cli::try_parse_from([
+    let error = try_parse_cli([
         "loongclaw",
         channel_send_command("feishu"),
         "--target",
@@ -1143,7 +1234,7 @@ fn feishu_send_cli_rejects_unsupported_conversation_target_kind() {
 
 #[test]
 fn feishu_send_cli_defaults_target_kind_from_catalog_metadata() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         channel_send_command("feishu"),
         "--target",
@@ -1163,7 +1254,7 @@ fn feishu_send_cli_defaults_target_kind_from_catalog_metadata() {
 
 #[test]
 fn telegram_send_cli_accepts_generic_target_and_defaults_to_conversation() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         channel_send_command("telegram"),
         "--target",
@@ -1190,7 +1281,7 @@ fn telegram_send_cli_accepts_generic_target_and_defaults_to_conversation() {
 
 #[test]
 fn telegram_send_cli_rejects_non_conversation_target_kind() {
-    let error = Cli::try_parse_from([
+    let error = try_parse_cli([
         "loongclaw",
         channel_send_command("telegram"),
         "--target",
@@ -1211,7 +1302,7 @@ fn telegram_send_cli_rejects_non_conversation_target_kind() {
 
 #[test]
 fn matrix_send_cli_accepts_generic_target_and_defaults_to_conversation() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "matrix-send",
         "--target",
@@ -1238,7 +1329,7 @@ fn matrix_send_cli_accepts_generic_target_and_defaults_to_conversation() {
 
 #[test]
 fn matrix_send_cli_rejects_non_conversation_target_kind() {
-    let error = Cli::try_parse_from([
+    let error = try_parse_cli([
         "loongclaw",
         "matrix-send",
         "--target",
@@ -1258,8 +1349,582 @@ fn matrix_send_cli_rejects_non_conversation_target_kind() {
 }
 
 #[test]
+fn wecom_send_cli_accepts_generic_target_and_defaults_to_conversation() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("wecom"),
+        "--target",
+        "group_demo",
+        "--text",
+        "hello wecom",
+    ])
+    .expect("wecom send CLI should parse");
+
+    match cli.command {
+        Some(Commands::WecomSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "group_demo");
+            assert_eq!(target_kind, channel_default_send_target_kind("wecom"));
+            assert_eq!(text, "hello wecom");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn wecom_send_cli_rejects_non_conversation_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("wecom"),
+        "--target",
+        "group_demo",
+        "--target-kind",
+        "message_reply",
+        "--text",
+        "hello wecom",
+    ])
+    .expect_err("wecom send should reject non-conversation kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("wecom --target-kind does not support `message_reply`; use `conversation`")
+    );
+}
+
+#[test]
+fn line_send_cli_accepts_generic_target_and_defaults_to_address() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("line"),
+        "--target",
+        "U1234567890abcdef",
+        "--text",
+        "hello line",
+    ])
+    .expect("line send CLI should parse");
+
+    match cli.command {
+        Some(Commands::LineSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "U1234567890abcdef");
+            assert_eq!(target_kind, channel_default_send_target_kind("line"));
+            assert_eq!(text, "hello line");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn line_send_cli_rejects_non_address_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("line"),
+        "--target",
+        "U1234567890abcdef",
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello line",
+    ])
+    .expect_err("line send should reject non-address kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("line --target-kind does not support `conversation`; use `address`")
+    );
+}
+
+#[test]
+fn dingtalk_send_cli_accepts_config_backed_endpoint_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("dingtalk"),
+        "--text",
+        "hello dingtalk",
+    ])
+    .expect("dingtalk send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::DingtalkSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("dingtalk"));
+            assert_eq!(text, "hello dingtalk");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn dingtalk_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("dingtalk"),
+        "--target",
+        "https://example.test/dingtalk",
+        "--text",
+        "hello dingtalk",
+    ])
+    .expect("dingtalk send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::DingtalkSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/dingtalk"));
+            assert_eq!(target_kind, channel_default_send_target_kind("dingtalk"));
+            assert_eq!(text, "hello dingtalk");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn dingtalk_send_cli_rejects_non_endpoint_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("dingtalk"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello dingtalk",
+    ])
+    .expect_err("dingtalk send should reject non-endpoint kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("dingtalk --target-kind does not support `conversation`; use `endpoint`")
+    );
+}
+
+#[test]
+fn webhook_send_cli_accepts_config_backed_endpoint_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("webhook"),
+        "--text",
+        "hello webhook",
+    ])
+    .expect("webhook send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::WebhookSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("webhook"));
+            assert_eq!(text, "hello webhook");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn webhook_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("webhook"),
+        "--target",
+        "https://example.test/webhook",
+        "--text",
+        "hello webhook",
+    ])
+    .expect("webhook send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::WebhookSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/webhook"));
+            assert_eq!(target_kind, channel_default_send_target_kind("webhook"));
+            assert_eq!(text, "hello webhook");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn webhook_send_cli_rejects_non_endpoint_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("webhook"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello webhook",
+    ])
+    .expect_err("webhook send should reject non-endpoint kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("webhook --target-kind does not support `conversation`; use `endpoint`")
+    );
+}
+
+#[test]
+fn google_chat_send_cli_accepts_config_backed_endpoint_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("google-chat"),
+        "--text",
+        "hello gchat",
+    ])
+    .expect("google chat send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::GoogleChatSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("google-chat"));
+            assert_eq!(text, "hello gchat");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn google_chat_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("google-chat"),
+        "--target",
+        "https://example.test/google-chat",
+        "--text",
+        "hello gchat",
+    ])
+    .expect("google chat send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::GoogleChatSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/google-chat"));
+            assert_eq!(target_kind, channel_default_send_target_kind("google-chat"));
+            assert_eq!(text, "hello gchat");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn google_chat_send_cli_rejects_non_endpoint_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("google-chat"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello gchat",
+    ])
+    .expect_err("google chat send should reject non-endpoint kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("google-chat --target-kind does not support `conversation`; use `endpoint`")
+    );
+}
+
+#[test]
+fn teams_send_cli_accepts_config_backed_endpoint_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--text",
+        "hello teams",
+    ])
+    .expect("teams send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::TeamsSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(target_kind, channel_default_send_target_kind("teams"));
+            assert_eq!(text, "hello teams");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn teams_send_cli_accepts_explicit_endpoint_target_override() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--target",
+        "https://example.test/teams",
+        "--text",
+        "hello teams",
+    ])
+    .expect("teams send CLI should parse with an explicit endpoint override");
+
+    match cli.command {
+        Some(Commands::TeamsSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target.as_deref(), Some("https://example.test/teams"));
+            assert_eq!(target_kind, channel_default_send_target_kind("teams"));
+            assert_eq!(text, "hello teams");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn teams_send_cli_rejects_non_endpoint_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("teams"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello teams",
+    ])
+    .expect_err("teams send should reject non-endpoint kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("teams --target-kind does not support `conversation`; use `endpoint`")
+    );
+}
+
+#[test]
+fn mattermost_send_cli_accepts_generic_target_and_defaults_to_conversation() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("mattermost"),
+        "--target",
+        "channel-demo",
+        "--text",
+        "hello mattermost",
+    ])
+    .expect("mattermost send CLI should parse");
+
+    match cli.command {
+        Some(Commands::MattermostSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "channel-demo");
+            assert_eq!(target_kind, channel_default_send_target_kind("mattermost"));
+            assert_eq!(text, "hello mattermost");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn mattermost_send_cli_rejects_non_conversation_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("mattermost"),
+        "--target",
+        "channel-demo",
+        "--target-kind",
+        "address",
+        "--text",
+        "hello mattermost",
+    ])
+    .expect_err("mattermost send should reject non-conversation kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("mattermost --target-kind does not support `address`; use `conversation`")
+    );
+}
+
+#[test]
+fn nextcloud_talk_send_cli_accepts_conversation_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("nextcloud-talk"),
+        "--target",
+        "room-token",
+        "--text",
+        "hello nextcloud",
+    ])
+    .expect("nextcloud talk send CLI should parse");
+
+    match cli.command {
+        Some(Commands::NextcloudTalkSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "room-token");
+            assert_eq!(
+                target_kind,
+                channel_default_send_target_kind("nextcloud-talk")
+            );
+            assert_eq!(text, "hello nextcloud");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn nextcloud_talk_send_cli_rejects_non_conversation_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("nextcloud-talk"),
+        "--target",
+        "room-token",
+        "--target-kind",
+        "address",
+        "--text",
+        "hello nextcloud",
+    ])
+    .expect_err("nextcloud talk send should reject non-conversation kinds");
+
+    assert!(
+        error.to_string().contains(
+            "nextcloud-talk --target-kind does not support `address`; use `conversation`"
+        )
+    );
+}
+
+#[test]
+fn synology_chat_send_cli_accepts_config_backed_webhook_without_target() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("synology-chat"),
+        "--text",
+        "hello synology",
+    ])
+    .expect("synology chat send CLI should parse without explicit target");
+
+    match cli.command {
+        Some(Commands::SynologyChatSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, None);
+            assert_eq!(
+                target_kind,
+                channel_default_send_target_kind("synology-chat")
+            );
+            assert_eq!(text, "hello synology");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn synology_chat_send_cli_rejects_non_address_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("synology-chat"),
+        "--target-kind",
+        "conversation",
+        "--text",
+        "hello synology",
+    ])
+    .expect_err("synology chat send should reject non-address kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("synology-chat --target-kind does not support `conversation`; use `address`")
+    );
+}
+
+#[test]
+fn imessage_send_cli_accepts_conversation_target_kind() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        channel_send_command("imessage"),
+        "--target",
+        "iMessage;+;chat123",
+        "--text",
+        "hello imessage",
+    ])
+    .expect("imessage send CLI should parse");
+
+    match cli.command {
+        Some(Commands::ImessageSend {
+            target,
+            target_kind,
+            text,
+            ..
+        }) => {
+            assert_eq!(target, "iMessage;+;chat123");
+            assert_eq!(target_kind, channel_default_send_target_kind("imessage"));
+            assert_eq!(text, "hello imessage");
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn imessage_send_cli_rejects_non_conversation_target_kind() {
+    let error = try_parse_cli([
+        "loongclaw",
+        channel_send_command("imessage"),
+        "--target",
+        "iMessage;+;chat123",
+        "--target-kind",
+        "address",
+        "--text",
+        "hello imessage",
+    ])
+    .expect_err("imessage send should reject non-conversation kinds");
+
+    assert!(
+        error
+            .to_string()
+            .contains("imessage --target-kind does not support `address`; use `conversation`")
+    );
+}
+
+#[test]
 fn matrix_serve_cli_accepts_once_and_account_flags() {
-    let cli = Cli::try_parse_from(["loongclaw", "matrix-serve", "--once", "--account", "ops"])
+    let cli = try_parse_cli(["loongclaw", "matrix-serve", "--once", "--account", "ops"])
         .expect("matrix serve CLI should parse");
 
     match cli.command {
@@ -1271,13 +1936,27 @@ fn matrix_serve_cli_accepts_once_and_account_flags() {
     }
 }
 
+#[test]
+fn wecom_serve_cli_accepts_account_flag() {
+    let cli = try_parse_cli(["loongclaw", "wecom-serve", "--account", "ops"])
+        .expect("wecom serve CLI should parse");
+
+    match cli.command {
+        Some(Commands::WecomServe { account, .. }) => {
+            assert_eq!(account.as_deref(), Some("ops"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
 fn fake_send_cli_runner(args: ChannelSendCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
     Box::pin(async move {
+        let target = args.target.unwrap_or("-");
         Err(format!(
             "config={}|account={}|target={}|target_kind={}|text={}|card={}",
             args.config_path.unwrap_or("-"),
             args.account.unwrap_or("-"),
-            args.target,
+            target,
             args.target_kind.as_str(),
             args.text,
             args.as_card
@@ -1307,13 +1986,13 @@ fn run_channel_send_cli_forwards_common_arguments_to_runner() {
     let error = runtime
         .block_on(run_channel_send_cli(
             ChannelSendCliSpec {
-                family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+                family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
                 run: fake_send_cli_runner,
             },
             ChannelSendCliArgs {
                 config_path: Some("/tmp/loongclaw.toml"),
                 account: Some("ops"),
-                target: "om_42",
+                target: Some("om_42"),
                 target_kind: mvp::channel::ChannelOutboundTargetKind::MessageReply,
                 text: "hello",
                 as_card: true,
@@ -1356,24 +2035,121 @@ fn run_channel_serve_cli_forwards_optional_arguments_to_runner() {
 }
 
 #[test]
+fn multi_channel_serve_cli_requires_explicit_cli_session() {
+    let error = try_parse_cli(["loongclaw", "multi-channel-serve"])
+        .expect_err("missing --session should fail");
+    assert!(error.to_string().contains("--session <SESSION>"));
+}
+
+#[test]
+fn multi_channel_serve_cli_parses_channel_account_selection_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "multi-channel-serve",
+        "--session",
+        "cli-supervisor",
+        "--channel-account",
+        "telegram=bot_123456",
+        "--channel-account",
+        "lark=alerts",
+        "--channel-account",
+        "matrix=bridge-sync",
+        "--channel-account",
+        "wecom=robot-prod",
+    ])
+    .expect("multi-channel-serve should parse");
+
+    match cli.command {
+        Some(Commands::MultiChannelServe {
+            session,
+            channel_account,
+            ..
+        }) => {
+            assert_eq!(session, "cli-supervisor");
+            assert_eq!(channel_account.len(), 4);
+            assert_eq!(channel_account[0].channel_id, "telegram");
+            assert_eq!(channel_account[0].account_id, "bot_123456");
+            assert_eq!(channel_account[1].channel_id, "feishu");
+            assert_eq!(channel_account[1].account_id, "alerts");
+            assert_eq!(channel_account[2].channel_id, "matrix");
+            assert_eq!(channel_account[2].account_id, "bridge-sync");
+            assert_eq!(channel_account[3].channel_id, "wecom");
+            assert_eq!(channel_account[3].account_id, "robot-prod");
+        }
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn multi_channel_serve_cli_rejects_malformed_channel_account_selector() {
+    let error = try_parse_cli([
+        "loongclaw",
+        "multi-channel-serve",
+        "--session",
+        "cli-supervisor",
+        "--channel-account",
+        "telegrambot123",
+    ])
+    .expect_err("missing CHANNEL=ACCOUNT separator should fail");
+
+    assert!(error.to_string().contains("CHANNEL=ACCOUNT"));
+}
+
+#[test]
+fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
+    let help = render_cli_help(["multi-channel-serve"]);
+
+    assert!(help.contains("--session <SESSION>"), "help: {help}");
+    assert!(
+        help.contains("--channel-account <CHANNEL=ACCOUNT>"),
+        "help: {help}"
+    );
+    assert!(
+        help.contains("runtime-backed service-channel"),
+        "help: {help}"
+    );
+}
+
+#[test]
 fn default_channel_send_target_kind_uses_command_family_send_metadata() {
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::FEISHU_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::ReceiveId
     );
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation
     );
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {
-            family: mvp::channel::MATRIX_COMMAND_FAMILY_DESCRIPTOR,
+            family: mvp::channel::MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+            run: fake_send_cli_runner,
+        }),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        default_channel_send_target_kind(ChannelSendCliSpec {
+            family: mvp::channel::WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+            run: fake_send_cli_runner,
+        }),
+        mvp::channel::ChannelOutboundTargetKind::Conversation
+    );
+    assert_eq!(
+        default_channel_send_target_kind(ChannelSendCliSpec {
+            family: mvp::channel::LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+            run: fake_send_cli_runner,
+        }),
+        mvp::channel::ChannelOutboundTargetKind::Address
+    );
+    assert_eq!(
+        default_channel_send_target_kind(ChannelSendCliSpec {
+            family: mvp::channel::MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
             run: fake_send_cli_runner,
         }),
         mvp::channel::ChannelOutboundTargetKind::Conversation

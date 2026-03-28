@@ -16,7 +16,7 @@ LoongClaw is not only a runtime for developers. The current MVP is aimed at:
 2. **Safe by default** — visible capabilities must still honor policy, approval, and audit boundaries.
 3. **Assistant-first surfaces** — user-facing capability should feel like “my assistant can do this”, not only “the platform exposes an adapter”.
 4. **Progressive disclosure** — `onboard`, `ask`, `chat`, and `doctor` carry the common path; each surface should lead with the next user action before exposing runtime detail.
-5. **One runtime, many surfaces** — CLI ask, interactive chat, and future surfaces should share the same conversation, memory, tool, and provider semantics.
+5. **One runtime, one local control plane, many surfaces** — CLI ask, interactive chat, and future HTTP or browser surfaces should share the same conversation, memory, tool, provider, and session semantics.
 6. **Fail loud with a repair path** — when setup or runtime health breaks, LoongClaw must point users toward `doctor` instead of leaving them in silent failure.
 
 ## Current MVP Journey
@@ -39,6 +39,11 @@ This keeps the first-run journey legible while preserving the existing runtime a
 For the current MVP, that also means first-run surfaces should feel assistant-first in their copy:
 show the runnable handoff first, then keep config, memory, and runtime facts in secondary detail blocks.
 
+As browser and gateway surfaces arrive, they should layer on a localhost-only
+product control plane rather than reaching directly into provider or ACP internals.
+That keeps session continuity, approvals, and operator workflows aligned across
+CLI and future UI clients.
+
 ## Product Specifications
 
 See [Product Specs Index](product-specs/index.md) for detailed user-facing requirements:
@@ -50,7 +55,8 @@ See [Product Specs Index](product-specs/index.md) for detailed user-facing requi
 - [Browser Automation](product-specs/browser-automation.md) — bounded browser-style assistant actions
 - [Channel Setup](product-specs/channel-setup.md) — configuring shipped assistant surfaces
 - [Tool Surface](product-specs/tool-surface.md) — truthful runtime-visible tool advertising
-- [WebChat](product-specs/webchat.md) — expectations for the browser-facing chat surface
+- [Local Product Control Plane](product-specs/local-product-control-plane.md) — shared localhost-only product substrate for future HTTP and Web UI surfaces
+- [Web UI](product-specs/web-ui.md) — expectations for the browser-facing product surface
 - [Memory Profiles](product-specs/memory-profiles.md) — memory access patterns
 - [Prompt And Personality](product-specs/prompt-and-personality.md) — prompt engineering constraints
 
@@ -65,7 +71,7 @@ The primary daemon surfaces are:
 | `chat` | Interactive CLI conversation |
 | `doctor` | Health diagnostics with optional safe repair |
 | `migrate` | Power-user migration path |
-| `telegram-serve` / `feishu-serve` | Service channels once the base setup is healthy |
+| `telegram-serve` / `feishu-serve` / `matrix-serve` / `wecom-serve` / `multi-channel-serve` | Service channels once the base setup is healthy |
 
 ## See Also
 

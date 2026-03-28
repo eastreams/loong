@@ -1,5 +1,65 @@
+#![allow(clippy::wildcard_enum_match_arm)]
+
 use super::*;
 pub use clap::{CommandFactory, Parser};
+use std::ffi::OsString;
+
+const CLI_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
+fn with_cli_stack<T, F>(thread_name: &str, operation: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let thread_builder = std::thread::Builder::new();
+    let thread_builder = thread_builder.name(thread_name.to_owned());
+    let thread_builder = thread_builder.stack_size(CLI_STACK_SIZE_BYTES);
+    let join_handle = thread_builder
+        .spawn(operation)
+        .expect("spawn CLI stack thread");
+    match join_handle.join() {
+        Ok(value) => value,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+fn try_parse_cli<const N: usize>(args: [&str; N]) -> Result<Cli, clap::Error> {
+    let owned_args = args
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<OsString>>();
+    with_cli_stack("integration-cli-parse", move || {
+        Cli::try_parse_from(owned_args)
+    })
+}
+
+fn cli_command_name() -> String {
+    with_cli_stack("integration-cli-command-name", || {
+        let command = Cli::command();
+        command.get_name().to_owned()
+    })
+}
+
+fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
+    let owned_path = subcommand_path
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<String>>();
+    with_cli_stack("integration-cli-help", move || {
+        let mut command = Cli::command();
+        let mut current = &mut command;
+        for subcommand in owned_path {
+            current = current
+                .find_subcommand_mut(subcommand.as_str())
+                .unwrap_or_else(|| panic!("missing CLI subcommand `{subcommand}`"));
+        }
+        let mut rendered = Vec::new();
+        current
+            .write_long_help(&mut rendered)
+            .expect("render CLI help");
+        String::from_utf8(rendered).expect("help should be utf8")
+    })
+}
 
 fn validation_diagnostic_with_severity(
     severity: &str,
@@ -28,11 +88,14 @@ mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;
 mod feishu_cli;
+mod gateway_read_models;
 mod import_cli;
 mod memory_context_benchmark_cli;
 mod migrate_cli;
 mod migration;
+mod multi_channel_serve_cli;
 mod onboard_cli;
+mod plugins_cli;
 mod programmatic;
 mod runtime_capability_cli;
 mod runtime_experiment_cli;
@@ -44,21 +107,12 @@ mod spec_runtime_bridge;
 
 #[test]
 fn cli_uses_loongclaw_program_name() {
-    let command = Cli::command();
-    assert_eq!(command.get_name(), "loongclaw");
+    assert_eq!(cli_command_name(), "loongclaw");
 }
 
 #[test]
 fn cli_import_help_explains_explicit_power_user_flow() {
-    let mut command = Cli::command();
-    let import = command
-        .find_subcommand_mut("import")
-        .expect("import subcommand should exist");
-    let mut help = Vec::new();
-    import
-        .write_long_help(&mut help)
-        .expect("render import help");
-    let help = String::from_utf8(help).expect("help should be utf8");
+    let help = render_cli_help(["import"]);
 
     assert!(
         help.contains("Power-user import flow"),
@@ -87,15 +141,7 @@ fn cli_import_help_explains_explicit_power_user_flow() {
 
 #[test]
 fn cli_migrate_help_explains_explicit_migration_flow() {
-    let mut command = Cli::command();
-    let migrate = command
-        .find_subcommand_mut("migrate")
-        .expect("migrate subcommand should exist");
-    let mut help = Vec::new();
-    migrate
-        .write_long_help(&mut help)
-        .expect("render migrate help");
-    let help = String::from_utf8(help).expect("help should be utf8");
+    let help = render_cli_help(["migrate"]);
 
     assert!(
         help.contains("Power-user migration flow"),
@@ -117,15 +163,7 @@ fn cli_migrate_help_explains_explicit_migration_flow() {
 
 #[test]
 fn cli_onboard_help_mentions_detected_reusable_settings() {
-    let mut command = Cli::command();
-    let onboard = command
-        .find_subcommand_mut("onboard")
-        .expect("onboard subcommand should exist");
-    let mut help = Vec::new();
-    onboard
-        .write_long_help(&mut help)
-        .expect("render onboard help");
-    let help = String::from_utf8(help).expect("help should be utf8");
+    let help = render_cli_help(["onboard"]);
 
     assert!(
         help.contains("detect"),
@@ -150,13 +188,7 @@ fn cli_onboard_help_mentions_detected_reusable_settings() {
 
 #[test]
 fn cli_ask_help_mentions_one_shot_assistant_usage() {
-    let mut command = Cli::command();
-    let ask = command
-        .find_subcommand_mut("ask")
-        .expect("ask subcommand should exist");
-    let mut help = Vec::new();
-    ask.write_long_help(&mut help).expect("render ask help");
-    let help = String::from_utf8(help).expect("help should be utf8");
+    let help = render_cli_help(["ask"]);
 
     assert!(
         help.contains("one-shot"),
@@ -174,15 +206,7 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
 
 #[test]
 fn cli_runtime_restore_help_mentions_dry_run_default() {
-    let mut command = Cli::command();
-    let runtime_restore = command
-        .find_subcommand_mut("runtime-restore")
-        .expect("runtime-restore subcommand should exist");
-    let mut help = Vec::new();
-    runtime_restore
-        .write_long_help(&mut help)
-        .expect("render runtime-restore help");
-    let help = String::from_utf8(help).expect("help should be utf8");
+    let help = render_cli_help(["runtime-restore"]);
 
     assert!(
         help.contains("Dry-run by default"),
@@ -196,7 +220,7 @@ fn cli_runtime_restore_help_mentions_dry_run_default() {
 
 #[test]
 fn ask_cli_accepts_message_session_and_acp_flags() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "ask",
         "--message",
@@ -234,9 +258,55 @@ fn ask_cli_accepts_message_session_and_acp_flags() {
 }
 
 #[test]
+fn init_spec_cli_accepts_plugin_trust_guard_preset() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "init-spec",
+        "--output",
+        "/tmp/plugin-trust-guard.json",
+        "--preset",
+        "plugin-trust-guard",
+    ])
+    .expect("init-spec CLI should parse plugin trust guard preset");
+
+    match cli.command {
+        Some(Commands::InitSpec { output, preset }) => {
+            assert_eq!(output, "/tmp/plugin-trust-guard.json");
+            assert_eq!(preset, InitSpecPreset::PluginTrustGuard);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn run_spec_cli_accepts_render_summary_flag() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "run-spec",
+        "--spec",
+        "/tmp/tool-search-trusted.json",
+        "--render-summary",
+    ])
+    .expect("run-spec CLI should parse render summary flag");
+
+    match cli.command {
+        Some(Commands::RunSpec {
+            spec,
+            print_audit,
+            render_summary,
+            ..
+        }) => {
+            assert_eq!(spec, "/tmp/tool-search-trusted.json");
+            assert!(!print_audit);
+            assert!(render_summary);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn ask_cli_requires_message_flag() {
-    let error =
-        Cli::try_parse_from(["loongclaw", "ask"]).expect_err("ask without --message should fail");
+    let error = try_parse_cli(["loongclaw", "ask"]).expect_err("ask without --message should fail");
     let rendered = error.to_string();
 
     assert!(
@@ -247,7 +317,7 @@ fn ask_cli_requires_message_flag() {
 
 #[test]
 fn audit_cli_recent_parses_global_flags_after_subcommand() {
-    let cli = Cli::try_parse_from([
+    let cli = try_parse_cli([
         "loongclaw",
         "audit",
         "recent",
@@ -268,8 +338,30 @@ fn audit_cli_recent_parses_global_flags_after_subcommand() {
             assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
             assert!(json);
             match command {
-                loongclaw_daemon::audit_cli::AuditCommands::Recent { limit } => {
+                loongclaw_daemon::audit_cli::AuditCommands::Recent {
+                    limit,
+                    since_epoch_s,
+                    until_epoch_s,
+                    pack_id,
+                    agent_id,
+                    event_id,
+                    token_id,
+                    kind,
+                    triage_label,
+                    query_contains,
+                    trust_tier,
+                } => {
                     assert_eq!(limit, 25);
+                    assert_eq!(since_epoch_s, None);
+                    assert_eq!(until_epoch_s, None);
+                    assert_eq!(pack_id, None);
+                    assert_eq!(agent_id, None);
+                    assert_eq!(event_id, None);
+                    assert_eq!(token_id, None);
+                    assert_eq!(kind, None);
+                    assert_eq!(triage_label, None);
+                    assert_eq!(query_contains, None);
+                    assert_eq!(trust_tier, None);
                 }
                 other => panic!("unexpected audit subcommand parsed: {other:?}"),
             }
@@ -280,7 +372,7 @@ fn audit_cli_recent_parses_global_flags_after_subcommand() {
 
 #[test]
 fn audit_cli_summary_parses_limit_without_json() {
-    let cli = Cli::try_parse_from(["loongclaw", "audit", "summary", "--limit", "10"])
+    let cli = try_parse_cli(["loongclaw", "audit", "summary", "--limit", "10"])
         .expect("audit summary CLI should parse");
 
     match cli.command {
@@ -292,12 +384,423 @@ fn audit_cli_summary_parses_limit_without_json() {
             assert_eq!(config, None);
             assert!(!json);
             match command {
-                loongclaw_daemon::audit_cli::AuditCommands::Summary { limit } => {
+                loongclaw_daemon::audit_cli::AuditCommands::Summary {
+                    limit,
+                    since_epoch_s,
+                    until_epoch_s,
+                    pack_id,
+                    agent_id,
+                    event_id,
+                    token_id,
+                    kind,
+                    triage_label,
+                    group_by,
+                } => {
                     assert_eq!(limit, 10);
+                    assert_eq!(since_epoch_s, None);
+                    assert_eq!(until_epoch_s, None);
+                    assert_eq!(pack_id, None);
+                    assert_eq!(agent_id, None);
+                    assert_eq!(event_id, None);
+                    assert_eq!(token_id, None);
+                    assert_eq!(kind, None);
+                    assert_eq!(triage_label, None);
+                    assert_eq!(group_by, None);
                 }
                 other => panic!("unexpected audit subcommand parsed: {other:?}"),
             }
         }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_recent_parses_kind_and_triage_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "recent",
+        "--limit",
+        "15",
+        "--kind",
+        "tool-search-evaluated",
+        "--triage-label",
+        "tool-search-trust-conflict",
+    ])
+    .expect("audit recent CLI should parse kind and triage filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Recent {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                kind,
+                triage_label,
+                query_contains,
+                trust_tier,
+            } => {
+                assert_eq!(limit, 15);
+                assert_eq!(since_epoch_s, None);
+                assert_eq!(until_epoch_s, None);
+                assert_eq!(pack_id, None);
+                assert_eq!(agent_id, None);
+                assert_eq!(event_id, None);
+                assert_eq!(token_id, None);
+                assert_eq!(kind.as_deref(), Some("ToolSearchEvaluated"));
+                assert_eq!(triage_label.as_deref(), Some("tool_search_trust_conflict"));
+                assert_eq!(query_contains, None);
+                assert_eq!(trust_tier, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_recent_parses_tool_search_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "recent",
+        "--query-contains",
+        "trust:official",
+        "--trust-tier",
+        "verified_community",
+        "--kind",
+        "tool-search-evaluated",
+    ])
+    .expect("audit recent CLI should parse tool search filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Recent {
+                kind,
+                query_contains,
+                trust_tier,
+                ..
+            } => {
+                assert_eq!(kind.as_deref(), Some("ToolSearchEvaluated"));
+                assert_eq!(query_contains.as_deref(), Some("trust:official"));
+                assert_eq!(trust_tier.as_deref(), Some("verified-community"));
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_summary_parses_kind_filter_in_canonical_form() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "summary",
+        "--kind",
+        "ToolSearchEvaluated",
+    ])
+    .expect("audit summary CLI should parse canonical event kind filter");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Summary {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                kind,
+                triage_label,
+                group_by,
+            } => {
+                assert_eq!(limit, 200);
+                assert_eq!(since_epoch_s, None);
+                assert_eq!(until_epoch_s, None);
+                assert_eq!(pack_id, None);
+                assert_eq!(agent_id, None);
+                assert_eq!(event_id, None);
+                assert_eq!(token_id, None);
+                assert_eq!(kind.as_deref(), Some("ToolSearchEvaluated"));
+                assert_eq!(triage_label, None);
+                assert_eq!(group_by, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_summary_parses_group_by_alias() {
+    let cli = try_parse_cli(["loongclaw", "audit", "summary", "--group-by", "token-id"])
+        .expect("audit summary CLI should parse group-by alias");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Summary { group_by, .. } => {
+                assert_eq!(group_by.as_deref(), Some("token"));
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_discovery_parses_trust_filters_and_aliases() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "discovery",
+        "--limit",
+        "30",
+        "--triage-label",
+        "conflict",
+        "--query-contains",
+        "trust:official",
+        "--trust-tier",
+        "verified_community",
+    ])
+    .expect("audit discovery CLI should parse trust filters and aliases");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Discovery {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                triage_label,
+                query_contains,
+                trust_tier,
+                group_by,
+            } => {
+                assert_eq!(limit, 30);
+                assert_eq!(since_epoch_s, None);
+                assert_eq!(until_epoch_s, None);
+                assert_eq!(pack_id, None);
+                assert_eq!(agent_id, None);
+                assert_eq!(event_id, None);
+                assert_eq!(token_id, None);
+                assert_eq!(triage_label.as_deref(), Some("tool_search_trust_conflict"));
+                assert_eq!(query_contains.as_deref(), Some("trust:official"));
+                assert_eq!(trust_tier.as_deref(), Some("verified-community"));
+                assert_eq!(group_by, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_discovery_parses_group_by_alias() {
+    let cli = try_parse_cli(["loongclaw", "audit", "discovery", "--group-by", "agent-id"])
+        .expect("audit discovery CLI should parse group-by alias");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Discovery { group_by, .. } => {
+                assert_eq!(group_by.as_deref(), Some("agent"));
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_recent_parses_time_window_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "recent",
+        "--since-epoch-s",
+        "1700010000",
+        "--until-epoch-s",
+        "1700010900",
+        "--limit",
+        "5",
+    ])
+    .expect("audit recent CLI should parse time window filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Recent {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                kind,
+                triage_label,
+                query_contains,
+                trust_tier,
+            } => {
+                assert_eq!(limit, 5);
+                assert_eq!(since_epoch_s, Some(1_700_010_000));
+                assert_eq!(until_epoch_s, Some(1_700_010_900));
+                assert_eq!(pack_id, None);
+                assert_eq!(agent_id, None);
+                assert_eq!(event_id, None);
+                assert_eq!(token_id, None);
+                assert_eq!(kind, None);
+                assert_eq!(triage_label, None);
+                assert_eq!(query_contains, None);
+                assert_eq!(trust_tier, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_discovery_parses_pack_and_agent_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "discovery",
+        "--pack-id",
+        "sales-intel",
+        "--agent-id",
+        "agent-search",
+        "--limit",
+        "7",
+    ])
+    .expect("audit discovery CLI should parse pack and agent filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Discovery {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                triage_label,
+                query_contains,
+                trust_tier,
+                group_by,
+            } => {
+                assert_eq!(limit, 7);
+                assert_eq!(since_epoch_s, None);
+                assert_eq!(until_epoch_s, None);
+                assert_eq!(pack_id.as_deref(), Some("sales-intel"));
+                assert_eq!(agent_id.as_deref(), Some("agent-search"));
+                assert_eq!(event_id, None);
+                assert_eq!(token_id, None);
+                assert_eq!(triage_label, None);
+                assert_eq!(query_contains, None);
+                assert_eq!(trust_tier, None);
+                assert_eq!(group_by, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_recent_parses_event_and_token_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "recent",
+        "--event-id",
+        "evt-123",
+        "--token-id",
+        "token-abc",
+    ])
+    .expect("audit recent CLI should parse event and token filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::Recent {
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+                event_id,
+                token_id,
+                kind,
+                triage_label,
+                query_contains,
+                trust_tier,
+            } => {
+                assert_eq!(limit, 50);
+                assert_eq!(since_epoch_s, None);
+                assert_eq!(until_epoch_s, None);
+                assert_eq!(pack_id, None);
+                assert_eq!(agent_id, None);
+                assert_eq!(event_id.as_deref(), Some("evt-123"));
+                assert_eq!(token_id.as_deref(), Some("token-abc"));
+                assert_eq!(kind, None);
+                assert_eq!(triage_label, None);
+                assert_eq!(query_contains, None);
+                assert_eq!(trust_tier, None);
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_token_trail_parses_required_token_and_identity_filters() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "audit",
+        "token-trail",
+        "--token-id",
+        "token-abc",
+        "--limit",
+        "12",
+        "--since-epoch-s",
+        "1700010000",
+        "--until-epoch-s",
+        "1700010900",
+        "--pack-id",
+        "sales-intel",
+        "--agent-id",
+        "agent-a",
+    ])
+    .expect("audit token-trail CLI should parse token and identity filters");
+
+    match cli.command {
+        Some(Commands::Audit { command, .. }) => match command {
+            loongclaw_daemon::audit_cli::AuditCommands::TokenTrail {
+                token_id,
+                limit,
+                since_epoch_s,
+                until_epoch_s,
+                pack_id,
+                agent_id,
+            } => {
+                assert_eq!(token_id, "token-abc");
+                assert_eq!(limit, 12);
+                assert_eq!(since_epoch_s, Some(1_700_010_000));
+                assert_eq!(until_epoch_s, Some(1_700_010_900));
+                assert_eq!(pack_id.as_deref(), Some("sales-intel"));
+                assert_eq!(agent_id.as_deref(), Some("agent-a"));
+            }
+            other => panic!("unexpected audit subcommand parsed: {other:?}"),
+        },
         other => panic!("unexpected command parse result: {other:?}"),
     }
 }
@@ -356,11 +859,25 @@ fn validation_summary_counts_error_and_warning_diagnostics_separately() {
 fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:telegram-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:telegram-token".to_owned(),
+    ));
     config.telegram.allowed_chat_ids = vec![1001];
     config.feishu.enabled = true;
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    config.feishu.app_secret = Some("app-secret".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "app-secret".to_owned(),
+    ));
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "bot_test".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "secret_test".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
 
     let inventory = mvp::channel::channel_inventory(&config);
     let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
@@ -394,6 +911,16 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
     assert!(rendered.contains(&format!(
         "op serve ({}) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
         channel_serve_command("feishu")
+    )));
+    assert!(rendered.contains("WeCom [wecom]"));
+    assert!(rendered.contains("account=wecom:bot_test"));
+    assert!(rendered.contains(&format!(
+        "op send ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,websocket_url",
+        channel_send_command("wecom")
+    )));
+    assert!(rendered.contains(&format!(
+        "op serve ({}) ready: ready target_kinds=conversation requirements=enabled,bot_id,secret,allowed_conversation_ids,websocket_url,ping_interval_s",
+        channel_serve_command("wecom")
     )));
     assert!(rendered.contains("running=false"));
 }
@@ -467,35 +994,126 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 
     assert!(rendered.contains("catalog-only channels:"));
     assert!(rendered.contains(
-        "Discord [discord] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=discord-bot transport=discord_gateway target_kinds=conversation"
+        "Discord [discord] implementation_status=config_backed selection_order=40 selection_label=\"community server bot\" capabilities=multi_account,send aliases=discord-bot transport=discord_http_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "blurb: Shipped Discord outbound message surface with config-backed direct sends; inbound gateway/runtime support remains planned."
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        "op send ({}) disabled: disabled by discord account configuration target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("discord")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        "op serve ({}) unsupported: discord serve runtime is not implemented yet target_kinds=conversation requirements=enabled,bot_token,application_id,allowed_guild_ids",
         channel_serve_command("discord")
     )));
     assert!(rendered.contains(
-        "Slack [slack] implementation_status=stub capabilities=send,serve,runtime_tracking aliases=slack-bot transport=slack_events_api target_kinds=conversation"
+        "Slack [slack] implementation_status=config_backed selection_order=50 selection_label=\"workspace event bot\" capabilities=multi_account,send aliases=slack-bot transport=slack_web_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
-        "catalog op send ({}) availability=stub tracks_runtime=false target_kinds=conversation requirements=-",
+        "op send ({}) disabled: disabled by slack account configuration target_kinds=conversation requirements=enabled,bot_token",
         channel_send_command("slack")
     )));
     assert!(rendered.contains(&format!(
-        "catalog op serve ({}) availability=stub tracks_runtime=true target_kinds=conversation requirements=-",
+        "op serve ({}) unsupported: slack serve runtime is not implemented yet target_kinds=conversation requirements=enabled,bot_token,app_token,signing_secret,allowed_channel_ids",
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
-        "onboarding strategy=planned status_command=\"loongclaw channels --json\" repair_command=-"
+        "WhatsApp [whatsapp] implementation_status=config_backed selection_order=90 selection_label=\"business messaging app\" capabilities=multi_account,send aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
-    assert!(rendered.contains("setup_hint=\"stub surface only"));
+    assert!(rendered.contains(&format!(
+        "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
+        channel_send_command("whatsapp")
+    )));
+    assert!(rendered.contains(&format!(
+        "op serve ({}) unsupported: whatsapp serve runtime is not implemented yet target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
+        channel_serve_command("whatsapp")
+    )));
+    assert!(rendered.contains(
+        "LINE [line] implementation_status=config_backed selection_order=60 selection_label=\"consumer messaging bot\" capabilities=multi_account,send aliases=line-bot transport=line_messaging_api target_kinds=address configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "DingTalk [dingtalk] implementation_status=config_backed selection_order=80 selection_label=\"group webhook bot\" capabilities=multi_account,send aliases=ding,ding-bot transport=dingtalk_custom_robot_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "Google Chat [google-chat] implementation_status=config_backed selection_order=120 selection_label=\"workspace space webhook\" capabilities=multi_account,send aliases=gchat,googlechat transport=google_chat_incoming_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (dingtalk-send) disabled: disabled by dingtalk account configuration target_kinds=endpoint requirements=enabled,webhook_url"
+    ));
+    assert!(rendered.contains(
+        "op send (google-chat-send) disabled: disabled by google_chat account configuration target_kinds=endpoint requirements=enabled,webhook_url"
+    ));
+    assert!(rendered.contains(
+        "op serve (google-chat-serve) unsupported: google chat incoming webhook surface is outbound-only target_kinds=endpoint requirements=enabled,webhook_url"
+    ));
+    assert!(rendered.contains(
+        "Signal [signal] implementation_status=config_backed selection_order=130 selection_label=\"private messenger bridge\" capabilities=multi_account,send aliases=signal-cli transport=signal_cli_rest_api target_kinds=address configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (signal-send) disabled: disabled by signal account configuration target_kinds=address requirements=enabled,service_url,account"
+    ));
+    assert!(rendered.contains(
+        "op serve (signal-serve) unsupported: signal serve runtime is not implemented yet target_kinds=address requirements=enabled,service_url,account"
+    ));
+    assert!(rendered.contains(
+        "Microsoft Teams [teams] implementation_status=config_backed selection_order=140 selection_label=\"workspace webhook bot\" capabilities=multi_account,send aliases=msteams,ms-teams transport=microsoft_teams_incoming_webhook target_kinds=endpoint,conversation configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (teams-send) disabled: disabled by teams account configuration target_kinds=endpoint requirements=enabled,webhook_url"
+    ));
+    assert!(rendered.contains(
+        "op serve (teams-serve) unsupported: microsoft teams incoming webhook surface is outbound-only today target_kinds=conversation requirements=enabled,app_id,app_password,tenant_id,allowed_conversation_ids"
+    ));
+    assert!(rendered.contains(
+        "Nextcloud Talk [nextcloud-talk] implementation_status=config_backed selection_order=160 selection_label=\"self-hosted room bot\" capabilities=multi_account,send aliases=nextcloud,nextcloudtalk transport=nextcloud_talk_bot_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (nextcloud-talk-send) disabled: disabled by nextcloud_talk account configuration target_kinds=conversation requirements=enabled,server_url,shared_secret"
+    ));
+    assert!(rendered.contains(
+        "op serve (nextcloud-talk-serve) unsupported: nextcloud talk bot callback serve is not implemented yet target_kinds=conversation requirements=enabled,server_url,shared_secret"
+    ));
+    assert!(rendered.contains(
+        "Synology Chat [synology-chat] implementation_status=config_backed selection_order=165 selection_label=\"nas webhook bot\" capabilities=multi_account,send aliases=synologychat,synochat transport=synology_chat_outgoing_incoming_webhooks target_kinds=address configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (synology-chat-send) disabled: disabled by synology_chat account configuration target_kinds=address requirements=enabled,incoming_url"
+    ));
+    assert!(rendered.contains(
+        "op serve (synology-chat-serve) unsupported: synology chat outgoing webhook serve is not implemented yet target_kinds=address requirements=enabled,token,incoming_url,allowed_user_ids"
+    ));
+    assert!(rendered.contains(
+        "iMessage [imessage] implementation_status=config_backed selection_order=180 selection_label=\"apple message bridge\" capabilities=multi_account,send aliases=bluebubbles,blue-bubbles transport=imessage_bridge_api target_kinds=conversation configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "op send (imessage-send) disabled: disabled by imessage account configuration target_kinds=conversation requirements=enabled,bridge_url,bridge_token"
+    ));
+    assert!(rendered.contains(
+        "op serve (imessage-serve) unsupported: imessage bridge sync runtime is not implemented yet target_kinds=conversation requirements=enabled,bridge_url,bridge_token,allowed_chat_ids"
+    ));
+    assert!(rendered.contains(
+        "Webhook [webhook] implementation_status=config_backed selection_order=110 selection_label=\"generic http integration\" capabilities=multi_account,send aliases=http-webhook transport=generic_webhook target_kinds=endpoint configured_accounts=1 default_configured_account=default"
+    ));
+    assert!(rendered.contains(
+        "WebChat [webchat] implementation_status=stub selection_order=230 selection_label=\"embedded web inbox\""
+    ));
+    assert!(rendered.contains(
+        "op send (webhook-send) disabled: disabled by webhook account configuration target_kinds=endpoint requirements=enabled,endpoint_url"
+    ));
+    assert!(rendered.contains(
+        "op serve (webhook-serve) unsupported: generic webhook serve runtime is not implemented yet target_kinds=endpoint requirements=enabled,public_base_url,signing_secret"
+    ));
+    assert!(rendered.contains(
+        "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
+    ));
+    assert!(rendered.contains(
+        "setup_hint=\"configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned\""
+    ));
 }
 
 #[test]
-fn memory_system_metadata_json_includes_summary_and_source() {
+fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
     use mvp::memory::MemorySystem as _;
 
     let metadata = mvp::memory::BuiltinMemorySystem.metadata();
@@ -516,6 +1134,10 @@ fn memory_system_metadata_json_includes_summary_and_source() {
             .expect("capabilities should be an array")
             .iter()
             .any(|entry| entry == "canonical_store")
+    );
+    assert_eq!(
+        payload["supported_pre_assembly_stage_families"],
+        json!(["derive", "retrieve", "rank"])
     );
 }
 
@@ -538,6 +1160,10 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
     assert_eq!(payload["config"], "/tmp/loongclaw.toml");
     assert_eq!(payload["selected"]["id"], "builtin");
     assert_eq!(payload["selected"]["source"], "default");
+    assert_eq!(
+        payload["selected"]["supported_pre_assembly_stage_families"],
+        json!(["derive", "retrieve", "rank"])
+    );
     assert_eq!(payload["policy"]["backend"], "sqlite");
     assert_eq!(payload["policy"]["profile"], "window_plus_summary");
     assert_eq!(payload["policy"]["mode"], "window_plus_summary");
@@ -565,8 +1191,13 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
     let rendered = render_memory_system_snapshot_text("/tmp/loongclaw.toml", &snapshot);
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
-    assert!(rendered.contains("selected=builtin source=default api_version=1"));
+    assert!(rendered.contains(
+        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration pre_assembly_stages=derive,retrieve,rank"
+    ));
     assert!(rendered.contains("policy=backend:sqlite profile:window_plus_summary mode:window_plus_summary ingest_mode:async_background fail_open:false strict_mode_requested:true strict_mode_active:false effective_fail_open:true"));
+    assert!(rendered.contains(
+        "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration pre_assembly_stages=derive,retrieve,rank"
+    ));
 }
 
 #[test]
@@ -683,18 +1314,19 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("strategy"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("planned")
+                        == Some("manual_config")
                     && surface
                         .get("catalog")
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("status_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw channels --json")
+                        == Some("loongclaw doctor")
                     && surface
                         .get("catalog")
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("repair_command"))
-                        .is_some_and(serde_json::Value::is_null)
+                        .and_then(serde_json::Value::as_str)
+                        == Some("loongclaw doctor --fix")
             })
     );
 }
@@ -810,22 +1442,11 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
             .expect("channel catalog array")
             .iter()
             .any(|entry| {
-                entry.get("id").and_then(serde_json::Value::as_str) == Some("discord")
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("wecom")
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("stub")
-                    && entry
-                        .get("operations")
-                        .and_then(serde_json::Value::as_array)
-                        .map(|items| {
-                            items
-                                .iter()
-                                .filter_map(|item| item.get("availability"))
-                                .filter_map(serde_json::Value::as_str)
-                                .collect::<Vec<_>>()
-                        })
-                        == Some(vec!["stub", "stub"])
+                        == Some("runtime_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
@@ -836,6 +1457,283 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                                 .collect::<Vec<_>>()
                         })
                         == Some(vec!["conversation"])
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("discord")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+                    && entry
+                        .get("operations")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|item| item.get("availability"))
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["implemented", "stub"])
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(40)
+                    && entry
+                        .get("selection_label")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("community server bot")
+                    && entry
+                        .get("blurb")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|value| value.contains("config-backed direct sends"))
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("slack")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(50)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("whatsapp")
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["address"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(90)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("webhook")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["endpoint"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(110)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("google-chat")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["endpoint"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(120)
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("teams")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["endpoint", "conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(140)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("nextcloud-talk")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(160)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("imessage")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["conversation"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(180)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("synology-chat")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["address"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(165)
+                    && entry
+                        .get("implementation_status")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("config_backed")
+            })
+    );
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("signal")
+                    && entry
+                        .get("supported_target_kinds")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["address"])
+                    && entry
+                        .get("selection_order")
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(130)
             })
     );
 }
@@ -893,6 +1791,165 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("telegram"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("slack")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("slack"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("slack"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(50)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("whatsapp")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("whatsapp"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("whatsapp"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(90)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("signal")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("signal"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("signal"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(130)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("wecom")
+            && surface
+                .get("default_configured_account_id")
+                .and_then(serde_json::Value::as_str)
+                == Some("default")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("capabilities"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_capability_ids("wecom"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("wecom"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)
@@ -967,6 +2024,64 @@ fn build_channels_cli_json_payload_includes_grouped_channel_surfaces() {
                         .collect::<Vec<_>>()
                 })
                 == Some(channel_supported_target_kinds("discord"))
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(40)
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("webhook")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("webhook"))
+            && surface
+                .get("configured_accounts")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                == Some(1)
+    }));
+
+    assert!(surfaces.iter().any(|surface| {
+        surface
+            .get("catalog")
+            .and_then(|catalog| catalog.get("id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("webchat")
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("selection_order"))
+                .and_then(serde_json::Value::as_u64)
+                == Some(230)
+            && surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("supported_target_kinds"))
+                .and_then(serde_json::Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .collect::<Vec<_>>()
+                })
+                == Some(channel_supported_target_kinds("webchat"))
             && surface
                 .get("configured_accounts")
                 .and_then(serde_json::Value::as_array)

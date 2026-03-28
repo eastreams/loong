@@ -56,7 +56,21 @@ write_release_fixture_asset() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "\${1:-}" == "onboard" ]]; then
-  printf 'onboard\n' >> "\${ONBOARD_MARKER:?}"
+  shift
+  selected_provider="\${LOONGCLAW_WEB_SEARCH_PROVIDER:-}"
+  while [[ "\$#" -gt 0 ]]; do
+    case "\${1:-}" in
+      --web-search-provider)
+        shift
+        selected_provider="\${1:-}"
+        ;;
+    esac
+    shift || true
+  done
+  {
+    printf 'onboard\n'
+    printf 'web_search_provider=%s\n' "\${selected_provider:-}"
+  } >> "\${ONBOARD_MARKER:?}"
 fi
 printf '%s\n' "$binary_label"
 EOF
@@ -109,24 +123,59 @@ EOF
   chmod +x "$fixture/fake-bin/curl"
 }
 
+make_install_curl_stub_bin() {
+  local fixture="$1"
+  local duckduckgo_mode="${2:?duckduckgo_mode is required}"
+  local tavily_result="${3:?tavily_result is required}"
+  local real_curl
+  real_curl="$(command -v curl)"
+  mkdir -p "$fixture/fake-bin"
+  cat >"$fixture/fake-bin/curl" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="\${@: -1}"
+case "\$url" in
+  https://html.duckduckgo.com/html/*)
+    if [[ "$duckduckgo_mode" == "success" ]]; then
+      exit 0
+    fi
+    exit 22
+    ;;
+  https://api.tavily.com/search)
+    if [[ "$tavily_result" == "__FAIL__" ]]; then
+      exit 7
+    fi
+    printf '%s' "$tavily_result"
+    exit 0
+    ;;
+esac
+
+exec "$real_curl" "\$@"
+EOF
+  chmod +x "$fixture/fake-bin/curl"
+}
+
 make_uname_stub_bin() {
   local fixture="$1"
   local stub_platform="$2"
   local stub_arch="$3"
+  local stub_operating_system="${4:-GNU/Linux}"
   mkdir -p "$fixture/fake-bin"
-  cat >"$fixture/fake-bin/uname" <<EOF
+  cat >"$fixture/fake-bin/uname" <<EOF2
 #!/usr/bin/env bash
 set -euo pipefail
 
 case "\${1:-}" in
   -s) printf '%s\n' "$stub_platform" ;;
   -m) printf '%s\n' "$stub_arch" ;;
+  -o) printf '%s\n' "$stub_operating_system" ;;
   *)
     echo "unexpected uname invocation: \$*" >&2
     exit 1
     ;;
 esac
-EOF
+EOF2
   chmod +x "$fixture/fake-bin/uname"
 }
 
@@ -134,7 +183,7 @@ make_getconf_stub_bin() {
   local fixture="$1"
   local response="$2"
   mkdir -p "$fixture/fake-bin"
-  cat >"$fixture/fake-bin/getconf" <<EOF
+  cat >"$fixture/fake-bin/getconf" <<EOF2
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -148,7 +197,7 @@ if [[ "$response" == "__FAIL__" ]]; then
 fi
 
 printf '%s\n' "$response"
-EOF
+EOF2
   chmod +x "$fixture/fake-bin/getconf"
 }
 
@@ -156,7 +205,7 @@ make_ldd_stub_bin() {
   local fixture="$1"
   local response="$2"
   mkdir -p "$fixture/fake-bin"
-  cat >"$fixture/fake-bin/ldd" <<EOF
+  cat >"$fixture/fake-bin/ldd" <<EOF2
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -164,11 +213,10 @@ if [[ "$response" == "__FAIL__" ]]; then
   exit 1
 fi
 
-  printf '%s\n' "$response"
-EOF
+printf '%s\n' "$response"
+EOF2
   chmod +x "$fixture/fake-bin/ldd"
 }
-
 make_sort_stub_bin() {
   local fixture="$1"
   local mode="$2"
@@ -228,6 +276,104 @@ run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test() {
     echo "expected GNU artifact to be installed but got '$installed_output'" >&2
     exit 1
   fi
+}
+
+
+run_termux_arm64_installs_android_release_test() {
+  local fixture install_dir output_file installed_output
+  fixture="$(make_release_fixture "v0.1.2" "aarch64-linux-android" "termux-binary")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/termux-android.out"
+  make_uname_stub_bin "$fixture" "Linux" "aarch64" "Android"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      TERMUX_VERSION="0.119.0" \
+      PREFIX="/data/data/com.termux/files/usr" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "aarch64-linux-android"
+  installed_output="$("$install_dir/loongclaw")"
+  if [[ "$installed_output" != "termux-binary" ]]; then
+    echo "expected Android artifact to be installed on Termux but got '$installed_output'" >&2
+    exit 1
+  fi
+}
+
+run_linux_guest_with_termux_env_is_not_termux_test() {
+  if (
+    source_install_functions
+    TERMUX_VERSION="0.119.0"
+    PREFIX="/data/data/com.termux/files/usr"
+    uname() {
+      case "${1:-}" in
+        -s) printf 'Linux\n' ;;
+        -m) printf 'x86_64\n' ;;
+        -o) printf 'GNU/Linux\n' ;;
+        *)
+          echo "unexpected uname invocation: $*" >&2
+          return 1
+          ;;
+      esac
+    }
+    is_termux_environment
+  ); then
+    echo "expected GNU/Linux shells with inherited Termux env to stay on Linux artifacts" >&2
+    exit 1
+  fi
+}
+
+run_linux_guest_with_termux_env_prefers_linux_release_test() {
+  local fixture install_dir output_file installed_output
+  fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/linux-termux-env.out"
+  make_uname_stub_bin "$fixture" "Linux" "x86_64" "GNU/Linux"
+  make_getconf_stub_bin "$fixture" "glibc 2.39"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      TERMUX_VERSION="0.119.0" \
+      PREFIX="/data/data/com.termux/files/usr" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "x86_64-unknown-linux-gnu"
+  installed_output="$("$install_dir/loongclaw")"
+  if [[ "$installed_output" != "gnu-binary" ]]; then
+    echo "expected Linux artifact to be installed when uname -o reports GNU/Linux but got '$installed_output'" >&2
+    exit 1
+  fi
+}
+
+run_termux_x86_64_rejects_android_release_test() {
+  local fixture output_file
+  fixture="$(mktemp -d)"
+  trap 'rm -rf "$fixture"' RETURN
+  output_file="$fixture/termux-android-x86_64.out"
+  make_uname_stub_bin "$fixture" "Linux" "x86_64" "Android"
+
+  if (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      TERMUX_VERSION="0.119.0" \
+      PREFIX="/data/data/com.termux/files/usr" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$fixture/install" >"$output_file" 2>&1
+  ); then
+    echo "expected install.sh to reject unsupported Android x86_64 hosts" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "$output_file" "unsupported Android architecture"
 }
 
 run_linux_x86_64_falls_back_to_musl_when_glibc_is_too_old_test() {
@@ -460,11 +606,20 @@ run_release_override_install_and_onboard_test() {
   output_file="$fixture/install.out"
   marker="$fixture/onboard.log"
   : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
 
   (
     cd "$REPO_ROOT"
-    ONBOARD_MARKER="$marker" \
+    PATH="$fixture/fake-bin:$PATH" \
+      ONBOARD_MARKER="$marker" \
       LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
   )
 
@@ -472,6 +627,130 @@ run_release_override_install_and_onboard_test() {
   assert_contains "$output_file" "Installed loongclaw"
   assert_contains "$output_file" "Running guided onboarding"
   assert_contains "$marker" "onboard"
+}
+
+run_release_override_install_and_onboard_detects_duckduckgo_default_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-ddg.out"
+  marker="$fixture/onboard-web-search-ddg.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: DuckDuckGo (detected)"
+  assert_contains "$marker" "web_search_provider=duckduckgo"
+}
+
+run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-tavily.out"
+  marker="$fixture/onboard-web-search-tavily.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "__FAIL__" "401"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="zh_CN.UTF-8" \
+      TZ="Asia/Shanghai" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="" \
+      EXA_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Tavily (detected)"
+  assert_contains "$marker" "web_search_provider=tavily"
+}
+
+run_release_override_install_and_onboard_prefers_unique_ready_credential_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-perplexity.out"
+  marker="$fixture/onboard-web-search-perplexity.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "__FAIL__"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="C.UTF-8" \
+      TZ="UTC" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="" \
+      PERPLEXITY_API_KEY="perplexity-test-token" \
+      EXA_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Perplexity Search (detected credential)"
+  assert_contains "$marker" "web_search_provider=perplexity"
+}
+
+run_release_override_install_and_onboard_preserves_signal_source_when_multiple_credentials_exist_test() {
+  local fixture install_dir output_file marker
+  fixture="$(make_release_fixture "v0.1.2")"
+  trap 'rm -rf "$fixture"' RETURN
+  install_dir="$fixture/install"
+  output_file="$fixture/install-web-search-tavily-multi-credential.out"
+  marker="$fixture/onboard-web-search-tavily-multi-credential.log"
+  : >"$marker"
+  make_install_curl_stub_bin "$fixture" "success" "401"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fixture/fake-bin:$PATH" \
+      LANG="zh_CN.UTF-8" \
+      TZ="Asia/Shanghai" \
+      ONBOARD_MARKER="$marker" \
+      LOONGCLAW_INSTALL_RELEASE_BASE_URL="file://$fixture/releases" \
+      BRAVE_API_KEY="" \
+      TAVILY_API_KEY="tavily-test-token" \
+      PERPLEXITY_API_KEY="perplexity-test-token" \
+      EXA_API_KEY="" \
+      JINA_API_KEY="" \
+      JINA_AUTH_TOKEN="" \
+      LOONGCLAW_WEB_SEARCH_PROVIDER="" \
+      bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "Onboarding web search default: Tavily (detected)"
+  assert_contains "$marker" "web_search_provider=tavily"
 }
 
 run_checksum_mismatch_fails_test() {
@@ -549,9 +828,17 @@ run_standalone_linux_arm64_install_rejects_missing_glibc_test() {
 }
 
 run_release_override_install_and_onboard_test
+run_release_override_install_and_onboard_detects_duckduckgo_default_test
+run_release_override_install_and_onboard_prefers_tavily_for_domestic_hosts_test
+run_release_override_install_and_onboard_prefers_unique_ready_credential_test
+run_release_override_install_and_onboard_preserves_signal_source_when_multiple_credentials_exist_test
 run_checksum_mismatch_fails_test
 run_missing_release_guidance_test
 run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test
+run_termux_arm64_installs_android_release_test
+run_linux_guest_with_termux_env_is_not_termux_test
+run_linux_guest_with_termux_env_prefers_linux_release_test
+run_termux_x86_64_rejects_android_release_test
 run_version_at_least_falls_back_when_sort_version_is_unavailable_test
 run_version_at_least_rejects_older_version_with_sort_version_test
 run_detect_host_glibc_version_rejects_musl_ldd_output_test

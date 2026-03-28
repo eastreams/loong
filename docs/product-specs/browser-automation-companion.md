@@ -20,6 +20,9 @@ runtime into a heavyweight browser platform.
 - [ ] When the companion does ship, it reuses LoongClaw's existing capability,
       approval, policy, and audit model rather than exposing a raw shell-only
       browser CLI.
+- [ ] When the companion grows beyond the preview path, it attaches through the
+      daemon-owned gateway or equivalent service-owned node model rather than
+      creating a second long-lived runtime host.
 - [ ] The companion uses an isolated LoongClaw-managed browser profile by
       default instead of assuming access to the user's personal browser profile.
 - [ ] Any bundled or preinstalled helper skill for browser automation is
@@ -54,6 +57,8 @@ automation companion:
     instead of wedging the turn
 - the bundled `browser-companion-preview` managed skill acts as guidance on top
   of the runtime surface, not as the source of truth for runtime availability
+- the longer-term target is to promote the companion into a gateway-managed node
+  once explicit gateway service ownership lands
 
 The install/release lifecycle, `onboard` and `doctor` readiness integration,
 isolated browser profile management, stronger approval evidence UX, and broader
@@ -63,5 +68,5 @@ runtime packaging still remain planned work.
 
 - Replacing the shipped lightweight browser tools
 - Making heavy browser automation part of the default install path
-- WebChat, dashboard controls, or broader trigger automation
+- The broader Web UI surface or trigger automation beyond the browser companion scope
 - Arbitrary desktop automation outside the browser surface

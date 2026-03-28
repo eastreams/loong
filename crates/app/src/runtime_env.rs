@@ -54,6 +54,10 @@ pub fn initialize_runtime_environment(
         bool_env(config.tools.sessions.enabled),
     );
     set_env_var(
+        "LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION",
+        bool_env(config.tools.sessions.allow_mutation),
+    );
+    set_env_var(
         "LOONGCLAW_TOOL_MESSAGES_ENABLED",
         bool_env(config.tools.messages.enabled),
     );
@@ -207,6 +211,7 @@ mod tests {
             "LOONGCLAW_SHELL_DENY",
             "LOONGCLAW_SHELL_DEFAULT_MODE",
             "LOONGCLAW_FILE_ROOT",
+            "LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION",
             "LOONGCLAW_EXTERNAL_SKILLS_ENABLED",
             "LOONGCLAW_EXTERNAL_SKILLS_REQUIRE_DOWNLOAD_APPROVAL",
             "LOONGCLAW_EXTERNAL_SKILLS_ALLOWED_DOMAINS",
@@ -242,6 +247,7 @@ mod tests {
         config.memory.summary_max_chars = 900;
         config.memory.profile_note = Some("Imported NanoBot preferences".to_owned());
         config.tools.file_root = Some("/tmp/loongclaw-runtime-file-root".to_owned());
+        config.tools.sessions.allow_mutation = true;
         config.tools.browser.enabled = false;
         config.tools.browser.max_sessions = 4;
         config.tools.browser.max_links = 12;
@@ -285,6 +291,12 @@ mod tests {
         assert_eq!(
             std::env::var("LOONGCLAW_FILE_ROOT").ok().as_deref(),
             Some("/tmp/loongclaw-runtime-file-root")
+        );
+        assert_eq!(
+            std::env::var("LOONGCLAW_TOOL_SESSIONS_ALLOW_MUTATION")
+                .ok()
+                .as_deref(),
+            Some("true")
         );
         assert_eq!(
             std::env::var("LOONGCLAW_EXTERNAL_SKILLS_ENABLED")

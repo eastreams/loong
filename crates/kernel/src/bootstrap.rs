@@ -2,7 +2,10 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::plugin_ir::{PluginActivationPlan, PluginActivationStatus, PluginBridgeKind};
+use crate::{
+    PluginCompatibilityMode, PluginCompatibilityShim, PluginTrustTier,
+    plugin_ir::{PluginActivationPlan, PluginActivationStatus, PluginBridgeKind},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BootstrapPolicy {
@@ -13,6 +16,8 @@ pub struct BootstrapPolicy {
     pub allow_mcp_server_auto_apply: bool,
     pub allow_acp_bridge_auto_apply: bool,
     pub allow_acp_runtime_auto_apply: bool,
+    #[serde(default)]
+    pub block_unverified_high_risk_auto_apply: bool,
     pub enforce_ready_execution: bool,
     pub max_tasks: usize,
 }
@@ -27,6 +32,7 @@ impl Default for BootstrapPolicy {
             allow_mcp_server_auto_apply: false,
             allow_acp_bridge_auto_apply: false,
             allow_acp_runtime_auto_apply: false,
+            block_unverified_high_risk_auto_apply: false,
             enforce_ready_execution: false,
             max_tasks: 256,
         }
@@ -46,6 +52,12 @@ pub enum BootstrapTaskStatus {
 pub struct BootstrapTask {
     pub plugin_id: String,
     pub source_path: String,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
+    #[serde(default)]
+    pub compatibility_mode: PluginCompatibilityMode,
+    #[serde(default)]
+    pub compatibility_shim: Option<PluginCompatibilityShim>,
     pub bridge_kind: PluginBridgeKind,
     pub adapter_family: String,
     pub bootstrap_hint: String,
@@ -91,6 +103,9 @@ impl PluginBootstrapExecutor {
                 report.tasks.push(BootstrapTask {
                     plugin_id: candidate.plugin_id.clone(),
                     source_path: candidate.source_path.clone(),
+                    trust_tier: candidate.trust_tier,
+                    compatibility_mode: candidate.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
                     bridge_kind: candidate.bridge_kind,
                     adapter_family: candidate.adapter_family.clone(),
                     bootstrap_hint: candidate.bootstrap_hint.clone(),
@@ -105,6 +120,9 @@ impl PluginBootstrapExecutor {
                 report.tasks.push(BootstrapTask {
                     plugin_id: candidate.plugin_id.clone(),
                     source_path: candidate.source_path.clone(),
+                    trust_tier: candidate.trust_tier,
+                    compatibility_mode: candidate.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
                     bridge_kind: candidate.bridge_kind,
                     adapter_family: candidate.adapter_family.clone(),
                     bootstrap_hint: candidate.bootstrap_hint.clone(),
@@ -115,6 +133,28 @@ impl PluginBootstrapExecutor {
             }
             ready_handled = ready_handled.saturating_add(1);
 
+            if policy.block_unverified_high_risk_auto_apply
+                && matches!(candidate.trust_tier, PluginTrustTier::Unverified)
+                && plugin_bridge_is_high_risk_auto_apply(candidate.bridge_kind)
+            {
+                report.deferred_tasks = report.deferred_tasks.saturating_add(1);
+                report.tasks.push(BootstrapTask {
+                    plugin_id: candidate.plugin_id.clone(),
+                    source_path: candidate.source_path.clone(),
+                    trust_tier: candidate.trust_tier,
+                    compatibility_mode: candidate.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
+                    bridge_kind: candidate.bridge_kind,
+                    adapter_family: candidate.adapter_family.clone(),
+                    bootstrap_hint: candidate.bootstrap_hint.clone(),
+                    status: BootstrapTaskStatus::DeferredUnsupportedAutoApply,
+                    reason:
+                        "bridge is ready but auto-apply is blocked by bootstrap trust policy for unverified high-risk plugins"
+                            .to_owned(),
+                });
+                continue;
+            }
+
             if bridge_auto_apply_allowed(candidate.bridge_kind, policy) {
                 report.applied_tasks = report.applied_tasks.saturating_add(1);
                 report
@@ -123,6 +163,9 @@ impl PluginBootstrapExecutor {
                 report.tasks.push(BootstrapTask {
                     plugin_id: candidate.plugin_id.clone(),
                     source_path: candidate.source_path.clone(),
+                    trust_tier: candidate.trust_tier,
+                    compatibility_mode: candidate.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
                     bridge_kind: candidate.bridge_kind,
                     adapter_family: candidate.adapter_family.clone(),
                     bootstrap_hint: candidate.bootstrap_hint.clone(),
@@ -134,6 +177,9 @@ impl PluginBootstrapExecutor {
                 report.tasks.push(BootstrapTask {
                     plugin_id: candidate.plugin_id.clone(),
                     source_path: candidate.source_path.clone(),
+                    trust_tier: candidate.trust_tier,
+                    compatibility_mode: candidate.compatibility_mode,
+                    compatibility_shim: candidate.compatibility_shim.clone(),
                     bridge_kind: candidate.bridge_kind,
                     adapter_family: candidate.adapter_family.clone(),
                     bootstrap_hint: candidate.bootstrap_hint.clone(),
@@ -169,9 +215,23 @@ fn bridge_auto_apply_allowed(bridge: PluginBridgeKind, policy: &BootstrapPolicy)
     }
 }
 
+#[must_use]
+pub fn plugin_bridge_is_high_risk_auto_apply(bridge: PluginBridgeKind) -> bool {
+    matches!(
+        bridge,
+        PluginBridgeKind::ProcessStdio
+            | PluginBridgeKind::NativeFfi
+            | PluginBridgeKind::WasmComponent
+            | PluginBridgeKind::McpServer
+            | PluginBridgeKind::AcpBridge
+            | PluginBridgeKind::AcpRuntime
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PluginSourceKind;
     use crate::plugin_ir::{
         PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus, PluginBridgeKind,
     };
@@ -180,24 +240,49 @@ mod tests {
         PluginActivationPlan {
             total_plugins: 2,
             ready_plugins: 2,
+            setup_incomplete_plugins: 0,
             blocked_plugins: 0,
             candidates: vec![
                 PluginActivationCandidate {
                     plugin_id: "http-plugin".to_owned(),
                     source_path: "/tmp/http.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::Official,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::HttpJson,
                     adapter_family: "http-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
                     bootstrap_hint: "register http".to_owned(),
                 },
                 PluginActivationCandidate {
                     plugin_id: "ffi-plugin".to_owned(),
                     source_path: "/tmp/ffi.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::VerifiedCommunity,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::NativeFfi,
                     adapter_family: "rust-ffi-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
                     bootstrap_hint: "load ffi".to_owned(),
                 },
             ],
@@ -252,29 +337,109 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_tasks_preserve_compatibility_shim_context() {
+        let executor = PluginBootstrapExecutor::new();
+        let plan = PluginActivationPlan {
+            total_plugins: 1,
+            ready_plugins: 1,
+            setup_incomplete_plugins: 0,
+            blocked_plugins: 0,
+            candidates: vec![PluginActivationCandidate {
+                plugin_id: "openclaw-weather".to_owned(),
+                source_path: "/tmp/openclaw-weather/index.js".to_owned(),
+                source_kind: PluginSourceKind::EmbeddedSource,
+                package_root: "/tmp/openclaw-weather".to_owned(),
+                package_manifest_path: None,
+                trust_tier: PluginTrustTier::Unverified,
+                compatibility_mode: PluginCompatibilityMode::OpenClawModern,
+                compatibility_shim: Some(PluginCompatibilityShim {
+                    shim_id: "openclaw-modern-compat".to_owned(),
+                    family: "openclaw-modern-compat".to_owned(),
+                }),
+                compatibility_shim_support: None,
+                compatibility_shim_support_mismatch_reasons: Vec::new(),
+                bridge_kind: PluginBridgeKind::ProcessStdio,
+                adapter_family: "javascript-stdio-adapter".to_owned(),
+                slot_claims: Vec::new(),
+                diagnostic_findings: Vec::new(),
+                status: PluginActivationStatus::Ready,
+                reason: "ready".to_owned(),
+                missing_required_env_vars: Vec::new(),
+                missing_required_config_keys: Vec::new(),
+                bootstrap_hint:
+                    "enable compatibility shim `openclaw-modern-compat` (openclaw-modern-compat) and then spawn javascript worker".to_owned(),
+            }],
+        };
+        let policy = BootstrapPolicy {
+            allow_process_stdio_auto_apply: true,
+            ..BootstrapPolicy::default()
+        };
+
+        let report = executor.execute(&plan, &policy);
+
+        assert_eq!(report.tasks.len(), 1);
+        assert_eq!(
+            report.tasks[0].compatibility_mode,
+            PluginCompatibilityMode::OpenClawModern
+        );
+        assert_eq!(
+            report.tasks[0]
+                .compatibility_shim
+                .as_ref()
+                .map(|shim| shim.shim_id.as_str()),
+            Some("openclaw-modern-compat")
+        );
+    }
+
+    #[test]
     fn acp_bridge_and_runtime_auto_apply_are_gated_independently() {
         let executor = PluginBootstrapExecutor::new();
         let plan = PluginActivationPlan {
             total_plugins: 2,
             ready_plugins: 2,
+            setup_incomplete_plugins: 0,
             blocked_plugins: 0,
             candidates: vec![
                 PluginActivationCandidate {
                     plugin_id: "acp-bridge-plugin".to_owned(),
                     source_path: "/tmp/acp-bridge.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::VerifiedCommunity,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::AcpBridge,
                     adapter_family: "acp-bridge-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
                     bootstrap_hint: "register acp bridge".to_owned(),
                 },
                 PluginActivationCandidate {
                     plugin_id: "acpx-runtime-plugin".to_owned(),
                     source_path: "/tmp/acpx-runtime.rs".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::VerifiedCommunity,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
                     bridge_kind: PluginBridgeKind::AcpRuntime,
                     adapter_family: "acp-runtime-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
                     status: PluginActivationStatus::Ready,
                     reason: "ready".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
                     bootstrap_hint: "register acp runtime".to_owned(),
                 },
             ],
@@ -309,5 +474,73 @@ mod tests {
             "/tmp/acpx-runtime.rs".to_owned(),
             "acpx-runtime-plugin".to_owned()
         )));
+    }
+
+    #[test]
+    fn trust_policy_can_block_unverified_high_risk_auto_apply() {
+        let executor = PluginBootstrapExecutor::new();
+        let plan = PluginActivationPlan {
+            total_plugins: 1,
+            ready_plugins: 1,
+            setup_incomplete_plugins: 0,
+            blocked_plugins: 0,
+            candidates: vec![PluginActivationCandidate {
+                plugin_id: "ffi-plugin".to_owned(),
+                source_path: "/tmp/ffi.rs".to_owned(),
+                source_kind: PluginSourceKind::EmbeddedSource,
+                package_root: "/tmp".to_owned(),
+                package_manifest_path: None,
+                trust_tier: PluginTrustTier::Unverified,
+                compatibility_mode: PluginCompatibilityMode::Native,
+                compatibility_shim: None,
+                compatibility_shim_support: None,
+                compatibility_shim_support_mismatch_reasons: Vec::new(),
+                bridge_kind: PluginBridgeKind::NativeFfi,
+                adapter_family: "rust-ffi-adapter".to_owned(),
+                slot_claims: Vec::new(),
+                diagnostic_findings: Vec::new(),
+                status: PluginActivationStatus::Ready,
+                reason: "ready".to_owned(),
+                missing_required_env_vars: Vec::new(),
+                missing_required_config_keys: Vec::new(),
+                bootstrap_hint: "load ffi".to_owned(),
+            }],
+        };
+        let policy = BootstrapPolicy {
+            allow_native_ffi_auto_apply: true,
+            block_unverified_high_risk_auto_apply: true,
+            ..BootstrapPolicy::default()
+        };
+
+        let report = executor.execute(&plan, &policy);
+
+        assert_eq!(report.applied_tasks, 0);
+        assert_eq!(report.deferred_tasks, 1);
+        assert_eq!(report.tasks[0].trust_tier, PluginTrustTier::Unverified);
+        assert!(
+            report.tasks[0]
+                .reason
+                .contains("bootstrap trust policy for unverified high-risk plugins")
+        );
+    }
+
+    #[test]
+    fn bootstrap_task_deserializes_legacy_payload_without_compatibility_mode() {
+        let raw = r#"
+{
+  "plugin_id": "legacy-plugin",
+  "source_path": "/tmp/legacy-plugin.py",
+  "bridge_kind": "http_json",
+  "adapter_family": "http-adapter",
+  "bootstrap_hint": "register http adapter",
+  "status": "applied",
+  "reason": "legacy payload"
+}
+"#;
+
+        let task: BootstrapTask =
+            serde_json::from_str(raw).expect("legacy bootstrap task should deserialize");
+
+        assert_eq!(task.compatibility_mode, PluginCompatibilityMode::Native);
     }
 }
