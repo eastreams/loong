@@ -2576,7 +2576,7 @@ fn runtime_capability_plan_emits_memory_stage_profile_payload() {
 
     let candidate_a_path = root.join("artifacts/runtime-capability-memory-stage-profile-a.json");
     let candidate_b_path = root.join("artifacts/runtime-capability-memory-stage-profile-b.json");
-    propose_runtime_capability_variant_with_target(
+    let candidate_a = propose_runtime_capability_variant_with_target(
         &root,
         &run_a_path,
         "memory-stage-profile-a",
@@ -2586,7 +2586,7 @@ fn runtime_capability_plan_emits_memory_stage_profile_payload() {
         &["memory_read"],
         &["memory", "pipeline"],
     );
-    propose_runtime_capability_variant_with_target(
+    let candidate_b = propose_runtime_capability_variant_with_target(
         &root,
         &run_b_path,
         "memory-stage-profile-b",
@@ -2651,54 +2651,81 @@ fn runtime_capability_plan_emits_memory_stage_profile_payload() {
             .and_then(Value::as_str),
         Some(plan.planned_artifact.artifact_id.as_str())
     );
-    assert!(
+    assert_eq!(
         planned_payload
             .pointer("/profile/summary")
-            .and_then(Value::as_str)
-            .is_some(),
-        "payload should include the profile summary"
+            .and_then(Value::as_str),
+        Some("Promote governed memory pipeline intent into a reusable profile")
     );
-    assert!(
+    assert_eq!(
         planned_payload
             .pointer("/profile/review_scope")
-            .and_then(Value::as_str)
-            .is_some(),
-        "payload should include the profile review scope"
+            .and_then(Value::as_str),
+        Some("Governed memory pipeline promotion intent only")
     );
-    assert!(
-        planned_payload
-            .pointer("/profile/required_capabilities")
-            .and_then(Value::as_array)
-            .is_some(),
-        "payload should include the profile required capabilities"
-    );
-    assert!(
-        planned_payload
-            .pointer("/profile/tags")
-            .and_then(Value::as_array)
-            .is_some(),
-        "payload should include the profile tags"
-    );
-    assert!(
+    let required_capabilities = planned_payload
+        .pointer("/profile/required_capabilities")
+        .and_then(Value::as_array)
+        .expect("payload should include the profile required capabilities")
+        .iter()
+        .map(|value| value.as_str().expect("required capability should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(required_capabilities, vec!["memory_read"]);
+    let tags = planned_payload
+        .pointer("/profile/tags")
+        .and_then(Value::as_array)
+        .expect("payload should include the profile tags")
+        .iter()
+        .map(|value| value.as_str().expect("tag should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(tags, vec!["memory", "pipeline"]);
+    assert_eq!(
         planned_payload
             .pointer("/provenance/family_id")
-            .and_then(Value::as_str)
-            .is_some(),
-        "payload should include the provenance family id"
+            .and_then(Value::as_str),
+        Some(family.family_id.as_str())
+    );
+    let accepted_candidate_ids = planned_payload
+        .pointer("/provenance/accepted_candidate_ids")
+        .and_then(Value::as_array)
+        .expect("payload should include the accepted candidate ids")
+        .iter()
+        .map(|value| value.as_str().expect("candidate id should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        accepted_candidate_ids,
+        vec![
+            candidate_a.candidate_id.as_str(),
+            candidate_b.candidate_id.as_str(),
+        ]
+    );
+    let changed_surfaces = planned_payload
+        .pointer("/provenance/evidence_digest/changed_surfaces")
+        .and_then(Value::as_array)
+        .expect("payload should include the compact changed-surfaces digest")
+        .iter()
+        .map(|value| value.as_str().expect("changed surface should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(changed_surfaces, Vec::<&str>::new());
+
+    let rendered =
+        loongclaw_daemon::runtime_capability_cli::render_runtime_capability_promotion_plan_text(
+            &plan,
+        );
+    assert!(
+        rendered.contains(&format!(
+            "planned_payload=profile_id={}",
+            plan.planned_artifact.artifact_id
+        )),
+        "rendered text should mention the payload compactly when present"
     );
     assert!(
-        planned_payload
-            .pointer("/provenance/accepted_candidate_ids")
-            .and_then(Value::as_array)
-            .is_some(),
-        "payload should include the accepted candidate ids"
+        !rendered.contains("planned_payload=null"),
+        "rendered text should omit null planned payload noise"
     );
     assert!(
-        planned_payload
-            .pointer("/provenance/evidence_digest/changed_surfaces")
-            .and_then(Value::as_array)
-            .is_some(),
-        "payload should include the compact changed-surfaces digest"
+        !rendered.contains("memory_stage_profile:memory_stage_profile"),
+        "rendered text should not repeat the payload discriminator"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -2781,6 +2808,10 @@ fn runtime_capability_plan_omits_memory_stage_profile_payload_for_other_targets(
     )
     .expect("runtime capability plan should succeed");
     let payload = serde_json::to_value(&plan).expect("serialize runtime capability plan");
+    let rendered =
+        loongclaw_daemon::runtime_capability_cli::render_runtime_capability_promotion_plan_text(
+            &plan,
+        );
 
     assert!(
         payload.pointer("/planned_payload").is_some(),
@@ -2791,6 +2822,10 @@ fn runtime_capability_plan_omits_memory_stage_profile_payload_for_other_targets(
             .pointer("/planned_payload")
             .is_some_and(Value::is_null),
         "non-memory targets should serialize planned_payload as null"
+    );
+    assert!(
+        !rendered.contains("planned_payload="),
+        "non-memory targets should not render a planned payload line"
     );
 
     fs::remove_dir_all(&root).ok();

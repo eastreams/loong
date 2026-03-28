@@ -1726,7 +1726,7 @@ fn build_runtime_capability_promotion_planned_payload(
 pub fn render_runtime_capability_promotion_plan_text(
     report: &RuntimeCapabilityPromotionPlanReport,
 ) -> String {
-    [
+    let mut lines = vec![
         format!("family_id={}", report.family_id),
         format!("promotable={}", report.promotable),
         format!(
@@ -1778,10 +1778,6 @@ pub fn render_runtime_capability_promotion_plan_text(
             render_string_values_with_separator(&report.rollback_hints, " | ")
         ),
         format!(
-            "planned_payload={}",
-            render_runtime_capability_planned_payload_summary(report.planned_payload.as_ref())
-        ),
-        format!(
             "provenance_candidate_ids={}",
             render_string_values(&report.provenance.candidate_ids)
         ),
@@ -1800,19 +1796,26 @@ pub fn render_runtime_capability_promotion_plan_text(
                 " | "
             )
         ),
-    ]
-    .join("\n")
+    ];
+
+    if let Some(planned_payload) = render_runtime_capability_planned_payload_summary(
+        report.planned_payload.as_ref(),
+    ) {
+        lines.push(format!("planned_payload={planned_payload}"));
+    }
+
+    lines.join("\n")
 }
 
 fn render_runtime_capability_planned_payload_summary(
     payload: Option<&RuntimeCapabilityPromotionPlannedPayload>,
-) -> String {
+) -> Option<String> {
     match payload {
-        Some(payload) => format!(
-            "memory_stage_profile:{}:{}",
-            payload.memory_stage_profile.artifact_kind, payload.memory_stage_profile.profile.id
-        ),
-        None => "null".to_owned(),
+        Some(payload) => Some(format!(
+            "profile_id={}",
+            payload.memory_stage_profile.profile.id
+        )),
+        None => None,
     }
 }
 
