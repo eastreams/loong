@@ -22,12 +22,16 @@ use tokio::{
     task::JoinHandle,
 };
 
+use crate::mvp::acp::AcpSessionManager;
+use crate::mvp::config::LoongClawConfig;
 use crate::{
     CliResult, build_channels_cli_json_payload,
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
 };
 
+use super::api_events::handle_events;
 use super::api_health::handle_health;
+use super::event_bus::GatewayEventBus;
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_operator_summary_read_model,
@@ -44,11 +48,72 @@ const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
 
 #[derive(Clone)]
-struct GatewayControlAppState {
-    runtime_dir: PathBuf,
-    bearer_token: String,
-    channel_inventory: Arc<GatewayChannelInventoryReadModel>,
-    runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
+pub(crate) struct GatewayControlAppState {
+    pub(crate) runtime_dir: PathBuf,
+    pub(crate) bearer_token: String,
+    pub(crate) channel_inventory: Arc<GatewayChannelInventoryReadModel>,
+    pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
+    pub(crate) event_bus: Option<GatewayEventBus>,
+    #[allow(dead_code)] // wired in task 4/5
+    pub(crate) acp_manager: Option<Arc<AcpSessionManager>>,
+    #[allow(dead_code)] // wired in task 4/5
+    pub(crate) config: Option<LoongClawConfig>,
+}
+
+impl GatewayControlAppState {
+    /// Minimal state for tests that don't need ACP.
+    pub fn test_minimal(bearer_token: String) -> Self {
+        use super::read_models::*;
+        use serde_json::json;
+
+        let channel_inventory = GatewayChannelInventoryReadModel {
+            config: String::new(),
+            schema: GatewayChannelInventorySchema {
+                version: 1,
+                primary_channel_view: "channel_surfaces",
+                catalog_view: "channel_catalog",
+                legacy_channel_views: &[],
+            },
+            channels: vec![],
+            catalog_only_channels: vec![],
+            channel_catalog: vec![],
+            channel_surfaces: vec![],
+        };
+        let runtime_snapshot = GatewayRuntimeSnapshotReadModel {
+            config: String::new(),
+            schema: GatewayRuntimeSnapshotSchema {
+                version: 1,
+                surface: "test",
+                purpose: "test",
+            },
+            provider: json!({}),
+            context_engine: json!({}),
+            memory_system: json!({}),
+            acp: json!({}),
+            channels: GatewayRuntimeSnapshotChannelsReadModel {
+                enabled_channel_ids: vec![],
+                enabled_service_channel_ids: vec![],
+                inventory: channel_inventory.clone(),
+            },
+            tool_runtime: json!({}),
+            tools: GatewayRuntimeSnapshotToolsReadModel {
+                visible_tool_count: 0,
+                visible_tool_names: vec![],
+                capability_snapshot_sha256: String::new(),
+                capability_snapshot: String::new(),
+            },
+            external_skills: json!({}),
+        };
+        Self {
+            runtime_dir: PathBuf::from("/tmp/test"),
+            bearer_token,
+            channel_inventory: Arc::new(channel_inventory),
+            runtime_snapshot: Arc::new(runtime_snapshot),
+            event_bus: None,
+            acp_manager: None,
+            config: None,
+        }
+    }
 }
 
 struct GatewayControlSurfaceRuntime {
@@ -169,6 +234,9 @@ pub async fn start_gateway_control_surface(
         bearer_token,
         channel_inventory: Arc::new(channel_inventory),
         runtime_snapshot: Arc::new(runtime_snapshot),
+        event_bus: None,
+        acp_manager: None,
+        config: None,
     };
     let app_state = Arc::new(app_state);
     let router = build_gateway_control_router(app_state);
@@ -214,6 +282,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             get(handle_gateway_operator_summary),
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
+        .route("/v1/events", get(handle_events))
         .route("/health", get(handle_health))
         .with_state(app_state)
 }
@@ -361,6 +430,13 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         result |= x ^ y;
     }
     result == 0
+}
+
+pub(crate) fn authorize_request_from_state(
+    headers: &HeaderMap,
+    app_state: &GatewayControlAppState,
+) -> CliResult<()> {
+    authorize_request(headers, &app_state.bearer_token)
 }
 
 fn authorize_request(headers: &HeaderMap, expected_token: &str) -> CliResult<()> {
@@ -624,4 +700,18 @@ fn json_error(status_code: StatusCode, code: &str, message: &str) -> GatewayCont
 #[doc(hidden)]
 pub fn build_gateway_health_test_router() -> Router {
     Router::new().route("/health", get(handle_health))
+}
+
+/// Minimal router for SSE events endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_events_test_router(
+    bearer_token: String,
+    event_bus: GatewayEventBus,
+) -> Router {
+    let mut state = GatewayControlAppState::test_minimal(bearer_token);
+    state.event_bus = Some(event_bus);
+    let app_state = Arc::new(state);
+    Router::new()
+        .route("/v1/events", get(handle_events))
+        .with_state(app_state)
 }

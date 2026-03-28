@@ -88,6 +88,7 @@ mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;
 mod feishu_cli;
+mod gateway_api_events;
 mod gateway_api_health;
 mod gateway_owner_state;
 mod gateway_read_models;
