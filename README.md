@@ -338,10 +338,11 @@ instability from true upstream unavailability.
    - dashboard
    - onboarding
 
-   The initial product mode stays same-origin and local by default.
+   The initial product mode stays same-origin and localhost-bound by default.
 
-   That local-first boundary is the current operating slice, not the long-term
-   architecture endpoint.
+   That default bind policy is a security boundary for the current operating
+   slice, not a statement that future gateway/service expansion is out of
+   scope or the long-term architecture endpoint.
 
    The long-term direction is to keep Web UI attached to the same daemon-owned
    gateway/service runtime rather than creating a second assistant runtime.
