@@ -2555,19 +2555,17 @@ fn runtime_capability_plan_uses_memory_stage_profile_dry_run_artifact_surface() 
 #[test]
 fn runtime_capability_plan_emits_memory_stage_profile_payload() {
     let root = unique_temp_dir("loongclaw-runtime-capability-plan-memory-stage-profile-payload");
-    let config_path = write_runtime_capability_config(&root);
+    write_runtime_capability_config(&root);
 
-    let (run_a_path, _) = finish_runtime_experiment_variant(
+    let (run_a_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(
         &root,
-        &config_path,
         "memory-stage-profile-a",
         -0.2,
         &[],
         loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
     );
-    let (run_b_path, _) = finish_runtime_experiment_variant(
+    let (run_b_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(
         &root,
-        &config_path,
         "memory-stage-profile-b",
         -0.4,
         &[],
@@ -2706,7 +2704,10 @@ fn runtime_capability_plan_emits_memory_stage_profile_payload() {
         .iter()
         .map(|value| value.as_str().expect("changed surface should be a string"))
         .collect::<Vec<_>>();
-    assert_eq!(changed_surfaces, Vec::<&str>::new());
+    assert_eq!(
+        changed_surfaces,
+        vec!["context_engine_compaction", "memory_policy"]
+    );
 
     let rendered =
         loongclaw_daemon::runtime_capability_cli::render_runtime_capability_promotion_plan_text(
