@@ -29,7 +29,7 @@
 
 ## Implementation Notes
 
-- Treat this plan as the first implementation slice under [`docs/plans/2026-03-27-bash-exec-basic-tool-design.md`](docs/plans/2026-03-27-bash-exec-basic-tool-design.md), not as the full implementation of issue `#637`.
+- Treat this plan as the first implementation slice under [`2026-03-27-bash-exec-basic-tool-design.md`](2026-03-27-bash-exec-basic-tool-design.md), not as the full implementation of issue `#637`.
 - Default to non-login shell execution via `bash -c <command>`.
 - Add a config-controlled login-shell option at `tools.bash.login_shell`; when it is explicitly enabled, switch execution to `bash -lc <command>`.
 - Probe order for Bash runtime:
