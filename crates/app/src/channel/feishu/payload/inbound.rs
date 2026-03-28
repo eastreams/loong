@@ -5,6 +5,7 @@ use serde_json::{Map, Value};
 use crate::CliResult;
 use crate::channel::{
     ChannelDeliveryResource, ChannelOutboundTarget, ChannelPlatform, ChannelSession,
+    feishu::feishu_allowlist_allows_chat,
 };
 use crate::crypto::timing_safe_eq;
 use crate::feishu::FeishuUserPrincipal;
@@ -179,7 +180,7 @@ pub(in crate::channel::feishu) fn parse_feishu_inbound_payload(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "feishu message event missing message.chat_id".to_owned())?;
-    if !allowed_chat_ids.contains(chat_id) {
+    if !feishu_allowlist_allows_chat(allowed_chat_ids, chat_id) {
         return Ok(FeishuWebhookAction::Ignore);
     }
 
@@ -445,7 +446,7 @@ fn is_allowed_feishu_card_callback_chat(
     else {
         return false;
     };
-    allowed_chat_ids.contains(open_chat_id)
+    feishu_allowlist_allows_chat(allowed_chat_ids, open_chat_id)
 }
 
 fn parse_feishu_card_callback_action(

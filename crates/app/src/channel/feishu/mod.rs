@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -21,6 +22,25 @@ mod websocket;
 use adapter::FeishuAdapter;
 use payload::normalize_webhook_path;
 use webhook::{FeishuWebhookState, feishu_webhook_handler};
+
+const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
+
+pub(in crate::channel) fn feishu_allowlist_allows_all(allowed_chat_ids: &BTreeSet<String>) -> bool {
+    allowed_chat_ids
+        .iter()
+        .any(|chat_id| chat_id.trim() == FEISHU_ALLOWLIST_ALL_SENTINEL)
+}
+
+pub(in crate::channel) fn feishu_allowlist_allows_chat(
+    allowed_chat_ids: &BTreeSet<String>,
+    chat_id: &str,
+) -> bool {
+    let chat_id = chat_id.trim();
+    if chat_id.is_empty() {
+        return false;
+    }
+    feishu_allowlist_allows_all(allowed_chat_ids) || allowed_chat_ids.contains(chat_id)
+}
 
 pub(super) async fn run_feishu_send(
     config: &ResolvedFeishuChannelConfig,
@@ -155,6 +175,28 @@ mod tests {
     };
     use std::sync::Arc;
     use tokio::sync::Mutex;
+
+    fn set(ids: &[&str]) -> BTreeSet<String> {
+        ids.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn allowlist_allows_all_when_wildcard_present() {
+        assert!(feishu_allowlist_allows_all(&set(&["oc_demo", "*"])));
+        assert!(feishu_allowlist_allows_all(&set(&["  *  "])));
+        assert!(!feishu_allowlist_allows_all(&set(&["oc_demo"])));
+    }
+
+    #[test]
+    fn allowlist_allows_chat_for_exact_and_wildcard_matches() {
+        let exact_only = set(&["oc_demo"]);
+        assert!(feishu_allowlist_allows_chat(&exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(&exact_only, "oc_other"));
+        assert!(!feishu_allowlist_allows_chat(&exact_only, " "));
+
+        let wildcard = set(&["*"]);
+        assert!(feishu_allowlist_allows_chat(&wildcard, "oc_other"));
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockRequest {
