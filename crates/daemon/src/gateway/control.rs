@@ -27,6 +27,7 @@ use crate::{
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
 };
 
+use super::api_health::handle_health;
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
     GatewayRuntimeSnapshotReadModel, build_operator_summary_read_model,
@@ -213,6 +214,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
             get(handle_gateway_operator_summary),
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
+        .route("/health", get(handle_health))
         .with_state(app_state)
 }
 
@@ -616,4 +618,10 @@ fn json_error(status_code: StatusCode, code: &str, message: &str) -> GatewayCont
         }
     });
     json_response(status_code, payload)
+}
+
+/// Minimal router for health endpoint integration tests.
+#[doc(hidden)]
+pub fn build_gateway_health_test_router() -> Router {
+    Router::new().route("/health", get(handle_health))
 }

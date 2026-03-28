@@ -1,3 +1,4 @@
+pub(crate) mod api_health;
 pub mod client;
 pub mod control;
 pub mod read_models;

@@ -2217,6 +2217,7 @@ dependencies = [
  "time",
  "tokio",
  "toml",
+ "tower",
  "wat",
 ]
 

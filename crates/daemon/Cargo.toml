@@ -89,6 +89,7 @@ path = "src/main.rs"
 [dev-dependencies]
 loongclaw-spec = { path = "../spec", features = ["test-hooks"] }
 sha2.workspace = true
+tower = { version = "0.5", features = ["util"] }
 wat = "1"
 
 [lints]
