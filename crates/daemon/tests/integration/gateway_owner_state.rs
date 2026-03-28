@@ -12,6 +12,7 @@ use std::{
 
 use loongclaw_daemon::{
     gateway::{
+        client::{GatewayLocalClient, GatewayStopResponseOutcome},
         service::{
             run_gateway_run_with_hooks_for_test,
             run_multi_channel_serve_gateway_compat_with_hooks_for_test,
@@ -460,4 +461,101 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
     assert_eq!(stopped_status.port, None);
     assert_eq!(stopped_status.token_path, None);
     assert!(!token_path.exists());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
+    let runtime_dir = unique_runtime_dir("local-client");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let expected_port = running_status
+        .port
+        .expect("gateway control surface port should be persisted");
+    let client =
+        GatewayLocalClient::discover(runtime_dir.as_path()).expect("discover gateway local client");
+
+    assert_eq!(client.discovery().socket_address().port(), expected_port);
+    assert_eq!(
+        client.discovery().base_url(),
+        format!("http://127.0.0.1:{expected_port}")
+    );
+
+    let status = client.status().await.expect("read gateway status");
+    assert_eq!(status.phase, "running");
+    assert_eq!(status.bind_address.as_deref(), Some("127.0.0.1"));
+
+    let channels = client.channels().await.expect("read gateway channels");
+    assert_eq!(
+        channels["schema"]["primary_channel_view"],
+        "channel_surfaces"
+    );
+    assert_eq!(channels["schema"]["catalog_view"], "channel_catalog");
+
+    let runtime_snapshot = client
+        .runtime_snapshot()
+        .await
+        .expect("read gateway runtime snapshot");
+    assert_eq!(runtime_snapshot["schema"]["surface"], "runtime_snapshot");
+
+    let operator_summary = client
+        .operator_summary()
+        .await
+        .expect("read gateway operator summary");
+    assert_eq!(operator_summary.owner.phase, "running");
+    assert_eq!(
+        operator_summary.control_surface.base_url.as_deref(),
+        Some(client.discovery().base_url())
+    );
+    assert!(operator_summary.control_surface.loopback_only);
+    assert_eq!(
+        operator_summary.channels.enabled_service_channel_count,
+        runtime_snapshot["channels"]["enabled_service_channel_ids"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or_default()
+    );
+    assert_eq!(
+        operator_summary.runtime.visible_tool_count,
+        runtime_snapshot["tools"]["visible_tool_count"]
+            .as_u64()
+            .map(|value| value as usize)
+            .unwrap_or_default()
+    );
+
+    let stop = client.stop().await.expect("request gateway stop");
+    assert_eq!(stop.outcome, GatewayStopResponseOutcome::Requested);
+
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop after local client stop")
+        .expect("join gateway run after local client stop")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+
+    let stopped_status = load_gateway_owner_status(runtime_dir.as_path())
+        .expect("stopped gateway status should be present");
+    assert_eq!(stopped_status.phase, "stopped");
+    assert!(!stopped_status.running);
 }

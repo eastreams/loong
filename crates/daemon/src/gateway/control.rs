@@ -23,10 +23,15 @@ use tokio::{
 };
 
 use crate::{
-    CliResult, build_channels_cli_json_payload, build_runtime_snapshot_cli_json_payload,
+    CliResult, build_channels_cli_json_payload,
     collect_runtime_snapshot_cli_state_from_loaded_config, mvp, supervisor::LoadedSupervisorConfig,
 };
 
+use super::read_models::{
+    GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
+    GatewayRuntimeSnapshotReadModel, build_operator_summary_read_model,
+    build_runtime_snapshot_read_model,
+};
 use super::state::{
     GatewayControlSurfaceBinding, GatewayStopRequestOutcome, gateway_control_token_path,
     load_gateway_owner_status, request_gateway_stop,
@@ -41,8 +46,8 @@ type GatewayControlJsonResponse = (StatusCode, Json<Value>);
 struct GatewayControlAppState {
     runtime_dir: PathBuf,
     bearer_token: String,
-    channels_payload: Arc<Value>,
-    runtime_snapshot_payload: Arc<Value>,
+    channel_inventory: Arc<GatewayChannelInventoryReadModel>,
+    runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
 }
 
 struct GatewayControlSurfaceRuntime {
@@ -119,8 +124,8 @@ pub async fn start_gateway_control_surface(
     runtime_dir: &Path,
     loaded_config: &LoadedSupervisorConfig,
 ) -> CliResult<GatewayControlSurface> {
-    let channels_payload = build_gateway_channels_payload(loaded_config)?;
-    let runtime_snapshot_payload = build_gateway_runtime_snapshot_payload(loaded_config)?;
+    let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
+    let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
     let bearer_token = new_gateway_control_bearer_token();
     let token_path = gateway_control_token_path(runtime_dir);
 
@@ -161,8 +166,8 @@ pub async fn start_gateway_control_surface(
     let app_state = GatewayControlAppState {
         runtime_dir: runtime_dir.to_path_buf(),
         bearer_token,
-        channels_payload: Arc::new(channels_payload),
-        runtime_snapshot_payload: Arc::new(runtime_snapshot_payload),
+        channel_inventory: Arc::new(channel_inventory),
+        runtime_snapshot: Arc::new(runtime_snapshot),
     };
     let app_state = Arc::new(app_state);
     let router = build_gateway_control_router(app_state);
@@ -202,6 +207,10 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         .route(
             "/api/gateway/runtime-snapshot",
             get(handle_gateway_runtime_snapshot),
+        )
+        .route(
+            "/api/gateway/operator-summary",
+            get(handle_gateway_operator_summary),
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
         .with_state(app_state)
@@ -243,8 +252,18 @@ async fn handle_gateway_channels(
         return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
     }
 
-    let payload = app_state.channels_payload.as_ref().clone();
-    json_response(StatusCode::OK, payload)
+    let payload = serialize_json_value(
+        app_state.channel_inventory.as_ref(),
+        "gateway channels payload",
+    );
+    match payload {
+        Ok(payload) => json_response(StatusCode::OK, payload),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "serialize_failed",
+            error.as_str(),
+        ),
+    }
 }
 
 async fn handle_gateway_runtime_snapshot(
@@ -255,8 +274,51 @@ async fn handle_gateway_runtime_snapshot(
         return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
     }
 
-    let payload = app_state.runtime_snapshot_payload.as_ref().clone();
-    json_response(StatusCode::OK, payload)
+    let payload = serialize_json_value(
+        app_state.runtime_snapshot.as_ref(),
+        "gateway runtime snapshot payload",
+    );
+    match payload {
+        Ok(payload) => json_response(StatusCode::OK, payload),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "serialize_failed",
+            error.as_str(),
+        ),
+    }
+}
+
+async fn handle_gateway_operator_summary(
+    headers: HeaderMap,
+    State(app_state): State<Arc<GatewayControlAppState>>,
+) -> GatewayControlJsonResponse {
+    if let Err(error) = authorize_request(&headers, app_state.bearer_token.as_str()) {
+        return json_error(StatusCode::UNAUTHORIZED, "unauthorized", error.as_str());
+    }
+
+    let status = load_gateway_owner_status(app_state.runtime_dir.as_path());
+    let Some(status) = status else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "status_unavailable",
+            "gateway owner status is unavailable",
+        );
+    };
+
+    let summary = build_gateway_operator_summary_read_model(
+        &status,
+        app_state.channel_inventory.as_ref(),
+        app_state.runtime_snapshot.as_ref(),
+    );
+    let payload = serialize_json_value(&summary, "gateway operator summary payload");
+    match payload {
+        Ok(payload) => json_response(StatusCode::OK, payload),
+        Err(error) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "serialize_failed",
+            error.as_str(),
+        ),
+    }
 }
 
 async fn handle_gateway_stop(
@@ -321,18 +383,40 @@ fn authorize_request(headers: &HeaderMap, expected_token: &str) -> CliResult<()>
     Ok(())
 }
 
-fn build_gateway_channels_payload(loaded_config: &LoadedSupervisorConfig) -> CliResult<Value> {
-    let config_path = loaded_config.resolved_path.display().to_string();
-    let inventory = mvp::channel::channel_inventory(&loaded_config.config);
-    let payload = build_channels_cli_json_payload(config_path.as_str(), &inventory);
-    serialize_json_value(&payload, "gateway channels payload")
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut result = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
 }
 
-fn build_gateway_runtime_snapshot_payload(
+fn build_gateway_channel_inventory_read_model(
     loaded_config: &LoadedSupervisorConfig,
-) -> CliResult<Value> {
+) -> CliResult<GatewayChannelInventoryReadModel> {
+    let config_path = loaded_config.resolved_path.display().to_string();
+    let inventory = mvp::channel::channel_inventory(&loaded_config.config);
+    let read_model = build_channels_cli_json_payload(config_path.as_str(), &inventory);
+    Ok(read_model)
+}
+
+fn build_gateway_runtime_snapshot_read_model(
+    loaded_config: &LoadedSupervisorConfig,
+) -> CliResult<GatewayRuntimeSnapshotReadModel> {
     let snapshot = collect_runtime_snapshot_cli_state_from_loaded_config(loaded_config)?;
-    build_runtime_snapshot_cli_json_payload(&snapshot)
+    let read_model = build_runtime_snapshot_read_model(&snapshot);
+    Ok(read_model)
+}
+
+fn build_gateway_operator_summary_read_model(
+    status: &super::state::GatewayOwnerStatus,
+    channel_inventory: &GatewayChannelInventoryReadModel,
+    runtime_snapshot: &GatewayRuntimeSnapshotReadModel,
+) -> GatewayOperatorSummaryReadModel {
+    build_operator_summary_read_model(status, channel_inventory, runtime_snapshot)
 }
 
 fn serialize_json_value<T: Serialize>(value: &T, context: &str) -> CliResult<Value> {

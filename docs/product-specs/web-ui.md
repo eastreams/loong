@@ -42,8 +42,14 @@ future paired clients.
 
 The current gateway slice already provides a localhost-only authenticated
 control surface for gateway owner status, channel inventory, runtime snapshot,
-and cooperative stop. The Web UI should consume that control surface instead of
-inventing a second browser-only runtime contract.
+operator summary, and cooperative stop. The Web UI should consume that control
+surface instead of inventing a second browser-only runtime contract.
+
+The current daemon slice also includes a reusable localhost discovery/client
+contract that validates loopback binding, loads the local bearer token, and
+offers route-scoped helpers for the current gateway API. The Web UI dashboard
+path should build on that contract instead of reading `status.json` and the
+control token file independently.
 
 ## Acceptance Criteria
 
