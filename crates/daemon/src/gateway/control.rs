@@ -31,6 +31,7 @@ use crate::{
 
 use super::api_events::handle_events;
 use super::api_health::handle_health;
+use super::api_turn::handle_turn;
 use super::event_bus::GatewayEventBus;
 use super::read_models::{
     GatewayChannelInventoryReadModel, GatewayOperatorSummaryReadModel,
@@ -54,9 +55,7 @@ pub(crate) struct GatewayControlAppState {
     pub(crate) channel_inventory: Arc<GatewayChannelInventoryReadModel>,
     pub(crate) runtime_snapshot: Arc<GatewayRuntimeSnapshotReadModel>,
     pub(crate) event_bus: Option<GatewayEventBus>,
-    #[allow(dead_code)] // wired in task 4/5
     pub(crate) acp_manager: Option<Arc<AcpSessionManager>>,
-    #[allow(dead_code)] // wired in task 4/5
     pub(crate) config: Option<LoongClawConfig>,
 }
 
@@ -283,6 +282,7 @@ fn build_gateway_control_router(app_state: Arc<GatewayControlAppState>) -> Route
         )
         .route("/api/gateway/stop", post(handle_gateway_stop))
         .route("/v1/events", get(handle_events))
+        .route("/v1/turn", post(handle_turn))
         .route("/health", get(handle_health))
         .with_state(app_state)
 }
