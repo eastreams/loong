@@ -2151,19 +2151,19 @@ mod tests {
             config.feishu.app_secret_env.as_deref(),
             Some("FEISHU_APP_SECRET")
         );
-        assert_eq!(
-            config.feishu.verification_token_env.as_deref(),
-            Some("FEISHU_VERIFICATION_TOKEN")
+        assert!(
+            config.feishu.verification_token_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook verification_token_env"
         );
-        assert_eq!(
-            config.feishu.encrypt_key_env.as_deref(),
-            Some("FEISHU_ENCRYPT_KEY")
+        assert!(
+            config.feishu.encrypt_key_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook encrypt_key_env"
         );
         assert_eq!(
             config.matrix.access_token_env.as_deref(),
             Some("MATRIX_ACCESS_TOKEN")
         );
-        assert_eq!(fixes.len(), 6);
+        assert_eq!(fixes.len(), 4);
     }
 
     #[test]
