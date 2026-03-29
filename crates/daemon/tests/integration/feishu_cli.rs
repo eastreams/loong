@@ -3291,6 +3291,64 @@ async fn feishu_doc_create_uses_user_grant_token_and_inserts_initial_content() {
 }
 
 #[tokio::test]
+async fn feishu_doc_create_reports_doc_write_hint_when_only_message_write_scope_exists() {
+    let temp_dir = temp_feishu_cli_dir("doc-create-missing-doc-write");
+    std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+    let config_path = write_sample_feishu_config(&temp_dir);
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let mut grant = sample_grant(
+        "feishu_main",
+        "ou_123",
+        "u-token-doc-create",
+        "r-token",
+        now_s,
+    );
+
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "im:message",
+    ]);
+
+    store.save_grant(&grant).expect("seed grant");
+
+    let error = loongclaw_daemon::feishu_cli::execute_feishu_doc_create(
+        &loongclaw_daemon::feishu_cli::FeishuDocCreateArgs {
+            grant: loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: true,
+                },
+                open_id: Some("ou_123".to_owned()),
+            },
+            title: Some("Release Plan".to_owned()),
+            folder_token: None,
+            content: Some("# Release Plan".to_owned()),
+            content_path: None,
+            content_type: Some("markdown".to_owned()),
+        },
+    )
+    .await
+    .expect_err("doc create should reject grants without a confirmed doc write scope");
+
+    assert!(
+        error.contains(
+            "loongclaw feishu doc create requires at least one Feishu scope [docx:document]"
+        ),
+        "error={error}"
+    );
+    assert!(
+        error.contains("loongclaw feishu auth start --account feishu_main --capability doc-write"),
+        "error={error}"
+    );
+    assert!(
+        !error.contains("--capability message-write"),
+        "error={error}"
+    );
+}
+
+#[tokio::test]
 async fn feishu_doc_create_reads_content_path_and_infers_markdown_type() {
     let temp_dir = temp_feishu_cli_dir("doc-create-content-path");
     std::fs::create_dir_all(&temp_dir).expect("create temp dir");

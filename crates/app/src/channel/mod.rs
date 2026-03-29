@@ -226,7 +226,7 @@ mod dingtalk;
 mod discord;
 #[cfg(feature = "channel-email")]
 mod email;
-#[cfg(feature = "channel-feishu")]
+#[cfg(feature = "feishu-integration")]
 pub mod feishu;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;

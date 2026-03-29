@@ -230,8 +230,8 @@ pub fn recommended_auth_start_command_for_grant(
 
     Some(feishu_auth_start_command_hint(
         configured_account_id,
-        grant.is_some() && !doc_write_status.ready,
         grant.is_some() && !write_status.ready,
+        grant.is_some() && !doc_write_status.ready,
     ))
 }
 
@@ -624,6 +624,50 @@ mod tests {
             Some(
                 "loongclaw feishu auth start --account feishu_main --capability doc-write --capability message-write"
             )
+        );
+    }
+
+    #[test]
+    fn build_grant_recommendations_marks_only_missing_doc_write_scope() {
+        let now_s = unix_ts_now();
+        let mut grant = sample_grant("feishu_main", "ou_123", now_s);
+
+        grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+            "offline_access",
+            "docx:document:readonly",
+            "im:message:readonly",
+            "im:message",
+        ]);
+
+        let recommendations = build_grant_recommendations("feishu_main", Some(&grant), now_s, &[]);
+
+        assert!(recommendations.missing_doc_write_scope);
+        assert!(!recommendations.missing_message_write_scope);
+        assert_eq!(
+            recommendations.auth_start_command.as_deref(),
+            Some("loongclaw feishu auth start --account feishu_main --capability doc-write")
+        );
+    }
+
+    #[test]
+    fn build_grant_recommendations_marks_only_missing_message_write_scope() {
+        let now_s = unix_ts_now();
+        let mut grant = sample_grant("feishu_main", "ou_123", now_s);
+
+        grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+            "offline_access",
+            "docx:document:readonly",
+            "docx:document",
+            "im:message:readonly",
+        ]);
+
+        let recommendations = build_grant_recommendations("feishu_main", Some(&grant), now_s, &[]);
+
+        assert!(!recommendations.missing_doc_write_scope);
+        assert!(recommendations.missing_message_write_scope);
+        assert_eq!(
+            recommendations.auth_start_command.as_deref(),
+            Some("loongclaw feishu auth start --account feishu_main --capability message-write")
         );
     }
 

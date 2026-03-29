@@ -1559,6 +1559,13 @@ fn ensure_grant_has_any_scope(
     accepted: &[&str],
     action: &str,
 ) -> CliResult<()> {
+    let include_doc_write = accepted
+        .iter()
+        .copied()
+        .any(|scope| mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES.contains(&scope));
+    let include_message_write = accepted.iter().copied().any(|scope| {
+        mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES.contains(&scope)
+    });
     if accepted
         .iter()
         .copied()
@@ -1571,7 +1578,11 @@ fn ensure_grant_has_any_scope(
         "{action} requires at least one Feishu scope [{}] for `{}`; rerun `{}` or pass the required scopes manually",
         accepted.join(", "),
         grant.principal.storage_key(),
-        feishu_auth_start_command_hint(configured_account_id, true, false),
+        feishu_auth_start_command_hint(
+            configured_account_id,
+            include_message_write,
+            include_doc_write,
+        ),
     ))
 }
 

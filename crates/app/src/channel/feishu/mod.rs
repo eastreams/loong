@@ -1,27 +1,41 @@
 use std::collections::BTreeSet;
+#[cfg(feature = "channel-feishu")]
 use std::path::Path;
+#[cfg(feature = "channel-feishu")]
 use std::sync::Arc;
 
+#[cfg(feature = "channel-feishu")]
 use axum::{Router, routing::post};
 
+#[cfg(feature = "channel-feishu")]
 use crate::CliResult;
+#[cfg(feature = "channel-feishu")]
 use crate::KernelContext;
+#[cfg(feature = "channel-feishu")]
 use crate::channel::{
     ChannelAdapter, ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
     runtime_state::ChannelOperationRuntimeTracker,
 };
+#[cfg(feature = "channel-feishu")]
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
 };
 
+#[cfg(feature = "channel-feishu")]
 mod adapter;
 pub mod api;
+#[cfg(feature = "channel-feishu")]
 mod payload;
+#[cfg(feature = "channel-feishu")]
 mod webhook;
+#[cfg(feature = "channel-feishu")]
 mod websocket;
 
+#[cfg(feature = "channel-feishu")]
 use adapter::FeishuAdapter;
+#[cfg(feature = "channel-feishu")]
 use payload::normalize_webhook_path;
+#[cfg(feature = "channel-feishu")]
 use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
 const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
@@ -43,6 +57,7 @@ pub(in crate::channel) fn feishu_allowlist_allows_chat(
     feishu_allowlist_allows_all(allowed_chat_ids) || allowed_chat_ids.contains(chat_id)
 }
 
+#[cfg(feature = "channel-feishu")]
 pub(super) async fn run_feishu_send(
     config: &ResolvedFeishuChannelConfig,
     request: &FeishuChannelSendRequest,
@@ -84,6 +99,7 @@ pub(super) async fn run_feishu_send(
     adapter.send_message(&target, &message).await
 }
 
+#[cfg(feature = "channel-feishu")]
 #[allow(clippy::print_stdout)] // CLI startup banner
 pub(super) async fn run_feishu_channel(
     config: &LoongClawConfig,
@@ -165,7 +181,7 @@ pub(super) async fn run_feishu_channel(
         .map_err(|error| format!("feishu webhook server stopped: {error}"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "channel-feishu"))]
 mod tests {
     use super::*;
     use axum::{
