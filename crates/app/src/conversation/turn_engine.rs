@@ -2766,7 +2766,7 @@ mod tests {
 
     #[tokio::test]
     async fn auto_mode_requires_approval_for_high_risk_core_tool() {
-        let memory_config = isolated_memory_config("provider-switch-core-approval");
+        let memory_config = isolated_memory_config("claw-migrate-core-approval");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -2782,18 +2782,16 @@ mod tests {
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-        let kernel_ctx =
-            crate::context::bootstrap_test_kernel_context("turn-engine-provider-switch", 60)
-                .expect("kernel context");
+        let kernel_ctx = kernel_context("turn-engine-claw-migrate-auto");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &provider_tool_turn(
-                    "provider.switch",
-                    json!({ "selector": "openai" }),
+                    "claw.migrate",
+                    json!({}),
                     "root-session",
-                    "turn-provider-switch",
-                    "call-provider-switch",
+                    "turn-claw-migrate-auto",
+                    "call-claw-migrate-auto",
                 ),
                 &session_context,
                 &dispatcher,
@@ -2805,10 +2803,10 @@ mod tests {
         let TurnResult::NeedsApproval(requirement) = result else {
             panic!("expected NeedsApproval, got {result:?}");
         };
-        assert_eq!(requirement.tool_name.as_deref(), Some("provider.switch"));
+        assert_eq!(requirement.tool_name.as_deref(), Some("claw.migrate"));
         assert_eq!(
             requirement.approval_key.as_deref(),
-            Some("tool:provider.switch")
+            Some("tool:claw.migrate")
         );
         assert_eq!(
             requirement.rule_id.as_str(),
@@ -2823,13 +2821,13 @@ mod tests {
             .expect("load approval request")
             .expect("approval request row");
         assert_eq!(stored.status, ApprovalRequestStatus::Pending);
-        assert_eq!(stored.tool_name, "provider.switch");
+        assert_eq!(stored.tool_name, "claw.migrate");
         assert_eq!(stored.request_payload_json["execution_kind"], "core");
     }
 
     #[tokio::test]
     async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
-        let memory_config = isolated_memory_config("provider-switch-core-full");
+        let memory_config = isolated_memory_config("claw-migrate-core-full");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -2850,18 +2848,16 @@ mod tests {
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-        let kernel_ctx =
-            crate::context::bootstrap_test_kernel_context("turn-engine-provider-switch-full", 60)
-                .expect("kernel context");
+        let kernel_ctx = kernel_context("turn-engine-claw-migrate-full");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &provider_tool_turn(
-                    "provider.switch",
-                    json!({ "selector": "openai" }),
+                    "claw.migrate",
+                    json!({}),
                     "root-session",
-                    "turn-provider-switch-full",
-                    "call-provider-switch-full",
+                    "turn-claw-migrate-full",
+                    "call-claw-migrate-full",
                 ),
                 &session_context,
                 &dispatcher,
@@ -2876,14 +2872,14 @@ mod tests {
         assert!(
             failure
                 .reason
-                .contains("provider.switch requires a resolved runtime config path"),
+                .contains("claw.migrate requires payload.input_path"),
             "expected execution to reach the core tool, got: {failure:?}"
         );
     }
 
     #[tokio::test]
     async fn full_session_consent_still_requires_approval_for_governed_app_tool() {
-        let memory_config = isolated_memory_config("delegate-app-full");
+        let memory_config = isolated_memory_config("browser-companion-governed-full");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -2902,60 +2898,23 @@ mod tests {
 
         let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
-        let tool_view = runtime_tool_view_for_config(&tool_config);
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
-                &delegate_async_turn("root-session", "turn-delegate-full", "call-delegate-full"),
-                &session_context,
-                &dispatcher,
-                ConversationRuntimeBinding::direct(),
-                None,
-            )
-            .await;
-
-        let TurnResult::NeedsApproval(requirement) = result else {
-            panic!("expected NeedsApproval, got {result:?}");
-        };
-        assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
-        assert_eq!(
-            requirement.rule_id.as_str(),
-            "governed_tool_requires_approval"
-        );
-    }
-
-    #[tokio::test]
-    async fn governed_approval_allowlist_does_not_bypass_prompt_session_consent() {
-        let memory_config = isolated_memory_config("delegate-app-allowlist-prompt");
-        let repo = SessionRepository::new(&memory_config).expect("repository");
-        repo.ensure_session(NewSessionRecord {
-            session_id: "root-session".to_owned(),
-            kind: SessionKind::Root,
-            parent_session_id: None,
-            label: Some("Root".to_owned()),
-            state: SessionState::Ready,
-        })
-        .expect("ensure root session");
-
-        let mut tool_config = ToolConfig::default();
-        tool_config.consent.default_mode = ToolConsentMode::Prompt;
-        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
-        tool_config
-            .approval
-            .approved_calls
-            .push("tool:delegate_async".to_owned());
-        let tool_view = runtime_tool_view_for_config(&tool_config);
-        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
-        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-
-        let result = TurnEngine::new(4)
-            .execute_turn_in_context(
-                &delegate_async_turn(
+                &browser_companion_click_turn(
                     "root-session",
-                    "turn-delegate-allowlist",
-                    "call-delegate-allowlist",
+                    "turn-browser-companion-governed-full",
+                    "call-browser-companion-governed-full",
+                    "browser-companion-governed-full",
                 ),
                 &session_context,
                 &dispatcher,
@@ -2967,7 +2926,68 @@ mod tests {
         let TurnResult::NeedsApproval(requirement) = result else {
             panic!("expected NeedsApproval, got {result:?}");
         };
-        assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "governed_tool_requires_approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_approval_allowlist_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("browser-companion-allowlist-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        tool_config
+            .approval
+            .approved_calls
+            .push("tool:browser.companion.click".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-allowlist",
+                    "call-browser-companion-allowlist",
+                    "browser-companion-allowlist",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
         assert_eq!(
             requirement.rule_id.as_str(),
             "session_tool_consent_prompt_mode"
@@ -2976,7 +2996,7 @@ mod tests {
 
     #[tokio::test]
     async fn governed_approval_grant_does_not_bypass_prompt_session_consent() {
-        let memory_config = isolated_memory_config("delegate-app-grant-prompt");
+        let memory_config = isolated_memory_config("browser-companion-grant-prompt");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -2988,7 +3008,7 @@ mod tests {
         .expect("ensure root session");
         repo.upsert_approval_grant(NewApprovalGrantRecord {
             scope_session_id: "root-session".to_owned(),
-            approval_key: "tool:delegate_async".to_owned(),
+            approval_key: "tool:browser.companion.click".to_owned(),
             created_by_session_id: Some("root-session".to_owned()),
         })
         .expect("persist approval grant");
@@ -2996,13 +3016,24 @@ mod tests {
         let mut tool_config = ToolConfig::default();
         tool_config.consent.default_mode = ToolConsentMode::Prompt;
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
-        let tool_view = runtime_tool_view_for_config(&tool_config);
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
-                &delegate_async_turn("root-session", "turn-delegate-grant", "call-delegate-grant"),
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-grant",
+                    "call-browser-companion-grant",
+                    "browser-companion-grant",
+                ),
                 &session_context,
                 &dispatcher,
                 ConversationRuntimeBinding::direct(),
@@ -3013,7 +3044,10 @@ mod tests {
         let TurnResult::NeedsApproval(requirement) = result else {
             panic!("expected NeedsApproval, got {result:?}");
         };
-        assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
         assert_eq!(
             requirement.rule_id.as_str(),
             "session_tool_consent_prompt_mode"
