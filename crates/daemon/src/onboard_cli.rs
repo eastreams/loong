@@ -6924,6 +6924,40 @@ mod tests {
     }
 
     #[test]
+    fn provider_credential_check_accepts_x_api_key_provider_env_credentials() {
+        let mut env = ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Anthropic;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credential_check(&config);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, OnboardCheckLevel::Pass);
+        assert!(check.detail.contains("ANTHROPIC_API_KEY is available"));
+    }
+
+    #[test]
+    fn provider_credential_check_passes_for_auth_optional_provider() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Ollama;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credential_check(&config);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, OnboardCheckLevel::Pass);
+        assert!(check.detail.contains("optional for this provider"));
+    }
+
+    #[test]
     fn preferred_api_key_env_default_ignores_invalid_configured_secret_literal() {
         let secret = "sk-live-direct-secret-value";
         let mut config = mvp::config::LoongClawConfig::default();

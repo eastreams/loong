@@ -1,5 +1,7 @@
 use loongclaw_app as mvp;
 
+use crate::provider_credential_policy;
+
 pub fn guided_provider_label(kind: mvp::config::ProviderKind) -> &'static str {
     kind.display_name()
 }
@@ -110,9 +112,30 @@ pub fn provider_identity_summary_with_credential_state(
 }
 
 pub fn provider_credential_state(config: &mvp::config::ProviderConfig) -> &'static str {
-    if config.authorization_header().is_some() {
+    let credentials_ready =
+        provider_credential_policy::provider_has_locally_available_credentials(config);
+    if credentials_ready {
         "credentials resolved"
     } else {
         "credential still missing"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_credential_state_accepts_x_api_key_provider_env_credentials() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let config = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Anthropic,
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        let credential_state = provider_credential_state(&config);
+
+        assert_eq!(credential_state, "credentials resolved");
     }
 }

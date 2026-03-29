@@ -14,18 +14,10 @@ pub(crate) struct ProviderCredentialEnvBinding {
 }
 
 pub(crate) fn provider_credential_env_hints(provider: &mvp::config::ProviderConfig) -> Vec<String> {
-    let mut hints = Vec::new();
-    let configured_oauth = provider.configured_oauth_access_token_env_override();
-    let configured_api_key = provider.configured_api_key_env_override();
-    let default_oauth = provider.kind.default_oauth_access_token_env();
-    let default_api_key = provider.kind.default_api_key_env();
+    let support_facts = provider.support_facts();
+    let auth_support = support_facts.auth;
 
-    push_provider_credential_env_hint(&mut hints, configured_oauth.as_deref());
-    push_provider_credential_env_hint(&mut hints, configured_api_key.as_deref());
-    push_provider_credential_env_hint(&mut hints, default_oauth);
-    push_provider_credential_env_hint(&mut hints, default_api_key);
-
-    hints
+    auth_support.hint_env_names
 }
 
 pub(crate) fn provider_credential_env_hint(
@@ -78,6 +70,65 @@ pub(crate) fn configured_provider_credential_env_binding(
     );
 
     configured_oauth.or(configured_api_key)
+}
+
+pub(crate) fn provider_available_credential_env_binding(
+    provider: &mvp::config::ProviderConfig,
+) -> Option<ProviderCredentialEnvBinding> {
+    let env_hints = provider_credential_env_hints(provider);
+
+    for env_name in env_hints {
+        let env_value = std::env::var(env_name.as_str()).ok();
+        let has_value = env_value
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        if !has_value {
+            continue;
+        }
+
+        let field = selected_provider_credential_env_field(provider, env_name.as_str());
+        let binding = ProviderCredentialEnvBinding { field, env_name };
+
+        return Some(binding);
+    }
+
+    None
+}
+
+pub(crate) fn apply_provider_credential_env_binding(
+    provider: &mut mvp::config::ProviderConfig,
+    binding: &ProviderCredentialEnvBinding,
+) {
+    let env_name = Some(binding.env_name.clone());
+
+    match binding.field {
+        ProviderCredentialEnvField::ApiKey => {
+            provider.clear_oauth_access_token_env_binding();
+            provider.set_api_key_env_binding(env_name);
+        }
+        ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.clear_api_key_env_binding();
+            provider.set_oauth_access_token_env_binding(env_name);
+        }
+    }
+}
+
+pub(crate) fn provider_has_locally_available_credentials(
+    provider: &mvp::config::ProviderConfig,
+) -> bool {
+    if provider.resolved_auth_secret().is_some() {
+        return true;
+    }
+
+    for header_name in ["authorization", "x-api-key"] {
+        let header_value = provider.header_value(header_name);
+        let has_value = header_value.is_some_and(|value| !value.trim().is_empty());
+        if has_value {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub(crate) fn provider_has_inline_credential(provider: &mvp::config::ProviderConfig) -> bool {
@@ -176,20 +227,6 @@ fn env_name_matches_api_key_binding(
     configured_api_key.as_deref() == Some(env_name)
 }
 
-fn push_provider_credential_env_hint(hints: &mut Vec<String>, maybe_env_name: Option<&str>) {
-    let normalized = maybe_env_name.and_then(normalize_provider_credential_env_name);
-    let Some(env_name) = normalized else {
-        return;
-    };
-
-    let already_present = hints.iter().any(|existing| existing == &env_name);
-    if already_present {
-        return;
-    }
-
-    hints.push(env_name);
-}
-
 fn provider_credential_env_name_is_safe(raw: &str) -> bool {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -265,5 +302,37 @@ mod tests {
         let rendered = render_provider_credential_source_value(Some("sk-live-direct-secret-value"));
 
         assert_eq!(rendered.as_deref(), Some("environment variable"));
+    }
+
+    #[test]
+    fn provider_has_locally_available_credentials_accepts_x_api_key_providers() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::Anthropic,
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        let has_credentials = provider_has_locally_available_credentials(&provider);
+
+        assert!(has_credentials);
+    }
+
+    #[test]
+    fn provider_available_credential_env_binding_uses_first_populated_env_hint() {
+        let mut env = mvp::test_support::ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "test-openai-key");
+        let provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+
+        let binding = provider_available_credential_env_binding(&provider);
+
+        assert_eq!(
+            binding,
+            Some(ProviderCredentialEnvBinding {
+                field: ProviderCredentialEnvField::ApiKey,
+                env_name: "OPENAI_API_KEY".to_owned(),
+            })
+        );
     }
 }

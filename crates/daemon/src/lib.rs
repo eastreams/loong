@@ -2487,15 +2487,7 @@ fn build_runtime_snapshot_provider_profile_state(
 }
 
 fn runtime_snapshot_provider_credentials_resolved(provider: &mvp::config::ProviderConfig) -> bool {
-    if provider.resolved_auth_secret().is_some() {
-        return true;
-    }
-
-    ["authorization", "x-api-key"].iter().any(|header_name| {
-        provider
-            .header_value(header_name)
-            .is_some_and(|value| !value.trim().is_empty())
-    })
+    provider_credential_policy::provider_has_locally_available_credentials(provider)
 }
 
 fn collect_runtime_snapshot_external_skills_state(

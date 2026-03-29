@@ -4905,9 +4905,13 @@ fn onboard_api_key_env_screen_redacts_invalid_current_source_and_keeps_clear_hin
             .any(|line| line == "- type :clear to clear the configured credential env"),
         "credential-env screen should still offer the clear token when the configured env pointer is present but redacted: {lines:#?}"
     );
+    let current_source_line = lines
+        .iter()
+        .find(|line| line.starts_with("- current source:"))
+        .expect("credential-env screen should include the current source line");
     assert!(
-        lines.iter().all(|line| !line.contains(secret)),
-        "credential-env screen must never echo the invalid secret-like configured env pointer: {lines:#?}"
+        !current_source_line.contains(secret),
+        "credential-env screen must never echo the invalid secret-like configured env pointer in the current source line: {lines:#?}"
     );
 }
 

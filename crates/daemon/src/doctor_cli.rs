@@ -1356,6 +1356,8 @@ fn provider_credentials_doctor_check(
     has_provider_credentials: bool,
 ) -> DoctorCheck {
     let provider_label = crate::provider_presentation::active_provider_detail_label(config);
+    let support_facts = config.provider.support_facts();
+    let auth_support = support_facts.auth;
     if has_provider_credentials {
         return DoctorCheck {
             name: "provider credentials".to_owned(),
@@ -1364,19 +1366,17 @@ fn provider_credentials_doctor_check(
         };
     }
 
-    let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
-    let mut detail = if hints.is_empty() {
-        "provider credentials are missing".to_owned()
-    } else {
-        format!(
-            "provider credentials are missing (try env: {})",
-            hints.join(", ")
-        )
-    };
-    if let Some(hint) = config.provider.auth_guidance_hint() {
-        detail.push(' ');
-        detail.push_str(hint.as_str());
+    if !auth_support.requires_explicit_configuration {
+        return DoctorCheck {
+            name: "provider credentials".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: format!(
+                "{provider_label}: provider credentials are optional for this provider"
+            ),
+        };
     }
+
+    let detail = auth_support.missing_configuration_message;
     DoctorCheck {
         name: "provider credentials".to_owned(),
         level: DoctorCheckLevel::Warn,
@@ -3316,7 +3316,8 @@ mod tests {
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set provider credentials in env: OPENAI_CODEX_OAUTH_TOKEN or OPENAI_API_KEY"
+                step
+                    == "Set provider credentials in env: OPENAI_CODEX_OAUTH_TOKEN or OPENAI_OAUTH_ACCESS_TOKEN or OPENAI_API_KEY"
             }),
             "doctor should turn missing provider auth into a concrete next step: {next_steps:#?}"
         );
@@ -3349,6 +3350,22 @@ mod tests {
         assert_eq!(check.level, DoctorCheckLevel::Warn);
         assert!(check.detail.contains("ARK_API_KEY"));
         assert!(check.detail.contains("Authorization: Bearer <ARK_API_KEY>"));
+    }
+
+    #[test]
+    fn provider_credentials_doctor_check_passes_for_auth_optional_provider() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Ollama;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credentials_doctor_check(&config, false);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(check.detail.contains("optional for this provider"));
     }
 
     #[test]

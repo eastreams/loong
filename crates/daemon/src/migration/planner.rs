@@ -3,6 +3,8 @@ use std::path::Path;
 
 use loongclaw_app as mvp;
 
+use crate::provider_credential_policy;
+
 use super::channels;
 use super::discovery::{build_import_candidate, resolve_channel_import_readiness_from_config};
 use super::provider_transport;
@@ -187,7 +189,9 @@ fn compose_provider_domain(
 
     Some(DomainPreview {
         kind: SetupDomainKind::Provider,
-        status: if merged_config.provider.authorization_header().is_some() {
+        status: if provider_credential_policy::provider_has_locally_available_credentials(
+            &merged_config.provider,
+        ) {
             PreviewStatus::Ready
         } else {
             PreviewStatus::NeedsReview
@@ -266,8 +270,10 @@ fn supplement_provider_config(
     let mut source = source.clone();
     source.canonicalize_configured_auth_env_bindings();
     let default_provider = mvp::config::ProviderConfig::default();
-    let target_has_auth = target.authorization_header().is_some();
-    let source_has_auth = source.authorization_header().is_some();
+    let target_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(target);
+    let source_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(&source);
     let mut changed = false;
     if (target.model.trim().is_empty() || target.model.eq_ignore_ascii_case("auto"))
         && !source.model.trim().is_empty()
@@ -289,6 +295,29 @@ fn supplement_provider_config(
     {
         target.oauth_access_token = source.oauth_access_token.clone();
         changed = true;
+    }
+    let target_missing_auth_config =
+        target.api_key.is_none() && target.oauth_access_token.is_none();
+    let should_materialize_source_env_binding =
+        source_has_auth && (target_missing_auth_config || !target_has_auth);
+    if should_materialize_source_env_binding {
+        let source_binding =
+            provider_credential_policy::provider_available_credential_env_binding(&source);
+        let target_binding =
+            provider_credential_policy::configured_provider_credential_env_binding(target);
+        let binding_changed = source_binding != target_binding;
+        let source_binding = if binding_changed {
+            source_binding
+        } else {
+            None
+        };
+        if let Some(source_binding) = source_binding {
+            provider_credential_policy::apply_provider_credential_env_binding(
+                target,
+                &source_binding,
+            );
+            changed = true;
+        }
     }
     if target.endpoint.is_none() && source.endpoint.is_some() {
         target.endpoint = source.endpoint.clone();
@@ -418,6 +447,29 @@ mod tests {
             })
         );
         assert_eq!(merged_config.provider.api_key_env, None);
+    }
+
+    #[test]
+    fn supplement_provider_config_accepts_x_api_key_source_credentials() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Anthropic);
+        target.api_key = None;
+        target.set_api_key_env(None);
+
+        let source =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Anthropic);
+
+        let changed = supplement_provider_config(&mut target, &source);
+
+        assert!(changed);
+        assert_eq!(
+            target.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "ANTHROPIC_API_KEY".to_owned(),
+            })
+        );
     }
 }
 
