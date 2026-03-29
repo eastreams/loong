@@ -228,7 +228,8 @@ async fn execute_create_command(
     )
     .await?;
     let task_id = required_string_field(&queued.payload, "child_session_id", "tasks create")?;
-    let task_detail = build_task_detail(memory_config, tool_config, current_session_id, &task_id)?;
+    let (task_detail, task_lookup_error) =
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, &task_id);
     let recipes = build_task_recipes(resolved_config_path, current_session_id, &task_id);
     let next_steps = build_task_next_steps();
     let payload = json!({
@@ -237,6 +238,7 @@ async fn execute_create_command(
         "current_session_id": current_session_id,
         "queued_outcome": queued.payload,
         "task": task_detail,
+        "task_lookup_error": task_lookup_error,
         "recipes": recipes,
         "next_steps": next_steps,
     });
@@ -254,23 +256,14 @@ fn execute_list_command(
     include_archived: bool,
 ) -> CliResult<Value> {
     let raw_limit = limit.clamp(1, 200);
-    let scan_limit = 200usize;
-    let sessions_payload = json!({
-        "limit": scan_limit,
-        "state": state,
-        "kind": "delegate_child",
-        "overdue_only": overdue_only,
-        "include_archived": include_archived,
-        "include_delegate_lifecycle": true,
-    });
-    let sessions_outcome = execute_app_tool_request(
+    let session_ids = load_visible_background_task_ids(
         memory_config,
         tool_config,
         current_session_id,
-        "sessions_list",
-        sessions_payload,
+        state,
+        overdue_only,
+        include_archived,
     )?;
-    let session_ids = extract_async_background_task_ids(&sessions_outcome.payload)?;
     let matched_count = session_ids.len();
 
     let mut tasks = Vec::new();
@@ -417,6 +410,7 @@ fn execute_cancel_command(
     task_id: &str,
     dry_run: bool,
 ) -> CliResult<Value> {
+    validate_background_task_target(memory_config, tool_config, current_session_id, task_id)?;
     let payload = json!({
         "session_id": task_id,
         "dry_run": dry_run,
@@ -428,7 +422,8 @@ fn execute_cancel_command(
         "session_cancel",
         payload,
     )?;
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let (task, task_lookup_error) =
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -460,6 +455,7 @@ fn execute_cancel_command(
         "message": message,
         "action": action,
         "task": task,
+        "task_lookup_error": task_lookup_error,
     });
     Ok(output)
 }
@@ -472,6 +468,7 @@ fn execute_recover_command(
     task_id: &str,
     dry_run: bool,
 ) -> CliResult<Value> {
+    validate_background_task_target(memory_config, tool_config, current_session_id, task_id)?;
     let payload = json!({
         "session_id": task_id,
         "dry_run": dry_run,
@@ -483,7 +480,8 @@ fn execute_recover_command(
         "session_recover",
         payload,
     )?;
-    let task = build_task_detail(memory_config, tool_config, current_session_id, task_id)?;
+    let (task, task_lookup_error) =
+        build_best_effort_task_detail(memory_config, tool_config, current_session_id, task_id);
     let mutation_result = extract_single_mutation_result(&outcome.payload);
     let result = mutation_result
         .as_ref()
@@ -515,6 +513,7 @@ fn execute_recover_command(
         "message": message,
         "action": action,
         "task": task,
+        "task_lookup_error": task_lookup_error,
     });
     Ok(output)
 }
@@ -555,26 +554,41 @@ fn execute_app_tool_request(
     Ok(outcome)
 }
 
-fn extract_async_background_task_ids(payload: &Value) -> CliResult<Vec<String>> {
-    let sessions = payload
-        .get("sessions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "tasks list payload missing sessions array".to_owned())?;
+fn load_visible_background_task_ids(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    state: Option<&str>,
+    overdue_only: bool,
+    include_archived: bool,
+) -> CliResult<Vec<String>> {
+    let repo = mvp::session::repository::SessionRepository::new(memory_config)?;
+    let mut sessions = repo.list_visible_sessions(current_session_id)?;
+    if tool_config.sessions.visibility == mvp::config::SessionVisibility::SelfOnly {
+        sessions.retain(|session| session.session_id == current_session_id);
+    }
+    if let Some(raw_state) = state {
+        let required_state = parse_task_state_filter(raw_state)?;
+        sessions.retain(|session| session.state == required_state);
+    }
+    sessions.retain(|session| session.kind == mvp::session::repository::SessionKind::DelegateChild);
+    if !include_archived {
+        sessions.retain(|session| session.archived_at.is_none());
+    }
+
     let mut task_ids = Vec::new();
     for session in sessions {
-        let session_id = required_string_field(session, "session_id", "tasks list session entry")?;
-        let delegate_lifecycle = session
-            .get("delegate_lifecycle")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let mode = delegate_lifecycle
-            .get("mode")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        if mode != "async" {
+        let task_id = session.session_id;
+        let status_payload =
+            load_task_status_payload(memory_config, tool_config, current_session_id, &task_id)?;
+        let status_summary = summarize_task_status_payload(&status_payload)?;
+        if !status_summary.is_background_task {
             continue;
         }
-        task_ids.push(session_id);
+        if overdue_only && !status_summary.is_overdue {
+            continue;
+        }
+        task_ids.push(task_id);
     }
     Ok(task_ids)
 }
@@ -587,6 +601,7 @@ fn build_task_detail(
 ) -> CliResult<Value> {
     let status_payload =
         load_task_status_payload(memory_config, tool_config, current_session_id, task_id)?;
+    ensure_background_task_status_payload(&status_payload, task_id)?;
     let approvals_payload =
         load_task_approvals_payload(memory_config, tool_config, current_session_id, task_id)?;
     let tool_policy_payload =
@@ -600,14 +615,6 @@ fn build_task_detail(
         .get("delegate_lifecycle")
         .cloned()
         .unwrap_or(Value::Null);
-    let session_kind = session.get("kind").and_then(Value::as_str).unwrap_or("");
-    let delegate_mode = delegate.get("mode").and_then(Value::as_str).unwrap_or("");
-    if session_kind != "delegate_child" || delegate_mode != "async" {
-        return Err(format!(
-            "tasks_cli_not_background_task: session `{task_id}` is not an async delegate child"
-        ));
-    }
-
     let label = session.get("label").cloned().unwrap_or(Value::Null);
     let session_state = session.get("state").cloned().unwrap_or(Value::Null);
     let phase = delegate.get("phase").cloned().unwrap_or(Value::Null);
@@ -690,6 +697,105 @@ fn build_task_detail(
         "recent_events": recent_events,
     });
     Ok(detail)
+}
+
+fn build_best_effort_task_detail(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> (Value, Value) {
+    let detail_result = build_task_detail(memory_config, tool_config, current_session_id, task_id);
+    match detail_result {
+        Ok(task_detail) => (task_detail, Value::Null),
+        Err(error) => {
+            let fallback_task = fallback_task_detail(current_session_id, task_id);
+            let lookup_error = Value::String(error);
+            (fallback_task, lookup_error)
+        }
+    }
+}
+
+fn fallback_task_detail(current_session_id: &str, task_id: &str) -> Value {
+    json!({
+        "task_id": task_id,
+        "session_id": task_id,
+        "scope_session_id": current_session_id,
+        "label": Value::Null,
+        "session_state": Value::Null,
+        "phase": Value::Null,
+        "timeout_seconds": Value::Null,
+        "last_error": Value::Null,
+        "approval": {
+            "matched_count": 0,
+            "returned_count": 0,
+            "attention_summary": Value::Null,
+            "requests": [],
+        },
+        "tool_policy": Value::Null,
+    })
+}
+
+fn validate_background_task_target(
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+    tool_config: &mvp::config::ToolConfig,
+    current_session_id: &str,
+    task_id: &str,
+) -> CliResult<()> {
+    let status_payload =
+        load_task_status_payload(memory_config, tool_config, current_session_id, task_id)?;
+    ensure_background_task_status_payload(&status_payload, task_id)
+}
+
+fn ensure_background_task_status_payload(status_payload: &Value, task_id: &str) -> CliResult<()> {
+    let status_summary = summarize_task_status_payload(status_payload)?;
+    if !status_summary.is_background_task {
+        return Err(format!(
+            "tasks_cli_not_background_task: session `{task_id}` is not an async delegate child"
+        ));
+    }
+    Ok(())
+}
+
+fn summarize_task_status_payload(status_payload: &Value) -> CliResult<TaskStatusSummary> {
+    let session = status_payload
+        .get("session")
+        .ok_or_else(|| "task status payload missing session object".to_owned())?;
+    let delegate = status_payload
+        .get("delegate_lifecycle")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let session_kind = session.get("kind").and_then(Value::as_str).unwrap_or("");
+    let delegate_mode = delegate.get("mode").and_then(Value::as_str).unwrap_or("");
+    let staleness_state = delegate
+        .get("staleness")
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let is_background_task = session_kind == "delegate_child" && delegate_mode == "async";
+    let is_overdue = staleness_state == "overdue";
+
+    Ok(TaskStatusSummary {
+        is_background_task,
+        is_overdue,
+    })
+}
+
+fn parse_task_state_filter(raw_state: &str) -> CliResult<mvp::session::repository::SessionState> {
+    match raw_state {
+        "ready" => Ok(mvp::session::repository::SessionState::Ready),
+        "running" => Ok(mvp::session::repository::SessionState::Running),
+        "completed" => Ok(mvp::session::repository::SessionState::Completed),
+        "failed" => Ok(mvp::session::repository::SessionState::Failed),
+        "timed_out" => Ok(mvp::session::repository::SessionState::TimedOut),
+        _ => Err(format!("invalid session tool payload.state: `{raw_state}`")),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskStatusSummary {
+    is_background_task: bool,
+    is_overdue: bool,
 }
 
 fn load_task_status_payload(
@@ -836,6 +942,7 @@ fn render_tasks_create_text(payload: &Value) -> CliResult<String> {
             .unwrap_or("unknown")
     ));
     lines.extend(render_task_detail_lines(task)?);
+    append_task_lookup_error_line(payload, &mut lines);
 
     if !recipes.is_empty() {
         lines.push("recipes:".to_owned());
@@ -1003,6 +1110,7 @@ fn render_tasks_mutation_text(payload: &Value) -> CliResult<String> {
         lines.push(rendered_action);
     }
     lines.extend(render_task_detail_lines(task)?);
+    append_task_lookup_error_line(payload, &mut lines);
     Ok(lines.join("\n"))
 }
 
@@ -1097,6 +1205,13 @@ fn render_task_detail_lines(task: &Value) -> CliResult<Vec<String>> {
         "effective_runtime_narrowing: {rendered_runtime_narrowing}"
     ));
     Ok(lines)
+}
+
+fn append_task_lookup_error_line(payload: &Value, lines: &mut Vec<String>) {
+    let Some(task_lookup_error) = payload.get("task_lookup_error").and_then(Value::as_str) else {
+        return;
+    };
+    lines.push(format!("task_lookup_error: {task_lookup_error}"));
 }
 
 fn render_string_array(values: &[Value]) -> String {

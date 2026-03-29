@@ -4,8 +4,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
-use super::payload::{optional_payload_string, required_payload_string};
-
 #[cfg(test)]
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 
@@ -25,18 +23,50 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
     payload: &Value,
     default_timeout_seconds: u64,
 ) -> Result<DelegateRequest, String> {
-    let task = required_payload_string(payload, "task", "delegate tool")?;
-    let label = optional_payload_string(payload, "label");
-    let timeout_seconds = payload
-        .get("timeout_seconds")
-        .and_then(Value::as_u64)
-        .unwrap_or(default_timeout_seconds);
+    let raw_task = payload.get("task").and_then(Value::as_str).unwrap_or("");
+    let raw_label = payload.get("label").and_then(Value::as_str);
+    let timeout_seconds = payload.get("timeout_seconds").and_then(Value::as_u64);
+
+    normalize_delegate_request(
+        raw_task,
+        raw_label,
+        timeout_seconds,
+        default_timeout_seconds,
+    )
+}
+
+pub(crate) fn normalize_delegate_request(
+    task: &str,
+    label: Option<&str>,
+    timeout_seconds: Option<u64>,
+    default_timeout_seconds: u64,
+) -> Result<DelegateRequest, String> {
+    let normalized_task = normalize_required_delegate_text(task, "task")?;
+    let normalized_label = normalize_optional_delegate_text(label);
+    let effective_timeout_seconds = timeout_seconds.unwrap_or(default_timeout_seconds);
 
     Ok(DelegateRequest {
-        task,
-        label,
-        timeout_seconds,
+        task: normalized_task,
+        label: normalized_label,
+        timeout_seconds: effective_timeout_seconds,
     })
+}
+
+fn normalize_required_delegate_text(value: &str, field: &str) -> Result<String, String> {
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return Err(format!("delegate tool requires payload.{field}"));
+    }
+    Ok(trimmed_value.to_owned())
+}
+
+fn normalize_optional_delegate_text(value: Option<&str>) -> Option<String> {
+    let raw_value = value?;
+    let trimmed_value = raw_value.trim();
+    if trimmed_value.is_empty() {
+        return None;
+    }
+    Some(trimmed_value.to_owned())
 }
 
 pub(crate) fn next_delegate_session_id() -> String {
@@ -138,6 +168,20 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label, None);
+        assert_eq!(request.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn normalize_delegate_request_trims_cli_inputs() {
+        let request = normalize_delegate_request(
+            "  research  ",
+            Some("  release-check  "),
+            None,
+            DEFAULT_TIMEOUT_SECONDS,
+        )
+        .expect("delegate request");
+        assert_eq!(request.task, "research");
+        assert_eq!(request.label.as_deref(), Some("release-check"));
         assert_eq!(request.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
     }
 

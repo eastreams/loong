@@ -19,6 +19,27 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     canonical_temp_dir.join(format!("{prefix}-{nanos}"))
 }
 
+struct TempDirGuard {
+    path: PathBuf,
+}
+
+impl TempDirGuard {
+    fn new(prefix: &str) -> Self {
+        let path = unique_temp_dir(prefix);
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.path).ok();
+    }
+}
+
 struct TasksCliEnvironmentGuard {
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<OsString>)>,
@@ -69,6 +90,9 @@ impl TasksCliEnvironmentGuard {
         let mut saved = Vec::new();
         for key in TASKS_RUNTIME_ENV_KEYS {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
+            unsafe {
+                std::env::remove_var(key);
+            }
         }
         for (key, value) in pairs {
             let already_saved = saved.iter().any(|(saved_key, _)| saved_key == key);
@@ -103,39 +127,44 @@ impl Drop for TasksCliEnvironmentGuard {
     }
 }
 
-fn write_tasks_config(root: &Path) -> PathBuf {
+fn write_tasks_config_with(
+    root: &Path,
+    configure: impl FnOnce(&mut mvp::config::LoongClawConfig),
+) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
     let config_path = root.join("loongclaw.toml");
     let mut config = mvp::config::LoongClawConfig::default();
     config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.sessions.allow_mutation = true;
+    configure(&mut config);
     mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
         .expect("write config fixture");
     config_path
 }
 
+fn write_tasks_config(root: &Path) -> PathBuf {
+    write_tasks_config_with(root, |_| {})
+}
+
 fn seed_background_task(config_path: &Path, root_session_id: &str, task_id: &str) {
-    let config = mvp::config::load(Some(config_path.to_string_lossy().as_ref()))
-        .expect("load config")
-        .1;
-    let memory_config =
-        mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
-        .expect("session repository");
-    repo.create_session(mvp::session::repository::NewSessionRecord {
-        session_id: root_session_id.to_owned(),
-        kind: mvp::session::repository::SessionKind::Root,
-        parent_session_id: None,
-        label: Some("Ops Root".to_owned()),
-        state: mvp::session::repository::SessionState::Ready,
-    })
-    .expect("create root session");
+    let repo = load_session_repository(config_path);
+    seed_background_task_record(&repo, root_session_id, task_id, true);
+}
+
+fn seed_background_task_record(
+    repo: &mvp::session::repository::SessionRepository,
+    root_session_id: &str,
+    task_id: &str,
+    include_runtime_metadata: bool,
+) {
+    ensure_root_session(repo, root_session_id);
+    let task_label = "Release Check";
     repo.create_session(mvp::session::repository::NewSessionRecord {
         session_id: task_id.to_owned(),
         kind: mvp::session::repository::SessionKind::DelegateChild,
         parent_session_id: Some(root_session_id.to_owned()),
-        label: Some("Release Check".to_owned()),
+        label: Some(task_label.to_owned()),
         state: mvp::session::repository::SessionState::Ready,
     })
     .expect("create child session");
@@ -145,11 +174,14 @@ fn seed_background_task(config_path: &Path, root_session_id: &str, task_id: &str
         actor_session_id: Some(root_session_id.to_owned()),
         payload_json: json!({
             "task": "check release readiness",
-            "label": "Release Check",
+            "label": task_label,
             "timeout_seconds": 60,
         }),
     })
     .expect("append delegate_queued event");
+    if !include_runtime_metadata {
+        return;
+    }
     repo.ensure_approval_request(mvp::session::repository::NewApprovalRequestRecord {
         approval_request_id: "apr-task-1".to_owned(),
         session_id: task_id.to_owned(),
@@ -172,6 +204,24 @@ fn seed_background_task(config_path: &Path, root_session_id: &str, task_id: &str
         runtime_narrowing: mvp::tools::runtime_config::ToolRuntimeNarrowing::default(),
     })
     .expect("upsert session tool policy");
+}
+
+fn ensure_root_session(repo: &mvp::session::repository::SessionRepository, root_session_id: &str) {
+    let existing_root = repo
+        .load_session(root_session_id)
+        .expect("load root session");
+    if existing_root.is_some() {
+        return;
+    }
+
+    repo.create_session(mvp::session::repository::NewSessionRecord {
+        session_id: root_session_id.to_owned(),
+        kind: mvp::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Ops Root".to_owned()),
+        state: mvp::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
 }
 
 fn load_session_repository(config_path: &Path) -> mvp::session::repository::SessionRepository {
@@ -309,11 +359,24 @@ fn tasks_wait_cli_parses_session_and_timeout_flags() {
     }
 }
 
+#[test]
+fn tasks_cli_environment_guard_clears_tracked_env_vars_before_applying_overrides() {
+    unsafe {
+        std::env::set_var("LOONGCLAW_SQLITE_PATH", "/tmp/host-value.sqlite3");
+    }
+    let _guard = TasksCliEnvironmentGuard::set(&[]);
+    let cleared_value = std::env::var_os("LOONGCLAW_SQLITE_PATH");
+    assert_eq!(cleared_value, None);
+    unsafe {
+        std::env::remove_var("LOONGCLAW_SQLITE_PATH");
+    }
+}
+
 #[tokio::test]
 async fn execute_tasks_command_list_returns_visible_background_tasks() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-list");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-list");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -337,15 +400,13 @@ async fn execute_tasks_command_list_returns_visible_background_tasks() {
     assert_eq!(execution.payload["returned_count"], 1);
     assert_eq!(execution.payload["tasks"][0]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["tasks"][0]["phase"], "queued");
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[tokio::test]
 async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-status");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-status");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -379,15 +440,13 @@ async fn execute_tasks_command_status_surfaces_approval_and_tool_policy() {
         rendered.contains("effective_tool_ids: file.read"),
         "status render should surface effective tool ids: {rendered}"
     );
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[tokio::test]
 async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow_up_recipes() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-create");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-create");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
         loongclaw_daemon::tasks_cli::TasksCommandOptions {
@@ -456,15 +515,92 @@ async fn execute_tasks_command_create_queues_background_task_and_surfaces_follow
         child_session.kind,
         mvp::session::repository::SessionKind::DelegateChild
     );
+}
 
-    fs::remove_dir_all(&root).ok();
+#[tokio::test]
+async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration_fails() {
+    let root = TempDirGuard::new("loongclaw-tasks-cli-create-best-effort");
+    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let config_path = write_tasks_config_with(root.path(), |config| {
+        config.tools.sessions.enabled = false;
+    });
+
+    let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
+        loongclaw_daemon::tasks_cli::TasksCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::tasks_cli::TasksCommands::Create {
+                task: "research release readiness".to_owned(),
+                label: Some("Release Check".to_owned()),
+                timeout_seconds: Some(45),
+            },
+        },
+    )
+    .await
+    .expect("tasks create should still succeed");
+
+    let queued_task_id = execution.payload["queued_outcome"]["child_session_id"]
+        .as_str()
+        .expect("queued task id");
+    let rendered = loongclaw_daemon::tasks_cli::render_tasks_cli_text(&execution)
+        .expect("render tasks create");
+
+    assert_eq!(execution.payload["command"], "create");
+    assert_eq!(execution.payload["task"]["task_id"], queued_task_id);
+    assert_eq!(execution.payload["task"]["scope_session_id"], "ops-root");
+    assert!(
+        execution.payload["task_lookup_error"]
+            .as_str()
+            .expect("task lookup error")
+            .contains("session tools are disabled"),
+        "expected hydration failure to surface lookup error, got: {:?}",
+        execution.payload
+    );
+    assert!(
+        rendered.contains("task_lookup_error:"),
+        "rendered create output should surface hydration warning: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_tasks_command_list_counts_background_tasks_beyond_session_tool_limit() {
+    let root = TempDirGuard::new("loongclaw-tasks-cli-list-many");
+    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let config_path = write_tasks_config(root.path());
+    let repo = load_session_repository(&config_path);
+    ensure_root_session(&repo, "ops-root");
+    for index in 0..101 {
+        let task_id = format!("delegate:list-{index:03}");
+        seed_background_task_record(&repo, "ops-root", &task_id, false);
+    }
+
+    let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
+        loongclaw_daemon::tasks_cli::TasksCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::tasks_cli::TasksCommands::List {
+                limit: 20,
+                state: None,
+                overdue_only: false,
+                include_archived: false,
+            },
+        },
+    )
+    .await
+    .expect("tasks list should succeed");
+
+    assert_eq!(execution.payload["command"], "list");
+    assert_eq!(execution.payload["matched_count"], 101);
+    assert_eq!(execution.payload["returned_count"], 20);
 }
 
 #[tokio::test]
 async fn execute_tasks_command_events_and_wait_surface_incremental_payloads() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-events");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-events");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
 
     let events_execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -514,15 +650,13 @@ async fn execute_tasks_command_events_and_wait_surface_incremental_payloads() {
     assert_eq!(wait_execution.payload["wait_status"], "timeout");
     assert_eq!(wait_execution.payload["events"], json!([]));
     assert_eq!(wait_execution.payload["task"]["task_id"], "delegate:task-1");
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[tokio::test]
 async fn execute_tasks_command_cancel_dry_run_surfaces_cancel_action() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-cancel");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-cancel");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -547,15 +681,13 @@ async fn execute_tasks_command_cancel_dry_run_surfaces_cancel_action() {
     );
     assert_eq!(execution.payload["task"]["task_id"], "delegate:task-1");
     assert_eq!(execution.payload["task"]["phase"], "queued");
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[tokio::test]
 async fn execute_tasks_command_recover_dry_run_surfaces_non_recoverable_result() {
-    let root = unique_temp_dir("loongclaw-tasks-cli-recover");
+    let root = TempDirGuard::new("loongclaw-tasks-cli-recover");
     let _env = TasksCliEnvironmentGuard::set(&[]);
-    let config_path = write_tasks_config(&root);
+    let config_path = write_tasks_config(root.path());
     seed_background_task(&config_path, "ops-root", "delegate:task-1");
 
     let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
@@ -584,6 +716,4 @@ async fn execute_tasks_command_recover_dry_run_surfaces_non_recoverable_result()
         execution.payload
     );
     assert!(execution.payload["action"].is_null());
-
-    fs::remove_dir_all(&root).ok();
 }

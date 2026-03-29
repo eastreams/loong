@@ -4076,16 +4076,19 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     let session_context = runtime.session_context(config, session_id, binding)?;
-    let effective_timeout_seconds =
-        timeout_seconds.unwrap_or(config.tools.delegate.timeout_seconds);
-    let task_text = task.to_owned();
+    let delegate_request = crate::tools::delegate::normalize_delegate_request(
+        task,
+        label.as_deref(),
+        timeout_seconds,
+        config.tools.delegate.timeout_seconds,
+    )?;
     enqueue_delegate_async_with_runtime(
         config,
         runtime,
         &session_context,
-        task_text,
-        label,
-        effective_timeout_seconds,
+        delegate_request.task,
+        delegate_request.label,
+        delegate_request.timeout_seconds,
         binding,
     )
     .await

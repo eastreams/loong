@@ -113,8 +113,8 @@ mod runtime_snapshot_support;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
-mod tlon_cli;
 pub mod tasks_cli;
+mod tlon_cli;
 
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{

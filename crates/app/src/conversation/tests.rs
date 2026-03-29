@@ -16232,6 +16232,30 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
 }
 
 #[cfg(feature = "memory-sqlite")]
+async fn wait_for_async_delegate_request_count(
+    spawner: &Arc<FakeAsyncDelegateSpawner>,
+    expected_count: usize,
+) {
+    let timeout_duration = std::time::Duration::from_secs(2);
+    let wait_result = tokio::time::timeout(timeout_duration, async {
+        loop {
+            let request_count = spawner
+                .requests
+                .lock()
+                .expect("async delegate requests lock")
+                .len();
+            if request_count == expected_count {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    wait_result.expect("timed out waiting for async delegate request");
+}
+
+#[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn spawn_background_delegate_with_runtime_creates_missing_root_session_scope() {
     let db_path = std::env::temp_dir().join(format!(
@@ -16295,17 +16319,7 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
         crate::session::repository::SessionState::Ready
     );
 
-    for _ in 0..10 {
-        let request_count = spawner
-            .requests
-            .lock()
-            .expect("async delegate requests lock")
-            .len();
-        if request_count == 1 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    wait_for_async_delegate_request_count(&spawner, 1).await;
 
     let requests = spawner
         .requests
@@ -16371,17 +16385,7 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
 
     assert_eq!(outcome.payload["timeout_seconds"], 77);
 
-    for _ in 0..10 {
-        let request_count = spawner
-            .requests
-            .lock()
-            .expect("async delegate requests lock")
-            .len();
-        if request_count == 1 {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-    }
+    wait_for_async_delegate_request_count(&spawner, 1).await;
 
     let requests = spawner
         .requests
