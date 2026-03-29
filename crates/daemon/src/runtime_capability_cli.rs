@@ -1817,13 +1817,7 @@ pub fn render_runtime_capability_promotion_plan_text(
 fn render_runtime_capability_planned_payload_summary(
     payload: Option<&RuntimeCapabilityPromotionPlannedPayload>,
 ) -> Option<String> {
-    match payload {
-        Some(payload) => Some(format!(
-            "profile_id={}",
-            payload.memory_stage_profile.profile.id
-        )),
-        None => None,
-    }
+    payload.map(|payload| format!("profile_id={}", payload.memory_stage_profile.profile.id))
 }
 
 fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessCheck]) -> String {
