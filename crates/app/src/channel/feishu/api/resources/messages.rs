@@ -209,11 +209,9 @@ pub async fn send_markdown_card_message(
         receive_id_type,
         receive_id,
         "interactive",
-        serde_json::json!({
-            "card": cards::build_markdown_card(
-                require_non_empty("feishu message send", "text", text)?.as_str()
-            )
-        }),
+        cards::build_markdown_card(
+            require_non_empty("feishu message send", "text", text)?.as_str(),
+        ),
         uuid,
     )
     .await
@@ -322,11 +320,9 @@ pub async fn reply_markdown_card_message(
         tenant_access_token,
         message_id,
         "interactive",
-        serde_json::json!({
-            "card": cards::build_markdown_card(
-                require_non_empty("feishu message reply", "text", text)?.as_str()
-            )
-        }),
+        cards::build_markdown_card(
+            require_non_empty("feishu message reply", "text", text)?.as_str(),
+        ),
         reply_in_thread,
         uuid,
     )

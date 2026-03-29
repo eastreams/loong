@@ -257,11 +257,11 @@ findings, start from the built-in observability surfaces instead of external
 skill setup:
 
 ```bash
-loongclaw doctor --config ~/.loongclaw/config.toml
-loongclaw doctor --config ~/.loongclaw/config.toml --json
-loongclaw audit recent --config ~/.loongclaw/config.toml
-loongclaw audit summary --config ~/.loongclaw/config.toml
-loongclaw audit recent --config ~/.loongclaw/config.toml --json
+loong doctor --config ~/.loongclaw/config.toml
+loong doctor --config ~/.loongclaw/config.toml --json
+loong audit recent --config ~/.loongclaw/config.toml
+loong audit summary --config ~/.loongclaw/config.toml
+loong audit recent --config ~/.loongclaw/config.toml --json
 if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
 

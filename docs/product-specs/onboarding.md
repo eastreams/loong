@@ -8,7 +8,7 @@ next.
 
 ## Acceptance Criteria
 
-- [x] `loongclaw onboard` is the default first-run path called out in product docs.
+- [x] `loong onboard` is the default first-run path called out in product docs.
 - [x] The shipped wizard stages are `welcome`, `authentication`, `runtime defaults`,
       `workspace`, `protocols`, `environment check`, `review and write`, and `ready`.
 - [x] Onboarding detects reusable provider, channel, or workspace settings when
@@ -17,7 +17,7 @@ next.
       so the review step can show what was already saved versus what was found
       in the detected starting point.
 - [x] The happy path ends with explicit next-step guidance for:
-      a concrete `loongclaw ask --message "..."` example and `loongclaw chat`.
+      a concrete `loong ask --message "..."` example and `loong chat`.
 - [x] The success summary leads with a runnable `start here` handoff before the
       saved provider, prompt, memory, and channel inventory.
 - [x] The primary post-onboard handoff prefers a one-shot `ask` example before
@@ -47,14 +47,14 @@ next.
       explicitly opts into a destructive path such as `--force`.
 - [x] Onboarding uses the same provider, memory, and channel configuration
       surfaces that the runtime uses after setup.
-- [x] When preflight checks fail, onboarding points users to `loongclaw doctor`
-      or `loongclaw doctor --fix` as the repair path.
+- [x] When preflight checks fail, onboarding points users to `loong doctor`
+      or `loong doctor --fix` as the repair path.
 - [x] The environment-check stage can finish green, `ready with warnings`, or
       blocked; warning-only outcomes require explicit confirmation before write,
       and blocked outcomes stop before write and point users to doctor as the
       repair path.
 - [x] Onboarding preflight reuses the same browser companion diagnostics as
-      `loongclaw doctor`, surfacing optional managed-lane blockers before write
+      `loong doctor`, surfacing optional managed-lane blockers before write
       without redefining runtime truth inside onboarding.
 - [x] Providers with a reviewed onboarding default model, such as MiniMax and
       DeepSeek, can complete setup with an explicit model even when model

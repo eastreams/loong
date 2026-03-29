@@ -11,13 +11,16 @@ use super::types::FeishuCardUpdateReceipt;
 pub fn build_markdown_card(text: &str) -> Value {
     let content = text.trim();
     serde_json::json!({
+        "schema": "2.0",
         "config": {
             "wide_screen_mode": true
         },
-        "elements": [{
-            "tag": "markdown",
-            "content": content
-        }]
+        "body": {
+            "elements": [{
+                "tag": "markdown",
+                "content": content
+            }]
+        }
     })
 }
 
@@ -108,13 +111,16 @@ mod tests {
         assert_eq!(
             build_markdown_card("  approved  "),
             json!({
+                "schema": "2.0",
                 "config": {
                     "wide_screen_mode": true
                 },
-                "elements": [{
-                    "tag": "markdown",
-                    "content": "approved"
-                }]
+                "body": {
+                    "elements": [{
+                        "tag": "markdown",
+                        "content": "approved"
+                    }]
+                }
             })
         );
     }

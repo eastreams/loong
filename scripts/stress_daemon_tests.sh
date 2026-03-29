@@ -48,7 +48,7 @@ run_mode() {
     local cmd=(
       cargo test
       -p loongclaw-daemon
-      --bin loongclaw
+      --bin loong
       --all-features
     )
     if [[ "$LOCKED" == "true" ]]; then

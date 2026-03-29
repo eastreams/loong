@@ -2186,15 +2186,18 @@ mod tests {
             response.body(),
             &json!({
                 "card": {
+                    "schema": "2.0",
                     "config": {
                         "wide_screen_mode": true
                     },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": "Approved inline"
-                        }
-                    ]
+                    "body": {
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": "Approved inline"
+                            }
+                        ]
+                    }
                 }
             })
         );
@@ -2386,15 +2389,18 @@ mod tests {
                     "content": "Approved"
                 },
                 "card": {
+                    "schema": "2.0",
                     "config": {
                         "wide_screen_mode": true
                     },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": "Approved inline"
-                        }
-                    ]
+                    "body": {
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": "Approved inline"
+                            }
+                        ]
+                    }
                 }
             })
         );

@@ -46,30 +46,29 @@ needs.
 
 | Surface | Status | Transport | Required config | Operator commands |
 | --- | --- | --- | --- | --- |
-| CLI | Shipped | local interactive runtime | none beyond base provider config | `loongclaw ask`, `loongclaw chat` |
-| Telegram | Runtime-backed | Bot API polling | `telegram.enabled`, `telegram.bot_token`, `telegram.allowed_chat_ids` | `loongclaw telegram-send`, `loongclaw telegram-serve` |
-| Feishu / Lark | Runtime-backed | webhook or websocket | `feishu.enabled`, `feishu.app_id`, `feishu.app_secret`, `feishu.allowed_chat_ids`; webhook mode also needs `verification_token` and `encrypt_key` | `loongclaw feishu-send`, `loongclaw feishu-serve` |
-| Matrix | Runtime-backed | Client-Server sync | `matrix.enabled`, `matrix.access_token`, `matrix.base_url`, `matrix.allowed_room_ids` | `loongclaw matrix-send`, `loongclaw matrix-serve` |
-| WeCom | Runtime-backed | official AIBot long connection | `wecom.enabled`, `wecom.bot_id`, `wecom.secret`, `wecom.allowed_conversation_ids` | `loongclaw wecom-send`, `loongclaw wecom-serve` |
-| Discord | Config-backed outbound | Discord HTTP API | `discord.enabled`, `discord.bot_token` | `loongclaw discord-send` |
-| Slack | Config-backed outbound | Slack Web API | `slack.enabled`, `slack.bot_token` | `loongclaw slack-send` |
-| LINE | Config-backed outbound | LINE Messaging API | `line.enabled`, `line.channel_access_token` | `loongclaw line-send` |
-| DingTalk | Config-backed outbound | DingTalk custom robot webhook | `dingtalk.enabled`, `dingtalk.webhook_url`; `secret` is optional when the webhook uses signed requests | `loongclaw dingtalk-send` |
-| WhatsApp | Config-backed outbound | WhatsApp Cloud API | `whatsapp.enabled`, `whatsapp.access_token`, `whatsapp.phone_number_id` | `loongclaw whatsapp-send` |
-| Email | Config-backed outbound | SMTP relay or SMTP URL | `email.enabled`, `email.smtp_host`, `email.smtp_username`, `email.smtp_password`, `email.from_address` | `loongclaw email-send` |
-| Webhook | Config-backed outbound | generic HTTP webhook POST | `webhook.enabled`, `webhook.endpoint_url`; `auth_token` is optional and can pair with custom header and prefix overrides | `loongclaw webhook-send` |
-| Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loongclaw google-chat-send` |
-| Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loongclaw signal-send` |
-| Tlon | Config-backed outbound | Urbit ship HTTP poke API | `tlon.enabled`, `tlon.ship`, `tlon.url`, `tlon.code` | `loongclaw tlon-send` |
-| Twitch | Config-backed outbound | Twitch Chat API | `twitch.enabled`, `twitch.access_token` or `twitch.access_token_env`; optional `default_account`, `accounts`, `api_base_url`, `oauth_base_url`, and `channel_names` remain available for account routing, controlled environments, and planned serve work | `loongclaw twitch-send` |
-| Tlon | Config-backed outbound | Urbit ship HTTP poke API | `tlon.enabled`, `tlon.ship`, `tlon.url`, `tlon.code` | `loongclaw tlon-send` |
-| Microsoft Teams | Config-backed outbound | Teams incoming webhook | `teams.enabled`, `teams.webhook_url` for sends; future bot runtime fields keep `teams.app_id`, `teams.app_password`, `teams.tenant_id`, `teams.allowed_conversation_ids` reserved for the planned serve path | `loongclaw teams-send` |
-| Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loongclaw mattermost-send` |
-| Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loongclaw nextcloud-talk-send` |
-| Synology Chat | Config-backed outbound | Synology Chat incoming webhook | `synology_chat.enabled`, `synology_chat.incoming_url` | `loongclaw synology-chat-send` |
-| IRC | Config-backed outbound | IRC socket client | `irc.enabled`, `irc.server`, `irc.nickname`; `password` is optional, and `username`, `realname`, `channel_names` are optional operator hints | `loongclaw irc-send` |
-| iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loongclaw imessage-send` |
-| Nostr | Config-backed outbound | relay publish over WebSocket | `nostr.enabled`, `nostr.relay_urls`, `nostr.private_key`; `allowed_pubkeys` stays reserved for the planned inbound path | `loongclaw nostr-send` |
+| CLI | Shipped | local interactive runtime | none beyond base provider config | `loong ask`, `loong chat` |
+| Telegram | Runtime-backed | Bot API polling | `telegram.enabled`, `telegram.bot_token`, `telegram.allowed_chat_ids` | `loong telegram-send`, `loong telegram-serve` |
+| Feishu / Lark | Runtime-backed | webhook or websocket | `feishu.enabled`, `feishu.app_id`, `feishu.app_secret`, `feishu.allowed_chat_ids`; webhook mode also needs `verification_token` and `encrypt_key` | `loong feishu-send`, `loong feishu-serve` |
+| Matrix | Runtime-backed | Client-Server sync | `matrix.enabled`, `matrix.access_token`, `matrix.base_url`, `matrix.allowed_room_ids` | `loong matrix-send`, `loong matrix-serve` |
+| WeCom | Runtime-backed | official AIBot long connection | `wecom.enabled`, `wecom.bot_id`, `wecom.secret`, `wecom.allowed_conversation_ids` | `loong wecom-send`, `loong wecom-serve` |
+| Discord | Config-backed outbound | Discord HTTP API | `discord.enabled`, `discord.bot_token` | `loong discord-send` |
+| Slack | Config-backed outbound | Slack Web API | `slack.enabled`, `slack.bot_token` | `loong slack-send` |
+| LINE | Config-backed outbound | LINE Messaging API | `line.enabled`, `line.channel_access_token` | `loong line-send` |
+| DingTalk | Config-backed outbound | DingTalk custom robot webhook | `dingtalk.enabled`, `dingtalk.webhook_url`; `secret` is optional when the webhook uses signed requests | `loong dingtalk-send` |
+| WhatsApp | Config-backed outbound | WhatsApp Cloud API | `whatsapp.enabled`, `whatsapp.access_token`, `whatsapp.phone_number_id` | `loong whatsapp-send` |
+| Email | Config-backed outbound | SMTP relay or SMTP URL | `email.enabled`, `email.smtp_host`, `email.smtp_username`, `email.smtp_password`, `email.from_address` | `loong email-send` |
+| Webhook | Config-backed outbound | generic HTTP webhook POST | `webhook.enabled`, `webhook.endpoint_url`; `auth_token` is optional and can pair with custom header and prefix overrides | `loong webhook-send` |
+| Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loong google-chat-send` |
+| Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loong signal-send` |
+| Twitch | Config-backed outbound | Twitch Chat API | `twitch.enabled`, `twitch.access_token` or `twitch.access_token_env`; optional `default_account`, `accounts`, `api_base_url`, `oauth_base_url`, and `channel_names` remain available for account routing, controlled environments, and planned serve work | `loong twitch-send` |
+| Tlon | Config-backed outbound | Urbit ship HTTP poke API | `tlon.enabled`, `tlon.ship`, `tlon.url`, `tlon.code` | `loong tlon-send` |
+| Microsoft Teams | Config-backed outbound | Teams incoming webhook | `teams.enabled`, `teams.webhook_url` for sends; future bot runtime fields keep `teams.app_id`, `teams.app_password`, `teams.tenant_id`, `teams.allowed_conversation_ids` reserved for the planned serve path | `loong teams-send` |
+| Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loong mattermost-send` |
+| Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loong nextcloud-talk-send` |
+| Synology Chat | Config-backed outbound | Synology Chat incoming webhook | `synology_chat.enabled`, `synology_chat.incoming_url` | `loong synology-chat-send` |
+| IRC | Config-backed outbound | IRC socket client | `irc.enabled`, `irc.server`, `irc.nickname`; `password` is optional, and `username`, `realname`, `channel_names` are optional operator hints | `loong irc-send` |
+| iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loong imessage-send` |
+| Nostr | Config-backed outbound | relay publish over WebSocket | `nostr.enabled`, `nostr.relay_urls`, `nostr.private_key`; `allowed_pubkeys` stays reserved for the planned inbound path | `loong nostr-send` |
 
 ## Expansion Model
 
@@ -109,8 +108,8 @@ Telegram setup remains the simplest shipped bot surface:
 - enable the channel
 - provide one bot token
 - allowlist trusted chat ids
-- run `loongclaw telegram-serve` for reply-loop automation
-- use `loongclaw telegram-send` for direct operator sends
+- run `loong telegram-serve` for reply-loop automation
+- use `loong telegram-send` for direct operator sends
 
 ### Feishu / Lark
 
@@ -121,8 +120,8 @@ selected mode:
   `allowed_chat_ids`
 - webhook mode additionally requires `verification_token` and `encrypt_key`
 - websocket mode must not be blocked on webhook-only secrets
-- `loongclaw feishu-send` supports both `receive_id` and `message_reply`
-- `loongclaw feishu-serve` owns the inbound reply service
+- `loong feishu-send` supports both `receive_id` and `message_reply`
+- `loong feishu-serve` owns the inbound reply service
 
 ### Matrix
 

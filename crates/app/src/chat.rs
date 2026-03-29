@@ -184,7 +184,7 @@ fn build_onboard_command(
 }
 
 fn format_onboard_command_hint(config_path: Option<&str>, resolved_config_path: &Path) -> String {
-    let mut command = String::from("loongclaw onboard");
+    let mut command = format!("{} onboard", config::active_cli_command_name());
     if config_path.is_some() {
         command.push_str(" --output ");
         command.push_str(&resolved_config_path.display().to_string());
@@ -815,7 +815,7 @@ fn render_cli_chat_missing_config_lines_with_width(
 
 fn build_cli_chat_missing_config_screen_spec(onboard_hint: &str) -> TuiScreenSpec {
     let intro_lines = vec![
-        "Welcome to LoongClaw!".to_owned(),
+        format!("Welcome to {}!", config::PRODUCT_DISPLAY_NAME),
         "No configuration found for interactive chat.".to_owned(),
     ];
     let sections = vec![TuiSectionSpec::ActionGroup {
@@ -1105,7 +1105,7 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
     let sections = parse_cli_chat_markdown_sections(assistant_text);
 
     TuiMessageSpec {
-        role: "loongclaw".to_owned(),
+        role: config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("reply".to_owned()),
         sections,
         footer_lines: Vec::new(),
@@ -1687,7 +1687,7 @@ fn build_cli_chat_live_surface_message_spec(
     }
 
     TuiMessageSpec {
-        role: "loongclaw".to_owned(),
+        role: config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("live".to_owned()),
         sections,
         footer_lines: Vec::new(),
@@ -4550,7 +4550,7 @@ mod tests {
     fn onboard_command_hint_preserves_explicit_config_path() {
         let hint = format_onboard_command_hint(Some("custom.toml"), Path::new("/tmp/custom.toml"));
 
-        assert_eq!(hint, "loongclaw onboard --output /tmp/custom.toml");
+        assert_eq!(hint, "loong onboard --output /tmp/custom.toml");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -5440,7 +5440,7 @@ mod tests {
 
     #[test]
     fn render_cli_chat_missing_config_lines_wrap_setup_prompt_in_surface() {
-        let command = "loongclaw onboard --output /tmp/loongclaw.toml";
+        let command = "loong onboard --output /tmp/loongclaw.toml";
         let lines = render_cli_chat_missing_config_lines_with_width(command, 80);
 
         assert!(
@@ -5456,7 +5456,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "setup command: loongclaw onboard --output /tmp/loongclaw.toml"),
+                .any(|line| line == "setup command: loong onboard --output /tmp/loongclaw.toml"),
             "missing-config setup prompt should surface the setup command block: {lines:#?}"
         );
         assert!(
@@ -5779,7 +5779,7 @@ println!(\"{value}\");
 ```";
         let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
 
-        assert_eq!(lines[0], "loongclaw: reply");
+        assert_eq!(lines[0], "loong: reply");
         assert!(
             lines.iter().any(|line| line == "Plan"),
             "markdown headings should become section titles: {lines:#?}"
@@ -5882,7 +5882,7 @@ allowed_decisions: yes / auto / full / esc";
         };
         let lines = render_cli_chat_live_surface_lines_with_width(&snapshot, 72);
 
-        assert_eq!(lines[0], "loongclaw: live");
+        assert_eq!(lines[0], "loong: live");
         assert!(
             lines.iter().any(|line| line == "note: querying model"),
             "live surface should explain the active phase through a callout: {lines:#?}"

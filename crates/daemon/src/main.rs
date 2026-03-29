@@ -1,5 +1,4 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
-use clap::Parser;
 use loongclaw_daemon::*;
 
 /// Discard any unread input from the terminal's tty input queue.
@@ -37,7 +36,8 @@ impl Drop for StdinGuard {
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
-    let cli = Cli::parse();
+    mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
+    let cli = parse_cli();
     let result = match cli.command.unwrap_or_else(resolve_default_entry_command) {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
@@ -465,9 +465,10 @@ async fn main() {
             uuid,
         } => {
             if target_kind == mvp::channel::ChannelOutboundTargetKind::MessageReply {
-                Err(
-                    "legacy `feishu-send` no longer supports `message_reply` execution; use `loongclaw feishu reply` for reply targets".to_owned(),
-                )
+                Err(format!(
+                    "legacy `feishu-send` no longer supports `message_reply` execution; use `{} feishu reply` for reply targets",
+                    mvp::config::active_cli_command_name()
+                ))
             } else {
                 mvp::channel::run_feishu_send(
                     config.as_deref(),

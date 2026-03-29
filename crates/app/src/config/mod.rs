@@ -94,7 +94,11 @@ pub use runtime::{
 pub(crate) use runtime::{normalize_dispatch_account_id, normalize_dispatch_channel_id};
 pub(crate) use shared::ConfigValidationIssue;
 #[allow(unused_imports)]
-pub use shared::{CLI_COMMAND_NAME, expand_path};
+pub use shared::{
+    CLI_COMMAND_NAME, LEGACY_CLI_COMMAND_NAME, PRODUCT_DISPLAY_NAME, active_cli_command_name,
+    detect_invoked_cli_command_name, detect_invoked_cli_command_name_from_arg0, expand_path,
+    set_active_cli_command_name,
+};
 #[allow(unused_imports)]
 pub use tools::{
     AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,

@@ -57,7 +57,7 @@ write_fixture_release_doc() {
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| \`loongclaw-${tag}-x86_64-unknown-linux-gnu.tar.gz\` | 1 | \`deadbeef\` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/${tag}/linux.tar.gz) |
+| \`loong-${tag}-x86_64-unknown-linux-gnu.tar.gz\` | 1 | \`deadbeef\` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/${tag}/linux.tar.gz) |
 
 ## Verification
 | Check | Result | Evidence |
@@ -190,7 +190,7 @@ EOF
 ## Artifacts
 | Asset | Size (bytes) | SHA256 | Download |
 |---|---:|---|---|
-| `loongclaw-v0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz` | 1 | `deadbeef` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/v0.1.0-alpha.1/linux.tar.gz) |
+| `loong-v0.1.0-alpha.1-x86_64-unknown-linux-gnu.tar.gz` | 1 | `deadbeef` | [link](https://github.com/loongclaw-ai/loongclaw/releases/download/v0.1.0-alpha.1/linux.tar.gz) |
 
 ## Verification
 | Check | Result | Evidence |

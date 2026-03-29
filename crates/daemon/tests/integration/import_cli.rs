@@ -579,7 +579,7 @@ fn import_cli_apply_summary_wraps_long_path_and_domains_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "next step: loongclaw ask --config '/tmp/shared"),
+            .any(|line| line == "next step: loong ask --config '/tmp/shared"),
         "apply summary should keep the ask-next-step label visible before wrapping long command paths: {lines:#?}"
     );
     assert!(
@@ -630,14 +630,14 @@ fn import_cli_apply_summary_includes_registry_channel_actions() {
 
     assert!(
         lines.iter().any(|line| {
-            line == "also available: chat · loongclaw chat --config '/tmp/loongclaw-config.toml'"
+            line == "also available: chat · loong chat --config '/tmp/loongclaw-config.toml'"
         }),
         "apply summary should surface interactive chat immediately after the primary ask step: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| {
             line
-                == "also available: Telegram · loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+                == "also available: Telegram · loong telegram-serve --config '/tmp/loongclaw-config.toml'"
         }),
         "apply summary should continue surfacing registry-driven channel handoff commands after ask/chat: {lines:#?}"
     );
@@ -658,19 +658,19 @@ fn import_cli_apply_summary_shell_quotes_config_paths_with_single_quotes() {
 
     assert!(
         rendered.contains(
-            "next step: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Summarize this repository and suggest the best next step.'"
+            "next step: loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Summarize this repository and suggest the best next step.'"
         ),
         "apply summary should shell-quote single quotes in the primary ask command and keep the suggested message shell-safe: {lines:#?}"
     );
     assert!(
         rendered.contains(
-            "also available: chat · loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "also available: chat · loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in the secondary chat command: {lines:#?}"
     );
     assert!(
         rendered.contains(
-            "also available: Telegram · loongclaw telegram-serve --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "also available: Telegram · loong telegram-serve --config '/tmp/loongclaw'\"'\"'s config.toml'"
         ),
         "apply summary should shell-quote single quotes in channel handoff commands: {lines:#?}"
     );
@@ -691,14 +691,14 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 
     assert!(
         lines.iter().any(|line| {
-            line == "next step: loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+            line == "next step: loong telegram-serve --config '/tmp/loongclaw-config.toml'"
         }),
         "apply summary should not hand users to CLI chat when the imported config has cli disabled: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| !line.starts_with("next step: loongclaw ask --config")),
+            .all(|line| !line.starts_with("next step: loong ask --config")),
         "ask should not remain the primary handoff when cli is disabled: {lines:#?}"
     );
 }

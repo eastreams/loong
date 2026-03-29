@@ -1889,8 +1889,9 @@ pub fn load(path: Option<&str>) -> CliResult<(PathBuf, LoongClawConfig)> {
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
         format!(
-            "failed to read config {}: {error}. run `loongclaw onboard` first",
-            config_path.display()
+            "failed to read config {}: {error}. run `{} onboard` first",
+            config_path.display(),
+            crate::config::active_cli_command_name(),
         )
     })?;
     parse_toml_config(&raw).map(|config| (config_path, config))
@@ -1917,8 +1918,9 @@ pub fn validate_file_with_locale(
     let config_path = path.map(expand_path).unwrap_or_else(default_config_path);
     let raw = fs::read_to_string(&config_path).map_err(|error| {
         format!(
-            "failed to read config {}: {error}. run `loongclaw onboard` first",
-            config_path.display()
+            "failed to read config {}: {error}. run `{} onboard` first",
+            config_path.display(),
+            crate::config::active_cli_command_name(),
         )
     })?;
     let (config, selection_report) = parse_toml_config_components(&raw)?;
@@ -2417,7 +2419,7 @@ api_key_env = "$OPENAI_API_KEY"
         let path_string = missing.display().to_string();
 
         let error = load(Some(&path_string)).expect_err("missing config should fail");
-        assert!(error.contains("run `loongclaw onboard` first"));
+        assert!(error.contains("run `loong onboard` first"));
     }
 
     #[test]

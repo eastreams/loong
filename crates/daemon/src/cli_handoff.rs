@@ -4,27 +4,50 @@ pub(crate) fn shell_quote_argument(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
-pub(crate) fn format_subcommand_with_config(subcommand: &str, config_path: &str) -> String {
+pub(crate) fn format_subcommand_with_config_for_command(
+    command_name: &str,
+    subcommand: &str,
+    config_path: &str,
+) -> String {
     format!(
         "{} {} --config {}",
-        mvp::config::CLI_COMMAND_NAME,
+        command_name,
         subcommand,
         shell_quote_argument(config_path)
     )
 }
 
-pub(crate) fn format_ask_with_config(config_path: &str, message: &str) -> String {
+pub(crate) fn format_subcommand_with_config(subcommand: &str, config_path: &str) -> String {
+    format_subcommand_with_config_for_command(
+        mvp::config::active_cli_command_name(),
+        subcommand,
+        config_path,
+    )
+}
+
+pub(crate) fn format_ask_with_config_for_command(
+    command_name: &str,
+    config_path: &str,
+    message: &str,
+) -> String {
     format!(
         "{} ask --config {} --message {}",
-        mvp::config::CLI_COMMAND_NAME,
+        command_name,
         shell_quote_argument(config_path),
         shell_quote_argument(message)
     )
 }
 
+pub(crate) fn format_ask_with_config(config_path: &str, message: &str) -> String {
+    format_ask_with_config_for_command(mvp::config::active_cli_command_name(), config_path, message)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{format_ask_with_config, format_subcommand_with_config, shell_quote_argument};
+    use super::{
+        format_ask_with_config, format_ask_with_config_for_command, format_subcommand_with_config,
+        format_subcommand_with_config_for_command, shell_quote_argument,
+    };
 
     #[test]
     fn shell_quote_argument_escapes_single_quotes() {
@@ -38,7 +61,7 @@ mod tests {
     fn format_subcommand_with_config_shell_quotes_the_config_path() {
         assert_eq!(
             format_subcommand_with_config("doctor", "/tmp/loongclaw's config.toml"),
-            "loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
         );
     }
 
@@ -46,7 +69,7 @@ mod tests {
     fn format_ask_with_config_shell_quotes_the_config_path() {
         assert_eq!(
             format_ask_with_config("/tmp/loongclaw's config.toml", "say it's ready"),
-            "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'say it'\"'\"'s ready'"
+            "loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'say it'\"'\"'s ready'"
         );
     }
 
@@ -54,7 +77,31 @@ mod tests {
     fn format_ask_with_config_shell_quotes_message_content() {
         assert_eq!(
             format_ask_with_config("/tmp/loongclaw.toml", "say \"hi\" and print $HOME"),
-            "loongclaw ask --config '/tmp/loongclaw.toml' --message 'say \"hi\" and print $HOME'"
+            "loong ask --config '/tmp/loongclaw.toml' --message 'say \"hi\" and print $HOME'"
+        );
+    }
+
+    #[test]
+    fn format_subcommand_with_config_can_render_legacy_binary_name() {
+        assert_eq!(
+            format_subcommand_with_config_for_command(
+                crate::LEGACY_CLI_COMMAND_NAME,
+                "doctor",
+                "/tmp/loongclaw.toml",
+            ),
+            "loongclaw doctor --config '/tmp/loongclaw.toml'"
+        );
+    }
+
+    #[test]
+    fn format_ask_with_config_can_render_legacy_binary_name() {
+        assert_eq!(
+            format_ask_with_config_for_command(
+                crate::LEGACY_CLI_COMMAND_NAME,
+                "/tmp/loongclaw.toml",
+                "say hi",
+            ),
+            "loongclaw ask --config '/tmp/loongclaw.toml' --message 'say hi'"
         );
     }
 }

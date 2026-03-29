@@ -193,7 +193,7 @@ mod tests {
         assert_eq!(action.label, "channels");
         assert_eq!(
             action.command,
-            "loongclaw channels --config '/tmp/loongclaw.toml'"
+            "loong channels --config '/tmp/loongclaw.toml'"
         );
     }
 

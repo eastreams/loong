@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn validate_operator_outbound_message_input_rejects_mixed_image_key_and_path() {
         let error = validate_operator_outbound_message_input(
-            "loongclaw feishu send",
+            "loong feishu send",
             &FeishuOperatorOutboundMessageInput {
                 image_key: Some("img_v2_demo".to_owned()),
                 image_path: Some("/tmp/demo.png".to_owned()),
@@ -231,14 +231,14 @@ mod tests {
 
         assert_eq!(
             error,
-            "loongclaw feishu send accepts either --image-key or --image-path, not both"
+            "loong feishu send accepts either --image-key or --image-path, not both"
         );
     }
 
     #[test]
     fn validate_operator_outbound_message_input_rejects_file_type_without_path() {
         let error = validate_operator_outbound_message_input(
-            "loongclaw feishu send",
+            "loong feishu send",
             &FeishuOperatorOutboundMessageInput {
                 file_key: Some("file_v2_demo".to_owned()),
                 file_type: Some("stream".to_owned()),
@@ -249,7 +249,7 @@ mod tests {
 
         assert_eq!(
             error,
-            "loongclaw feishu send only allows --file-type with --file-path"
+            "loong feishu send only allows --file-type with --file-path"
         );
     }
 }

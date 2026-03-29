@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use kernel::{
     BootstrapTaskStatus, Capability, ConnectorCommand, FixedClock, InMemoryAuditSink,
     PluginActivationStatus, TaskIntent, ToolCoreOutcome, ToolCoreRequest,
@@ -137,6 +137,58 @@ pub mod test_support;
 
 pub const PUBLIC_GITHUB_REPO: &str = "loongclaw-ai/loongclaw";
 pub const CLI_COMMAND_NAME: &str = mvp::config::CLI_COMMAND_NAME;
+pub const LEGACY_CLI_COMMAND_NAME: &str = mvp::config::LEGACY_CLI_COMMAND_NAME;
+
+pub fn active_cli_command_name() -> &'static str {
+    mvp::config::active_cli_command_name()
+}
+
+fn render_welcome_long_about(command_name: &str) -> String {
+    format!(
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+    )
+}
+
+fn render_import_long_about(command_name: &str) -> String {
+    format!(
+        "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `{command_name} onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
+    )
+}
+
+fn render_migrate_long_about(command_name: &str) -> String {
+    format!(
+        "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `{command_name} onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+    )
+}
+
+fn render_ask_long_about(command_name: &str) -> String {
+    format!(
+        "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive `{command_name} chat` REPL. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
+    )
+}
+
+pub fn build_cli_command(command_name: &'static str) -> clap::Command {
+    Cli::command()
+        .name(command_name)
+        .bin_name(command_name)
+        .mut_subcommand("welcome", |command| {
+            command.long_about(render_welcome_long_about(command_name))
+        })
+        .mut_subcommand("import", |command| {
+            command.long_about(render_import_long_about(command_name))
+        })
+        .mut_subcommand("migrate", |command| {
+            command.long_about(render_migrate_long_about(command_name))
+        })
+        .mut_subcommand("ask", |command| {
+            command.long_about(render_ask_long_about(command_name))
+        })
+}
+
+pub fn parse_cli() -> Cli {
+    let mut matches = build_cli_command(active_cli_command_name()).get_matches();
+    Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|error| error.exit())
+}
 
 pub fn native_spec_tool_executor(
     request: ToolCoreRequest,
@@ -249,7 +301,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loongclaw ask --config <path> --message \"...\"\n- loongclaw chat --config <path>\n- loongclaw doctor --config <path>\n- loongclaw --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -443,7 +495,7 @@ pub enum Commands {
     },
     #[command(
         about = "Preview or apply migration sources explicitly",
-        long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loongclaw onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
+        long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loong onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
     )]
     Import {
         /// Write the imported config to a custom path instead of the default loongclaw config location
@@ -482,7 +534,7 @@ pub enum Commands {
     },
     #[command(
         about = "Preview or apply legacy claw migration explicitly",
-        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loongclaw onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loong onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
     )]
     Migrate {
         /// Path to the legacy claw workspace or root to inspect
@@ -713,7 +765,7 @@ pub enum Commands {
     },
     #[command(
         about = "Run one non-interactive assistant turn",
-        long_about = "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive `loongclaw chat` REPL. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
+        long_about = "Run one non-interactive one-shot assistant turn.\n\nUse this when you want a fast answer without entering the interactive `loong chat` REPL. The command reuses the normal CLI conversation runtime, session memory, provider selection, and ACP options."
     )]
     Ask {
         #[arg(long)]
@@ -1356,7 +1408,7 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
         Err(format!(
             "Config file not found at {}. Run `{} onboard` to set up LoongClaw.",
             config_path.display(),
-            CLI_COMMAND_NAME,
+            active_cli_command_name(),
         ))
     }
 }
@@ -1377,7 +1429,7 @@ fn render_welcome_banner(config_path: &Path) -> String {
         ask_command,
         chat_command,
         doctor_command,
-        CLI_COMMAND_NAME,
+        active_cli_command_name(),
     )
 }
 
@@ -1535,7 +1587,7 @@ mod first_run_entry_tests {
             "welcome should explain the missing config file: {error}"
         );
         assert!(
-            error.contains("loongclaw onboard"),
+            error.contains("loong onboard"),
             "welcome should point users back to onboarding: {error}"
         );
     }
@@ -1564,19 +1616,19 @@ mod first_run_entry_tests {
             "welcome banner should include the current version: {rendered}"
         );
         assert!(
-            rendered.contains("loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml'"),
             "welcome banner should include a quoted ask command: {rendered}"
         );
         assert!(
-            rendered.contains("loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
-            rendered.contains("loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"),
             "welcome banner should include a quoted doctor command: {rendered}"
         );
         assert!(
-            rendered.contains("loongclaw --help"),
+            rendered.contains("loong --help"),
             "welcome banner should point users to root help: {rendered}"
         );
     }

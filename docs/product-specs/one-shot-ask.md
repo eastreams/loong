@@ -7,7 +7,7 @@ that I can get an answer immediately without entering an interactive shell.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes `loongclaw ask --message "..."` as a first-class CLI
+- [ ] LoongClaw exposes `loong ask --message "..."` as a first-class CLI
       command.
 - [ ] `ask` reuses the same config load, provider routing, memory behavior, and
       ACP options as CLI chat.
@@ -19,7 +19,7 @@ that I can get an answer immediately without entering an interactive shell.
 - [ ] When surfaced outside `ask` itself, the one-shot handoff is labeled in
       product-facing language such as "first answer" rather than only as a
       technical example.
-- [ ] `ask` help text points users toward `loongclaw chat` for interactive
+- [ ] `ask` help text points users toward `loong chat` for interactive
       follow-up.
 
 ## Out of Scope

@@ -954,7 +954,7 @@ fn build_task_recipes(
     current_session_id: &str,
     task_id: &str,
 ) -> Vec<String> {
-    let command_name = crate::CLI_COMMAND_NAME;
+    let command_name = crate::active_cli_command_name();
     let config_arg = crate::cli_handoff::shell_quote_argument(resolved_config_path);
     let session_arg = crate::cli_handoff::shell_quote_argument(current_session_id);
     let task_arg = crate::cli_handoff::shell_quote_argument(task_id);

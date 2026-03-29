@@ -4999,9 +4999,8 @@ mod tests {
             "group[agent]=agent-b loaded_events=1 triage_counts=- query_requested_tier_counts=verified-community=1"
         ));
         assert!(
-            rendered.contains(
-                "group_drill_down[agent]=agent-a command=loongclaw audit recent --config"
-            )
+            rendered
+                .contains("group_drill_down[agent]=agent-a command=loong audit recent --config")
         );
         assert!(rendered.contains(
             "group_correlated_preview[agent]=agent-a loaded_events=3 event_kind_counts=AuthorizationDenied=1,ToolSearchEvaluated=2 triage_counts=authorization_denied=1,tool_search_trust_conflict=1,tool_search_trust_empty=1"
@@ -5010,10 +5009,10 @@ mod tests {
             "group_correlated_focus[agent]=agent-a additional_events=1 non_discovery_event_kind_counts=AuthorizationDenied=1 non_discovery_triage_counts=authorization_denied=1 attention_hint=adjacent_triage=authorization_denied=1 remediation_hint=grant the required capability or retry with a token scoped for the requested operation"
         ));
         assert!(rendered.contains(
-            "group_correlated_summary[agent]=agent-a command=loongclaw audit summary --config"
+            "group_correlated_summary[agent]=agent-a command=loong audit summary --config"
         ));
         assert!(rendered.contains(
-            "group_correlated_remediation[agent]=agent-a command=loongclaw audit summary --config"
+            "group_correlated_remediation[agent]=agent-a command=loong audit summary --config"
         ));
         assert!(rendered.contains("--agent-id 'agent-a'"));
         assert!(rendered.contains("--kind 'ToolSearchEvaluated'"));
@@ -5025,14 +5024,14 @@ mod tests {
         assert_eq!(
             payload["groups"][0]["drill_down_command"],
             json!(format!(
-                "loongclaw audit recent --config '{}' --limit 10 --agent-id 'agent-a' --kind 'ToolSearchEvaluated'",
+                "loong audit recent --config '{}' --limit 10 --agent-id 'agent-a' --kind 'ToolSearchEvaluated'",
                 config_path.display()
             ))
         );
         assert_eq!(
             payload["groups"][0]["correlated_summary_command"],
             json!(format!(
-                "loongclaw audit summary --config '{}' --limit 10 --agent-id 'agent-a'",
+                "loong audit summary --config '{}' --limit 10 --agent-id 'agent-a'",
                 config_path.display()
             ))
         );
@@ -5056,7 +5055,7 @@ mod tests {
         assert_eq!(
             payload["groups"][0]["correlated_remediation_command"],
             json!(format!(
-                "loongclaw audit summary --config '{}' --limit 10 --agent-id 'agent-a' --triage-label 'authorization_denied' --group-by 'token'",
+                "loong audit summary --config '{}' --limit 10 --agent-id 'agent-a' --triage-label 'authorization_denied' --group-by 'token'",
                 config_path.display()
             ))
         );
@@ -5129,7 +5128,7 @@ mod tests {
 
         assert_eq!(
             command,
-            "loongclaw audit recent --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --event-id 'evt-2' --kind 'ToolSearchEvaluated' --triage-label 'tool_search_trust_conflict' --query-contains 'trust:official' --trust-tier 'official'"
+            "loong audit recent --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --event-id 'evt-2' --kind 'ToolSearchEvaluated' --triage-label 'tool_search_trust_conflict' --query-contains 'trust:official' --trust-tier 'official'"
         );
     }
 
@@ -5185,7 +5184,7 @@ mod tests {
 
         assert_eq!(
             command,
-            "loongclaw audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b'"
+            "loong audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b'"
         );
     }
 
@@ -5250,7 +5249,7 @@ mod tests {
 
         assert_eq!(
             command,
-            "loongclaw audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --triage-label 'authorization_denied' --group-by 'token'"
+            "loong audit summary --config '/tmp/loongclaw.toml' --limit 25 --since-epoch-s 1700010400 --until-epoch-s 1700010499 --pack-id 'sales-intel' --agent-id 'agent-b' --triage-label 'authorization_denied' --group-by 'token'"
         );
     }
 

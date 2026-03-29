@@ -22,7 +22,7 @@ use reqwest::header::{
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind};
+use crate::config::{ProviderAuthScheme, ProviderConfig, ProviderKind, active_cli_command_name};
 
 use super::auth_profile_runtime::ProviderAuthProfile;
 
@@ -259,28 +259,29 @@ pub(super) fn render_transport_route_hint(
 ) -> Option<String> {
     let host = request_host_label(url)?;
     let lower = error_message.to_ascii_lowercase();
+    let doctor_command = format!("{} doctor", active_cli_command_name());
 
     if is_timeout {
         return Some(format!(
-            "request host {host}: the transport timed out before an HTTP response arrived. if you're using a proxy/TUN/fake-ip setup, verify that the route stays healthy for longer-lived requests, then run `loongclaw doctor` to inspect provider route diagnostics"
+            "request host {host}: the transport timed out before an HTTP response arrived. if you're using a proxy/TUN/fake-ip setup, verify that the route stays healthy for longer-lived requests, then run `{doctor_command}` to inspect provider route diagnostics"
         ));
     }
 
     if is_connect && message_looks_like_dns_failure(lower.as_str()) {
         return Some(format!(
-            "request host {host}: dns resolution failed before the request reached the provider. check local dns / proxy / TUN rules, then run `loongclaw doctor` to inspect provider route diagnostics"
+            "request host {host}: dns resolution failed before the request reached the provider. check local dns / proxy / TUN rules, then run `{doctor_command}` to inspect provider route diagnostics"
         ));
     }
 
     if message_looks_like_proxy_route_failure(lower.as_str()) {
         return Some(format!(
-            "request host {host}: the transport failed while crossing a proxy/TUN route. verify that the local proxy path is healthy, then run `loongclaw doctor` to inspect provider route diagnostics"
+            "request host {host}: the transport failed while crossing a proxy/TUN route. verify that the local proxy path is healthy, then run `{doctor_command}` to inspect provider route diagnostics"
         ));
     }
 
     if is_connect {
         return Some(format!(
-            "request host {host}: the connection failed before an HTTP status was returned. this usually points to dns, proxy/TUN routing, or another local network-path problem. run `loongclaw doctor` to inspect provider route diagnostics"
+            "request host {host}: the connection failed before an HTTP status was returned. this usually points to dns, proxy/TUN routing, or another local network-path problem. run `{doctor_command}` to inspect provider route diagnostics"
         ));
     }
 
@@ -669,7 +670,7 @@ mod tests {
 
         assert!(hint.contains("ark.cn-beijing.volces.com:443"));
         assert!(hint.contains("dns"));
-        assert!(hint.contains("loongclaw doctor"));
+        assert!(hint.contains("loong doctor"));
     }
 
     #[test]

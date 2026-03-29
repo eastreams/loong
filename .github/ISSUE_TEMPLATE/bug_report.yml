@@ -91,7 +91,7 @@ body:
       placeholder: |
         1. Configure provider profile A and provider profile B.
         2. Set profile B as the active profile.
-        3. Run `loongclaw ask --message "ping"`.
+        3. Run `loong ask --message "ping"`.
         4. Observe the request executes through profile A.
       render: bash
     validations:

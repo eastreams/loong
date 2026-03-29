@@ -15,6 +15,10 @@ use crate::feishu_support::{
 
 const DEFAULT_FEISHU_REDIRECT_URI: &str = "http://127.0.0.1:34819/callback";
 
+fn active_cli_command_name() -> &'static str {
+    mvp::config::active_cli_command_name()
+}
+
 #[derive(Subcommand, Debug)]
 pub enum FeishuCommand {
     /// Start or inspect user OAuth grants and state
@@ -681,8 +685,9 @@ pub async fn execute_feishu_auth_select(args: &FeishuAuthSelectArgs) -> CliResul
         .store
         .load_grant(context.account_id(), open_id)?
         .ok_or_else(|| {
+            let cli = active_cli_command_name();
             format!(
-                "no stored Feishu grant for account `{}` and open_id `{}`; run `loongclaw feishu auth list --account {}` first",
+                "no stored Feishu grant for account `{}` and open_id `{}`; run `{cli} feishu auth list --account {}` first",
                 context.resolved.configured_account_id,
                 open_id,
                 context.resolved.configured_account_id
@@ -935,15 +940,16 @@ pub async fn execute_feishu_read_doc(args: &FeishuReadDocArgs) -> CliResult<Valu
 
 pub async fn execute_feishu_doc_create(args: &FeishuDocCreateArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let action = format!("{} feishu doc create", active_cli_command_name());
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
         mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
-        "loongclaw feishu doc create",
+        action.as_str(),
     )?;
     let client = context.build_client()?;
     let initial_content = prepare_feishu_doc_cli_content(
-        "loongclaw feishu doc create",
+        action.as_str(),
         args.content.as_deref(),
         args.content_path.as_deref(),
         args.content_type.as_deref(),
@@ -994,25 +1000,26 @@ pub async fn execute_feishu_doc_create(args: &FeishuDocCreateArgs) -> CliResult<
 
 pub async fn execute_feishu_doc_append(args: &FeishuDocAppendArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let action = format!("{} feishu doc append", active_cli_command_name());
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
         mvp::channel::feishu::api::FEISHU_DOC_WRITE_ACCEPTED_SCOPES,
-        "loongclaw feishu doc append",
+        action.as_str(),
     )?;
     let client = context.build_client()?;
     let url = args.url.trim();
     if url.is_empty() {
-        return Err("loongclaw feishu doc append requires --url".to_owned());
+        return Err(format!("{action} requires --url"));
     }
     let content = prepare_feishu_doc_cli_content(
-        "loongclaw feishu doc append",
+        action.as_str(),
         args.content.as_deref(),
         args.content_path.as_deref(),
         args.content_type.as_deref(),
         true,
     )?
-    .ok_or_else(|| "loongclaw feishu doc append requires --content or --content-path".to_owned())?;
+    .ok_or_else(|| format!("{action} requires --content or --content-path"))?;
     let document_id = mvp::channel::feishu::api::resources::docs::extract_document_id(url)
         .ok_or_else(|| "failed to resolve Feishu document id".to_owned())?;
     let converted = mvp::channel::feishu::api::resources::docs::convert_content_to_blocks(
@@ -1253,11 +1260,12 @@ pub async fn execute_feishu_calendar_freebusy(
 
 pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let action = format!("{} feishu send", active_cli_command_name());
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
         mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
-        "loongclaw feishu send",
+        action.as_str(),
     )?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
@@ -1266,7 +1274,7 @@ pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
         .to_owned();
     let uuid = trimmed_opt(args.uuid.as_deref()).map(ToOwned::to_owned);
     let body = mvp::channel::feishu::api::resolve_operator_outbound_message_body(
-        "loongclaw feishu send",
+        action.as_str(),
         &client,
         &tenant_access_token,
         &mvp::channel::feishu::api::FeishuOperatorOutboundMessageInput {
@@ -1311,16 +1319,17 @@ pub async fn execute_feishu_send(args: &FeishuSendArgs) -> CliResult<Value> {
 
 pub async fn execute_feishu_reply(args: &FeishuReplyArgs) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let action = format!("{} feishu reply", active_cli_command_name());
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
         mvp::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
-        "loongclaw feishu reply",
+        action.as_str(),
     )?;
     let client = context.build_client()?;
     let tenant_access_token = client.get_tenant_access_token().await?;
     let body = mvp::channel::feishu::api::resolve_operator_outbound_message_body(
-        "loongclaw feishu reply",
+        action.as_str(),
         &client,
         &tenant_access_token,
         &mvp::channel::feishu::api::FeishuOperatorOutboundMessageInput {
@@ -1398,6 +1407,7 @@ fn describe_grant_selection_error(
     resolution: &mvp::channel::feishu::api::FeishuGrantResolution,
 ) -> String {
     let display_account_id = context.resolved.configured_account_id.as_str();
+    let cli = active_cli_command_name();
     if let Some(requested_open_id) = resolution.missing_explicit_open_id() {
         if resolution.inventory.grants.is_empty() {
             return format!(
@@ -1407,7 +1417,7 @@ fn describe_grant_selection_error(
         }
         let available_open_ids = resolution.available_open_ids().join(", ");
         return format!(
-            "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; available open_ids: {available_open_ids}; run `{}` or `loongclaw feishu auth list --account {display_account_id}`",
+            "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; available open_ids: {available_open_ids}; run `{}` or `{cli} feishu auth list --account {display_account_id}`",
             crate::feishu_support::feishu_auth_select_command_hint(display_account_id),
         );
     }
@@ -1420,7 +1430,7 @@ fn describe_grant_selection_error(
             .map(|open_id| format!("stale selected open_id `{open_id}` was cleared; "))
             .unwrap_or_default();
         return format!(
-            "{stale_selected_hint}multiple stored Feishu grants exist for account `{display_account_id}` ({open_ids}); run `loongclaw feishu auth list --account {display_account_id}`, then `{}` or pass `--open-id`",
+            "{stale_selected_hint}multiple stored Feishu grants exist for account `{display_account_id}` ({open_ids}); run `{cli} feishu auth list --account {display_account_id}`, then `{}` or pass `--open-id`",
             crate::feishu_support::feishu_auth_select_command_hint(display_account_id),
         );
     }
@@ -2671,7 +2681,7 @@ mod render_tests {
                 "matched_scopes": []
             },
             "recommendations": {
-                "auth_start_command": "loongclaw feishu auth start --account feishu_main --capability message-write"
+                "auth_start_command": "loong feishu auth start --account feishu_main --capability message-write"
             }
         })
     }
@@ -2684,7 +2694,7 @@ mod render_tests {
             "selected_open_id": Value::Null,
             "grants": [sample_grant_summary(false, false)],
             "recommendations": {
-                "select_command": "loongclaw feishu auth select --account feishu_main --open-id <open_id>",
+                "select_command": "loong feishu auth select --account feishu_main --open-id <open_id>",
                 "stale_selected_open_id": "ou_missing"
             }
         });
@@ -2693,7 +2703,7 @@ mod render_tests {
 
         assert!(rendered.contains("configured_account: work"));
         assert!(rendered.contains(
-            "select_hint: loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+            "select_hint: loong feishu auth select --account feishu_main --open-id <open_id>"
         ));
         assert!(rendered.contains("stale_selected_open_id: ou_missing"));
         assert!(rendered.contains("missing_scopes: docx:document:readonly"));
@@ -2786,7 +2796,7 @@ mod render_tests {
             "selected_open_id": Value::Null,
             "effective_open_id": Value::Null,
             "recommendations": {
-                "select_command": "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+                "select_command": "loong feishu auth select --account feishu_main --open-id <open_id>"
             }
         });
 
@@ -2797,7 +2807,7 @@ mod render_tests {
         assert!(rendered.contains("selected_open_id: -"));
         assert!(rendered.contains("effective_open_id: -"));
         assert!(rendered.contains(
-            "select_hint: loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+            "select_hint: loong feishu auth select --account feishu_main --open-id <open_id>"
         ));
     }
 
@@ -2811,7 +2821,7 @@ mod render_tests {
             "selected_open_id": Value::Null,
             "grants": [sample_grant_summary(false, false)],
             "recommendations": {
-                "select_command": "loongclaw feishu auth select --account feishu_main --open-id <open_id>",
+                "select_command": "loong feishu auth select --account feishu_main --open-id <open_id>",
                 "stale_selected_open_id": "ou_missing"
             }
         });
@@ -2821,7 +2831,7 @@ mod render_tests {
         assert!(rendered.contains("configured_account: work"));
         assert!(rendered.contains("status_scope: account"));
         assert!(rendered.contains(
-            "select_hint: loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+            "select_hint: loong feishu auth select --account feishu_main --open-id <open_id>"
         ));
         assert!(rendered.contains("stale_selected_open_id: ou_missing"));
         assert!(rendered.contains("missing_scopes: docx:document:readonly"));
@@ -2845,7 +2855,7 @@ mod render_tests {
             },
             "recommendations": {
                 "auth_start_command": Value::Null,
-                "select_command": "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+                "select_command": "loong feishu auth select --account feishu_main --open-id <open_id>"
             },
             "selected_open_id": Value::Null,
             "effective_open_id": Value::Null,
@@ -2858,7 +2868,7 @@ mod render_tests {
         assert!(rendered.contains("configured_account: work"));
         assert!(rendered.contains("requested_open_id: ou_missing"));
         assert!(rendered.contains(
-            "select_hint: loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+            "select_hint: loong feishu auth select --account feishu_main --open-id <open_id>"
         ));
         assert!(rendered.contains("available_open_ids: ou_456, ou_123"));
     }

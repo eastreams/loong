@@ -269,11 +269,8 @@ fn channel_catalog_includes_openclaw_inspired_extended_surfaces() {
         tlon.onboarding.strategy,
         ChannelOnboardingStrategy::ManualConfig
     );
-    assert_eq!(tlon.onboarding.status_command, "loongclaw doctor");
-    assert_eq!(
-        tlon.onboarding.repair_command,
-        Some("loongclaw doctor --fix")
-    );
+    assert_eq!(tlon.onboarding.status_command, "loong doctor");
+    assert_eq!(tlon.onboarding.repair_command, Some("loong doctor --fix"));
 
     assert_eq!(webchat.selection_order, 230);
     assert_eq!(webchat.aliases, vec!["browser-chat", "web-ui"]);

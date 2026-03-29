@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     CliResult,
-    config::{LoongClawConfig, MemoryProfile},
+    config::{LoongClawConfig, MemoryProfile, active_cli_command_name},
     prompt::DEFAULT_PROMPT_PACK_ID,
 };
 use serde_json::Value;
@@ -621,9 +621,10 @@ fn external_skill_probe_roots(input_path: &Path) -> Vec<PathBuf> {
 
 fn external_skill_warning(artifact: &ExternalSkillArtifact) -> String {
     format!(
-        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content by default, and installable local skills can be bridged into the managed runtime with `loongclaw migrate --mode apply_selected --apply-external-skills-plan` or the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`)",
+        "detected external skills artifact `{}` ({}); LoongClaw imports prompt/profile content by default, and installable local skills can be bridged into the managed runtime with `{} migrate --mode apply_selected --apply-external-skills-plan` or the explicit external skills lifecycle (`fetch` -> `install` -> `list` -> `invoke`)",
         artifact.path.display(),
-        artifact.kind.as_id()
+        artifact.kind.as_id(),
+        active_cli_command_name()
     )
 }
 

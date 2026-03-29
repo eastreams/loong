@@ -552,13 +552,11 @@ async fn feishu_send_command_requires_confirmed_write_scope() {
     .expect_err("send should reject grants without a confirmed write scope");
 
     assert!(
-        error.contains("loongclaw feishu send requires at least one Feishu scope [im:message, im:message:send_as_bot, im:message:send]"),
+        error.contains("loong feishu send requires at least one Feishu scope [im:message, im:message:send_as_bot, im:message:send]"),
         "error={error}"
     );
     assert!(
-        error.contains(
-            "loongclaw feishu auth start --account feishu_main --capability message-write"
-        ),
+        error.contains("loong feishu auth start --account feishu_main --capability message-write"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());
@@ -1880,7 +1878,7 @@ async fn feishu_auth_list_reports_multiple_grants_for_account() {
     assert_eq!(payload["recommendations"]["selection_required"], true);
     assert_eq!(
         payload["recommendations"]["select_command"],
-        "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+        "loong feishu auth select --account feishu_main --open-id <open_id>"
     );
     assert_eq!(payload["grants"][0]["selected"], false);
     assert_eq!(payload["grants"][0]["principal"]["open_id"], "ou_456");
@@ -2064,7 +2062,7 @@ async fn feishu_auth_select_uses_configured_account_in_missing_grant_error() {
     .expect_err("select should fail for an unknown explicit open_id");
 
     assert!(error.contains("account `work`"));
-    assert!(error.contains("loongclaw feishu auth list --account work"));
+    assert!(error.contains("loong feishu auth list --account work"));
     assert!(!error.contains("feishu_secondary"));
 }
 
@@ -2146,7 +2144,7 @@ async fn feishu_auth_status_without_open_id_summarizes_multiple_grants() {
     assert_eq!(payload["recommendations"]["selection_required"], true);
     assert_eq!(
         payload["recommendations"]["select_command"],
-        "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+        "loong feishu auth select --account feishu_main --open-id <open_id>"
     );
     assert_eq!(payload["grants"][0]["principal"]["open_id"], "ou_456");
     assert_eq!(payload["grants"][1]["principal"]["open_id"], "ou_123");
@@ -2167,7 +2165,7 @@ async fn feishu_auth_status_without_open_id_summarizes_multiple_grants() {
     );
     assert_eq!(
         payload["grants"][0]["recommendations"]["auth_start_command"],
-        "loongclaw feishu auth start --account feishu_main --capability doc-write --capability message-write"
+        "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
     );
 }
 
@@ -2310,7 +2308,7 @@ async fn feishu_auth_status_recommends_account_scoped_reauthorize_for_missing_wr
     );
     assert_eq!(
         payload["recommendations"]["auth_start_command"],
-        "loongclaw feishu auth start --account feishu_main --capability doc-write --capability message-write"
+        "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
     );
 }
 
@@ -2336,7 +2334,7 @@ async fn feishu_auth_status_without_grant_recommends_readonly_auth_start() {
     assert_eq!(payload["status"]["has_grant"], false);
     assert_eq!(
         payload["recommendations"]["auth_start_command"],
-        "loongclaw feishu auth start --account feishu_main"
+        "loong feishu auth start --account feishu_main"
     );
     assert_eq!(
         payload["recommendations"]["missing_message_write_scope"],
@@ -2389,7 +2387,7 @@ async fn feishu_auth_status_with_missing_open_id_reports_available_grants() {
     assert_eq!(payload["status"]["has_grant"], false);
     assert_eq!(
         payload["recommendations"]["select_command"],
-        "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+        "loong feishu auth select --account feishu_main --open-id <open_id>"
     );
     assert_eq!(
         payload["recommendations"]["requested_open_id_missing"],
@@ -2435,9 +2433,7 @@ async fn feishu_auth_revoke_reports_missing_explicit_open_id() {
 
     assert!(error.contains("open_id `ou_missing`"));
     assert!(error.contains("ou_123"));
-    assert!(
-        error.contains("loongclaw feishu auth select --account feishu_main --open-id <open_id>")
-    );
+    assert!(error.contains("loong feishu auth select --account feishu_main --open-id <open_id>"));
 }
 
 #[tokio::test]
@@ -2550,7 +2546,7 @@ async fn feishu_auth_revoke_reports_reselection_needed_when_multiple_grants_rema
     assert_eq!(payload["recommendations"]["selection_required"], true);
     assert_eq!(
         payload["recommendations"]["select_command"],
-        "loongclaw feishu auth select --account feishu_main --open-id <open_id>"
+        "loong feishu auth select --account feishu_main --open-id <open_id>"
     );
 }
 
@@ -2594,7 +2590,7 @@ async fn feishu_whoami_requires_open_id_when_multiple_grants_exist_without_selec
     .expect_err("whoami should require explicit selection when multiple grants exist");
 
     assert!(error.contains("multiple stored Feishu grants exist"));
-    assert!(error.contains("loongclaw feishu auth list"));
+    assert!(error.contains("loong feishu auth list"));
     assert!(error.contains("--open-id"));
 }
 
@@ -2630,9 +2626,7 @@ async fn feishu_whoami_reports_missing_explicit_open_id() {
 
     assert!(error.contains("open_id `ou_missing`"));
     assert!(error.contains("ou_123"));
-    assert!(
-        error.contains("loongclaw feishu auth select --account feishu_main --open-id <open_id>")
-    );
+    assert!(error.contains("loong feishu auth select --account feishu_main --open-id <open_id>"));
 }
 
 #[tokio::test]
@@ -2679,7 +2673,7 @@ async fn feishu_read_doc_requires_open_id_when_multiple_grants_exist_without_sel
     .expect_err("read doc should require explicit selection when multiple grants exist");
 
     assert!(error.contains("multiple stored Feishu grants exist"));
-    assert!(error.contains("loongclaw feishu auth list"));
+    assert!(error.contains("loong feishu auth list"));
     assert!(error.contains("--open-id"));
 }
 
@@ -3333,13 +3327,12 @@ async fn feishu_doc_create_reports_doc_write_hint_when_only_message_write_scope_
     .expect_err("doc create should reject grants without a confirmed doc write scope");
 
     assert!(
-        error.contains(
-            "loongclaw feishu doc create requires at least one Feishu scope [docx:document]"
-        ),
+        error
+            .contains("loong feishu doc create requires at least one Feishu scope [docx:document]"),
         "error={error}"
     );
     assert!(
-        error.contains("loongclaw feishu auth start --account feishu_main --capability doc-write"),
+        error.contains("loong feishu auth start --account feishu_main --capability doc-write"),
         "error={error}"
     );
     assert!(
@@ -4246,7 +4239,7 @@ async fn feishu_doc_append_rejects_content_and_content_path_together() {
 
     assert_eq!(
         error,
-        "loongclaw feishu doc append accepts either --content or --content-path, not both"
+        "loong feishu doc append accepts either --content or --content-path, not both"
     );
 }
 

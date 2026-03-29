@@ -74,7 +74,7 @@ fn doctor_reports_missing_feishu_grant_when_channel_is_enabled() {
     assert!(
         grant_check
             .detail
-            .contains("loongclaw feishu auth start --account feishu_main")
+            .contains("loong feishu auth start --account feishu_main")
     );
 }
 
@@ -137,7 +137,7 @@ fn doctor_warns_when_feishu_grant_lacks_doc_write_scope() {
     assert!(
         doc_write_check
             .detail
-            .contains("loongclaw feishu auth start --account feishu_main --capability doc-write")
+            .contains("loong feishu auth start --account feishu_main --capability doc-write")
     );
 }
 
@@ -201,9 +201,9 @@ fn doctor_warns_when_feishu_grant_lacks_message_write_scope() {
     assert!(write_check.detail.contains("write_ready=false"));
     assert!(write_check.detail.contains("im:message:send_as_bot"));
     assert!(
-        write_check.detail.contains(
-            "loongclaw feishu auth start --account feishu_main --capability message-write"
-        )
+        write_check
+            .detail
+            .contains("loong feishu auth start --account feishu_main --capability message-write")
     );
 }
 
@@ -268,7 +268,7 @@ fn doctor_warns_when_multiple_feishu_grants_exist_without_selected_default() {
     assert!(
         selection_check
             .detail
-            .contains("loongclaw feishu auth select --account feishu_main")
+            .contains("loong feishu auth select --account feishu_main")
     );
 }
 
@@ -441,7 +441,7 @@ fn doctor_warns_when_effective_grant_is_ambiguous_without_selected_default() {
     assert!(
         freshness_check
             .detail
-            .contains("loongclaw feishu auth select --account feishu_main --open-id <open_id>")
+            .contains("loong feishu auth select --account feishu_main --open-id <open_id>")
     );
 
     let write_check = checks

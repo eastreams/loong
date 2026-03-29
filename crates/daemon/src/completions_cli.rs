@@ -1,4 +1,3 @@
-use clap::CommandFactory;
 use clap_complete::{Shell, generate};
 
 use loongclaw_spec::CliResult;
@@ -19,14 +18,18 @@ pub fn generate_completions(shell: Shell, writer: &mut dyn std::io::Write) -> Cl
 }
 
 fn render_completions(shell: Shell) -> CliResult<Vec<u8>> {
+    render_completions_for_command(shell, crate::active_cli_command_name())
+}
+
+fn render_completions_for_command(shell: Shell, command_name: &'static str) -> CliResult<Vec<u8>> {
     let thread_builder = std::thread::Builder::new();
     let thread_builder = thread_builder.name("cli-completions-render".to_owned());
     let thread_builder = thread_builder.stack_size(CLI_COMPLETIONS_STACK_SIZE_BYTES);
     let join_handle = thread_builder
         .spawn(move || {
             let mut rendered = Vec::new();
-            let mut command = crate::Cli::command();
-            generate(shell, &mut command, crate::CLI_COMMAND_NAME, &mut rendered);
+            let mut command = crate::build_cli_command(command_name);
+            generate(shell, &mut command, command_name, &mut rendered);
             rendered
         })
         .map_err(|error| format!("spawn completions render thread failed: {error}"))?;
@@ -53,10 +56,23 @@ mod tests {
 
     #[test]
     fn completions_zsh_contains_binary_name() {
-        let mut buf = Vec::new();
-        generate_completions(Shell::Zsh, &mut buf).expect("generate zsh completions");
-        let out = String::from_utf8(buf).unwrap();
-        assert!(out.contains("loongclaw"));
+        let out = String::from_utf8(
+            render_completions_for_command(Shell::Zsh, crate::CLI_COMMAND_NAME)
+                .expect("generate zsh completions"),
+        )
+        .unwrap();
+        assert!(out.contains("#compdef loong"));
+        assert!(!out.contains("#compdef loongclaw"));
+    }
+
+    #[test]
+    fn completions_zsh_can_target_legacy_binary_name() {
+        let out = String::from_utf8(
+            render_completions_for_command(Shell::Zsh, crate::LEGACY_CLI_COMMAND_NAME)
+                .expect("generate zsh completions"),
+        )
+        .unwrap();
+        assert!(out.contains("#compdef loongclaw"));
     }
 
     #[test]

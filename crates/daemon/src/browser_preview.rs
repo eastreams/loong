@@ -345,16 +345,15 @@ mod tests {
 
         assert_eq!(
             browser_preview_enable_command(config_path),
-            "loongclaw skills enable-browser-preview --config '/tmp/loongclaw'\"'\"'s config.toml'"
+            "loong skills enable-browser-preview --config '/tmp/loongclaw'\"'\"'s config.toml'"
         );
         assert_eq!(
             browser_preview_unblock_command(config_path),
             "edit '/tmp/loongclaw'\"'\"'s config.toml' and remove `agent-browser` from [tools].shell_deny"
         );
         assert!(
-            browser_preview_ready_command(config_path).starts_with(
-                "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message "
-            ),
+            browser_preview_ready_command(config_path)
+                .starts_with("loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message "),
             "ready command should quote the config path for copy-paste safety"
         );
     }

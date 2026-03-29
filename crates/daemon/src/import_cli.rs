@@ -623,8 +623,9 @@ pub fn resolve_import_provider_selection(
             .collect::<Vec<_>>()
             .join(", ");
         return Err(format!(
-            "recommended import plan requires an active provider choice ({choices}); rerun with --provider {} or use loongclaw onboard",
+            "recommended import plan requires an active provider choice ({choices}); rerun with --provider {} or use {} onboard",
             migration::provider_selection::PROVIDER_SELECTOR_PLACEHOLDER,
+            mvp::config::active_cli_command_name(),
         ));
     }
 
