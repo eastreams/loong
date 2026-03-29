@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+default-run = "loong"
 
 [lib]
 name = "loongclaw_daemon"
@@ -74,6 +75,10 @@ rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 dunce = "1"
+
+[[bin]]
+name = "loong"
+path = "src/main.rs"
 
 [[bin]]
 name = "loongclaw"

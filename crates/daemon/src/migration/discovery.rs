@@ -441,11 +441,19 @@ fn default_codex_config_paths() -> Vec<PathBuf> {
     let home = PathBuf::from(home);
     let mut seen = BTreeSet::new();
     let mut paths = Vec::new();
+    let base_codex_path = home.join(".codex/config.toml");
+    let default_agent_codex_path = home
+        .join(".codex/agents")
+        .join(mvp::config::CLI_COMMAND_NAME)
+        .join("config.toml");
+    let legacy_agent_codex_path = home
+        .join(".codex/agents")
+        .join(mvp::config::LEGACY_CLI_COMMAND_NAME)
+        .join("config.toml");
     for path in [
-        home.join(".codex/config.toml"),
-        home.join(".codex/agents")
-            .join(mvp::config::CLI_COMMAND_NAME)
-            .join("config.toml"),
+        base_codex_path,
+        default_agent_codex_path,
+        legacy_agent_codex_path,
     ] {
         if path.is_file() && seen.insert(path.clone()) {
             paths.push(path);

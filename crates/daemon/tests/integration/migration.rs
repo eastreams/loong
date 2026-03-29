@@ -1027,17 +1027,17 @@ fn channel_registry_collects_serve_actions_for_enabled_channels() {
     assert_eq!(actions[0].label, "Telegram");
     assert_eq!(
         actions[0].command,
-        "loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+        "loong telegram-serve --config '/tmp/loongclaw-config.toml'"
     );
     assert_eq!(actions[1].label, "Feishu/Lark");
     assert_eq!(
         actions[1].command,
-        "loongclaw feishu-serve --config '/tmp/loongclaw-config.toml'"
+        "loong feishu-serve --config '/tmp/loongclaw-config.toml'"
     );
     assert_eq!(actions[2].label, "WeCom");
     assert_eq!(
         actions[2].command,
-        "loongclaw wecom-serve --config '/tmp/loongclaw-config.toml'"
+        "loong wecom-serve --config '/tmp/loongclaw-config.toml'"
     );
 }
 
@@ -1123,7 +1123,7 @@ fn channel_registry_collects_catalog_action_when_no_service_channels_are_enabled
     assert_eq!(actions[0].label, "channels");
     assert_eq!(
         actions[0].command,
-        "loongclaw channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loongclaw-config.toml'"
     );
 }
 

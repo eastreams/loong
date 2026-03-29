@@ -103,8 +103,8 @@ pub(super) const NOSTR_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
         setup_hint: "configure relay_urls and private_key in loongclaw.toml under nostr or nostr.accounts.<account>; outbound signed note publish is shipped, while inbound relay subscription support remains planned",
-        status_command: "loongclaw doctor",
-        repair_command: Some("loongclaw doctor --fix"),
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
     };
 
 pub(super) fn build_nostr_snapshots(

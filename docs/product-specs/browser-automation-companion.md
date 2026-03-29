@@ -35,8 +35,8 @@ The currently shipped preview scope is narrower than the final managed browser
 automation companion:
 
 - a first-party bundled `browser-companion-preview` managed skill
-- `loongclaw skills enable-browser-preview` as the operator-facing fast path
-- `loongclaw skills enable-browser-preview` now returns concrete install,
+- `loong skills enable-browser-preview` as the operator-facing fast path
+- `loong skills enable-browser-preview` now returns concrete install,
   verify, and first-task recipe guidance instead of only install metadata
 - when `cli.enabled=false`, the preview enable flow withholds ask-based recipes
   and tells the operator to re-enable the CLI before running them

@@ -1,15 +1,53 @@
 use std::{
     collections::BTreeMap,
     env,
+    ffi::OsStr,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use loongclaw_contracts::SecretRef;
 
 pub(super) const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub(super) const DEFAULT_SQLITE_FILE: &str = "memory.sqlite3";
-pub const CLI_COMMAND_NAME: &str = "loongclaw";
+pub const CLI_COMMAND_NAME: &str = "loong";
+pub const LEGACY_CLI_COMMAND_NAME: &str = "loongclaw";
+pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
+static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
+
+fn normalize_cli_command_name(raw: &str) -> &'static str {
+    if raw.eq_ignore_ascii_case(LEGACY_CLI_COMMAND_NAME) {
+        LEGACY_CLI_COMMAND_NAME
+    } else {
+        CLI_COMMAND_NAME
+    }
+}
+
+pub fn detect_invoked_cli_command_name_from_arg0(arg0: Option<&OsStr>) -> &'static str {
+    let Some(arg0) = arg0 else {
+        return CLI_COMMAND_NAME;
+    };
+    let Some(stem) = Path::new(arg0).file_stem().and_then(|value| value.to_str()) else {
+        return CLI_COMMAND_NAME;
+    };
+    normalize_cli_command_name(stem)
+}
+
+pub fn detect_invoked_cli_command_name() -> &'static str {
+    detect_invoked_cli_command_name_from_arg0(env::args_os().next().as_deref())
+}
+
+pub fn set_active_cli_command_name(command_name: &'static str) {
+    let _ = ACTIVE_CLI_COMMAND_NAME.set(normalize_cli_command_name(command_name));
+}
+
+pub fn active_cli_command_name() -> &'static str {
+    ACTIVE_CLI_COMMAND_NAME
+        .get()
+        .copied()
+        .unwrap_or(CLI_COMMAND_NAME)
+}
 
 pub(super) struct EnvPointerValidationHint<'a> {
     pub inline_field_path: &'a str,

@@ -7,16 +7,16 @@ can recover a broken setup without reverse-engineering runtime internals.
 
 ## Acceptance Criteria
 
-- [ ] `loongclaw doctor` reports the health of the local assistant runtime in
+- [ ] `loong doctor` reports the health of the local assistant runtime in
       user-facing language.
-- [ ] `loongclaw doctor --fix` only applies safe, local repair actions and
+- [ ] `loong doctor --fix` only applies safe, local repair actions and
       explains what it changed.
-- [ ] `loongclaw doctor --json` produces stable machine-readable output for
+- [ ] `loong doctor --json` produces stable machine-readable output for
       automation and support tooling, including machine-readable `next_steps`
       when doctor can recommend a concrete repair or first-value command.
-- [ ] `loongclaw doctor security` provides a separate security exposure and
+- [ ] `loong doctor security` provides a separate security exposure and
       config hygiene audit instead of overloading the general health report.
-- [ ] `loongclaw doctor security --json` emits a stable machine-readable
+- [ ] `loong doctor security --json` emits a stable machine-readable
       contract with `command`, `config`, `ok`, `summary`, and `findings`.
 - [ ] Security findings use the explicit posture vocabulary
       `covered | partial | exposed | unknown` so operators can distinguish

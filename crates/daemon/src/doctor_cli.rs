@@ -3312,7 +3312,7 @@ mod tests {
 
         assert_eq!(
             next_steps[0],
-            "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw.toml' --fix"
+            "Apply safe local repairs: loong doctor --config '/tmp/loongclaw.toml' --fix"
         );
         assert!(
             next_steps.iter().any(|step| {
@@ -3321,8 +3321,10 @@ mod tests {
             "doctor should turn missing provider auth into a concrete next step: {next_steps:#?}"
         );
         assert!(
-            next_steps.iter().any(|step| step
-                == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"),
+            next_steps
+                .iter()
+                .any(|step| step
+                    == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
         );
     }
@@ -3365,13 +3367,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
+                step == "Apply safe local repairs: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
             }),
             "doctor should shell-quote config paths with single quotes in fix commands: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                step == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
             }),
             "doctor should shell-quote config paths with single quotes in rerun commands: {next_steps:#?}"
         );
@@ -3394,7 +3396,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Install or expose the browser companion command on PATH, then re-run: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Install or expose the browser companion command on PATH, then re-run: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "doctor should turn browser companion warnings into a concrete repair path: {next_steps:#?}"
         );
@@ -3530,13 +3532,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loongclaw onboard --config '/tmp/loongclaw.toml'"
+                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loong onboard --config '/tmp/loongclaw.toml'"
             }),
             "doctor should point reviewed providers back to onboarding when auto-model recovery needs an explicit reviewed default: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "doctor should also keep the manual remediation path explicit for operators who do not want to rerun onboarding: {next_steps:#?}"
         );
@@ -3564,13 +3566,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "warn-level explicit model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
             }),
             "warn-level explicit model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -3594,13 +3596,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "warn-level preferred-model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
             }),
             "warn-level preferred-model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -3636,7 +3638,7 @@ mod tests {
         assert!(
             next_steps.iter().any(|step| {
                 step.contains("provider route")
-                    && step.contains("loongclaw doctor --config '/tmp/loongclaw.toml'")
+                    && step.contains("loong doctor --config '/tmp/loongclaw.toml'")
             }),
             "route-probe findings should produce a concrete diagnostics rerun step: {next_steps:#?}"
         );
@@ -3700,25 +3702,25 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Get a first answer: loongclaw ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
+                step == "Get a first answer: loong ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
             }),
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Continue in chat: loongclaw chat --config '/tmp/loongclaw.toml'"
+                step == "Continue in chat: loong chat --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Open a channel: loongclaw channels --config '/tmp/loongclaw.toml'"
+                step == "Open a channel: loong channels --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should surface the channel catalog when no service channel is enabled yet: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should prioritize the channel catalog ahead of optional browser preview when no service channel is enabled yet: {next_steps:#?}"
         );
@@ -3783,7 +3785,7 @@ mod tests {
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should not fall back to the optional enable step after preview has already been configured: {next_steps:#?}"
         );
@@ -3811,7 +3813,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should keep a browser preview action visible even when channel actions are available: {next_steps:#?}"
         );

@@ -526,7 +526,7 @@ mod tests {
                     inline_title_when_wide: true,
                     items: vec![TuiActionSpec {
                         label: "ask".to_owned(),
-                        command: "loongclaw ask --message 'hello'".to_owned(),
+                        command: "loong ask --message 'hello'".to_owned(),
                     }],
                 },
                 TuiSectionSpec::Checklist {
@@ -581,7 +581,7 @@ mod tests {
                     inline_title_when_wide: true,
                     items: vec![TuiActionSpec {
                         label: "ask".to_owned(),
-                        command: "loongclaw ask --message 'hello'".to_owned(),
+                        command: "loong ask --message 'hello'".to_owned(),
                     }],
                 },
             ],
@@ -611,7 +611,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "start here: loongclaw ask --message 'hello'"),
+                .any(|line| line == "start here: loong ask --message 'hello'"),
             "single primary actions should render inline on wide terminals: {lines:#?}"
         );
         assert!(

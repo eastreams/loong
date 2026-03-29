@@ -81,9 +81,10 @@ pub(super) async fn run_feishu_send(
     {
         target = target.with_idempotency_key(uuid.to_owned());
     }
+    let action = format!("{} feishu-send", crate::config::active_cli_command_name());
     let message = adapter
         .resolve_operator_outbound_message(
-            "loongclaw feishu-send",
+            action.as_str(),
             &api::FeishuOperatorOutboundMessageInput {
                 text: request.text.clone(),
                 card: request.card,

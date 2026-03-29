@@ -185,7 +185,10 @@ pub fn feishu_auth_start_command_hint(
     include_message_write: bool,
     include_doc_write: bool,
 ) -> String {
-    let mut parts = vec!["loongclaw feishu auth start".to_owned()];
+    let mut parts = vec![format!(
+        "{} feishu auth start",
+        mvp::config::active_cli_command_name()
+    )];
     let configured_account_id = configured_account_id.trim();
     if !configured_account_id.is_empty() {
         parts.push(format!("--account {configured_account_id}"));
@@ -200,7 +203,10 @@ pub fn feishu_auth_start_command_hint(
 }
 
 pub fn feishu_auth_select_command_hint(configured_account_id: &str) -> String {
-    let mut parts = vec!["loongclaw feishu auth select".to_owned()];
+    let mut parts = vec![format!(
+        "{} feishu auth select",
+        mvp::config::active_cli_command_name()
+    )];
     let configured_account_id = configured_account_id.trim();
     if !configured_account_id.is_empty() {
         parts.push(format!("--account {configured_account_id}"));
@@ -292,8 +298,9 @@ pub fn resolve_selected_grant(
 
     if resolution.selection_required() {
         let open_ids = resolution.available_open_ids().join(", ");
+        let cli = mvp::config::active_cli_command_name();
         return Err(format!(
-            "multiple stored Feishu grants exist for account `{account_id}` ({open_ids}); run `loongclaw feishu auth list` or pass `--open-id`"
+            "multiple stored Feishu grants exist for account `{account_id}` ({open_ids}); run `{cli} feishu auth list` or pass `--open-id`"
         ));
     }
 
@@ -405,7 +412,7 @@ mod tests {
         let error = resolve_selected_grant(&store, "feishu_main", None)
             .expect_err("multiple grants should require explicit selection");
 
-        assert!(error.contains("loongclaw feishu auth list"));
+        assert!(error.contains("loong feishu auth list"));
         assert!(error.contains("--open-id"));
         assert!(error.contains("ou_123"));
         assert!(error.contains("ou_456"));
@@ -491,7 +498,7 @@ mod tests {
         let error = resolve_selected_grant(&store, "feishu_main", None)
             .expect_err("multiple grants should still require explicit selection");
 
-        assert!(error.contains("loongclaw feishu auth list"));
+        assert!(error.contains("loong feishu auth list"));
         assert_eq!(
             store
                 .load_selected_grant("feishu_main")
@@ -606,7 +613,7 @@ mod tests {
 
         assert_eq!(
             command.as_deref(),
-            Some("loongclaw feishu auth start --account feishu_main")
+            Some("loong feishu auth start --account feishu_main")
         );
     }
 
@@ -622,7 +629,7 @@ mod tests {
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
             Some(
-                "loongclaw feishu auth start --account feishu_main --capability doc-write --capability message-write"
+                "loong feishu auth start --account feishu_main --capability doc-write --capability message-write"
             )
         );
     }
@@ -645,7 +652,7 @@ mod tests {
         assert!(!recommendations.missing_message_write_scope);
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
-            Some("loongclaw feishu auth start --account feishu_main --capability doc-write")
+            Some("loong feishu auth start --account feishu_main --capability doc-write")
         );
     }
 
@@ -667,7 +674,7 @@ mod tests {
         assert!(recommendations.missing_message_write_scope);
         assert_eq!(
             recommendations.auth_start_command.as_deref(),
-            Some("loongclaw feishu auth start --account feishu_main --capability message-write")
+            Some("loong feishu auth start --account feishu_main --capability message-write")
         );
     }
 

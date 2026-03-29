@@ -362,7 +362,7 @@ fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
 
     assert_eq!(
         error,
-        "`--output` is required for `loongclaw migrate --mode apply`"
+        "`--output` is required for `loong migrate --mode apply`"
     );
     assert!(
         !error.contains("payload.output_path"),

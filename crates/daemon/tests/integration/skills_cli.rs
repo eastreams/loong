@@ -622,7 +622,7 @@ fn execute_skills_command_enable_browser_preview_quotes_follow_up_config_path() 
         .as_array()
         .expect("enable browser preview should return next_steps");
     let expected = format!(
-        "Run diagnostics: loongclaw doctor --config {}",
+        "Run diagnostics: loong doctor --config {}",
         shell_quote(&config_path.display().to_string())
     );
     assert!(
@@ -657,7 +657,7 @@ fn execute_skills_command_enable_browser_preview_hides_recipes_when_cli_is_disab
         .as_array()
         .expect("enable browser preview should return next_steps");
     let expected_doctor_step = format!(
-        "Run diagnostics: loongclaw doctor --config {}",
+        "Run diagnostics: loong doctor --config {}",
         shell_quote(&config_path.display().to_string())
     );
     assert!(
@@ -690,7 +690,7 @@ fn execute_skills_command_enable_browser_preview_hides_recipes_when_cli_is_disab
     assert!(
         !next_steps.iter().any(|step| {
             step.as_str()
-                .is_some_and(|step| step.contains("Try browser companion preview: loongclaw ask"))
+                .is_some_and(|step| step.contains("Try browser companion preview: loong ask"))
         }),
         "cli-disabled configs should not advertise ask-based preview follow-up: {next_steps:#?}"
     );
@@ -1508,7 +1508,7 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
     let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(&search)
         .expect("search text rendering should succeed");
     let expected_inspect = format!(
-        "inspect=loongclaw skills info release-guard --config {}",
+        "inspect=loong skills info release-guard --config {}",
         shell_quote(&config_path.display().to_string())
     );
     let inspect_occurrences = rendered.matches(expected_inspect.as_str()).count();
@@ -1620,7 +1620,7 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
         .as_array()
         .expect("install should surface next steps");
     let expected_inspect_step = format!(
-        "Inspect the installed skill: loongclaw skills info demo-skill --config {}",
+        "Inspect the installed skill: loong skills info demo-skill --config {}",
         shell_quote(&config_path.display().to_string())
     );
     assert!(
@@ -1659,7 +1659,7 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
         .as_array()
         .expect("info should surface next steps");
     let expected_ask_step = format!(
-        "Try the skill in a conversation: loongclaw ask --config {} --message {}",
+        "Try the skill in a conversation: loong ask --config {} --message {}",
         shell_quote(&config_path.display().to_string()),
         shell_quote("Use the demo-skill skill to help with the current task.")
     );
@@ -2298,16 +2298,16 @@ fn render_skills_cli_text_surfaces_browser_preview_guidance() {
                     "next_steps": [
                         "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
                         "Verify browser preview runtime: agent-browser open example.com",
-                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                        "Run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
                     ],
                     "recipes": [
                         {
                             "label": "summarize a page",
-                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"
+                            "command": "loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"
                         },
                         {
                             "label": "extract page text",
-                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.'"
+                            "command": "loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.'"
                         }
                     ]
                 }),
@@ -2322,11 +2322,13 @@ fn render_skills_cli_text_surfaces_browser_preview_guidance() {
     assert!(rendered.contains(
         "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
     ));
-    assert!(rendered.contains(
-        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
-    ));
+    assert!(
+        rendered.contains(
+            "Run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+        )
+    );
     assert!(rendered.contains("recipes:"));
-    assert!(rendered.contains("- summarize a page: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"));
+    assert!(rendered.contains("- summarize a page: loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"));
 }
 
 #[test]
@@ -2349,7 +2351,7 @@ fn render_skills_cli_text_hides_browser_preview_recipes_when_cli_is_disabled() {
                     "next_steps": [
                         "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
                         "Verify browser preview runtime: agent-browser open example.com",
-                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'",
+                        "Run diagnostics: loong doctor --config '/tmp/loongclaw.toml'",
                         "Re-enable `cli.enabled` before running the preview recipes."
                     ],
                     "recipes": []

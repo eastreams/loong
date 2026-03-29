@@ -2602,8 +2602,10 @@ fn require_selected_grant(
         )
         .unwrap_or_else(|| {
             format!(
-                "no stored Feishu grant for account `{}`; run `loongclaw feishu auth start --account {}` first",
-                context.configured_account_id, context.configured_account_id
+                "no stored Feishu grant for account `{}`; run `{} feishu auth start --account {}` first",
+                context.configured_account_id,
+                crate::config::active_cli_command_name(),
+                context.configured_account_id
             )
         }),
     )

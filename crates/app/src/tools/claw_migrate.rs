@@ -255,7 +255,13 @@ pub(super) fn execute_claw_migrate_tool_with_config(
             "config_toml": config_toml,
             "next_step": written_output_path
                 .as_ref()
-                .map(|path| format!("loongclaw chat --config {}", path.display())),
+                .map(|path| {
+                    format!(
+                        "{} chat --config {}",
+                        config::active_cli_command_name(),
+                        path.display()
+                    )
+                }),
         }),
     })
 }

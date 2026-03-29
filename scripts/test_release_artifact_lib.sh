@@ -48,29 +48,29 @@ EOF
     "$(release_doc_backticked_field "$tmp_dir/v0.1.2.md" "Trace path")"
   assert_equals ".docs/releases/v0.1.2-debug.md" "$(release_debug_doc_relpath "v0.1.2")"
   assert_equals \
-    "loongclaw-v0.1.2-x86_64-unknown-linux-gnu.tar.gz" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-unknown-linux-gnu")"
+    "loong-v0.1.2-x86_64-unknown-linux-gnu.tar.gz" \
+    "$(release_archive_name "loong" "v0.1.2" "x86_64-unknown-linux-gnu")"
   assert_equals \
-    "loongclaw-v0.1.2-aarch64-apple-darwin.tar.gz" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-apple-darwin")"
+    "loong-v0.1.2-aarch64-apple-darwin.tar.gz" \
+    "$(release_archive_name "loong" "v0.1.2" "aarch64-apple-darwin")"
   assert_equals \
-    "loongclaw-v0.1.2-aarch64-unknown-linux-gnu.tar.gz" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-unknown-linux-gnu")"
+    "loong-v0.1.2-aarch64-unknown-linux-gnu.tar.gz" \
+    "$(release_archive_name "loong" "v0.1.2" "aarch64-unknown-linux-gnu")"
   assert_equals \
-    "loongclaw-v0.1.2-aarch64-linux-android.tar.gz" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "aarch64-linux-android")"
+    "loong-v0.1.2-aarch64-linux-android.tar.gz" \
+    "$(release_archive_name "loong" "v0.1.2" "aarch64-linux-android")"
   assert_equals \
-    "loongclaw-v0.1.2-x86_64-unknown-linux-musl.tar.gz" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-unknown-linux-musl")"
+    "loong-v0.1.2-x86_64-unknown-linux-musl.tar.gz" \
+    "$(release_archive_name "loong" "v0.1.2" "x86_64-unknown-linux-musl")"
   assert_equals \
-    "loongclaw-v0.1.2-x86_64-pc-windows-msvc.zip" \
-    "$(release_archive_name "loongclaw" "v0.1.2" "x86_64-pc-windows-msvc")"
+    "loong-v0.1.2-x86_64-pc-windows-msvc.zip" \
+    "$(release_archive_name "loong" "v0.1.2" "x86_64-pc-windows-msvc")"
   assert_equals \
-    "loongclaw-v0.1.2-x86_64-pc-windows-msvc.zip.sha256" \
-    "$(release_archive_checksum_name "loongclaw" "v0.1.2" "x86_64-pc-windows-msvc")"
+    "loong-v0.1.2-x86_64-pc-windows-msvc.zip.sha256" \
+    "$(release_archive_checksum_name "loong" "v0.1.2" "x86_64-pc-windows-msvc")"
   assert_equals \
-    "loongclaw-v0.1.2-x86_64-unknown-linux-musl.tar.gz.sha256" \
-    "$(release_archive_checksum_name "loongclaw" "v0.1.2" "x86_64-unknown-linux-musl")"
+    "loong-v0.1.2-x86_64-unknown-linux-musl.tar.gz.sha256" \
+    "$(release_archive_checksum_name "loong" "v0.1.2" "x86_64-unknown-linux-musl")"
   assert_equals \
     "x86_64-unknown-linux-gnu" \
     "$(release_target_for_platform "Linux" "x86_64")"

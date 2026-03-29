@@ -4,6 +4,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_UNDER_TEST="$REPO_ROOT/scripts/install.sh"
 . "$REPO_ROOT/scripts/release_artifact_lib.sh"
+PACKAGE_NAME="loong"
+PRIMARY_BIN_NAME="loong"
+LEGACY_BIN_NAME="loongclaw"
 
 assert_contains() {
   local file="$1"
@@ -11,6 +14,27 @@ assert_contains() {
   if ! grep -Fq "$needle" "$file"; then
     echo "expected to find '$needle' in $file" >&2
     cat "$file" >&2
+    exit 1
+  fi
+}
+
+assert_installed_binary_pair() {
+  local install_dir="$1"
+  local expected_output="$2"
+  local primary_output legacy_output
+
+  [[ -x "$install_dir/$PRIMARY_BIN_NAME" ]]
+  [[ -x "$install_dir/$LEGACY_BIN_NAME" ]]
+
+  primary_output="$("$install_dir/$PRIMARY_BIN_NAME")"
+  legacy_output="$("$install_dir/$LEGACY_BIN_NAME")"
+
+  if [[ "$primary_output" != "$expected_output" ]]; then
+    echo "expected primary binary output '$expected_output' but got '$primary_output'" >&2
+    exit 1
+  fi
+  if [[ "$legacy_output" != "$expected_output" ]]; then
+    echo "expected legacy binary output '$expected_output' but got '$legacy_output'" >&2
     exit 1
   fi
 }
@@ -40,14 +64,15 @@ make_release_fixture() {
 }
 
 write_release_fixture_asset() {
-  local fixture tag target binary_label archive_name checksum_name binary_name archive_path checksum_path release_dir staging_dir
+  local fixture tag target binary_label archive_name checksum_name binary_name legacy_binary_name archive_path checksum_path release_dir staging_dir
   fixture="${1:?fixture is required}"
   tag="${2:-v0.1.2}"
   target="${3:-$(host_target)}"
   binary_label="${4:-fixture-binary}"
-  archive_name="$(release_archive_name "loongclaw" "$tag" "$target")"
-  checksum_name="$(release_archive_checksum_name "loongclaw" "$tag" "$target")"
-  binary_name="$(release_binary_name_for_target "loongclaw" "$target")"
+  archive_name="$(release_archive_name "$PACKAGE_NAME" "$tag" "$target")"
+  checksum_name="$(release_archive_checksum_name "$PACKAGE_NAME" "$tag" "$target")"
+  binary_name="$(release_binary_name_for_target "$PRIMARY_BIN_NAME" "$target")"
+  legacy_binary_name="$(release_binary_name_for_target "$LEGACY_BIN_NAME" "$target")"
   release_dir="$fixture/releases/download/$tag"
   staging_dir="$fixture/staging/$target"
   mkdir -p "$release_dir" "$staging_dir"
@@ -75,14 +100,15 @@ fi
 printf '%s\n' "$binary_label"
 EOF
   chmod +x "$staging_dir/$binary_name"
+  cp "$staging_dir/$binary_name" "$staging_dir/$legacy_binary_name"
 
   archive_path="$release_dir/$archive_name"
   case "$archive_name" in
     *.tar.gz)
-      tar -C "$staging_dir" -czf "$archive_path" "$binary_name"
+      tar -C "$staging_dir" -czf "$archive_path" "$binary_name" "$legacy_binary_name"
       ;;
     *.zip)
-      (cd "$staging_dir" && zip -q "$archive_path" "$binary_name")
+      (cd "$staging_dir" && zip -q "$archive_path" "$binary_name" "$legacy_binary_name")
       ;;
     *)
       echo "unsupported archive format in fixture: $archive_name" >&2
@@ -255,7 +281,7 @@ source_install_functions() {
 }
 
 run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -271,16 +297,12 @@ run_linux_x86_64_prefers_gnu_when_glibc_is_supported_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-gnu"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "gnu-binary" ]]; then
-    echo "expected GNU artifact to be installed but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "gnu-binary"
 }
 
 
 run_termux_arm64_installs_android_release_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_release_fixture "v0.1.2" "aarch64-linux-android" "termux-binary")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -297,11 +319,7 @@ run_termux_arm64_installs_android_release_test() {
   )
 
   assert_contains "$output_file" "aarch64-linux-android"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "termux-binary" ]]; then
-    echo "expected Android artifact to be installed on Termux but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "termux-binary"
 }
 
 run_linux_guest_with_termux_env_is_not_termux_test() {
@@ -328,7 +346,7 @@ run_linux_guest_with_termux_env_is_not_termux_test() {
 }
 
 run_linux_guest_with_termux_env_prefers_linux_release_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -346,11 +364,7 @@ run_linux_guest_with_termux_env_prefers_linux_release_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-gnu"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "gnu-binary" ]]; then
-    echo "expected Linux artifact to be installed when uname -o reports GNU/Linux but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "gnu-binary"
 }
 
 run_termux_x86_64_rejects_android_release_test() {
@@ -377,7 +391,7 @@ run_termux_x86_64_rejects_android_release_test() {
 }
 
 run_linux_x86_64_falls_back_to_musl_when_glibc_is_too_old_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -393,15 +407,11 @@ run_linux_x86_64_falls_back_to_musl_when_glibc_is_too_old_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-musl"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "musl-binary" ]]; then
-    echo "expected musl fallback artifact to be installed but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "musl-binary"
 }
 
 run_linux_x86_64_falls_back_to_musl_when_glibc_detection_fails_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -418,15 +428,11 @@ run_linux_x86_64_falls_back_to_musl_when_glibc_detection_fails_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-musl"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "musl-binary" ]]; then
-    echo "expected musl fallback artifact to be installed but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "musl-binary"
 }
 
 run_linux_x86_64_explicit_musl_override_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -443,11 +449,7 @@ run_linux_x86_64_explicit_musl_override_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-musl"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "musl-binary" ]]; then
-    echo "expected musl override artifact to be installed but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "musl-binary"
 }
 
 run_linux_x86_64_explicit_gnu_override_rejects_old_glibc_test() {
@@ -529,7 +531,7 @@ run_release_target_for_install_rejects_arm64_old_glibc_without_musl_test() {
 }
 
 run_linux_x86_64_prefers_gnu_when_sort_version_is_unavailable_test() {
-  local fixture install_dir output_file installed_output
+  local fixture install_dir output_file
   fixture="$(make_linux_dual_libc_fixture "v0.1.2")"
   trap 'rm -rf "$fixture"' RETURN
   install_dir="$fixture/install"
@@ -546,11 +548,7 @@ run_linux_x86_64_prefers_gnu_when_sort_version_is_unavailable_test() {
   )
 
   assert_contains "$output_file" "x86_64-unknown-linux-gnu"
-  installed_output="$("$install_dir/loongclaw")"
-  if [[ "$installed_output" != "gnu-binary" ]]; then
-    echo "expected GNU artifact to be installed without sort -V support but got '$installed_output'" >&2
-    exit 1
-  fi
+  assert_installed_binary_pair "$install_dir" "gnu-binary"
 }
 
 run_linux_x86_64_explicit_gnu_override_rejects_musl_ldd_output_test() {
@@ -623,8 +621,9 @@ run_release_override_install_and_onboard_test() {
       bash "$SCRIPT_UNDER_TEST" --version v0.1.2 --prefix "$install_dir" --onboard >"$output_file" 2>&1
   )
 
-  [[ -x "$install_dir/loongclaw" ]]
-  assert_contains "$output_file" "Installed loongclaw"
+  assert_installed_binary_pair "$install_dir" "fixture-binary"
+  assert_contains "$output_file" "Installed loong to"
+  assert_contains "$output_file" "Installed compatible loongclaw command to"
   assert_contains "$output_file" "Running guided onboarding"
   assert_contains "$marker" "onboard"
 }
@@ -761,7 +760,7 @@ run_checksum_mismatch_fails_test() {
   output_file="$fixture/checksum.out"
   tag="v0.1.2"
   target="$(host_target)"
-  checksum_name="$(release_archive_checksum_name "loongclaw" "$tag" "$target")"
+  checksum_name="$(release_archive_checksum_name "$PACKAGE_NAME" "$tag" "$target")"
   printf 'deadbeef  wrong-archive\n' >"$fixture/releases/download/$tag/$checksum_name"
 
   if (

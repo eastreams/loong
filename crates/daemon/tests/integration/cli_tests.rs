@@ -37,15 +37,15 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should frame the configured path as a quick-command entrypoint: {help}"
     );
     assert!(
-        help.contains("loongclaw ask --config <path>"),
+        help.contains("loong ask --config <path>"),
         "welcome help should mention ask with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loongclaw chat --config <path>"),
+        help.contains("loong chat --config <path>"),
         "welcome help should mention chat with an explicit config placeholder: {help}"
     );
     assert!(
-        help.contains("loongclaw doctor --config <path>"),
+        help.contains("loong doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
     assert!(

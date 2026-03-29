@@ -305,7 +305,10 @@ fn assess_audit_retention(config: &mvp::config::LoongClawConfig) -> SecurityFind
                 .to_owned();
         let next_steps = vec![
             "Repair the audit journal path or parent directory permissions.".to_owned(),
-            "Run loongclaw doctor to confirm the journal path opens cleanly.".to_owned(),
+            format!(
+                "Run {} doctor to confirm the journal path opens cleanly.",
+                mvp::config::active_cli_command_name()
+            ),
         ];
         return build_finding(
             "audit_retention",
@@ -445,8 +448,10 @@ fn assess_tool_file_root(
                 .to_owned();
         let next_steps = vec![
             "Set tools.file_root to a dedicated workspace path.".to_owned(),
-            "Run loongclaw doctor --fix if you want the workspace directory created automatically."
-                .to_owned(),
+            format!(
+                "Run {} doctor --fix if you want the workspace directory created automatically.",
+                mvp::config::active_cli_command_name()
+            ),
         ];
         return build_finding(
             "tool_file_root",
@@ -670,9 +675,9 @@ fn assess_external_skills_probe_failure(
     let summary =
         "The effective external-skills runtime policy could not be resolved through the policy surface, so the live posture is unknown."
             .to_owned();
+    let cli = mvp::config::active_cli_command_name();
     let next_steps = vec![
-        "Run `loongclaw skills policy show --json` to confirm the effective runtime policy."
-            .to_owned(),
+        format!("Run `{cli} skills policy show --json` to confirm the effective runtime policy."),
         "Repair the external_skills.policy tool path before relying on this audit result."
             .to_owned(),
     ];
@@ -865,7 +870,10 @@ fn assess_browser_surfaces(
             let next_steps = vec![
                 "Keep the built-in browser lane as the active path until the companion runtime is fully ready."
                     .to_owned(),
-                "Run loongclaw doctor to repair the companion install/runtime gate.".to_owned(),
+                format!(
+                    "Run {} doctor to repair the companion install/runtime gate.",
+                    mvp::config::active_cli_command_name()
+                ),
             ];
             return build_finding(
                 "browser_surfaces",

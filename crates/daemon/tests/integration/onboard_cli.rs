@@ -5211,7 +5211,7 @@ fn onboarding_success_summary_reports_import_source_and_enabled_channels() {
     assert!(
         summary.next_actions.iter().any(|action| action
             .command
-            .contains("loongclaw ask --config '/tmp/loongclaw-config.toml' --message")),
+            .contains("loong ask --config '/tmp/loongclaw-config.toml' --message")),
         "success summary should keep a direct ask handoff: {summary:#?}"
     );
 }
@@ -5282,7 +5282,7 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
     assert_eq!(summary.next_actions[2].label, "channels");
     assert_eq!(
         summary.next_actions[2].command,
-        "loongclaw channels --config '/tmp/loongclaw-config.toml'"
+        "loong channels --config '/tmp/loongclaw-config.toml'"
     );
     assert!(
         lines
@@ -5314,14 +5314,14 @@ fn onboarding_success_summary_advertises_browser_preview_enable_action() {
             action.kind == crate::onboard_cli::OnboardingActionKind::BrowserPreview
                 && action.label == "enable browser preview"
                 && action.command
-                    == "loongclaw skills enable-browser-preview --config '/tmp/loongclaw-config.toml'"
+                    == "loong skills enable-browser-preview --config '/tmp/loongclaw-config.toml'"
         }),
         "onboarding should surface a concrete browser preview enable step for operators: {summary:#?}"
     );
     assert!(
         lines.iter().any(|line| {
             line.contains("enable browser preview")
-                && line.contains("loongclaw skills enable-browser-preview --config")
+                && line.contains("loong skills enable-browser-preview --config")
         }) && lines
             .iter()
             .any(|line| line.contains("/tmp/loongclaw-config.toml")),
@@ -6701,7 +6701,7 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- first answer: loongclaw ask --config")
+            .any(|line| line == "- first answer: loong ask --config")
             && lines
                 .iter()
                 .any(|line| line == "  '/tmp/loongclaw-config.toml' --message")
@@ -6718,10 +6718,10 @@ fn render_onboarding_success_summary_compacts_for_narrow_width() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "- chat: loongclaw chat --config")
+            .any(|line| line == "- chat: loong chat --config")
             && lines
                 .iter()
-                .any(|line| line == "- Telegram: loongclaw telegram-serve --config"),
+                .any(|line| line == "- Telegram: loong telegram-serve --config"),
         "narrow renderer should keep secondary chat and channel actions visible after the primary ask example: {lines:#?}"
     );
 }
@@ -6798,7 +6798,7 @@ fn onboarding_success_summary_uses_compact_header() {
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.join(" ").contains(
-                "- first answer: loongclaw ask --config '/tmp/loongclaw-config.toml' --message"
+                "- first answer: loong ask --config '/tmp/loongclaw-config.toml' --message"
             )
             && lines
                 .join(" ")
@@ -6839,12 +6839,12 @@ fn onboarding_success_summary_shell_quotes_config_paths_with_single_quotes() {
 
     assert!(
         rendered.contains(
-            "- first answer: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
+            "- first answer: loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message"
         ),
         "success summary should shell-quote single quotes in the primary ask handoff: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loongclaw chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+        rendered.contains("- chat: loong chat --config '/tmp/loongclaw'\"'\"'s config.toml'"),
         "success summary should shell-quote single quotes in the secondary chat handoff: {lines:#?}"
     );
 }
@@ -6907,7 +6907,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
         next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
             kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
@@ -7027,7 +7027,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
         next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
             kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
@@ -7098,7 +7098,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
         next_actions: vec![loongclaw_daemon::onboard_cli::OnboardingAction {
             kind: loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask,
             label: "ask".to_owned(),
-            command: "loongclaw ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
+            command: "loong ask --config /tmp/loongclaw-config.toml --message \"Summarize this repository and suggest the best next step.\"".to_owned(),
         }],
     };
 
@@ -7135,9 +7135,9 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
     let rendered = lines.join(" ");
 
     assert!(
-        rendered.contains(
-            "- first answer: loongclaw ask --config '/tmp/loongclaw-config.toml' --message"
-        ) && rendered.contains("Summarize this repository and suggest the best next step."),
+        rendered
+            .contains("- first answer: loong ask --config '/tmp/loongclaw-config.toml' --message")
+            && rendered.contains("Summarize this repository and suggest the best next step."),
         "wide success summary should call out a single primary ask action even when wrapping is needed: {lines:#?}"
     );
     assert!(
@@ -7145,17 +7145,19 @@ fn onboarding_success_summary_groups_secondary_channel_actions_after_primary_han
         "wide success summary should group secondary channel actions under a separate heading: {lines:#?}"
     );
     assert!(
-        rendered.contains("- chat: loongclaw chat --config '/tmp/loongclaw-config.toml'"),
+        rendered.contains("- chat: loong chat --config '/tmp/loongclaw-config.toml'"),
         "wide success summary should still surface interactive chat as a secondary follow-up: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line
-            == "- Telegram: loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"),
+        lines
+            .iter()
+            .any(|line| line
+                == "- Telegram: loong telegram-serve --config '/tmp/loongclaw-config.toml'"),
         "wide success summary should list telegram as a secondary action: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line
-            == "- Feishu/Lark: loongclaw feishu-serve --config '/tmp/loongclaw-config.toml'"),
+            == "- Feishu/Lark: loong feishu-serve --config '/tmp/loongclaw-config.toml'"),
         "wide success summary should list feishu as a secondary action: {lines:#?}"
     );
 }
@@ -7180,14 +7182,14 @@ fn onboarding_success_summary_uses_channel_handoff_when_cli_is_disabled() {
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- Telegram: loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
+                line == "- Telegram: loong telegram-serve --config '/tmp/loongclaw-config.toml'"
             }),
         "success summary should guide users into the first enabled channel when cli is disabled: {lines:#?}"
     );
     assert!(
         lines
             .iter()
-            .all(|line| line != "- chat: loongclaw chat --config '/tmp/loongclaw-config.toml'"),
+            .all(|line| line != "- chat: loong chat --config '/tmp/loongclaw-config.toml'"),
         "success summary should not keep chat as the primary handoff once cli is disabled: {lines:#?}"
     );
 }
@@ -7213,7 +7215,7 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line == "- channels: loongclaw channels --config '/tmp/loongclaw-config.toml'"
+                line == "- channels: loong channels --config '/tmp/loongclaw-config.toml'"
             }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
     );
@@ -7372,8 +7374,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("selection_order=10")
             && line.contains("selection_label=\"personal and group chat bot\"")
             && line.contains("strategy=manual_config")
-            && line.contains("status_command=\"loongclaw doctor\"")
-            && line.contains("repair_command=\"loongclaw doctor --fix\"")
+            && line.contains("status_command=\"loong doctor\"")
+            && line.contains("repair_command=\"loong doctor --fix\"")
     }));
     assert!(lines.iter().any(|line| {
         line.contains("Feishu/Lark [feishu]")
@@ -7385,8 +7387,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("selection_order=40")
             && line.contains("selection_label=\"community server bot\"")
             && line.contains("strategy=manual_config")
-            && line.contains("repair_command=\"loongclaw doctor --fix\"")
-            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("repair_command=\"loong doctor --fix\"")
+            && line.contains("status_command=\"loong doctor\"")
             && line.contains("blurb=\"Shipped Discord outbound message surface")
     }));
     assert!(lines.iter().any(|line| {
@@ -7394,8 +7396,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("selection_order=60")
             && line.contains("selection_label=\"consumer messaging bot\"")
             && line.contains("strategy=manual_config")
-            && line.contains("repair_command=\"loongclaw doctor --fix\"")
-            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("repair_command=\"loong doctor --fix\"")
+            && line.contains("status_command=\"loong doctor\"")
             && line.contains("blurb=\"Shipped LINE Messaging API outbound surface")
     }));
     assert!(lines.iter().any(|line| {
@@ -7403,8 +7405,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("selection_order=110")
             && line.contains("selection_label=\"generic http integration\"")
             && line.contains("strategy=manual_config")
-            && line.contains("repair_command=\"loongclaw doctor --fix\"")
-            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("repair_command=\"loong doctor --fix\"")
+            && line.contains("status_command=\"loong doctor\"")
             && line.contains("blurb=\"Shipped generic webhook outbound surface")
     }));
     assert!(lines.iter().any(|line| {
@@ -7412,8 +7414,8 @@ fn build_channel_onboarding_follow_up_lines_reports_manual_and_planned_channels(
             && line.contains("selection_order=150")
             && line.contains("selection_label=\"self-hosted workspace bot\"")
             && line.contains("strategy=manual_config")
-            && line.contains("repair_command=\"loongclaw doctor --fix\"")
-            && line.contains("status_command=\"loongclaw doctor\"")
+            && line.contains("repair_command=\"loong doctor --fix\"")
+            && line.contains("status_command=\"loong doctor\"")
             && line.contains("blurb=\"Shipped Mattermost outbound surface")
     }));
 }
