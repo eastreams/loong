@@ -72,13 +72,52 @@ pub(crate) fn render_transcript_lines(state: &TranscriptState) -> Vec<Line<'stat
     state
         .entries
         .iter()
-        .map(|entry| {
+        .flat_map(|entry| {
             let role = match entry.role {
                 TranscriptRole::User => "you",
                 TranscriptRole::Assistant => "assistant",
             };
             let streaming_suffix = if entry.streaming { " (streaming)" } else { "" };
-            Line::from(format!("{role}{streaming_suffix}> {}", entry.text))
+            let prefix = format!("{role}{streaming_suffix}> ");
+            let continuation_indent = " ".repeat(prefix.chars().count());
+
+            entry
+                .text
+                .split('\n')
+                .enumerate()
+                .map(|(index, line)| {
+                    if index == 0 {
+                        Line::from(format!("{prefix}{line}"))
+                    } else {
+                        Line::from(format!("{continuation_indent}{line}"))
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multiline_entries_keep_prefix_on_first_line_and_indent_followups() {
+        let mut state = TranscriptState::default();
+        state.push_message(
+            TranscriptRole::Assistant,
+            "first line\nsecond line\nthird line",
+        );
+
+        let rendered = render_transcript_lines(&state);
+        let lines = rendered
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<String>>();
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "assistant> first line");
+        assert_eq!(lines[1], "           second line");
+        assert_eq!(lines[2], "           third line");
+    }
 }

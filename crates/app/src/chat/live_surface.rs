@@ -238,8 +238,9 @@ fn should_render_cli_chat_live_phase(phase: ConversationTurnPhase) -> bool {
         | ConversationTurnPhase::RunningTools
         | ConversationTurnPhase::RequestingFollowupProvider
         | ConversationTurnPhase::FinalizingReply
+        | ConversationTurnPhase::Completed
         | ConversationTurnPhase::Failed => true,
-        ConversationTurnPhase::ContextReady | ConversationTurnPhase::Completed => false,
+        ConversationTurnPhase::ContextReady => false,
     }
 }
 
@@ -895,4 +896,17 @@ fn build_cli_chat_live_tool_section(
         title: Some("tool activity".to_owned()),
         lines: snapshot.tool_activity_lines.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_phase_still_renders_final_snapshot() {
+        assert!(
+            should_render_cli_chat_live_phase(ConversationTurnPhase::Completed),
+            "completed turns should emit one last live surface snapshot"
+        );
+    }
 }

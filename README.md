@@ -226,15 +226,15 @@ cargo install --path crates/daemon
 loongclaw chat --ui text
 ```
 
-You can also start the balanced transcript-first TUI shell:
+You can also request the balanced transcript-first TUI path:
 
 ```bash
 loongclaw chat --ui tui
 ```
 
-`--ui tui` requires a real interactive terminal. When stdin or stdout are piped, or the terminal is
-`TERM=dumb`, LoongClaw automatically falls back to text mode instead of trying to force the
-full-screen shell.
+`--ui tui` is currently a guarded preview flag. LoongClaw falls back to the text UI with a warning
+when stdin or stdout are piped, when the terminal is `TERM=dumb`, when the build omits the
+`channel-cli` feature, or while the runtime-backed full-screen shell remains disabled.
 
 ### Shell Completion
 

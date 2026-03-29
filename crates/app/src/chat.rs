@@ -23,6 +23,7 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 mod cli_input;
 mod live_surface;
 mod text_surface;
+#[cfg(feature = "channel-cli")]
 mod tui;
 mod ui_mode;
 
@@ -294,16 +295,24 @@ pub async fn run_cli_chat(
 
     let runtime = initialize_cli_turn_runtime(config_path, session_hint, options, "cli-chat")?;
     if options.ui_mode == CliChatUiMode::Tui {
-        match tui::run_tui_chat(&runtime, options).await? {
-            tui::CliTuiLaunchResult::Handled => {
-                println!("bye.");
-                return Ok(());
-            }
-            tui::CliTuiLaunchResult::FallbackToText { reason } => {
-                #[allow(clippy::print_stderr)]
-                {
-                    eprintln!("warning: {reason}; falling back to text ui");
+        #[cfg(feature = "channel-cli")]
+        {
+            match tui::run_tui_chat(&runtime, options).await? {
+                tui::CliTuiLaunchResult::FallbackToText { reason } => {
+                    #[allow(clippy::print_stderr)]
+                    {
+                        eprintln!("warning: {reason}; falling back to text ui");
+                    }
                 }
+            }
+        }
+        #[cfg(not(feature = "channel-cli"))]
+        {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!(
+                    "warning: tui ui requires the channel-cli feature; falling back to text ui"
+                );
             }
         }
     }
@@ -4161,6 +4170,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "channel-cli")]
     #[test]
     fn tui_shell_bootstrap_builds_initial_state() {
         let bootstrap = tui::app_shell::build_shell_bootstrap_state("default");
@@ -4173,6 +4183,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "channel-cli")]
     #[test]
     fn tui_terminal_policy_degrades_without_full_terminal_support() {
         let policy = tui::terminal::resolve_launch_mode(tui::terminal::TerminalSupportSnapshot {
@@ -4189,6 +4200,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "channel-cli")]
     #[test]
     fn tui_state_defaults_to_closed_drawer_and_composer_focus() {
         let state = tui::state::UiState::default();

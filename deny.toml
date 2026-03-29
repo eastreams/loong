@@ -14,6 +14,7 @@ ignore = [
     "RUSTSEC-2025-0057",  # fxhash unmaintained — transitive dep of scraper 0.24, no security impact
     "RUSTSEC-2024-0436",  # paste unmaintained — transitive dep of ratatui 0.29, no safe upgrade available yet
 ]
+unused-ignored-advisory = "warn"
 
 [licenses]
 allow = [
