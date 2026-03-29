@@ -11,16 +11,16 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::CliResult;
-use crate::feishu::resources::calendar::{
+use crate::channel::feishu::api::resources::calendar::{
     self, FeishuCalendarFreebusyQuery, FeishuCalendarListQuery,
 };
-use crate::feishu::resources::cards;
-use crate::feishu::resources::docs;
-use crate::feishu::resources::media;
-use crate::feishu::resources::messages::{
+use crate::channel::feishu::api::resources::cards;
+use crate::channel::feishu::api::resources::docs;
+use crate::channel::feishu::api::resources::media;
+use crate::channel::feishu::api::resources::messages::{
     self, FeishuMessageHistoryQuery, FeishuSearchMessagesQuery,
 };
-use crate::feishu::{
+use crate::channel::feishu::api::{
     FeishuClient, FeishuGrant, FeishuMessageResourceType, FeishuTokenStore, FeishuUserPrincipal,
     map_user_info_to_principal,
 };
@@ -718,6 +718,7 @@ pub(super) fn is_known_feishu_tool_name(raw: &str) -> bool {
     canonical_feishu_tool_name(raw).is_some()
 }
 
+#[cfg(test)]
 pub(super) fn feishu_tool_registry_entries() -> Vec<super::ToolRegistryEntry> {
     let mut entries = Vec::new();
     push_feishu_registry_entry(
@@ -1417,6 +1418,19 @@ pub(super) fn feishu_provider_tool_definitions() -> Vec<Value> {
     tools
 }
 
+pub(super) fn feishu_provider_tool_definition(tool_name: &str) -> Option<Value> {
+    feishu_provider_tool_definitions()
+        .into_iter()
+        .find(|definition| {
+            definition
+                .get("function")
+                .and_then(|value| value.get("name"))
+                .and_then(Value::as_str)
+                .map(super::canonical_tool_name)
+                == Some(tool_name)
+        })
+}
+
 pub(super) fn feishu_shape_examples() -> BTreeMap<&'static str, Value> {
     let mut shapes = BTreeMap::new();
     shapes.insert(
@@ -1555,8 +1569,12 @@ fn execute_feishu_whoami_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         let user_info = context.client.get_user_info(&grant.access_token).await?;
         let principal = map_user_info_to_principal(context.account_id.as_str(), &user_info)?;
 
@@ -1594,8 +1612,12 @@ fn execute_feishu_doc_create_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_required_scopes(&grant, FEISHU_DOC_WRITE_REQUIRED_SCOPES, tool_name.as_str())?;
         let document = docs::create_document(
             &context.client,
@@ -1669,8 +1691,12 @@ fn execute_feishu_doc_append_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_required_scopes(&grant, FEISHU_DOC_WRITE_REQUIRED_SCOPES, tool_name.as_str())?;
         let document_id = docs::extract_document_id(url.as_str())
             .ok_or_else(|| "failed to resolve Feishu document id".to_owned())?;
@@ -1721,8 +1747,12 @@ fn execute_feishu_doc_read_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_any_required_scope(&grant, FEISHU_DOC_READ_ACCEPTED_SCOPES, tool_name.as_str())?;
         let document = docs::fetch_document_content(
             &context.client,
@@ -1760,8 +1790,12 @@ fn execute_feishu_messages_search_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_required_scopes(&grant, &["search:message"], tool_name.as_str())?;
         let page = messages::search_messages(
             &context.client,
@@ -1821,8 +1855,12 @@ fn execute_feishu_messages_history_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_any_required_scope(
             &grant,
             &["im:message:readonly", "im:message.group_msg:readonly"],
@@ -1902,11 +1940,15 @@ fn execute_feishu_messages_send_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_any_required_scope(
             &grant,
-            crate::feishu::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
+            crate::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
             tool_name.as_str(),
         )?;
         let tenant_access_token = context.client.get_tenant_access_token().await?;
@@ -2007,11 +2049,15 @@ fn execute_feishu_messages_reply_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_any_required_scope(
             &grant,
-            crate::feishu::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
+            crate::channel::feishu::api::FEISHU_MESSAGE_WRITE_ACCEPTED_SCOPES,
             tool_name.as_str(),
         )?;
         let tenant_access_token = context.client.get_tenant_access_token().await?;
@@ -2239,8 +2285,12 @@ fn execute_feishu_messages_get_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_any_required_scope(
             &grant,
             &["im:message:readonly", "im:message.group_msg:readonly"],
@@ -2312,9 +2362,12 @@ fn execute_feishu_messages_resource_get_tool_with_config(
         let tool_name = request.tool_name;
 
         run_feishu_future(async move {
-            let grant =
-                crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant)
-                    .await?;
+            let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+                &context.client,
+                &context.store,
+                &grant,
+            )
+            .await?;
             ensure_any_required_scope(
                 &grant,
                 FEISHU_MESSAGE_RESOURCE_ACCEPTED_SCOPES,
@@ -2377,8 +2430,12 @@ fn execute_feishu_calendar_list_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_required_scopes(&grant, &["calendar:calendar:readonly"], tool_name.as_str())?;
         if payload.primary {
             let calendars = calendar::get_primary_calendars(
@@ -2441,8 +2498,12 @@ fn execute_feishu_calendar_freebusy_tool_with_config(
     let tool_name = request.tool_name;
 
     run_feishu_future(async move {
-        let grant =
-            crate::feishu::ensure_fresh_user_grant(&context.client, &context.store, &grant).await?;
+        let grant = crate::channel::feishu::api::ensure_fresh_user_grant(
+            &context.client,
+            &context.store,
+            &grant,
+        )
+        .await?;
         ensure_required_scopes(&grant, &["calendar:calendar:readonly"], tool_name.as_str())?;
         let effective_user_id = payload.user_id.clone().or_else(|| {
             trimmed_opt(payload.room_id.as_deref())
@@ -2499,7 +2560,7 @@ fn load_feishu_tool_context(
                 .to_owned(),
         );
     };
-    let resolved = crate::feishu::resolve_requested_feishu_account(
+    let resolved = crate::channel::feishu::api::resolve_requested_feishu_account(
         &runtime.channel,
         trimmed_opt(requested_account_id),
         "set payload.account_id to one of those configured accounts to disambiguate the Feishu tool request",
@@ -2525,7 +2586,7 @@ fn require_selected_grant(
     context: &FeishuToolContext,
     open_id: Option<&str>,
 ) -> CliResult<FeishuGrant> {
-    let resolution = crate::feishu::resolve_grant_selection(
+    let resolution = crate::channel::feishu::api::resolve_grant_selection(
         &context.store,
         context.account_id.as_str(),
         trimmed_opt(open_id),
@@ -2534,7 +2595,7 @@ fn require_selected_grant(
         return Ok(grant);
     }
     Err(
-        crate::feishu::describe_grant_selection_error_for_display(
+        crate::channel::feishu::api::describe_grant_selection_error_for_display(
             context.account_id.as_str(),
             context.configured_account_id.as_str(),
             &resolution,
@@ -3197,6 +3258,7 @@ fn search_chat_scope(payload: &FeishuMessagesSearchPayload) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn push_feishu_registry_entry(
     entries: &mut Vec<super::ToolRegistryEntry>,
     name: &'static str,

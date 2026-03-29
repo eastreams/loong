@@ -29,6 +29,7 @@ use crate::acp::{
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity;
+use crate::tools::ToolExecutionKind;
 
 use super::super::config::LoongClawConfig;
 use super::ConversationSessionAddress;
@@ -101,6 +102,8 @@ use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
     ConversationTurnToolEvent, build_observer_streaming_token_callback,
 };
+#[cfg(feature = "memory-sqlite")]
+use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
     ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
@@ -112,6 +115,7 @@ use super::turn_shared::{
 };
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
+use crate::config::ToolConsentMode;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
@@ -121,8 +125,8 @@ use crate::session::recovery::{
 use crate::session::repository::{
     ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, CreateSessionWithEventRequest,
     FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
-    SessionKind, SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
-    TransitionSessionWithEventIfCurrentRequest,
+    NewSessionToolConsentRecord, SessionKind, SessionRepository, SessionState,
+    TransitionApprovalRequestIfCurrentRequest, TransitionSessionWithEventIfCurrentRequest,
 };
 
 #[derive(Default)]
@@ -1036,6 +1040,48 @@ fn build_resolved_provider_checkpoint(
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingApprovalInputDecision {
+    RunOnce,
+    SessionAuto,
+    SessionFull,
+    Cancel,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl PendingApprovalInputDecision {
+    fn approval_decision(self) -> ApprovalDecision {
+        match self {
+            Self::RunOnce | Self::SessionAuto | Self::SessionFull => ApprovalDecision::ApproveOnce,
+            Self::Cancel => ApprovalDecision::Deny,
+        }
+    }
+
+    fn session_mode(self) -> Option<ToolConsentMode> {
+        match self {
+            Self::RunOnce | Self::Cancel => None,
+            Self::SessionAuto => Some(ToolConsentMode::Auto),
+            Self::SessionFull => Some(ToolConsentMode::Full),
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn normalize_pending_approval_control_input(input: &str) -> String {
+    super::turn_shared::normalize_approval_prompt_control_input(input)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_pending_approval_input_decision(input: &str) -> Option<PendingApprovalInputDecision> {
+    match parse_approval_prompt_action_input(input)? {
+        ApprovalPromptActionId::Yes => Some(PendingApprovalInputDecision::RunOnce),
+        ApprovalPromptActionId::Auto => Some(PendingApprovalInputDecision::SessionAuto),
+        ApprovalPromptActionId::Full => Some(PendingApprovalInputDecision::SessionFull),
+        ApprovalPromptActionId::Esc => Some(PendingApprovalInputDecision::Cancel),
+    }
+}
+
 impl ConversationTurnCoordinator {
     pub fn new() -> Self {
         Self
@@ -1669,6 +1715,21 @@ impl ConversationTurnCoordinator {
     ) -> CliResult<String> {
         let turn_result: CliResult<(String, bool)> = async {
             let session_id = address.session_id.as_str();
+            #[cfg(feature = "memory-sqlite")]
+            if let Some(reply) = self
+                .maybe_handle_pending_approval_control_turn(
+                    config,
+                    runtime,
+                    session_id,
+                    user_input,
+                    error_mode,
+                    binding,
+                    observer.as_ref(),
+                )
+                .await?
+            {
+                return Ok((reply, false));
+            }
             let preparing_event = ConversationTurnPhaseEvent::preparing();
             observe_turn_phase(observer.as_ref(), preparing_event);
 
@@ -1801,6 +1862,115 @@ impl ConversationTurnCoordinator {
                 Err(error)
             }
         }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    async fn maybe_handle_pending_approval_control_turn<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        runtime: &R,
+        session_id: &str,
+        user_input: &str,
+        error_mode: ProviderErrorMode,
+        binding: ConversationRuntimeBinding<'_>,
+        observer: Option<&ConversationTurnObserverHandle>,
+    ) -> CliResult<Option<String>> {
+        let Some(control_decision) = parse_pending_approval_input_decision(user_input) else {
+            return Ok(None);
+        };
+
+        if let Some(kernel_ctx) = binding.kernel_context() {
+            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        }
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let repo = SessionRepository::new(&memory_config)?;
+        let Some(pending_request) = repo
+            .list_approval_requests_for_session(session_id, Some(ApprovalRequestStatus::Pending))?
+            .into_iter()
+            .next()
+        else {
+            return Ok(None);
+        };
+
+        observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
+        let session_context = runtime.session_context(config, session_id, binding)?;
+        let assembled_context = runtime
+            .build_context(config, session_id, true, binding)
+            .await?;
+        let turn_id = next_conversation_turn_id();
+        let preparation = ProviderTurnPreparation::from_assembled_context_with_turn_id(
+            config,
+            assembled_context,
+            user_input,
+            turn_id.as_str(),
+            None,
+        );
+        observe_turn_phase(
+            observer,
+            ConversationTurnPhaseEvent::context_ready(
+                preparation.session.messages.len(),
+                preparation.session.estimated_tokens,
+            ),
+        );
+
+        let mut approval_args = serde_json::Map::new();
+        approval_args.insert(
+            "approval_request_id".to_owned(),
+            Value::String(pending_request.approval_request_id.clone()),
+        );
+        approval_args.insert(
+            "decision".to_owned(),
+            Value::String(control_decision.approval_decision().as_str().to_owned()),
+        );
+        if let Some(session_consent_mode) = control_decision.session_mode() {
+            approval_args.insert(
+                "session_consent_mode".to_owned(),
+                Value::String(session_consent_mode.as_str().to_owned()),
+            );
+        }
+
+        let approval_turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "approval_request_resolve".to_owned(),
+                args_json: Value::Object(approval_args),
+                source: "approval_control".to_owned(),
+                session_id: session_context.session_id.clone(),
+                turn_id: preparation.turn_id.clone(),
+                tool_call_id: format!(
+                    "call-approval-control-{}",
+                    normalize_pending_approval_control_input(user_input)
+                ),
+            }],
+            raw_meta: Value::Null,
+        };
+
+        let resolved_turn = resolve_provider_turn(
+            config,
+            runtime,
+            session_id,
+            user_input,
+            &preparation,
+            Ok(approval_turn),
+            error_mode,
+            binding,
+            None,
+            observer,
+        )
+        .await;
+        let reply = apply_resolved_provider_turn(
+            config,
+            runtime,
+            session_id,
+            user_input,
+            &preparation,
+            &resolved_turn,
+            binding,
+            observer,
+        )
+        .await?;
+        Ok(Some(reply))
     }
 
     fn reload_followup_provider_config_after_tool_turn(
@@ -3509,16 +3679,7 @@ where
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<loongclaw_contracts::ToolCoreRequest, String> {
-        let execution_kind = approval_request
-            .request_payload_json
-            .get("execution_kind")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "approval_request_invalid_payload: missing execution_kind".to_owned())?;
-        if execution_kind != "app" {
-            return Err(format!(
-                "approval_request_invalid_execution_kind: expected `app`, got `{execution_kind}`"
-            ));
-        }
+        let _ = self.replay_execution_kind(approval_request)?;
 
         let tool_name = approval_request
             .request_payload_json
@@ -3539,41 +3700,74 @@ where
         })
     }
 
+    fn replay_execution_kind(
+        &self,
+        approval_request: &ApprovalRequestRecord,
+    ) -> Result<ToolExecutionKind, String> {
+        let execution_kind = approval_request
+            .request_payload_json
+            .get("execution_kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "approval_request_invalid_payload: missing execution_kind".to_owned())?;
+        match execution_kind {
+            "core" => Ok(ToolExecutionKind::Core),
+            "app" => Ok(ToolExecutionKind::App),
+            _ => Err(format!(
+                "approval_request_invalid_execution_kind: expected `core` or `app`, got `{execution_kind}`"
+            )),
+        }
+    }
+
     async fn replay_approved_request(
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+        let execution_kind = self.replay_execution_kind(approval_request)?;
         let replay_request = self.replay_request(approval_request)?;
-        let session_context = self
-            .runtime
-            .session_context(self.config, &approval_request.session_id, self.binding)
-            .map_err(|error| format!("load approval request session context failed: {error}"))?;
 
-        match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
-            "delegate" => {
-                execute_delegate_tool(
-                    self.config,
-                    self.runtime,
-                    &session_context,
-                    replay_request.payload,
-                    self.binding,
-                )
-                .await
+        match execution_kind {
+            ToolExecutionKind::Core => {
+                let kernel_ctx = self
+                    .binding
+                    .kernel_context()
+                    .ok_or_else(|| "approval_request_replay_missing_kernel_context".to_owned())?;
+                crate::tools::execute_tool(replay_request, kernel_ctx).await
             }
-            "delegate_async" => {
-                execute_delegate_async_tool(
-                    self.config,
-                    self.runtime,
-                    &session_context,
-                    replay_request.payload,
-                    self.binding,
-                )
-                .await
-            }
-            _ => {
-                self.fallback
-                    .execute_app_tool(&session_context, replay_request, self.binding)
-                    .await
+            ToolExecutionKind::App => {
+                let session_context = self
+                    .runtime
+                    .session_context(self.config, &approval_request.session_id, self.binding)
+                    .map_err(|error| {
+                        format!("load approval request session context failed: {error}")
+                    })?;
+
+                match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
+                    "delegate" => {
+                        execute_delegate_tool(
+                            self.config,
+                            self.runtime,
+                            &session_context,
+                            replay_request.payload,
+                            self.binding,
+                        )
+                        .await
+                    }
+                    "delegate_async" => {
+                        execute_delegate_async_tool(
+                            self.config,
+                            self.runtime,
+                            &session_context,
+                            replay_request.payload,
+                            self.binding,
+                        )
+                        .await
+                    }
+                    _ => {
+                        self.fallback
+                            .execute_app_tool(&session_context, replay_request, self.binding)
+                            .await
+                    }
+                }
             }
         }
     }
@@ -3748,7 +3942,22 @@ where
                         ));
                     }
                 };
-                let _ = approved;
+                if let Some(session_consent_mode) = request.session_consent_mode {
+                    let scope_session_id = repo
+                        .lineage_root_session_id(&approved.session_id)?
+                        .ok_or_else(|| {
+                            format!(
+                                "approval_request_session_not_found: `{}`",
+                                approved.session_id
+                            )
+                        })?;
+                    let updated_by_session_id = Some(request.current_session_id.clone());
+                    repo.upsert_session_tool_consent(NewSessionToolConsentRecord {
+                        scope_session_id,
+                        mode: session_consent_mode,
+                        updated_by_session_id,
+                    })?;
+                }
                 self.execute_approved_request(&repo, &request.approval_request_id)
                     .await
             }
@@ -3983,11 +4192,13 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
 }
 
 #[cfg(feature = "memory-sqlite")]
-async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
+async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
     session_context: &SessionContext,
-    payload: Value,
+    task: String,
+    label: Option<String>,
+    timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
@@ -3999,14 +4210,13 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
-    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-        &payload,
-        config.tools.delegate.timeout_seconds,
-    )?;
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
-    let child_label = delegate_request.label.clone();
+    let child_label = label.clone();
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
+
+    ensure_session_exists_for_runtime_self_continuity(&repo, &session_context.session_id)?;
+
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
@@ -4018,53 +4228,116 @@ async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
                 config,
                 binding,
                 ConstrainedSubagentMode::Async,
-                delegate_request.timeout_seconds,
+                timeout_seconds,
                 next_child_depth,
                 active_children,
             );
-            Ok((
-                CreateSessionWithEventRequest {
-                    session: NewSessionRecord {
-                        session_id: child_session_id.clone(),
-                        kind: SessionKind::DelegateChild,
-                        parent_session_id: Some(session_context.session_id.clone()),
-                        label: child_label.clone(),
-                        state: SessionState::Ready,
-                    },
-                    event_kind: "delegate_queued".to_owned(),
-                    actor_session_id: Some(session_context.session_id.clone()),
-                    event_payload_json: execution.spawn_payload_with_runtime_self_continuity(
-                        &delegate_request.task,
-                        child_label.as_deref(),
-                        runtime_self_continuity.as_ref(),
-                    ),
-                },
-                execution,
-            ))
+            let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
+                &task,
+                child_label.as_deref(),
+                runtime_self_continuity.as_ref(),
+            );
+            let session = NewSessionRecord {
+                session_id: child_session_id.clone(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some(session_context.session_id.clone()),
+                label: child_label.clone(),
+                state: SessionState::Ready,
+            };
+            let request = CreateSessionWithEventRequest {
+                session,
+                event_kind: "delegate_queued".to_owned(),
+                actor_session_id: Some(session_context.session_id.clone()),
+                event_payload_json,
+            };
+            Ok((request, execution))
         },
     )?;
 
-    spawn_async_delegate_detached(
-        runtime_handle,
-        memory_config,
-        spawner,
-        AsyncDelegateSpawnRequest {
-            child_session_id: child_session_id.clone(),
-            parent_session_id: session_context.session_id.clone(),
-            task: delegate_request.task,
-            label: child_label,
-            execution,
-            runtime_self_continuity,
-            timeout_seconds: delegate_request.timeout_seconds,
-            kernel_context: binding.kernel_context().cloned(),
-        },
-    );
+    let kernel_context = binding.kernel_context().cloned();
+    let request = AsyncDelegateSpawnRequest {
+        child_session_id: child_session_id.clone(),
+        parent_session_id: session_context.session_id.clone(),
+        task,
+        label: child_label,
+        execution,
+        runtime_self_continuity,
+        timeout_seconds,
+        kernel_context,
+    };
+    spawn_async_delegate_detached(runtime_handle, memory_config, spawner, request);
 
     Ok(crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
+        label,
+        timeout_seconds,
+    ))
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_id: &str,
+    task: &str,
+    label: Option<String>,
+    timeout_seconds: Option<u64>,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    let session_context = runtime.session_context(config, session_id, binding)?;
+    let delegate_request = crate::tools::delegate::normalize_delegate_request(
+        task,
+        label.as_deref(),
+        timeout_seconds,
+        config.tools.delegate.timeout_seconds,
+    )?;
+    enqueue_delegate_async_with_runtime(
+        config,
+        runtime,
+        &session_context,
+        delegate_request.task,
         delegate_request.label,
         delegate_request.timeout_seconds,
-    ))
+        binding,
+    )
+    .await
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Sized>(
+    _config: &LoongClawConfig,
+    _runtime: &R,
+    _session_id: &str,
+    _task: &str,
+    _label: Option<String>,
+    _timeout_seconds: Option<u64>,
+    _binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    Err("delegate_async requires sqlite memory support (enable feature `memory-sqlite`)".to_owned())
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>(
+    config: &LoongClawConfig,
+    runtime: &R,
+    session_context: &SessionContext,
+    payload: Value,
+    binding: ConversationRuntimeBinding<'_>,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
+        &payload,
+        config.tools.delegate.timeout_seconds,
+    )?;
+    enqueue_delegate_async_with_runtime(
+        config,
+        runtime,
+        session_context,
+        delegate_request.task,
+        delegate_request.label,
+        delegate_request.timeout_seconds,
+        binding,
+    )
+    .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -6479,6 +6752,7 @@ async fn execute_single_tool_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ToolConfig;
     use crate::context::bootstrap_test_kernel_context;
     use crate::conversation::turn_engine::ToolBatchExecutionIntentTrace;
     use crate::conversation::{
@@ -6536,6 +6810,188 @@ mod tests {
         ))
     }
 
+    #[test]
+    fn pending_approval_input_parser_accepts_keyword_and_numeric_aliases() {
+        assert_eq!(
+            parse_pending_approval_input_decision("yes"),
+            Some(PendingApprovalInputDecision::RunOnce)
+        );
+        assert_eq!(
+            parse_pending_approval_input_decision("2"),
+            Some(PendingApprovalInputDecision::SessionAuto)
+        );
+        assert_eq!(
+            parse_pending_approval_input_decision("本会话全自动"),
+            Some(PendingApprovalInputDecision::SessionFull)
+        );
+        assert_eq!(
+            parse_pending_approval_input_decision("esc"),
+            Some(PendingApprovalInputDecision::Cancel)
+        );
+        assert_eq!(
+            parse_pending_approval_input_decision("跳过这次"),
+            Some(PendingApprovalInputDecision::Cancel)
+        );
+        assert_eq!(
+            parse_pending_approval_input_decision("skip call"),
+            Some(PendingApprovalInputDecision::Cancel)
+        );
+        assert_eq!(parse_pending_approval_input_decision("maybe"), None);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[derive(Default)]
+    struct ApprovalControlRuntime {
+        bootstrap_calls: StdMutex<usize>,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for ApprovalControlRuntime {
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Ok(vec![json!({
+                "role": "system",
+                "content": "approval control test"
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok("approval handled".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not run during approval control replay")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn_streaming should not run during approval control replay")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+
+        async fn bootstrap(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _kernel_ctx: &KernelContext,
+        ) -> CliResult<crate::conversation::context_engine::ContextEngineBootstrapResult> {
+            let mut bootstrap_calls = self
+                .bootstrap_calls
+                .lock()
+                .expect("bootstrap call lock should not be poisoned");
+            *bootstrap_calls += 1;
+            Ok(Default::default())
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    struct CoreReplayRuntime;
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for CoreReplayRuntime {
+        fn session_context(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<SessionContext> {
+            Err("session_context should not be called for core approval replay".to_owned())
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Err("build_messages should not run during core approval replay".to_owned())
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Err("request_completion should not run during core approval replay".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            Err("request_turn should not run during core approval replay".to_owned())
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            Err("request_turn_streaming should not run during core approval replay".to_owned())
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Err("persist_turn should not run during core approval replay".to_owned())
+        }
+    }
+
     #[cfg(feature = "memory-sqlite")]
     fn sqlite_memory_config(label: &str) -> MemoryRuntimeConfig {
         let path = unique_sqlite_path(label);
@@ -6543,6 +6999,37 @@ mod tests {
         let mut config = LoongClawConfig::default();
         config.memory.sqlite_path = path.display().to_string();
         MemoryRuntimeConfig::from_memory_config(&config.memory)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn seed_pending_approval_request(
+        repo: &SessionRepository,
+        session_id: &str,
+        approval_request_id: &str,
+        tool_name: &str,
+        execution_kind: &str,
+    ) {
+        repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+            approval_request_id: approval_request_id.to_owned(),
+            session_id: session_id.to_owned(),
+            turn_id: "turn-pending-approval".to_owned(),
+            tool_call_id: "call-pending-approval".to_owned(),
+            tool_name: tool_name.to_owned(),
+            approval_key: format!("tool:{tool_name}"),
+            request_payload_json: json!({
+                "session_id": session_id,
+                "turn_id": "turn-pending-approval",
+                "tool_call_id": "call-pending-approval",
+                "tool_name": tool_name,
+                "args_json": {},
+                "source": "test",
+                "execution_kind": execution_kind,
+            }),
+            governance_snapshot_json: json!({
+                "rule_id": "governed_tool_requires_approval",
+            }),
+        })
+        .expect("seed approval request");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8071,6 +8558,309 @@ mod tests {
             assert!(entry.get("tags").is_none());
             assert!(entry.get("why").is_none());
         }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn pending_approval_control_turn_bootstraps_once_and_emits_terminal_phases_once() {
+        let runtime = ApprovalControlRuntime::default();
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+        let coordinator = ConversationTurnCoordinator::new();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-bootstrap");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(&repo, "root-session", "apr-deny-1", "delegate_async", "app");
+
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("root-session");
+        let kernel_ctx =
+            crate::context::bootstrap_test_kernel_context("approval-control-observer", 60)
+                .expect("kernel context");
+
+        let reply = coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "esc",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+                Some(observer_handle),
+            )
+            .await
+            .expect("approval control turn should succeed");
+
+        assert_eq!(reply, "approval handled");
+
+        let bootstrap_calls = runtime
+            .bootstrap_calls
+            .lock()
+            .expect("bootstrap call lock should not be poisoned");
+        assert_eq!(*bootstrap_calls, 1);
+
+        let phase_events = observer
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        let phase_names = phase_events
+            .iter()
+            .map(|event| event.phase)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            phase_names,
+            vec![
+                ConversationTurnPhase::Preparing,
+                ConversationTurnPhase::ContextReady,
+                ConversationTurnPhase::RunningTools,
+                ConversationTurnPhase::FinalizingReply,
+                ConversationTurnPhase::Completed,
+            ]
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn pending_approval_control_turn_does_not_persist_session_mode_when_resolution_fails() {
+        let coordinator = ConversationTurnCoordinator::new();
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-session-mode");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(
+            &repo,
+            "root-session",
+            "apr-auto-failure",
+            "delegate_async",
+            "app",
+        );
+
+        let db_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .to_path_buf();
+        let conn = rusqlite::Connection::open(db_path).expect("open sqlite connection");
+        conn.execute_batch(
+            "
+            CREATE TRIGGER fail_pending_approval_update
+            BEFORE UPDATE ON approval_requests
+            BEGIN
+                SELECT RAISE(FAIL, 'forced approval request update failure');
+            END;
+            ",
+        )
+        .expect("create approval failure trigger");
+
+        let acp_options = AcpConversationTurnOptions::automatic();
+        let address = ConversationSessionAddress::from_session_id("root-session");
+        let result = coordinator
+            .handle_turn_with_runtime_and_address_and_acp_options_and_ingress_and_observer(
+                &config,
+                &address,
+                "auto",
+                ProviderErrorMode::Propagate,
+                &runtime,
+                &acp_options,
+                ConversationRuntimeBinding::direct(),
+                None,
+                None,
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "approval control turn should stay user-visible"
+        );
+
+        let stored = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent");
+        assert!(
+            stored.is_none(),
+            "session mode should not persist on failure"
+        );
+
+        let approval_request = repo
+            .load_approval_request("apr-auto-failure")
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Pending);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_persists_session_mode_on_success() {
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-session-mode-success");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(
+            &repo,
+            "root-session",
+            "apr-auto-success",
+            "sessions_list",
+            "app",
+        );
+        let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
+        let approval_runtime = CoordinatorApprovalResolutionRuntime {
+            config: &config,
+            runtime: &runtime,
+            fallback: &fallback,
+            binding: ConversationRuntimeBinding::direct(),
+        };
+        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
+            &approval_runtime,
+            crate::tools::approval::ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-auto-success".to_owned(),
+                decision: ApprovalDecision::ApproveOnce,
+                session_consent_mode: Some(ToolConsentMode::Auto),
+                visibility: crate::config::SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve should succeed");
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Executed
+        );
+
+        let stored = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+        assert_eq!(stored.mode, ToolConsentMode::Auto);
+        assert_eq!(
+            stored.updated_by_session_id.as_deref(),
+            Some("root-session")
+        );
+
+        let approval_request = repo
+            .load_approval_request("apr-auto-success")
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(
+            approval_request.decision,
+            Some(ApprovalDecision::ApproveOnce)
+        );
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Executed);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn core_approval_replay_skips_app_session_context_loading() {
+        let runtime = CoreReplayRuntime;
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-core-replay");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-core-replay".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-core-replay".to_owned(),
+            tool_call_id: "call-core-replay".to_owned(),
+            tool_name: "provider.switch".to_owned(),
+            approval_key: "tool:provider.switch".to_owned(),
+            request_payload_json: json!({
+                "session_id": "root-session",
+                "turn_id": "turn-core-replay",
+                "tool_call_id": "call-core-replay",
+                "tool_name": "provider.switch",
+                "args_json": {
+                    "selector": "openai"
+                },
+                "source": "test",
+                "execution_kind": "core",
+            }),
+            governance_snapshot_json: json!({
+                "rule_id": "session_tool_consent_auto_blocked",
+            }),
+        })
+        .expect("seed core approval request");
+        let approval_request = repo
+            .load_approval_request("apr-core-replay")
+            .expect("load approval request")
+            .expect("approval request row");
+        let kernel_ctx =
+            bootstrap_test_kernel_context("approval-core-replay", 60).expect("kernel context");
+        let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
+        let approval_runtime = CoordinatorApprovalResolutionRuntime {
+            config: &config,
+            runtime: &runtime,
+            fallback: &fallback,
+            binding: ConversationRuntimeBinding::kernel(&kernel_ctx),
+        };
+
+        let error = approval_runtime
+            .replay_approved_request(&approval_request)
+            .await
+            .expect_err("provider.switch should fail at core execution");
+        assert!(
+            error.contains("provider.switch requires a resolved runtime config path"),
+            "expected core execution failure, got: {error}"
+        );
     }
 
     #[test]

@@ -2558,7 +2558,9 @@ fi
 
 if args_contain "$*" 'prompt --session'; then
   drain_stdin
-  sleep 30
+  while :; do
+    :
+  done
   exit 0
 fi
 

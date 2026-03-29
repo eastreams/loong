@@ -9097,6 +9097,7 @@ mod tests {
     fn feishu_status_splits_direct_send_and_webhook_readiness() {
         let mut config = LoongClawConfig::default();
         config.feishu.enabled = true;
+        config.feishu.mode = Some(FeishuChannelServeMode::Webhook);
         config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline("app-id".to_owned()));
         config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
             "app-secret".to_owned(),

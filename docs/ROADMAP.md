@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-27
+Last updated: 2026-03-29
 
 This roadmap is execution-focused. Every stage has:
 
@@ -378,6 +378,19 @@ Remaining deliverables:
 - experiment-state operator surface follow-through:
   - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
   - keep the new dry-run promotion planner read-only and use it as the contract for any future promotion executor instead of jumping directly to automatic mutation
+- runtime productization over already-shipped substrate:
+  - background task UX on top of session runtime:
+    - expose task-shaped create, inspect, wait, follow, cancel, and recover flows over the current async delegate child-session substrate
+    - surface approval-pending and tool-narrowing state as task diagnostics instead of raw session-runtime detail only
+    - keep cron, heartbeat, and service-owned scheduling out of the first slice
+  - discovery-first managed skills UX:
+    - add search and recommendation over the current managed, user, and project skill inventory
+    - explain eligibility, visibility, shadowing, and first-use guidance rather than requiring operators to know a `skill_id` up front
+    - keep install and invoke explicit and governed instead of drifting into blind auto-install
+  - scoped memory retrieval productization:
+    - add query-aware retrieval and broaden beyond session-summary-only hydration
+    - make provenance and injection reason operator-visible
+    - ship local text search before embedding-dependent retrieval
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:

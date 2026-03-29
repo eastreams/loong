@@ -2149,7 +2149,7 @@ impl Default for FeishuChannelConfig {
             app_secret_env: Some(FEISHU_APP_SECRET_ENV.to_owned()),
             domain: FeishuDomain::Feishu,
             base_url: None,
-            mode: None,
+            mode: Some(FeishuChannelServeMode::Websocket),
             receive_id_type: default_feishu_receive_id_type(),
             webhook_bind: default_feishu_webhook_bind(),
             webhook_path: default_feishu_webhook_path(),
@@ -2697,7 +2697,7 @@ impl FeishuChannelConfig {
             app_secret_env: merged.app_secret_env,
             domain: merged.domain,
             base_url: merged.base_url,
-            mode: merged.mode.unwrap_or_default(),
+            mode: merged.mode.unwrap_or(FeishuChannelServeMode::Websocket),
             receive_id_type: merged.receive_id_type,
             webhook_bind: merged.webhook_bind,
             webhook_path: merged.webhook_path,
@@ -8208,7 +8208,7 @@ mod tests {
     }
 
     #[test]
-    fn feishu_mode_defaults_to_webhook_when_not_configured() {
+    fn feishu_mode_defaults_to_websocket_when_not_configured() {
         let config: FeishuChannelConfig = serde_json::from_value(json!({
             "enabled": true,
             "app_id": "cli_a1b2c3",
@@ -8220,7 +8220,7 @@ mod tests {
             .resolve_account(None)
             .expect("resolve default feishu account");
 
-        assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
+        assert_eq!(resolved.mode, FeishuChannelServeMode::Websocket);
     }
 
     #[test]

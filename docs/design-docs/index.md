@@ -14,6 +14,7 @@ Catalog of design documents and architectural decisions.
 | [Plugin Package Manifest Contract](plugin-package-manifest-contract.md) | Manifest-first plugin metadata, setup surface, and slot ownership contract | Active |
 | [OpenClaw Plugin Compatibility Contract](openclaw-plugin-compatibility-contract.md) | Foreign dialect normalization, compatibility-mode gating, and polyglot plugin strategy | Active |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
+| [Reference Runtime Comparison](reference-runtime-comparison.md) | Productization gap analysis and convergence order for tasks, skills, and memory | Active |
 | [ACP/ACPX Pre-Embed](acp-acpx-preembed.md) | Advanced cryptographic primitives | Active |
 | [Harness Engineering](harness-engineering.md) | Environment design for agent-driven development | Active |
 
@@ -76,9 +77,9 @@ All decisions from the research repository. Status reflects implementation reali
 | ID | Decision | Implementation Status |
 |----|----------|---------------------|
 | D-016 | MemoryStore trait (4 typed async methods) | Not started — using string dispatch (TD-008) |
-| D-017 | MemoryScope enum (Task, Session, Agent, Global) | Not started — flat session_id (TD-010) |
-| D-018 | SQLite + FTS5 default backend (WAL, feature-gated sqlite-vec) | Partial — SQLite turns table, no FTS5 (TD-011) |
-| D-019 | Mandatory provenance fields (10 fields: UUID, trust_tier, hash, agent, TTL...) | Not started |
+| D-017 | MemoryScope enum (Task, Session, Agent, Global) | Partial — scoped memory vocabulary now exists in app runtime as `Session`, `User`, `Agent`, and `Workspace`, but the original task/global vocabulary was not adopted and retrieval is not yet productized |
+| D-018 | SQLite + FTS5 default backend (WAL, feature-gated sqlite-vec) | Partial — SQLite canonical store, memory-system registry, and staged retrieval orchestration ship on `dev`, but FTS5/search are not yet present |
+| D-019 | Mandatory provenance fields (10 fields: UUID, trust_tier, hash, agent, TTL...) | Partial — canonical records already carry typed scope/kind/session metadata, but a stable operator-visible provenance contract for retrieval results is still missing |
 | D-020 | Configurable trust scoring (Tier 0-3) | Not started |
 | D-021 | Blake3 content hashing (feature-gated `pure` mode) | Not started |
 | D-022 | Capability-scoped deletion (tombstone audit trail) | Not started |

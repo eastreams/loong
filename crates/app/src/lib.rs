@@ -6,8 +6,6 @@ pub mod config;
 pub mod context;
 pub mod conversation;
 pub mod crypto;
-#[cfg(feature = "feishu-integration")]
-pub mod feishu;
 pub mod memory;
 pub mod migration;
 pub mod presentation;
@@ -32,6 +30,8 @@ mod process_env;
 #[doc(hidden)]
 pub mod test_support;
 
+#[cfg(feature = "feishu-integration")]
+pub use channel::feishu::api as feishu;
 pub use context::KernelContext;
 /// Result type for MVP CLI operations.
 pub type CliResult<T> = Result<T, String>;

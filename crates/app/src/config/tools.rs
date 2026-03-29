@@ -47,6 +47,8 @@ pub struct ToolConfig {
     #[serde(default = "default_shell_default_mode")]
     pub shell_default_mode: String,
     #[serde(default)]
+    pub consent: ToolConsentConfig,
+    #[serde(default)]
     pub approval: GovernedToolApprovalConfig,
     #[serde(default)]
     pub sessions: SessionToolConfig,
@@ -111,6 +113,31 @@ impl AutonomyProfile {
             Self::BoundedAutonomous => AUTONOMY_PROFILE_IDS[2],
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolConsentMode {
+    Prompt,
+    Auto,
+    #[default]
+    Full,
+}
+
+impl ToolConsentMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Prompt => "prompt",
+            Self::Auto => "auto",
+            Self::Full => "full",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ToolConsentConfig {
+    #[serde(default)]
+    pub default_mode: ToolConsentMode,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -453,6 +480,7 @@ impl Default for ToolConfig {
             shell_allow: default_shell_allow(),
             shell_deny: Vec::new(),
             shell_default_mode: default_shell_default_mode(),
+            consent: ToolConsentConfig::default(),
             approval: GovernedToolApprovalConfig::default(),
             sessions: SessionToolConfig::default(),
             messages: MessageToolConfig::default(),
@@ -1020,6 +1048,7 @@ mod tests {
         assert!(config.shell_deny.is_empty());
         assert_eq!(config.shell_default_mode, "deny");
         assert_eq!(config.autonomy_profile, AutonomyProfile::DiscoveryOnly);
+        assert_eq!(config.consent.default_mode, ToolConsentMode::Full);
         assert_eq!(config.approval.mode, GovernedToolApprovalMode::Disabled);
         assert!(config.approval.approved_calls.is_empty());
         assert!(config.approval.denied_calls.is_empty());
@@ -1287,6 +1316,29 @@ mod tests {
                 .any(|issue| issue.field_path == "tools.tool_execution.per_tool_timeout.file.read"),
             "expected per-tool timeout validation issue, got {issues:?}"
         );
+    }
+
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_tool_consent_mode_from_toml() {
+        let test_cases = [
+            ("prompt", ToolConsentMode::Prompt),
+            ("auto", ToolConsentMode::Auto),
+            ("full", ToolConsentMode::Full),
+        ];
+
+        for (raw_mode, expected_mode) in test_cases {
+            let raw = format!(
+                r#"
+[tools.consent]
+default_mode = "{raw_mode}"
+"#
+            );
+            let parsed =
+                toml::from_str::<crate::config::LoongClawConfig>(&raw).expect("parse tool config");
+
+            assert_eq!(parsed.tools.consent.default_mode, expected_mode);
+        }
     }
 
     #[cfg(feature = "config-toml")]

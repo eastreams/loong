@@ -31,7 +31,7 @@ use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
-    ExecutionLane, ProviderErrorMode, resolve_context_engine_selection,
+    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view, resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -1094,6 +1094,9 @@ fn build_cli_chat_history_message_spec(
 }
 
 fn render_cli_chat_assistant_lines_with_width(assistant_text: &str, width: usize) -> Vec<String> {
+    if let Some(screen_spec) = build_cli_chat_approval_screen_spec(assistant_text) {
+        return render_tui_screen_spec(&screen_spec, width, false);
+    }
     let message_spec = build_cli_chat_assistant_message_spec(assistant_text);
     render_tui_message_spec(&message_spec, width)
 }
@@ -1107,6 +1110,85 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
         sections,
         footer_lines: Vec::new(),
     }
+}
+
+fn build_cli_chat_approval_screen_spec(assistant_text: &str) -> Option<TuiScreenSpec> {
+    let parsed = parse_approval_prompt_view(assistant_text)?;
+    let mut intro_lines = Vec::new();
+    if let Some(preface) = parsed
+        .preface
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        intro_lines.extend(preface.lines().map(|line| line.to_owned()));
+    }
+
+    let title = parsed.title();
+
+    let mut sections = Vec::new();
+    if let Some(reason) = parsed.reason.as_deref() {
+        sections.push(TuiSectionSpec::Callout {
+            tone: TuiCalloutTone::Warning,
+            title: Some(parsed.pause_reason_title()),
+            lines: vec![reason.to_owned()],
+        });
+    }
+
+    let mut kv_items = Vec::new();
+    if let Some(tool_name) = parsed.tool_name.as_deref() {
+        kv_items.push(TuiKeyValueSpec::Plain {
+            key: parsed.tool_label(),
+            value: tool_name.to_owned(),
+        });
+    }
+    if let Some(request_id) = parsed.request_id.as_deref() {
+        kv_items.push(TuiKeyValueSpec::Plain {
+            key: parsed.request_id_label(),
+            value: request_id.to_owned(),
+        });
+    }
+    if !kv_items.is_empty() {
+        sections.push(TuiSectionSpec::KeyValues {
+            title: Some(parsed.request_section_title()),
+            items: kv_items,
+        });
+    }
+
+    let choices = parsed
+        .actions
+        .iter()
+        .map(|action| TuiChoiceSpec {
+            key: action.numeric_alias.clone(),
+            label: action.label.clone(),
+            detail_lines: action.detail_lines.clone(),
+            recommended: action.recommended,
+        })
+        .collect::<Vec<_>>();
+
+    let footer_lines = if parsed.actions.is_empty() {
+        Vec::new()
+    } else if parsed.locale.is_cjk() {
+        vec![
+            format!("也可以直接回复：{}", parsed.action_commands_text()),
+            format!("数字别名：{}", parsed.action_numeric_aliases_text()),
+        ]
+    } else {
+        vec![
+            format!("You can also reply with: {}", parsed.action_commands_text()),
+            format!("Numeric aliases: {}", parsed.action_numeric_aliases_text()),
+        ]
+    };
+
+    Some(TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(parsed.subtitle()),
+        title,
+        progress_line: None,
+        intro_lines,
+        sections,
+        choices,
+        footer_lines,
+    })
 }
 
 fn build_cli_chat_live_surface_observer(render_width: usize) -> ConversationTurnObserverHandle {
@@ -5750,6 +5832,39 @@ println!(\"{value}\");
         assert!(
             lines.iter().any(|line| line == "Next"),
             "a trailing heading should still render even when it has no body lines yet: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_assistant_lines_promotes_tool_approval_to_choice_screen() {
+        let assistant_text = "\
+我准备调用 provider.switch 来切换后续会话的 provider。
+[tool_approval_required]
+tool: provider.switch
+request_id: apr_provider_switch
+rule_id: session_tool_consent_auto_blocked
+reason: `provider.switch` is not eligible for auto mode and needs operator confirmation
+allowed_decisions: yes / auto / full / esc";
+        let lines = render_cli_chat_assistant_lines_with_width(assistant_text, 72);
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("准备调用 provider.switch")),
+            "approval replies should render as a dedicated screen title: {lines:#?}"
+        );
+        let first_choice_visible = lines.iter().any(|line| line.trim_start().starts_with("1)"));
+        let second_choice_visible = lines.iter().any(|line| line.trim_start().starts_with("2)"));
+
+        assert!(
+            first_choice_visible && second_choice_visible,
+            "approval choice screen should expose numbered choices in order: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("yes / auto / full / esc")),
+            "approval choice screen should keep the raw keyword controls visible: {lines:#?}"
         );
     }
 

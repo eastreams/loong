@@ -9,7 +9,7 @@ use std::{
 };
 
 use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -102,10 +102,11 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 5;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 10;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 7;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 11;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
+const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
 const SQL_INSERT_TURN: &str = "INSERT INTO turns(session_id, session_turn_index, role, content, ts) VALUES (?1, ?2, ?3, ?4, ?5)";
 const SQL_DELETE_TURNS_FOR_SESSION: &str = "DELETE FROM turns WHERE session_id = ?1";
 const SQL_UPSERT_SESSION_TURN_COUNT: &str =
@@ -148,6 +149,7 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_summary_checkpoint_bodies',
                         'approval_requests',
                         'approval_grants',
+                        'session_tool_consent',
                         'session_tool_policies'
                     ))
                 OR (type = 'index' AND name IN (
@@ -1246,7 +1248,7 @@ fn open_sqlite_connection_with_diagnostics(
     }
 
     let connection_open_started_at = StdInstant::now();
-    let conn =
+    let mut conn =
         Connection::open(path).map_err(|error| format!("open sqlite memory db failed: {error}"))?;
     diagnostics.connection_open_ms = elapsed_ms(connection_open_started_at);
 
@@ -1318,6 +1320,13 @@ fn open_sqlite_connection_with_diagnostics(
               updated_at INTEGER NOT NULL,
               PRIMARY KEY(scope_session_id, approval_key)
             );
+            CREATE TABLE IF NOT EXISTS session_tool_consent(
+              scope_session_id TEXT PRIMARY KEY,
+              mode TEXT NOT NULL CHECK (mode IN ('prompt', 'auto', 'full')),
+              updated_by_session_id TEXT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS session_tool_policies(
               session_id TEXT PRIMARY KEY,
               requested_tool_ids_json TEXT NOT NULL,
@@ -1335,6 +1344,7 @@ fn open_sqlite_connection_with_diagnostics(
     if user_version < SQLITE_MEMORY_SCHEMA_VERSION {
         ensure_turn_session_index_and_state_metadata(&conn)?;
         ensure_approval_lifecycle_tables(&conn)?;
+        ensure_session_tool_consent_storage(&mut conn)?;
         ensure_session_tool_policy_storage(&conn)?;
         ensure_summary_checkpoint_storage_layout(&conn)?;
         write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
@@ -1507,6 +1517,35 @@ fn ensure_approval_lifecycle_tables(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|error| format!("ensure approval lifecycle storage failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_tool_consent_storage(conn: &mut Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("session_tool_consent");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS session_tool_consent(
+          scope_session_id TEXT PRIMARY KEY,
+          mode TEXT NOT NULL CHECK (mode IN ('prompt', 'auto', 'full')),
+          updated_by_session_id TEXT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        ",
+    )
+    .map_err(|error| format!("ensure session tool consent storage failed: {error}"))?;
+
+    let has_mode_check = sqlite_table_sql_contains(
+        conn,
+        "session_tool_consent",
+        SESSION_TOOL_CONSENT_MODE_CHECK_SQL,
+    )?;
+    if !has_mode_check {
+        rebuild_session_tool_consent_storage_with_mode_check(conn)?;
+    }
 
     Ok(())
 }
@@ -1693,6 +1732,80 @@ fn sqlite_table_has_column(
     Ok(sqlite_table_columns(conn, table_name)?
         .iter()
         .any(|current_name| current_name == column_name))
+}
+
+fn sqlite_table_sql_contains(
+    conn: &Connection,
+    table_name: &str,
+    needle: &str,
+) -> Result<bool, String> {
+    let sql = conn
+        .query_row(
+            "SELECT sql
+             FROM sqlite_master
+             WHERE type = 'table' AND name = ?1",
+            [table_name],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| format!("query sqlite table sql failed: {error}"))?;
+
+    Ok(sql.is_some_and(|value| value.contains(needle)))
+}
+
+fn rebuild_session_tool_consent_storage_with_mode_check(
+    conn: &mut Connection,
+) -> Result<(), String> {
+    let invalid_mode_rows = conn
+        .query_row(
+            "SELECT COUNT(*)
+             FROM session_tool_consent
+             WHERE mode NOT IN ('prompt', 'auto', 'full')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("validate session tool consent modes failed: {error}"))?;
+    if invalid_mode_rows > 0 {
+        return Err(format!(
+            "session_tool_consent contains {invalid_mode_rows} invalid mode rows"
+        ));
+    }
+
+    let tx = conn.transaction().map_err(|error| {
+        format!("open session tool consent rebuild transaction failed: {error}")
+    })?;
+    tx.execute_batch(
+        "
+        ALTER TABLE session_tool_consent RENAME TO session_tool_consent_legacy;
+        CREATE TABLE session_tool_consent(
+          scope_session_id TEXT PRIMARY KEY,
+          mode TEXT NOT NULL CHECK (mode IN ('prompt', 'auto', 'full')),
+          updated_by_session_id TEXT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO session_tool_consent(
+          scope_session_id,
+          mode,
+          updated_by_session_id,
+          created_at,
+          updated_at
+        )
+        SELECT
+          scope_session_id,
+          mode,
+          updated_by_session_id,
+          created_at,
+          updated_at
+        FROM session_tool_consent_legacy;
+        DROP TABLE session_tool_consent_legacy;
+        ",
+    )
+    .map_err(|error| format!("rebuild session tool consent storage failed: {error}"))?;
+    tx.commit()
+        .map_err(|error| format!("commit session tool consent rebuild failed: {error}"))?;
+
+    Ok(())
 }
 
 fn sqlite_table_columns(conn: &Connection, table_name: &str) -> Result<Vec<String>, String> {
@@ -3994,6 +4107,118 @@ mod tests {
             .expect("read sqlite user_version");
 
         assert_eq!(user_version, SQLITE_MEMORY_SCHEMA_VERSION);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_repairs_session_tool_consent_mode_check_constraint() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-session-tool-consent-mode-check-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("session-tool-consent.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("open legacy sqlite db");
+        configure_sqlite_connection(&conn).expect("configure legacy sqlite db");
+        conn.execute_batch(
+            "
+            CREATE TABLE turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE INDEX idx_turns_session_id ON turns(session_id, id);
+            CREATE TABLE session_tool_consent(
+              scope_session_id TEXT PRIMARY KEY,
+              mode TEXT NOT NULL,
+              updated_by_session_id TEXT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            );
+            PRAGMA user_version = 6;
+            ",
+        )
+        .expect("create legacy schema");
+        conn.execute(
+            "INSERT INTO session_tool_consent(
+                scope_session_id,
+                mode,
+                updated_by_session_id,
+                created_at,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "root-session",
+                "full",
+                "root-session",
+                unix_ts_now(),
+                unix_ts_now(),
+            ],
+        )
+        .expect("insert legacy session tool consent");
+        drop(conn);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        ensure_memory_db_ready(Some(db_path.clone()), &config)
+            .expect("migrate legacy sqlite memory db");
+
+        let repaired_conn = Connection::open(&db_path).expect("open repaired sqlite db");
+        let session_tool_consent_sql = repaired_conn
+            .query_row(
+                "SELECT sql
+                 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'session_tool_consent'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read repaired session_tool_consent sql");
+
+        assert!(
+            session_tool_consent_sql.contains(SESSION_TOOL_CONSENT_MODE_CHECK_SQL),
+            "expected repaired DDL to contain mode check: {session_tool_consent_sql}"
+        );
+
+        let invalid_insert = repaired_conn.execute(
+            "INSERT INTO session_tool_consent(
+                scope_session_id,
+                mode,
+                updated_by_session_id,
+                created_at,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "other-session",
+                "bogus",
+                "root-session",
+                unix_ts_now(),
+                unix_ts_now(),
+            ],
+        );
+        assert!(
+            invalid_insert.is_err(),
+            "invalid mode should be rejected after repair"
+        );
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

@@ -14,6 +14,13 @@ can recover a broken setup without reverse-engineering runtime internals.
 - [x] `loongclaw doctor --json` produces stable machine-readable output for
       automation and support tooling, including machine-readable `next_steps`
       when doctor can recommend a concrete repair or first-value command.
+- [x] `loongclaw doctor security` provides a separate security exposure and
+      config hygiene audit instead of overloading the general health report.
+- [x] `loongclaw doctor security --json` emits a stable machine-readable
+      contract with `command`, `config`, `ok`, `summary`, and `findings`.
+- [x] Security findings use the explicit posture vocabulary
+      `covered | partial | exposed | unknown` so operators can distinguish
+      strong coverage from soft guardrails and unresolved surfaces.
 - [x] Text-mode doctor output ends with concrete next actions such as
       credential env hints, `doctor --fix`, first-turn ask/chat commands, and
       optional browser preview enable or runtime setup commands when relevant.
@@ -29,6 +36,12 @@ can recover a broken setup without reverse-engineering runtime internals.
 - [x] Doctor checks cover the current MVP path: config presence, provider
       readiness, SQLite memory readiness, shipped channel prerequisites, and
       the optional browser preview companion readiness path.
+- [x] `doctor security` covers the current operator-facing security posture:
+      audit retention durability, shell default policy, explicit tool file
+      root, web fetch egress, external skills download posture, secret storage
+      hygiene, and browser automation readiness posture.
+- [x] `doctor security` rejects `--fix` and `--skip-model-probe` instead of
+      silently accepting unsupported parent-command flags.
 - [x] Durable audit readiness checks exercise the runtime `open + lock + unlock`
       path for JSONL retention instead of relying on metadata-only validation.
 - [x] When `tools.browser_companion.enabled=true`, doctor surfaces companion

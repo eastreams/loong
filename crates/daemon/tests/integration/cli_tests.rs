@@ -55,6 +55,132 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
 }
 
 #[test]
+fn doctor_help_mentions_security_subcommand() {
+    let help = render_cli_help(["doctor"]);
+
+    assert!(
+        help.contains("security"),
+        "doctor help should advertise the security audit subcommand: {help}"
+    );
+    assert!(
+        help.contains("--config <CONFIG>"),
+        "doctor help should keep the shared config flag visible: {help}"
+    );
+}
+
+#[test]
+fn doctor_security_help_mentions_security_exposure_audit() {
+    let help = render_cli_help(["doctor", "security"]);
+
+    assert!(
+        help.contains("security exposure"),
+        "doctor security help should describe the exposure audit: {help}"
+    );
+    assert!(
+        help.contains("Usage: security"),
+        "doctor security help should render a dedicated usage block: {help}"
+    );
+}
+
+#[test]
+fn doctor_security_cli_parses_subcommand_and_global_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "doctor",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "security",
+        "--json",
+    ])
+    .expect("`doctor security --json` should parse");
+
+    match cli.command {
+        Some(Commands::Doctor {
+            config,
+            fix,
+            json,
+            skip_model_probe,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(!fix);
+            assert!(json);
+            assert!(!skip_model_probe);
+            assert_eq!(
+                command,
+                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn doctor_security_cli_accepts_global_flags_after_subcommand() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "doctor",
+        "security",
+        "--config",
+        "/tmp/loongclaw.toml",
+        "--skip-model-probe",
+    ])
+    .expect("global doctor flags should remain valid after the security subcommand");
+
+    match cli.command {
+        Some(Commands::Doctor {
+            config,
+            fix,
+            json,
+            skip_model_probe,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(!fix);
+            assert!(!json);
+            assert!(skip_model_probe);
+            assert_eq!(
+                command,
+                Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security)
+            );
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build test runtime");
+
+    let fix_error = runtime
+        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
+            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
+                config: None,
+                fix: true,
+                json: false,
+                skip_model_probe: false,
+                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
+            },
+        ))
+        .expect_err("doctor security should reject --fix at runtime");
+
+    let probe_error = runtime
+        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
+            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
+                config: None,
+                fix: false,
+                json: false,
+                skip_model_probe: true,
+                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
+            },
+        ))
+        .expect_err("doctor security should reject --skip-model-probe at runtime");
+
+    assert!(fix_error.contains("--fix"));
+    assert!(probe_error.contains("--skip-model-probe"));
+}
+
+#[test]
 fn setup_subcommand_is_removed() {
     let error = try_parse_cli(["loongclaw", "setup"])
         .expect_err("`setup` should no longer parse as a valid subcommand");
@@ -1009,6 +1135,111 @@ fn runtime_capability_cli_parses_propose_review_show_index_and_plan() {
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
             | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_capability_cli_parses_memory_stage_profile_target() {
+    let propose = try_parse_cli([
+        "loongclaw",
+        "runtime-capability",
+        "propose",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--output",
+        "/tmp/runtime-capability.json",
+        "--target",
+        "memory_stage_profile",
+        "--target-summary",
+        "Promote governed memory pipeline intent into a reusable profile",
+        "--bounded-scope",
+        "Governed memory pipeline promotion intent only",
+        "--required-capability",
+        "memory_read",
+        "--tag",
+        "memory",
+        "--tag",
+        "pipeline",
+    ])
+    .expect("`runtime-capability propose --target memory_stage_profile` should parse");
+
+    match propose.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                options,
+            ) => {
+                assert_eq!(options.run, "/tmp/runtime-experiment.json");
+                assert_eq!(options.output, "/tmp/runtime-capability.json");
+                assert_eq!(
+                    options.target,
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile
+                );
+                assert!(options.target_summary.contains("governed memory pipeline"));
+                assert_eq!(
+                    options.bounded_scope,
+                    "Governed memory pipeline promotion intent only"
+                );
+                assert_eq!(options.required_capability, vec!["memory_read".to_owned()]);
+                assert_eq!(options.tag, vec!["memory".to_owned(), "pipeline".to_owned()]);
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
+                panic!("unexpected runtime-capability subcommand parsed: {other:?}")
+            }
+        },
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_capability_cli_parses_memory_stage_profile_canonical_spelling() {
+    let propose = try_parse_cli([
+        "loongclaw",
+        "runtime-capability",
+        "propose",
+        "--run",
+        "/tmp/runtime-experiment.json",
+        "--output",
+        "/tmp/runtime-capability.json",
+        "--target",
+        "memory-stage-profile",
+        "--target-summary",
+        "Promote governed memory pipeline intent into a reusable profile",
+        "--bounded-scope",
+        "Governed memory pipeline promotion intent only",
+        "--required-capability",
+        "memory_read",
+        "--tag",
+        "memory",
+        "--tag",
+        "pipeline",
+    ])
+    .expect("`runtime-capability propose --target memory-stage-profile` should parse");
+
+    match propose.command {
+        Some(Commands::RuntimeCapability { command }) => match command {
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Propose(
+                options,
+            ) => {
+                assert_eq!(
+                    options.target,
+                    loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile
+                );
+            }
+            other @ (loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Review(
+                _,
+            )
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Show(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Index(_)
+            | loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityCommands::Plan(_)) => {
                 panic!("unexpected runtime-capability subcommand parsed: {other:?}")
             }
         },

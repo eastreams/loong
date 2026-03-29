@@ -83,6 +83,8 @@ mod channel_send_target_kind;
 mod cli_handoff;
 pub mod completions_cli;
 pub mod doctor_cli;
+pub mod doctor_security_cli;
+mod external_skills_policy_probe;
 pub mod feishu_cli;
 pub mod feishu_support;
 pub mod gateway;
@@ -113,6 +115,7 @@ mod runtime_snapshot_support;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
+pub mod tasks_cli;
 mod tlon_cli;
 
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
@@ -516,17 +519,19 @@ pub enum Commands {
     /// Run configuration diagnostics and optionally apply safe config/path fixes
     Doctor {
         /// Config file path to validate (defaults to auto-discovery)
-        #[arg(long)]
+        #[arg(long, global = true)]
         config: Option<String>,
         /// Apply safe auto-fixes for detected diagnostics
-        #[arg(long, default_value_t = false)]
+        #[arg(long, global = true, default_value_t = false)]
         fix: bool,
         /// Emit machine-readable JSON diagnostics
-        #[arg(long, default_value_t = false)]
+        #[arg(long, global = true, default_value_t = false)]
         json: bool,
         /// Skip provider model probing during diagnostics
-        #[arg(long, default_value_t = false)]
+        #[arg(long, global = true, default_value_t = false)]
         skip_model_probe: bool,
+        #[command(subcommand)]
+        command: Option<doctor_cli::DoctorCommands>,
     },
     /// Inspect the retained audit journal through a bounded CLI surface
     Audit {
@@ -545,6 +550,17 @@ pub enum Commands {
         json: bool,
         #[command(subcommand)]
         command: skills_cli::SkillsCommands,
+    },
+    /// Manage async background tasks on top of the current session runtime
+    Tasks {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: tasks_cli::TasksCommands,
     },
     #[command(
         visible_alias = "plugin",

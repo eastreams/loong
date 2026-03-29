@@ -218,6 +218,7 @@ pub enum ToolVisibilityGate {
     Sessions,
     SessionMutation,
     Messages,
+    Feishu,
     Delegate,
     Browser,
     BrowserCompanion,
@@ -458,7 +459,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: claw_migrate_definition,
         },
         ToolDescriptor {
@@ -471,7 +472,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityFetch,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -497,7 +498,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityInstall,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -510,7 +511,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityLoad,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -549,7 +550,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -562,7 +563,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::RuntimeSwitch,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -788,6 +789,102 @@ fn build_tool_catalog() -> ToolCatalog {
         },
     ];
 
+    #[cfg(feature = "feishu-integration")]
+    {
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.calendar.freebusy",
+            "feishu_calendar_freebusy",
+            "Query Feishu calendar free/busy for the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.calendar.list",
+            "feishu_calendar_list",
+            "List Feishu calendars or primary calendars for the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.card.update",
+            "feishu_card_update",
+            "Update a Feishu interactive card through the delayed callback API, using the current callback token when available",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.doc.append",
+            "feishu_doc_append",
+            "Append markdown or html content to an existing Feishu docx document with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.doc.create",
+            "feishu_doc_create",
+            "Create a Feishu docx document and optionally insert initial markdown or html content with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.doc.read",
+            "feishu_doc_read",
+            "Read Feishu Doc raw content with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.get",
+            "feishu_messages_get",
+            "Read one Feishu message detail using a tenant token resolved from the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.history",
+            "feishu_messages_history",
+            "List Feishu message history using a tenant token resolved from the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        #[cfg(feature = "tool-file")]
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.resource.get",
+            "feishu_messages_resource_get",
+            "Download one Feishu message image or file resource under the configured file root, with safe ingress defaults when the current Feishu turn carries exactly one resource reference",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.reply",
+            "feishu_messages_reply",
+            "Reply to a Feishu message with text, post, image, file, or a markdown card using a tenant token resolved from the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.search",
+            "feishu_messages_search",
+            "Search Feishu messages with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.messages.send",
+            "feishu_messages_send",
+            "Send a Feishu text, post, image, file, or markdown card message with a tenant token resolved from the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.whoami",
+            "feishu_whoami",
+            "Inspect the active Feishu grant principal and profile",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+    }
+
     #[cfg(feature = "tool-file")]
     {
         descriptors.push(ToolDescriptor {
@@ -839,7 +936,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_write_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -852,7 +949,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_edit_definition,
         });
     }
@@ -869,7 +966,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -1235,6 +1332,7 @@ fn tool_visibility_gate_enabled_for_runtime_view(
             sessions_enabled && allow_mutation
         }
         ToolVisibilityGate::Messages => config.messages.enabled,
+        ToolVisibilityGate::Feishu => false,
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => false,
@@ -1261,6 +1359,17 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
             sessions_enabled && allow_mutation
         }
         ToolVisibilityGate::Messages => config.messages_enabled,
+        ToolVisibilityGate::Feishu => {
+            #[cfg(feature = "feishu-integration")]
+            {
+                config.feishu.is_some()
+            }
+
+            #[cfg(not(feature = "feishu-integration"))]
+            {
+                false
+            }
+        }
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
@@ -2172,6 +2281,11 @@ fn approval_request_resolve_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "enum": ["approve_once", "approve_always", "deny"],
                         "description": "Operator decision for the pending approval request."
+                    },
+                    "session_consent_mode": {
+                        "type": "string",
+                        "enum": ["auto", "full"],
+                        "description": "Optional session consent mode to persist when approve_once wins the request."
                     }
                 },
                 "required": ["approval_request_id", "decision"],
@@ -2754,8 +2868,83 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+#[cfg(feature = "feishu-integration")]
+fn push_feishu_tool_descriptor(
+    descriptors: &mut Vec<ToolDescriptor>,
+    name: &'static str,
+    provider_name: &'static str,
+    description: &'static str,
+    policy: ToolPolicyDescriptor,
+) {
+    descriptors.push(ToolDescriptor {
+        name,
+        provider_name,
+        aliases: &[],
+        description,
+        execution_kind: ToolExecutionKind::Core,
+        availability: ToolAvailability::Runtime,
+        exposure: ToolExposureClass::Discoverable,
+        visibility_gate: ToolVisibilityGate::Feishu,
+        capability_action_class: CapabilityActionClass::ExecuteExisting,
+        policy,
+        provider_definition_builder: feishu_definition,
+    });
+}
+
+#[cfg(feature = "feishu-integration")]
+fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
+    crate::tools::feishu::feishu_provider_tool_definition(descriptor.name).unwrap_or_else(|| {
+        json!({
+            "type": "function",
+            "function": {
+                "name": descriptor.provider_name,
+                "description": descriptor.description,
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }
+            }
+        })
+    })
+}
+
 fn tool_argument_hint(name: &str) -> &'static str {
     match name {
+        "feishu.calendar.freebusy" => {
+            "account_id?:string,open_id?:string,time_min:string,time_max:string,user_id?:string,room_id?:string"
+        }
+        "feishu.calendar.list" => {
+            "account_id?:string,open_id?:string,primary?:boolean,page_size?:integer,page_token?:string,sync_token?:string"
+        }
+        "feishu.card.update" => {
+            "account_id?:string,callback_token?:string,card?:object,markdown?:string,shared?:boolean,open_ids?:string[]"
+        }
+        "feishu.doc.append" => {
+            "account_id?:string,open_id?:string,url:string,content?:string,content_path?:string,content_type?:string"
+        }
+        "feishu.doc.create" => {
+            "account_id?:string,open_id?:string,title?:string,folder_token?:string,content?:string,content_path?:string,content_type?:string"
+        }
+        "feishu.doc.read" => "account_id?:string,open_id?:string,url:string,lang?:integer",
+        "feishu.messages.get" => "account_id?:string,open_id?:string,message_id:string",
+        "feishu.messages.history" => {
+            "account_id?:string,open_id?:string,container_id?:string,container_id_type?:string,page_size?:integer,page_token?:string"
+        }
+        #[cfg(feature = "tool-file")]
+        "feishu.messages.resource.get" => {
+            "account_id?:string,open_id?:string,message_id?:string,file_key?:string,type?:string,save_as?:string"
+        }
+        "feishu.messages.reply" => {
+            "account_id?:string,open_id?:string,message_id:string,text?:string,post?:object,image_key?:string,file_key?:string,card?:object,markdown?:string"
+        }
+        "feishu.messages.search" => {
+            "account_id?:string,open_id?:string,query:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.messages.send" => {
+            "account_id?:string,open_id?:string,receive_id:string,receive_id_type?:string,text?:string,post?:object,image_key?:string,file_key?:string,card?:object,markdown?:string"
+        }
+        "feishu.whoami" => "account_id?:string,open_id?:string",
         "tool.search" => "query:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
         "claw.migrate" => "input_path?:string,mode?:string,source?:string",
@@ -2802,6 +2991,106 @@ fn tool_argument_hint(name: &str) -> &'static str {
 
 fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
     match name {
+        "feishu.calendar.freebusy" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("time_min", "string"),
+            ("time_max", "string"),
+            ("user_id", "string"),
+            ("room_id", "string"),
+        ],
+        "feishu.calendar.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("primary", "boolean"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+            ("sync_token", "string"),
+        ],
+        "feishu.card.update" => &[
+            ("account_id", "string"),
+            ("callback_token", "string"),
+            ("card", "object"),
+            ("markdown", "string"),
+            ("shared", "boolean"),
+            ("open_ids", "array"),
+        ],
+        "feishu.doc.append" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("url", "string"),
+            ("content", "string"),
+            ("content_path", "string"),
+            ("content_type", "string"),
+        ],
+        "feishu.doc.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("title", "string"),
+            ("folder_token", "string"),
+            ("content", "string"),
+            ("content_path", "string"),
+            ("content_type", "string"),
+        ],
+        "feishu.doc.read" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("url", "string"),
+            ("lang", "integer"),
+        ],
+        "feishu.messages.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("message_id", "string"),
+        ],
+        "feishu.messages.history" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("container_id", "string"),
+            ("container_id_type", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        #[cfg(feature = "tool-file")]
+        "feishu.messages.resource.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("message_id", "string"),
+            ("file_key", "string"),
+            ("type", "string"),
+            ("save_as", "string"),
+        ],
+        "feishu.messages.reply" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("message_id", "string"),
+            ("text", "string"),
+            ("post", "object"),
+            ("image_key", "string"),
+            ("file_key", "string"),
+            ("card", "object"),
+            ("markdown", "string"),
+        ],
+        "feishu.messages.search" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("query", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.messages.send" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("receive_id", "string"),
+            ("receive_id_type", "string"),
+            ("text", "string"),
+            ("post", "object"),
+            ("image_key", "string"),
+            ("file_key", "string"),
+            ("card", "object"),
+            ("markdown", "string"),
+        ],
+        "feishu.whoami" => &[("account_id", "string"), ("open_id", "string")],
         "tool.search" => &[("query", "string"), ("limit", "integer")],
         "tool.invoke" => &[
             ("tool_id", "string"),
@@ -2901,6 +3190,12 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.calendar.freebusy" => &["time_min", "time_max"],
+        "feishu.doc.append" | "feishu.doc.read" => &["url"],
+        "feishu.messages.get" => &["message_id"],
+        "feishu.messages.reply" => &["message_id"],
+        "feishu.messages.search" => &["query"],
+        "feishu.messages.send" => &["receive_id"],
         "tool.search" => &["query"],
         "tool.invoke" => &["tool_id", "lease", "arguments"],
         "external_skills.fetch" => &["url"],
@@ -2935,6 +3230,17 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
 
 fn tool_tags(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
+        "feishu.card.update" => &["feishu", "card", "update", "callback"],
+        "feishu.doc.read" => &["feishu", "docs", "read"],
+        "feishu.doc.create" | "feishu.doc.append" => &["feishu", "docs", "write"],
+        "feishu.messages.get" | "feishu.messages.history" | "feishu.messages.search" => {
+            &["feishu", "messages", "read"]
+        }
+        #[cfg(feature = "tool-file")]
+        "feishu.messages.resource.get" => &["feishu", "messages", "resource", "file"],
+        "feishu.messages.send" | "feishu.messages.reply" => &["feishu", "messages", "write"],
+        "feishu.whoami" => &["feishu", "identity", "read"],
         "tool.search" => &["core", "discover", "search"],
         "tool.invoke" => &["core", "dispatch", "invoke"],
         "claw.migrate" => &["migration", "migrate", "config", "legacy"],
@@ -3121,6 +3427,48 @@ mod tests {
             ToolVisibilityGate::Browser,
             &config
         ));
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn feishu_visibility_gate_requires_runtime_configuration() {
+        let hidden_runtime = ToolRuntimeConfig::default();
+        let hidden_view = runtime_tool_view_for_runtime_config(&hidden_runtime);
+
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::Feishu,
+            &hidden_runtime
+        ));
+        assert!(!hidden_view.contains("feishu.card.update"));
+
+        let visible_runtime = ToolRuntimeConfig {
+            feishu: Some(crate::tools::runtime_config::FeishuToolRuntimeConfig {
+                channel: crate::config::FeishuChannelConfig {
+                    enabled: true,
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "cli_a1b2c3".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "app-secret".to_owned(),
+                    )),
+                    ..crate::config::FeishuChannelConfig::default()
+                },
+                integration: crate::config::FeishuIntegrationConfig::default(),
+            }),
+            ..ToolRuntimeConfig::default()
+        };
+        let visible_view = runtime_tool_view_for_runtime_config(&visible_runtime);
+        let descriptor = tool_catalog()
+            .resolve("feishu_card_update")
+            .expect("feishu card update descriptor");
+
+        assert!(tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::Feishu,
+            &visible_runtime
+        ));
+        assert_eq!(descriptor.name, "feishu.card.update");
+        assert_eq!(descriptor.visibility_gate, ToolVisibilityGate::Feishu);
+        assert!(visible_view.contains("feishu.card.update"));
     }
 
     #[test]

@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use clap::Subcommand;
 use kernel::probe_jsonl_audit_journal_runtime_ready;
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
@@ -13,12 +14,19 @@ use serde_json::json;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
 
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DoctorCommands {
+    /// Report effective security exposure and config hygiene posture
+    Security,
+}
+
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
     pub config: Option<String>,
     pub fix: bool,
     pub json: bool,
     pub skip_model_probe: bool,
+    pub command: Option<DoctorCommands>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +51,22 @@ struct DoctorSummary {
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
+    if let Some(command) = options.command.clone() {
+        return match command {
+            DoctorCommands::Security => {
+                crate::doctor_security_cli::run_doctor_security_cli(
+                    crate::doctor_security_cli::DoctorSecurityCommandOptions {
+                        config: options.config,
+                        json: options.json,
+                        fix: options.fix,
+                        skip_model_probe: options.skip_model_probe,
+                    },
+                )
+                .await
+            }
+        };
+    }
+
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
     let mut checks = Vec::new();
     let mut fixes = Vec::new();
@@ -339,7 +363,7 @@ fn durable_audit_retention_doctor_check(
     }
 }
 
-fn durable_audit_target_issue(path: &Path) -> Option<String> {
+pub(crate) fn durable_audit_target_issue(path: &Path) -> Option<String> {
     durable_audit_target_issue_with_probe(path, durable_audit_runtime_probe)
 }
 
@@ -541,7 +565,7 @@ pub fn check_feishu_integration(
         "create feishu integration store directory",
     ));
 
-    let store = mvp::feishu::FeishuTokenStore::new(sqlite_path);
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(sqlite_path);
     let configured_ids = config.feishu.configured_account_ids();
     let scoped = configured_ids.len() > 1;
 
@@ -601,18 +625,20 @@ pub fn check_feishu_integration(
 
         let grant_name =
             scoped_feishu_check_name("feishu user grant", &resolved.configured_account_id, scoped);
-        let inventory =
-            match mvp::feishu::inspect_grants_for_account(&store, resolved.account.id.as_str()) {
-                Ok(inventory) => inventory,
-                Err(error) => {
-                    checks.push(DoctorCheck {
-                        name: grant_name,
-                        level: DoctorCheckLevel::Fail,
-                        detail: error,
-                    });
-                    continue;
-                }
-            };
+        let inventory = match mvp::channel::feishu::api::inspect_grants_for_account(
+            &store,
+            resolved.account.id.as_str(),
+        ) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                checks.push(DoctorCheck {
+                    name: grant_name,
+                    level: DoctorCheckLevel::Fail,
+                    detail: error,
+                });
+                continue;
+            }
+        };
 
         if inventory.grants.is_empty() {
             checks.push(DoctorCheck {
@@ -638,8 +664,11 @@ pub fn check_feishu_integration(
             continue;
         };
         let effective_grant = inventory.effective_grant();
-        let effective_status =
-            mvp::feishu::auth::summarize_grant_status(effective_grant, now_s, &required_scopes);
+        let effective_status = mvp::channel::feishu::api::auth::summarize_grant_status(
+            effective_grant,
+            now_s,
+            &required_scopes,
+        );
 
         checks.push(DoctorCheck {
             name: grant_name,
@@ -800,7 +829,8 @@ pub fn check_feishu_integration(
                 )
             },
         });
-        let doc_write_status = mvp::feishu::summarize_doc_write_scope_status(effective_grant);
+        let doc_write_status =
+            mvp::channel::feishu::api::summarize_doc_write_scope_status(effective_grant);
         checks.push(DoctorCheck {
             name: scoped_feishu_check_name(
                 "feishu doc write readiness",
@@ -852,7 +882,8 @@ pub fn check_feishu_integration(
                 )
             },
         });
-        let write_status = mvp::feishu::summarize_message_write_scope_status(effective_grant);
+        let write_status =
+            mvp::channel::feishu::api::summarize_message_write_scope_status(effective_grant);
         checks.push(DoctorCheck {
             name: scoped_feishu_check_name(
                 "feishu message write readiness",
@@ -1925,7 +1956,12 @@ mod tests {
         let mut file = std::fs::File::create(script_path).expect("create browser companion script");
         file.write_all(body.as_bytes())
             .expect("write browser companion script");
-        let mut permissions = file.metadata().expect("script metadata").permissions();
+        file.sync_all()
+            .expect("sync browser companion script to disk");
+        drop(file);
+        let mut permissions = std::fs::metadata(script_path)
+            .expect("script metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
     }
@@ -2151,19 +2187,19 @@ mod tests {
             config.feishu.app_secret_env.as_deref(),
             Some("FEISHU_APP_SECRET")
         );
-        assert_eq!(
-            config.feishu.verification_token_env.as_deref(),
-            Some("FEISHU_VERIFICATION_TOKEN")
+        assert!(
+            config.feishu.verification_token_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook verification_token_env"
         );
-        assert_eq!(
-            config.feishu.encrypt_key_env.as_deref(),
-            Some("FEISHU_ENCRYPT_KEY")
+        assert!(
+            config.feishu.encrypt_key_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook encrypt_key_env"
         );
         assert_eq!(
             config.matrix.access_token_env.as_deref(),
             Some("MATRIX_ACCESS_TOKEN")
         );
-        assert_eq!(fixes.len(), 6);
+        assert_eq!(fixes.len(), 4);
     }
 
     #[test]
@@ -2753,11 +2789,12 @@ mod tests {
             .feishu
             .resolve_account(None)
             .expect("resolve default feishu account");
-        let store =
-            mvp::feishu::FeishuTokenStore::new(config.feishu_integration.resolved_sqlite_path());
+        let store = mvp::channel::feishu::api::FeishuTokenStore::new(
+            config.feishu_integration.resolved_sqlite_path(),
+        );
         store
-            .save_grant(&mvp::feishu::FeishuGrant {
-                principal: mvp::feishu::FeishuUserPrincipal {
+            .save_grant(&mvp::channel::feishu::api::FeishuGrant {
+                principal: mvp::channel::feishu::api::FeishuUserPrincipal {
                     account_id: resolved.account.id,
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -2770,7 +2807,7 @@ mod tests {
                 },
                 access_token: "u-token".to_owned(),
                 refresh_token: "r-token".to_owned(),
-                scopes: mvp::feishu::FeishuGrantScopeSet::from_scopes(
+                scopes: mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
                     config.feishu_integration.trimmed_default_scopes(),
                 ),
                 access_expires_at_s: chrono::Utc::now().timestamp() + 3600,

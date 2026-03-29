@@ -13,7 +13,8 @@ experiment should be crystallized into a reusable lower-layer capability.
 - [ ] `runtime-capability propose` creates a persisted capability-candidate
       artifact from one finished `runtime-experiment` run.
 - [ ] The candidate artifact records one explicit target type:
-      `managed_skill`, `programmatic_flow`, or `profile_note_addendum`.
+      `managed_skill`, `programmatic_flow`, `profile_note_addendum`, or
+      `memory_stage_profile`.
 - [ ] The candidate artifact records one bounded scope, normalized tags, and
       normalized required capabilities without mutating live runtime state.
 - [ ] When the source run still points at recorded baseline and result snapshot
@@ -33,6 +34,10 @@ experiment should be crystallized into a reusable lower-layer capability.
       names across that family.
 - [ ] Each capability family reports readiness as `ready`, `not_ready`, or
       `blocked` from explicit evidence checks rather than opaque heuristics.
+- [ ] `memory_stage_profile` families stay `not_ready` unless accepted
+      candidates include snapshot-delta evidence with at least one allowlisted
+      changed surface: `memory_selected`, `memory_policy`,
+      `context_engine_selected`, or `context_engine_compaction`.
 - [ ] `runtime-capability plan` resolves one indexed family into a dry-run
       promotion plan that describes the target lower-layer artifact, stable
       artifact id, blockers, approval checklist, rollback hints, provenance
@@ -52,3 +57,70 @@ experiment should be crystallized into a reusable lower-layer capability.
 - Persisted capability-family state or background indexing daemons
 - Persisted promotion-plan artifacts or plan caches
 - Candidate queues, dashboards, or autonomous ranking systems
+
+## Dry-Run Plan Payload
+
+`runtime-capability plan` now carries one additional dry-run payload field:
+`planned_payload`.
+
+- `planned_payload` is emitted only when the planned family target is
+  `memory_stage_profile`.
+- For `managed_skill`, `programmatic_flow`, and `profile_note_addendum`,
+  `planned_payload` stays `null`.
+- The payload is governed review data only. It does not auto-apply anything to
+  runtime, and it does not yet encode executable memory-stage settings.
+
+The JSON shape is:
+
+```json
+{
+  "planned_payload": {
+    "memory_stage_profile": {
+      "schema_version": 1,
+      "artifact_kind": "memory_stage_profile",
+      "profile": {
+        "id": "memory-stage-profile-...",
+        "summary": "Promote governed memory pipeline intent into a reusable profile",
+        "review_scope": "Governed memory pipeline promotion intent only",
+        "required_capabilities": ["memory_read"],
+        "tags": ["memory", "pipeline"]
+      },
+      "provenance": {
+        "family_id": "8f5c2d1a4b7e...",
+        "accepted_candidate_ids": ["capability-candidate-..."],
+        "evidence_digest": {
+          "changed_surfaces": [
+            "context_engine_compaction",
+            "memory_policy"
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+For v1, `planned_payload.memory_stage_profile.profile` is derived directly from
+the existing proposal and planned-artifact data already present in the plan
+report:
+
+- `profile.id` comes from `planned_artifact.artifact_id`
+- `profile.summary` comes from `planned_artifact.summary`
+- `profile.review_scope` comes from `planned_artifact.bounded_scope`
+- `profile.required_capabilities` comes from
+  `planned_artifact.required_capabilities`
+- `profile.tags` comes from `planned_artifact.tags`
+- `artifact_kind` matches `planned_artifact.artifact_kind`
+
+The payload provenance is intentionally compact:
+
+- `provenance.family_id` names the indexed capability family that was planned
+- `provenance.accepted_candidate_ids` includes only accepted candidates in
+  stable family order
+- `provenance.evidence_digest.changed_surfaces` is a compact digest built from
+  accepted-candidate snapshot-delta evidence only
+
+That compact digest is narrower than the broader family-level plan evidence.
+Rejected-only or undecided-only delta surfaces may still appear under the main
+report `evidence.changed_surfaces`, but they are excluded from
+`planned_payload.memory_stage_profile.provenance.evidence_digest.changed_surfaces`.
