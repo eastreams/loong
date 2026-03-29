@@ -24,7 +24,8 @@ fn plugins_bridge_profiles_cli_parses_selected_profile_and_json_flag() {
                         ]
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
@@ -88,7 +89,8 @@ fn plugins_actions_cli_parses_filters_and_global_json_after_subcommand() {
                     );
                     assert_eq!(command.requires_reload, Some(true));
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
@@ -135,7 +137,8 @@ fn plugins_bridge_template_cli_parses_output_and_bridge_profile() {
                         Some("/tmp/bridge-support.delta.json")
                     );
                 }
-                other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
@@ -176,8 +179,63 @@ fn plugins_preflight_cli_parses_bridge_support_delta_selector() {
                         Some("abc123")
                     );
                 }
+                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Init(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                    panic!("unexpected plugins subcommand parsed: {other:?}");
+                }
+            }
+        }
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn plugins_init_cli_parses_manifest_scaffold_request() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "plugins",
+        "init",
+        "/tmp/tavily-search",
+        "--plugin-id",
+        "tavily-search",
+        "--provider-id",
+        "tavily",
+        "--connector-name",
+        "tavily-http",
+        "--bridge-kind",
+        "process_stdio",
+        "--source-language",
+        "python",
+        "--summary",
+        "Tavily-backed search package",
+        "--json",
+    ])
+    .expect("plugins init CLI should parse");
+
+    match cli.command {
+        Some(Commands::Plugins { json, command }) => {
+            assert!(json);
+            match command {
+                loongclaw_daemon::plugins_cli::PluginsCommands::Init(command) => {
+                    assert_eq!(command.package_root, "/tmp/tavily-search");
+                    assert_eq!(command.plugin_id, "tavily-search");
+                    assert_eq!(command.provider_id.as_deref(), Some("tavily"));
+                    assert_eq!(command.connector_name.as_deref(), Some("tavily-http"));
+                    assert_eq!(
+                        command.bridge_kind,
+                        loongclaw_daemon::plugins_cli::PluginInitBridgeKindArg::ProcessStdio
+                    );
+                    assert_eq!(command.source_language.as_deref(), Some("python"));
+                    assert_eq!(
+                        command.summary.as_deref(),
+                        Some("Tavily-backed search package")
+                    );
+                }
                 other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
                 | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
                     panic!("unexpected plugins subcommand parsed: {other:?}");
                 }
@@ -192,6 +250,7 @@ fn plugins_help_mentions_preflight_and_action_plan() {
     let help = render_cli_help(["plugins"]);
 
     assert!(help.contains("plugin preflight"), "help: {help}");
+    assert!(help.contains("init"), "help: {help}");
     assert!(help.contains("bridge-profiles"), "help: {help}");
     assert!(help.contains("bridge-template"), "help: {help}");
     assert!(help.contains("actions"), "help: {help}");
@@ -205,6 +264,24 @@ fn plugins_bridge_profiles_help_mentions_profile_filter() {
     assert!(help.contains("--profile <PROFILE>"), "help: {help}");
     assert!(help.contains("native-balanced"), "help: {help}");
     assert!(help.contains("openclaw-ecosystem-balanced"), "help: {help}");
+}
+
+#[test]
+fn plugins_init_help_mentions_bridge_contract_flags() {
+    let help = render_cli_help(["plugins", "init"]);
+
+    assert!(help.contains("<PACKAGE_ROOT>"), "help: {help}");
+    assert!(help.contains("--plugin-id <PLUGIN_ID>"), "help: {help}");
+    assert!(help.contains("--bridge-kind <BRIDGE_KIND>"), "help: {help}");
+    assert!(
+        help.contains("--source-language <SOURCE_LANGUAGE>"),
+        "help: {help}"
+    );
+    assert!(help.contains("--provider-id <PROVIDER_ID>"), "help: {help}");
+    assert!(
+        help.contains("--connector-name <CONNECTOR_NAME>"),
+        "help: {help}"
+    );
 }
 
 #[test]

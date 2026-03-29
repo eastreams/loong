@@ -3,10 +3,15 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::kernel::{Capability, ExecutionRoute, HarnessKind, VerticalPackManifest};
+use crate::kernel::{
+    CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, Capability, ExecutionRoute,
+    HarnessKind, PACKAGE_MANIFEST_FILE_NAME, PluginBridgeKind, PluginCompatibility, PluginManifest,
+    VerticalPackManifest, plugin_runtime_scaffold_defaults,
+};
 use crate::{
     BridgeSupportSpec, CliResult, HumanApprovalMode, HumanApprovalSpec, JsonSchemaDescriptor,
     MaterializedBridgeSupportDeltaArtifact, OperationSpec,
@@ -22,6 +27,7 @@ pub const PLUGINS_BRIDGE_PROFILES_SCHEMA_PURPOSE: &str = "bridge_profiles_catalo
 pub const PLUGINS_BRIDGE_TEMPLATE_SCHEMA_PURPOSE: &str = "bridge_support_materialization";
 pub const PLUGINS_PREFLIGHT_SCHEMA_PURPOSE: &str = "ecosystem_preflight_evaluation";
 pub const PLUGINS_ACTIONS_SCHEMA_PURPOSE: &str = "operator_action_plan";
+pub const PLUGINS_INIT_SCHEMA_PURPOSE: &str = "package_scaffold";
 
 fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
     let version = PLUGINS_COMMAND_SCHEMA_VERSION;
@@ -32,6 +38,8 @@ fn plugins_command_schema(purpose: &str) -> JsonSchemaDescriptor {
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum PluginsCommands {
+    /// Scaffold a new manifest-first plugin package root for external authors
+    Init(PluginInitCommand),
     /// List bundled bridge support profiles for controlled ecosystem compatibility
     BridgeProfiles(PluginBridgeProfilesCommand),
     /// Emit the effective recommended bridge support profile template for the scanned ecosystem
@@ -165,6 +173,64 @@ pub struct PluginActionsCommand {
     /// Restrict returned actions by reload requirement
     #[arg(long)]
     pub requires_reload: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "snake_case")]
+pub enum PluginInitBridgeKindArg {
+    HttpJson,
+    ProcessStdio,
+    NativeFfi,
+    WasmComponent,
+    McpServer,
+    AcpBridge,
+    AcpRuntime,
+}
+
+impl PluginInitBridgeKindArg {
+    fn as_bridge_kind(self) -> PluginBridgeKind {
+        match self {
+            Self::HttpJson => PluginBridgeKind::HttpJson,
+            Self::ProcessStdio => PluginBridgeKind::ProcessStdio,
+            Self::NativeFfi => PluginBridgeKind::NativeFfi,
+            Self::WasmComponent => PluginBridgeKind::WasmComponent,
+            Self::McpServer => PluginBridgeKind::McpServer,
+            Self::AcpBridge => PluginBridgeKind::AcpBridge,
+            Self::AcpRuntime => PluginBridgeKind::AcpRuntime,
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+#[command(
+    about = "Scaffold a manifest-first plugin package root for external authors",
+    long_about = "Scaffold a manifest-first plugin package root for external authors.\n\nThe generated package contains a canonical `loongclaw.plugin.json` plus a README that points authors to `loongclaw plugins preflight` and `loongclaw plugins actions` for governance validation. This command scaffolds package metadata only; it does not generate runtime code or widen trust policy."
+)]
+pub struct PluginInitCommand {
+    /// Target package root to create or reuse when the directory is empty
+    #[arg(value_name = "PACKAGE_ROOT")]
+    pub package_root: String,
+    /// Stable plugin identity used by governance, inventory, and audit surfaces
+    #[arg(long)]
+    pub plugin_id: String,
+    /// Optional provider id override; defaults to plugin_id
+    #[arg(long)]
+    pub provider_id: Option<String>,
+    /// Optional connector name override; defaults to plugin_id
+    #[arg(long)]
+    pub connector_name: Option<String>,
+    /// Runtime bridge surface declared by the plugin package
+    #[arg(long, value_enum)]
+    pub bridge_kind: PluginInitBridgeKindArg,
+    /// Source language for language-specific bridges such as process_stdio or native_ffi
+    #[arg(long)]
+    pub source_language: Option<String>,
+    /// Initial package version written to the manifest
+    #[arg(long, default_value = "0.1.0")]
+    pub version: String,
+    /// Optional one-line summary written to the manifest
+    #[arg(long)]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -486,9 +552,28 @@ pub struct PluginsBridgeTemplateExecution {
     pub template: BridgeSupportSpec,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PluginsInitExecution {
+    pub schema_version: u32,
+    pub schema: JsonSchemaDescriptor,
+    pub package_root: String,
+    pub manifest_path: String,
+    pub readme_path: String,
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub connector_name: String,
+    pub version: String,
+    pub bridge_kind: String,
+    pub source_language: Option<String>,
+    pub adapter_family: String,
+    pub entrypoint: String,
+    pub files_written: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum PluginsCommandExecution {
+    Init(Box<PluginsInitExecution>),
     BridgeProfiles(Box<PluginsBridgeProfilesExecution>),
     BridgeTemplate(Box<PluginsBridgeTemplateExecution>),
     Preflight(Box<PluginsPreflightExecution>),
@@ -513,6 +598,10 @@ pub async fn execute_plugins_command(
     options: PluginsCommandOptions,
 ) -> CliResult<PluginsCommandExecution> {
     match options.command {
+        PluginsCommands::Init(command) => {
+            let execution = execute_plugins_init(command)?;
+            Ok(PluginsCommandExecution::Init(Box::new(execution)))
+        }
         PluginsCommands::BridgeProfiles(command) => {
             let profiles = load_bridge_profile_views(&command.profiles)?;
             Ok(PluginsCommandExecution::BridgeProfiles(Box::new(
@@ -716,8 +805,291 @@ pub async fn execute_plugins_command(
     }
 }
 
+const PLUGINS_INIT_README_FILE_NAME: &str = "README.md";
+
+#[derive(Debug, Serialize)]
+struct PluginPackageScaffoldManifestDocument {
+    api_version: String,
+    version: String,
+    plugin_id: String,
+    provider_id: String,
+    connector_name: String,
+    capabilities: BTreeSet<Capability>,
+    metadata: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<String>,
+    compatibility: PluginCompatibility,
+}
+
+fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExecution> {
+    let package_root = normalize_required_cli_value("package root", &command.package_root)?;
+    let plugin_id = normalize_required_cli_value("--plugin-id", &command.plugin_id)?;
+    let provider_id = normalize_optional_cli_value(command.provider_id.as_deref())
+        .unwrap_or_else(|| plugin_id.clone());
+    let connector_name = normalize_optional_cli_value(command.connector_name.as_deref())
+        .unwrap_or_else(|| plugin_id.clone());
+    let version = normalize_required_cli_value("--version", &command.version)?;
+    let summary = normalize_optional_cli_value(command.summary.as_deref());
+    let bridge_kind = command.bridge_kind.as_bridge_kind();
+
+    validate_plugin_scaffold_version(&version)?;
+
+    let scaffold_defaults =
+        plugin_runtime_scaffold_defaults(bridge_kind, command.source_language.as_deref())
+            .map_err(|error| format!("plugins init failed: {error}; use --source-language when required by the selected bridge"))?;
+
+    let manifest = build_plugin_scaffold_manifest(
+        &plugin_id,
+        &provider_id,
+        &connector_name,
+        &version,
+        summary,
+        &scaffold_defaults,
+    );
+
+    let package_root_path = Path::new(package_root.as_str());
+    ensure_empty_plugin_scaffold_root(package_root_path)?;
+
+    let manifest_path = package_root_path.join(PACKAGE_MANIFEST_FILE_NAME);
+    let readme_path = package_root_path.join(PLUGINS_INIT_README_FILE_NAME);
+
+    let manifest_document = plugin_scaffold_manifest_document(&manifest)?;
+    let rendered_manifest = serde_json::to_string_pretty(&manifest_document)
+        .map_err(|error| format!("serialize scaffold manifest failed: {error}"))?;
+    let rendered_readme = render_plugin_scaffold_readme(
+        package_root.as_str(),
+        plugin_id.as_str(),
+        bridge_kind.as_str(),
+    );
+
+    fs::write(&manifest_path, rendered_manifest).map_err(|error| {
+        format!(
+            "write scaffold manifest `{}` failed: {error}",
+            manifest_path.display()
+        )
+    })?;
+    fs::write(&readme_path, rendered_readme).map_err(|error| {
+        format!(
+            "write scaffold readme `{}` failed: {error}",
+            readme_path.display()
+        )
+    })?;
+
+    let manifest_path_string = manifest_path.display().to_string();
+    let readme_path_string = readme_path.display().to_string();
+    let files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
+
+    Ok(PluginsInitExecution {
+        schema_version: PLUGINS_COMMAND_SCHEMA_VERSION,
+        schema: plugins_command_schema(PLUGINS_INIT_SCHEMA_PURPOSE),
+        package_root,
+        manifest_path: manifest_path_string,
+        readme_path: readme_path_string,
+        plugin_id,
+        provider_id,
+        connector_name,
+        version,
+        bridge_kind: bridge_kind.as_str().to_owned(),
+        source_language: scaffold_defaults.source_language,
+        adapter_family: scaffold_defaults.adapter_family,
+        entrypoint: scaffold_defaults.entrypoint_hint,
+        files_written,
+    })
+}
+
+fn normalize_required_cli_value(field_name: &str, raw: &str) -> CliResult<String> {
+    let trimmed = raw.trim();
+
+    if trimmed.is_empty() {
+        return Err(format!("plugins init requires a non-empty {field_name}"));
+    }
+
+    Ok(trimmed.to_owned())
+}
+
+fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Some(trimmed.to_owned())
+    })
+}
+
+fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
+    Version::parse(version)
+        .map(|_| ())
+        .map_err(|error| format!("plugins init requires --version to be valid semver: {error}"))
+}
+
+fn ensure_empty_plugin_scaffold_root(package_root: &Path) -> CliResult<()> {
+    if package_root.exists() {
+        let root_is_directory = package_root.is_dir();
+        if !root_is_directory {
+            return Err(format!(
+                "plugins init requires package root `{}` to be a directory",
+                package_root.display()
+            ));
+        }
+
+        let mut entries = fs::read_dir(package_root).map_err(|error| {
+            format!(
+                "inspect scaffold package root `{}` failed: {error}",
+                package_root.display()
+            )
+        })?;
+        let first_entry = entries.next().transpose().map_err(|error| {
+            format!(
+                "inspect scaffold package root `{}` failed: {error}",
+                package_root.display()
+            )
+        })?;
+        if first_entry.is_some() {
+            return Err(format!(
+                "plugins init requires an empty package root; `{}` already contains files",
+                package_root.display()
+            ));
+        }
+
+        return Ok(());
+    }
+
+    fs::create_dir_all(package_root).map_err(|error| {
+        format!(
+            "create scaffold package root `{}` failed: {error}",
+            package_root.display()
+        )
+    })
+}
+
+fn build_plugin_scaffold_manifest(
+    plugin_id: &str,
+    provider_id: &str,
+    connector_name: &str,
+    version: &str,
+    summary: Option<String>,
+    scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+) -> PluginManifest {
+    let mut capabilities = BTreeSet::new();
+    capabilities.insert(Capability::InvokeConnector);
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert(
+        "bridge_kind".to_owned(),
+        scaffold_defaults.bridge_kind.as_str().to_owned(),
+    );
+    metadata.insert(
+        "adapter_family".to_owned(),
+        scaffold_defaults.adapter_family.clone(),
+    );
+    metadata.insert(
+        "entrypoint".to_owned(),
+        scaffold_defaults.entrypoint_hint.clone(),
+    );
+    if let Some(source_language) = scaffold_defaults.source_language.as_ref() {
+        metadata.insert("source_language".to_owned(), source_language.clone());
+    }
+
+    let host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
+    let compatibility = PluginCompatibility {
+        host_api: Some(CURRENT_PLUGIN_HOST_API.to_owned()),
+        host_version_req: Some(host_version_req),
+    };
+
+    PluginManifest {
+        api_version: Some(CURRENT_PLUGIN_MANIFEST_API_VERSION.to_owned()),
+        version: Some(version.to_owned()),
+        plugin_id: plugin_id.to_owned(),
+        provider_id: provider_id.to_owned(),
+        connector_name: connector_name.to_owned(),
+        channel_id: None,
+        endpoint: None,
+        capabilities,
+        trust_tier: Default::default(),
+        metadata,
+        summary,
+        tags: Vec::new(),
+        input_examples: Vec::new(),
+        output_examples: Vec::new(),
+        defer_loading: false,
+        setup: None,
+        slot_claims: Vec::new(),
+        compatibility: Some(compatibility),
+    }
+}
+
+fn plugin_scaffold_manifest_document(
+    manifest: &PluginManifest,
+) -> CliResult<PluginPackageScaffoldManifestDocument> {
+    let api_version = manifest
+        .api_version
+        .clone()
+        .ok_or_else(|| "scaffold manifest is missing api_version".to_owned())?;
+    let version = manifest
+        .version
+        .clone()
+        .ok_or_else(|| "scaffold manifest is missing version".to_owned())?;
+    let compatibility = manifest
+        .compatibility
+        .clone()
+        .ok_or_else(|| "scaffold manifest is missing compatibility".to_owned())?;
+
+    Ok(PluginPackageScaffoldManifestDocument {
+        api_version,
+        version,
+        plugin_id: manifest.plugin_id.clone(),
+        provider_id: manifest.provider_id.clone(),
+        connector_name: manifest.connector_name.clone(),
+        capabilities: manifest.capabilities.clone(),
+        metadata: manifest.metadata.clone(),
+        summary: manifest.summary.clone(),
+        compatibility,
+    })
+}
+
+fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kind: &str) -> String {
+    let preflight_command =
+        format!("loongclaw plugins preflight --root \"{package_root}\" --profile sdk-release");
+    let actions_command =
+        format!("loongclaw plugins actions --root \"{package_root}\" --profile sdk-release");
+
+    [
+        format!("# {plugin_id}"),
+        String::new(),
+        "This package was scaffolded by `loongclaw plugins init`.".to_owned(),
+        String::new(),
+        format!("- Bridge kind: `{bridge_kind}`"),
+        format!("- Manifest: `{PACKAGE_MANIFEST_FILE_NAME}`"),
+        "- Trust default: `unverified`".to_owned(),
+        String::new(),
+        "## Next Steps".to_owned(),
+        String::new(),
+        format!(
+            "1. Replace the scaffolded bridge entrypoint in `{PACKAGE_MANIFEST_FILE_NAME}` with the real runtime entry for your package."
+        ),
+        format!(
+            "2. Fill in `summary`, `setup`, `slot_claims`, `tags`, and examples in `{PACKAGE_MANIFEST_FILE_NAME}` as your package contract becomes concrete."
+        ),
+        "3. Validate the package contract through the shared governance surface:".to_owned(),
+        String::new(),
+        "```bash".to_owned(),
+        preflight_command,
+        "```".to_owned(),
+        String::new(),
+        "4. Review the deduplicated operator action plan before release or marketplace handoff:"
+            .to_owned(),
+        String::new(),
+        "```bash".to_owned(),
+        actions_command,
+        "```".to_owned(),
+    ]
+    .join("\n")
+}
+
 fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
     match execution {
+        PluginsCommandExecution::Init(execution) => render_plugins_init_text(execution),
         PluginsCommandExecution::BridgeProfiles(execution) => {
             render_plugins_bridge_profiles_text(execution)
         }
@@ -727,6 +1099,32 @@ fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
         PluginsCommandExecution::Preflight(execution) => render_plugins_preflight_text(execution),
         PluginsCommandExecution::Actions(execution) => render_plugins_actions_text(execution),
     }
+}
+
+fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
+    let source_language = execution.source_language.as_deref().unwrap_or("-");
+    let mut lines = vec![format!(
+        "plugins init package_root={} plugin_id={} provider_id={} connector_name={}",
+        execution.package_root,
+        execution.plugin_id,
+        execution.provider_id,
+        execution.connector_name
+    )];
+    lines.push(format!(
+        "- bridge_kind={} source_language={} adapter_family={} entrypoint={}",
+        execution.bridge_kind, source_language, execution.adapter_family, execution.entrypoint
+    ));
+    lines.push(format!("- manifest={}", execution.manifest_path));
+    lines.push(format!("- readme={}", execution.readme_path));
+    lines.push(format!(
+        "- next_steps=loongclaw plugins preflight --root \"{}\" --profile sdk-release",
+        execution.package_root
+    ));
+    lines.push(format!(
+        "- operator_actions=loongclaw plugins actions --root \"{}\" --profile sdk-release",
+        execution.package_root
+    ));
+    lines.join("\n")
 }
 
 fn render_plugins_bridge_profiles_text(execution: &PluginsBridgeProfilesExecution) -> String {
@@ -2583,5 +2981,263 @@ mod tests {
             delta_artifact.delta.shim_profile_additions[0].supported_source_languages,
             vec!["python".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_scaffolds_http_json_package_manifest() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-http");
+        let package_root = format!("{temp_root}/tavily-search");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "tavily-search".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                source_language: None,
+                version: "0.1.0".to_owned(),
+                summary: Some("Tavily-backed search package".to_owned()),
+            }),
+        })
+        .await
+        .expect("plugins init should scaffold an http json package");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        assert_eq!(execution.schema_version, PLUGINS_COMMAND_SCHEMA_VERSION);
+        assert_eq!(execution.schema.version, PLUGINS_COMMAND_SCHEMA_VERSION);
+        assert_eq!(execution.schema.surface, PLUGINS_COMMAND_SCHEMA_SURFACE);
+        assert_eq!(execution.schema.purpose, PLUGINS_INIT_SCHEMA_PURPOSE);
+        assert_eq!(execution.package_root, package_root);
+        assert_eq!(execution.plugin_id, "tavily-search");
+        assert_eq!(execution.provider_id, "tavily-search");
+        assert_eq!(execution.connector_name, "tavily-search");
+        assert_eq!(execution.bridge_kind, "http_json");
+        assert_eq!(execution.source_language, None);
+        assert_eq!(execution.adapter_family, "http-adapter");
+        assert_eq!(execution.entrypoint, "https://localhost/invoke");
+        assert_eq!(execution.version, "0.1.0");
+        assert_eq!(execution.files_written.len(), 2);
+
+        let manifest_path = execution.manifest_path.clone();
+        let readme_path = execution.readme_path.clone();
+
+        let rendered_manifest =
+            fs::read_to_string(&manifest_path).expect("scaffold manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("scaffold manifest should decode");
+
+        assert_eq!(
+            manifest.api_version.as_deref(),
+            Some(crate::kernel::CURRENT_PLUGIN_MANIFEST_API_VERSION)
+        );
+        assert_eq!(manifest.version.as_deref(), Some("0.1.0"));
+        assert_eq!(manifest.plugin_id, "tavily-search");
+        assert_eq!(manifest.provider_id, "tavily-search");
+        assert_eq!(manifest.connector_name, "tavily-search");
+        assert_eq!(
+            manifest.summary.as_deref(),
+            Some("Tavily-backed search package")
+        );
+        assert!(
+            manifest.capabilities.contains(&Capability::InvokeConnector),
+            "scaffold manifest should include invoke_connector"
+        );
+        assert_eq!(
+            manifest.metadata.get("bridge_kind").map(String::as_str),
+            Some("http_json")
+        );
+        assert_eq!(
+            manifest.metadata.get("adapter_family").map(String::as_str),
+            Some("http-adapter")
+        );
+        assert_eq!(
+            manifest.metadata.get("entrypoint").map(String::as_str),
+            Some("https://localhost/invoke")
+        );
+        assert_eq!(
+            manifest
+                .compatibility
+                .as_ref()
+                .and_then(|compatibility| compatibility.host_api.as_deref()),
+            Some(crate::kernel::CURRENT_PLUGIN_HOST_API)
+        );
+        assert_eq!(
+            manifest
+                .compatibility
+                .as_ref()
+                .and_then(|compatibility| compatibility.host_version_req.as_deref()),
+            Some(">=0.1.0-alpha.2")
+        );
+
+        let rendered_readme =
+            fs::read_to_string(&readme_path).expect("scaffold readme should exist");
+        assert!(
+            rendered_readme.contains("loongclaw plugins preflight --root"),
+            "README should point authors to preflight: {rendered_readme}"
+        );
+        assert!(
+            rendered_readme.contains("loongclaw plugins actions --root"),
+            "README should point authors to actions: {rendered_readme}"
+        );
+
+        let scanner = crate::kernel::PluginScanner::new();
+        let scan_report = scanner
+            .scan_path(&execution.package_root)
+            .expect("scaffold package should scan cleanly");
+        let translator = crate::kernel::PluginTranslator::new();
+        let translation_report = translator.translate_scan_report(&scan_report);
+        let ir = &translation_report.entries[0];
+
+        assert_eq!(translation_report.translated_plugins, 1);
+        assert_eq!(
+            ir.runtime.bridge_kind,
+            crate::kernel::PluginBridgeKind::HttpJson
+        );
+        assert_eq!(ir.runtime.adapter_family, "http-adapter");
+        assert_eq!(ir.runtime.entrypoint_hint, "https://localhost/invoke");
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_requires_source_language_for_process_stdio() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-process-language");
+        let package_root = format!("{temp_root}/tavily-search");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "tavily-search".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: None,
+                version: "0.1.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("process stdio scaffold should require source language");
+
+        assert!(error.contains("--source-language"));
+        assert!(error.contains("process_stdio"));
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_invalid_semver_version() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-invalid-version");
+        let package_root = format!("{temp_root}/tavily-search");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "tavily-search".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                source_language: None,
+                version: "not-semver".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("plugins init should reject invalid semver");
+
+        assert!(error.contains("--version"));
+        assert!(error.contains("semver"));
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_process_stdio_scaffold_retains_source_language() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-process");
+        let package_root = format!("{temp_root}/weather-python");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weather-python".to_owned(),
+                provider_id: Some("weather".to_owned()),
+                connector_name: Some("weather-stdio".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                source_language: Some("py".to_owned()),
+                version: "0.2.0".to_owned(),
+                summary: Some("Python weather bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("process stdio scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        assert_eq!(execution.bridge_kind, "process_stdio");
+        assert_eq!(execution.source_language.as_deref(), Some("python"));
+        assert_eq!(execution.adapter_family, "python-stdio-adapter");
+        assert_eq!(execution.entrypoint, "stdin/stdout::invoke");
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+
+        assert_eq!(
+            manifest.metadata.get("source_language").map(String::as_str),
+            Some("python")
+        );
+        assert_eq!(
+            manifest.metadata.get("adapter_family").map(String::as_str),
+            Some("python-stdio-adapter")
+        );
+
+        let scanner = crate::kernel::PluginScanner::new();
+        let scan_report = scanner
+            .scan_path(&execution.package_root)
+            .expect("scaffold package should scan cleanly");
+        let translator = crate::kernel::PluginTranslator::new();
+        let translation_report = translator.translate_scan_report(&scan_report);
+        let ir = &translation_report.entries[0];
+
+        assert_eq!(ir.runtime.source_language, "python");
+        assert_eq!(
+            ir.runtime.bridge_kind,
+            crate::kernel::PluginBridgeKind::ProcessStdio
+        );
+        assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
+        assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_non_empty_package_root() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-non-empty");
+        let package_root = format!("{temp_root}/existing");
+
+        fs::create_dir_all(&package_root).expect("create package root");
+        fs::write(format!("{package_root}/README.md"), "occupied").expect("write occupied file");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root: package_root.clone(),
+                plugin_id: "occupied".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                source_language: None,
+                version: "0.1.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("non-empty package root should be rejected");
+
+        assert!(error.contains("empty"));
+        assert!(error.contains(&package_root));
     }
 }

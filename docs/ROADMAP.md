@@ -284,6 +284,16 @@ Acceptance criteria:
 Status: planned
 Focus: open ecosystem without sacrificing trust boundaries.
 
+Delivered in current baseline:
+
+- `loongclaw plugins init <package_root>` scaffolds a manifest-first plugin
+  package root with a canonical `loongclaw.plugin.json`, current host
+  compatibility defaults, and a README that routes authors into shared
+  governance validation instead of internal crate spelunking
+- package-manifest runtime projection now also honors explicit
+  `metadata.source_language`, so language-specific scaffolded packages keep
+  canonical bridge, adapter-family, and preflight language semantics
+
 Planned deliverables:
 
 - multi-language plugin intake pipeline:
