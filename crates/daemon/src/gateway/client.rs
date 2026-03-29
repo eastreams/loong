@@ -133,6 +133,34 @@ impl GatewayLocalClient {
         self.request_json(Method::POST, path).await
     }
 
+    pub async fn health(&self) -> CliResult<Value> {
+        let url = format!("{}/health", self.discovery.base_url);
+        let response = self
+            .http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|error| format!("gateway health request failed: {error}"))?;
+        parse_json_response(response).await
+    }
+
+    pub async fn turn(&self, session_key: &str, input: &str) -> CliResult<Value> {
+        let url = format!("{}/v1/turn", self.discovery.base_url);
+        let body = serde_json::json!({
+            "session_key": session_key,
+            "input": input,
+        });
+        let response = self
+            .http_client
+            .post(&url)
+            .bearer_auth(&self.discovery.bearer_token)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| format!("gateway turn request failed: {error}"))?;
+        parse_json_response(response).await
+    }
+
     async fn request_json<T>(&self, method: Method, path: &str) -> CliResult<T>
     where
         T: DeserializeOwned,
@@ -171,6 +199,20 @@ impl GatewayLocalClient {
         let endpoint = format!("{base_url}{path}");
         Ok(endpoint)
     }
+}
+
+async fn parse_json_response(response: Response) -> CliResult<Value> {
+    let status = response.status();
+    if !status.is_success() {
+        let error_message = decode_gateway_error_message(response).await;
+        return Err(format!(
+            "gateway request failed with status {status}: {error_message}"
+        ));
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|error| format!("decode gateway JSON response failed: {error}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
