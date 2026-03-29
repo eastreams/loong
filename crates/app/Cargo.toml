@@ -7,7 +7,7 @@ authors.workspace = true
 
 [features]
 default = ["channel-cli", "channel-telegram", "channel-feishu", "channel-matrix", "channel-wecom", "channel-discord", "channel-dingtalk", "channel-slack", "channel-webhook", "channel-google-chat", "channel-line", "channel-signal", "channel-twitch", "channel-teams", "channel-tlon", "channel-whatsapp", "channel-email", "channel-mattermost", "channel-nextcloud-talk", "channel-synology-chat", "channel-irc", "channel-imessage", "channel-nostr", "config-toml", "memory-sqlite", "feishu-integration", "tool-shell", "tool-file", "tool-browser", "tool-webfetch", "tool-websearch", "provider-openai", "provider-anthropic", "provider-bedrock", "provider-volcengine"]
-channel-cli = []
+channel-cli = ["dep:crossterm", "dep:ratatui", "dep:supports-color"]
 channel-telegram = []
 channel-feishu = ["dep:axum", "dep:aes", "dep:cbc", "dep:prost", "dep:rustls", "dep:tokio-tungstenite", "feishu-integration"]
 channel-matrix = []
@@ -56,8 +56,10 @@ chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
+crossterm = { workspace = true, optional = true, features = ["event-stream"] }
 toml = { workspace = true, optional = true }
 reqwest.workspace = true
+ratatui = { workspace = true, optional = true }
 scraper = { version = "0.26", optional = true }
 sha2.workspace = true
 hmac = "0.12"
@@ -70,6 +72,7 @@ lettre = { version = "0.11.19", default-features = false, features = ["builder",
 futures-util.workspace = true
 base64.workspace = true
 bech32.workspace = true
+supports-color = { workspace = true, optional = true }
 aws-config = { version = "1.8.15", optional = true }
 aws-credential-types = { version = "1.2.14", optional = true }
 aws-sigv4 = { version = "1.4.2", optional = true }

@@ -90,7 +90,7 @@ impl ChatCliFixture {
     }
 
     fn run_chat_command(&self, config_path: Option<&Path>, stdin_bytes: Option<&[u8]>) -> Output {
-        self.run_chat_command_with_fake_onboard(config_path, stdin_bytes, None)
+        self.run_chat_command_with_args(&[], config_path, stdin_bytes, None)
     }
 
     fn run_chat_command_with_fake_onboard(
@@ -99,9 +99,20 @@ impl ChatCliFixture {
         stdin_bytes: Option<&[u8]>,
         fake_onboard_exit_code: Option<i32>,
     ) -> Output {
+        self.run_chat_command_with_args(&[], config_path, stdin_bytes, fake_onboard_exit_code)
+    }
+
+    fn run_chat_command_with_args(
+        &self,
+        extra_args: &[&str],
+        config_path: Option<&Path>,
+        stdin_bytes: Option<&[u8]>,
+        fake_onboard_exit_code: Option<i32>,
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
         command
             .arg("chat")
+            .args(extra_args)
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
             .env_remove("LOONGCLAW_CONFIG_PATH")
@@ -131,6 +142,15 @@ impl ChatCliFixture {
         }
         drop(child.stdin.take());
         child.wait_with_output().expect("wait for chat cli output")
+    }
+
+    fn write_default_config(&self, file_name: &str) -> PathBuf {
+        let config_path = self.root.join(file_name);
+        let path_string = config_path.to_string_lossy().into_owned();
+        let config = loongclaw_app::config::LoongClawConfig::default();
+        loongclaw_app::config::write(Some(&path_string), &config, true)
+            .expect("write default chat config");
+        config_path
     }
 
     fn onboard_log(&self) -> String {
@@ -181,6 +201,29 @@ fn chat_cli_help_mentions_ui_selector() {
     assert!(
         help.contains("text"),
         "chat help should mention the text UI value: {help}"
+    );
+}
+
+#[test]
+fn chat_ui_tui_degrades_without_tty() {
+    let fixture = ChatCliFixture::new("tui-degrades-without-tty");
+    let config_path = fixture.write_default_config("loongclaw.toml");
+    let output =
+        fixture.run_chat_command_with_args(&["--ui", "tui"], Some(&config_path), None, None);
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "chat tui fallback should still exit cleanly, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("falling back to text ui"),
+        "chat tui fallback should explain the degraded terminal policy on stderr: {stderr:?}"
+    );
+    assert!(
+        stdout.contains("start here: Summarize this repository and suggest the best next step."),
+        "chat tui fallback should continue through the text startup surface: {stdout:?}"
     );
 }
 

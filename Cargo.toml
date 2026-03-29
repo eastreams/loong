@@ -39,8 +39,11 @@ regex = "1.12.3"
 wasmparser = "0.245"
 base64 = "0.22"
 bech32 = "0.11"
+crossterm = "0.29"
 ed25519-dalek = "2.2"
+ratatui = "0.29"
 secp256k1 = "0.31"
+supports-color = "3.0"
 wasmtime = { version = "43.0.0", default-features = false, features = ["std", "runtime", "cranelift"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }

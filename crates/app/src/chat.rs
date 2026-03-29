@@ -23,6 +23,7 @@ use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 mod cli_input;
 mod live_surface;
 mod text_surface;
+mod tui;
 mod ui_mode;
 
 use self::cli_input::ConcurrentCliInputReader;
@@ -292,6 +293,20 @@ pub async fn run_cli_chat(
     }
 
     let runtime = initialize_cli_turn_runtime(config_path, session_hint, options, "cli-chat")?;
+    if options.ui_mode == CliChatUiMode::Tui {
+        match tui::run_tui_chat(&runtime, options).await? {
+            tui::CliTuiLaunchResult::Handled => {
+                println!("bye.");
+                return Ok(());
+            }
+            tui::CliTuiLaunchResult::FallbackToText { reason } => {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("warning: {reason}; falling back to text ui");
+                }
+            }
+        }
+    }
     print_cli_chat_startup(&runtime, options)?;
     print_turn_checkpoint_startup_health(&runtime).await;
     let acp_event_printer = options
@@ -4144,6 +4159,45 @@ mod tests {
             lines.iter().any(|line| line == "session details"),
             "text surface module should preserve the session details section: {lines:#?}"
         );
+    }
+
+    #[test]
+    fn tui_shell_bootstrap_builds_initial_state() {
+        let bootstrap = tui::app_shell::build_shell_bootstrap_state("default");
+
+        assert_eq!(bootstrap.session_id, "default");
+        assert_eq!(bootstrap.focus_target, tui::state::FocusTarget::Composer);
+        assert!(
+            !bootstrap.drawer_open,
+            "initial TUI shell bootstrap should start with the drawer collapsed"
+        );
+    }
+
+    #[test]
+    fn tui_terminal_policy_degrades_without_full_terminal_support() {
+        let policy = tui::terminal::resolve_launch_mode(tui::terminal::TerminalSupportSnapshot {
+            stdin_is_terminal: false,
+            stdout_is_terminal: false,
+            stderr_is_terminal: false,
+            term: Some("xterm-256color".to_owned()),
+            color_support: false,
+        });
+
+        assert!(
+            matches!(policy, tui::terminal::TerminalLaunch::FallbackToText { .. }),
+            "non-terminal stdio should force text fallback: {policy:?}"
+        );
+    }
+
+    #[test]
+    fn tui_state_defaults_to_closed_drawer_and_composer_focus() {
+        let state = tui::state::UiState::default();
+
+        assert!(
+            !state.drawer_open,
+            "default TUI state should start with the drawer collapsed"
+        );
+        assert_eq!(state.focus_target, tui::state::FocusTarget::Composer);
     }
 
     #[test]
