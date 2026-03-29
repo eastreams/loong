@@ -102,6 +102,12 @@ pub enum SelectInteractionMode {
     Search,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectAction {
+    Selected(usize),
+    Back,
+}
+
 pub trait OnboardUi {
     fn print_line(&mut self, line: &str) -> CliResult<()>;
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
@@ -116,7 +122,7 @@ pub trait OnboardUi {
         options: &[SelectOption],
         default: Option<usize>,
         interaction_mode: SelectInteractionMode,
-    ) -> CliResult<usize>;
+    ) -> CliResult<SelectAction>;
 }
 
 #[derive(Debug, Clone)]
@@ -441,7 +447,7 @@ impl OnboardUi for StdioOnboardUi {
         options: &[SelectOption],
         default: Option<usize>,
         interaction_mode: SelectInteractionMode,
-    ) -> CliResult<usize> {
+    ) -> CliResult<SelectAction> {
         if rich_prompt_ui_available() {
             return select_one_rich(label, options, default, interaction_mode);
         }
@@ -507,7 +513,7 @@ fn select_one_stdio(
     label: &str,
     options: &[SelectOption],
     default: Option<usize>,
-) -> CliResult<usize> {
+) -> CliResult<SelectAction> {
     let default = validate_select_one_state(options.len(), default)?;
     loop {
         for (i, opt) in options.iter().enumerate() {
@@ -534,19 +540,22 @@ fn select_one_stdio(
         let capture = read_single_line_prompt_capture(line_reader)?;
         print_dropped_paste_notice(label, capture.dropped_line_count);
         if capture.reached_eof {
-            return resolve_select_one_eof(default);
+            return resolve_select_one_eof(default).map(SelectAction::Selected);
         }
         let input = ensure_onboard_input_not_cancelled(capture.raw)?;
         let trimmed = input.trim();
         if trimmed.is_empty() {
             if let Some(idx) = default {
-                return Ok(idx);
+                return Ok(SelectAction::Selected(idx));
             }
             println!("Please select an option.");
             continue;
         }
         if let Some(index) = parse_select_one_input(trimmed, options) {
-            return Ok(index);
+            return Ok(SelectAction::Selected(index));
+        }
+        if trimmed.eq_ignore_ascii_case("back") {
+            return Ok(SelectAction::Back);
         }
         println!("{}", render_select_one_invalid_input_message(options));
     }
@@ -655,7 +664,7 @@ fn select_one_rich(
     options: &[SelectOption],
     default: Option<usize>,
     interaction_mode: SelectInteractionMode,
-) -> CliResult<usize> {
+) -> CliResult<SelectAction> {
     let default = validate_select_one_state(options.len(), default)?;
     let items = options
         .iter()
@@ -693,7 +702,9 @@ fn select_one_rich(
                 .map_err(|error| map_rich_prompt_error("interactive model search", error))?
         }
     };
-    selection.ok_or_else(|| "onboarding cancelled: prompt aborted".to_owned())
+    selection
+        .map(SelectAction::Selected)
+        .ok_or_else(|| "onboarding cancelled: prompt aborted".to_owned())
 }
 
 fn summarize_select_option_description(detail_lines: &[String]) -> String {
@@ -739,12 +750,26 @@ fn select_screen_option(
     let select_options = select_options_from_screen_options(options);
     let default_idx =
         default_key.and_then(|key| options.iter().position(|option| option.key == key));
-    ui.select_one(
+    select_one_selected_index(
+        ui,
         label,
         &select_options,
         default_idx,
         SelectInteractionMode::List,
     )
+}
+
+fn select_one_selected_index(
+    ui: &mut impl OnboardUi,
+    label: &str,
+    options: &[SelectOption],
+    default: Option<usize>,
+    interaction_mode: SelectInteractionMode,
+) -> CliResult<usize> {
+    match ui.select_one(label, options, default, interaction_mode)? {
+        SelectAction::Selected(index) => Ok(index),
+        SelectAction::Back => Err("onboarding back navigation is not implemented yet".to_owned()),
+    }
 }
 
 fn build_onboard_entry_screen_options(options: &[OnboardEntryOption]) -> Vec<OnboardScreenOption> {
@@ -1669,7 +1694,8 @@ fn resolve_provider_selection(
                 context.render_width,
             ),
         )?;
-        let idx = ui.select_one(
+        let idx = select_one_selected_index(
+            ui,
             "Provider",
             &select_options,
             default_idx,
@@ -1758,7 +1784,8 @@ fn resolve_provider_selection(
             context.render_width,
         ),
     )?;
-    let idx = ui.select_one(
+    let idx = select_one_selected_index(
+        ui,
         "Provider",
         &select_options,
         default_idx,
@@ -1789,7 +1816,8 @@ fn resolve_provider_selection(
         let kimi_default_idx = Some(usize::from(
             default_provider_kind == mvp::config::ProviderKind::KimiCoding,
         ));
-        let sub_idx = ui.select_one(
+        let sub_idx = select_one_selected_index(
+            ui,
             "Kimi variant",
             &kimi_options,
             kimi_default_idx,
@@ -1824,7 +1852,8 @@ fn resolve_provider_selection(
         let stepfun_default_idx = Some(usize::from(
             default_provider_kind == mvp::config::ProviderKind::StepPlan,
         ));
-        let sub_idx = ui.select_one(
+        let sub_idx = select_one_selected_index(
+            ui,
             "Stepfun variant",
             &stepfun_options,
             stepfun_default_idx,
@@ -1882,7 +1911,8 @@ fn resolve_provider_selection(
             .collect::<Vec<_>>();
         let region_prompt = format!("Select the {} region endpoint:", region_info.family_label);
         print_lines(ui, vec![region_prompt])?;
-        let region_idx = ui.select_one(
+        let region_idx = select_one_selected_index(
+            ui,
             "Region",
             &region_options,
             Some(default_region_idx),
@@ -2023,7 +2053,8 @@ fn resolve_model_selection(
             available_models,
         );
         let (select_options, default_idx) = build_model_selection_options(&catalog_choices);
-        let idx = ui.select_one(
+        let idx = select_one_selected_index(
+            ui,
             "Model",
             &select_options,
             default_idx,
@@ -2270,7 +2301,8 @@ fn resolve_personality_selection(
         ui,
         render_personality_selection_header_lines(config, context.render_width),
     )?;
-    let idx = ui.select_one(
+    let idx = select_one_selected_index(
+        ui,
         "Personality",
         &select_options,
         default_idx,
@@ -2396,7 +2428,8 @@ fn resolve_memory_profile_selection(
             context.render_width,
         ),
     )?;
-    let idx = ui.select_one(
+    let idx = select_one_selected_index(
+        ui,
         "Memory profile",
         &select_options,
         default_idx,
@@ -2442,7 +2475,8 @@ async fn resolve_web_search_provider_selection(
             true,
         ),
     )?;
-    let idx = ui.select_one(
+    let idx = select_one_selected_index(
+        ui,
         "Web search provider",
         &select_options,
         default_idx,
@@ -6148,7 +6182,7 @@ mod tests {
             options: &[SelectOption],
             default: Option<usize>,
             _interaction_mode: SelectInteractionMode,
-        ) -> CliResult<usize> {
+        ) -> CliResult<SelectAction> {
             let default = validate_select_one_state(options.len(), default)?;
             match self.inputs.pop_front() {
                 Some(value) => {
@@ -6156,23 +6190,29 @@ mod tests {
                     let trimmed = value.trim();
                     if trimmed.is_empty() {
                         return default
+                            .map(SelectAction::Selected)
                             .ok_or_else(|| "no default for required selection".to_owned());
                     }
                     if let Ok(n) = trimmed.parse::<usize>() {
                         if n >= 1 && n <= options.len() {
-                            return Ok(n - 1);
+                            return Ok(SelectAction::Selected(n - 1));
                         }
                         return Err(format!(
                             "test selection {n} out of range 1..={}",
                             options.len()
                         ));
                     }
-                    parse_select_one_input(trimmed, options)
-                        .ok_or_else(|| format!("invalid test selection input: {trimmed}"))
+                    if let Some(index) = parse_select_one_input(trimmed, options) {
+                        return Ok(SelectAction::Selected(index));
+                    }
+                    if trimmed.eq_ignore_ascii_case("back") {
+                        return Ok(SelectAction::Back);
+                    }
+                    Err(format!("invalid test selection input: {trimmed}"))
                 }
-                None => {
-                    default.ok_or_else(|| "missing test input for required selection".to_owned())
-                }
+                None => default
+                    .map(SelectAction::Selected)
+                    .ok_or_else(|| "missing test input for required selection".to_owned()),
             }
         }
     }
@@ -6200,7 +6240,7 @@ mod tests {
             options: &[SelectOption],
             default: Option<usize>,
             _interaction_mode: SelectInteractionMode,
-        ) -> CliResult<usize> {
+        ) -> CliResult<SelectAction> {
             let default = validate_select_one_state(options.len(), default)?;
             match self.inputs.pop_front() {
                 Some(value) => {
@@ -6208,23 +6248,29 @@ mod tests {
                     let trimmed = value.trim();
                     if trimmed.is_empty() {
                         return default
+                            .map(SelectAction::Selected)
                             .ok_or_else(|| "no default for required selection".to_owned());
                     }
                     if let Ok(n) = trimmed.parse::<usize>() {
                         if n >= 1 && n <= options.len() {
-                            return Ok(n - 1);
+                            return Ok(SelectAction::Selected(n - 1));
                         }
                         return Err(format!(
                             "test selection {n} out of range 1..={}",
                             options.len()
                         ));
                     }
-                    parse_select_one_input(trimmed, options)
-                        .ok_or_else(|| format!("invalid test selection input: {trimmed}"))
+                    if let Some(index) = parse_select_one_input(trimmed, options) {
+                        return Ok(SelectAction::Selected(index));
+                    }
+                    if trimmed.eq_ignore_ascii_case("back") {
+                        return Ok(SelectAction::Back);
+                    }
+                    Err(format!("invalid test selection input: {trimmed}"))
                 }
-                None => {
-                    default.ok_or_else(|| "missing test input for required selection".to_owned())
-                }
+                None => default
+                    .map(SelectAction::Selected)
+                    .ok_or_else(|| "missing test input for required selection".to_owned()),
             }
         }
     }
@@ -6260,7 +6306,7 @@ mod tests {
             _options: &[SelectOption],
             _default: Option<usize>,
             _interaction_mode: SelectInteractionMode,
-        ) -> CliResult<usize> {
+        ) -> CliResult<SelectAction> {
             Err("test expected prompt_allow_empty instead of select_one".to_owned())
         }
     }
@@ -8908,16 +8954,18 @@ mod tests {
             },
         ];
 
-        let index = ui
+        match ui
             .select_one(
                 "Personality",
                 &options,
                 Some(0),
                 SelectInteractionMode::List,
             )
-            .expect("test ui should stay aligned with shared slug-selection behavior");
-
-        assert_eq!(index, 1);
+            .expect("test ui should stay aligned with shared slug-selection behavior")
+        {
+            SelectAction::Selected(index) => assert_eq!(index, 1),
+            SelectAction::Back => panic!("slug selection test should not return back"),
+        }
     }
 
     #[test]

@@ -353,7 +353,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for WriteConfirmationGuardUi {
         options: &[loongclaw_daemon::onboard_cli::SelectOption],
         default: Option<usize>,
         interaction_mode: loongclaw_daemon::onboard_cli::SelectInteractionMode,
-    ) -> loongclaw_daemon::CliResult<usize> {
+    ) -> loongclaw_daemon::CliResult<loongclaw_daemon::onboard_cli::SelectAction> {
         self.inner
             .select_one(label, options, default, interaction_mode)
     }
@@ -407,7 +407,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         options: &[loongclaw_daemon::onboard_cli::SelectOption],
         default: Option<usize>,
         _interaction_mode: loongclaw_daemon::onboard_cli::SelectInteractionMode,
-    ) -> loongclaw_daemon::CliResult<usize> {
+    ) -> loongclaw_daemon::CliResult<loongclaw_daemon::onboard_cli::SelectAction> {
         if options.is_empty() {
             return Err("no selection options available".to_owned());
         }
@@ -423,21 +423,29 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         let value = scripted_input_not_cancelled(self.next_input(label)?)?;
         let trimmed = value.trim();
         if trimmed.is_empty() {
-            return default.ok_or_else(|| "no default for required selection".to_owned());
+            return default
+                .map(loongclaw_daemon::onboard_cli::SelectAction::Selected)
+                .ok_or_else(|| "no default for required selection".to_owned());
         }
         if let Ok(n) = trimmed.parse::<usize>() {
             if n >= 1 && n <= options.len() {
-                return Ok(n - 1);
+                return Ok(loongclaw_daemon::onboard_cli::SelectAction::Selected(n - 1));
             }
             return Err(format!(
                 "scripted selection {n} out of range 1..={}",
                 options.len()
             ));
         }
-        options
+        if let Some(index) = options
             .iter()
             .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
-            .ok_or_else(|| format!("invalid scripted selection input: {trimmed}"))
+        {
+            return Ok(loongclaw_daemon::onboard_cli::SelectAction::Selected(index));
+        }
+        if trimmed.eq_ignore_ascii_case("b") || trimmed.eq_ignore_ascii_case("back") {
+            return Ok(loongclaw_daemon::onboard_cli::SelectAction::Back);
+        }
+        Err(format!("invalid scripted selection input: {trimmed}"))
     }
 }
 
@@ -621,16 +629,20 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
         },
     ];
 
-    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+    match loongclaw_daemon::onboard_cli::OnboardUi::select_one(
         &mut ui,
         "Personality",
         &options,
         Some(0),
         loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
     )
-    .expect("scripted selection should accept slug input so integration tests stay aligned");
-
-    assert_eq!(index, 1);
+    .expect("scripted selection should accept slug input so integration tests stay aligned")
+    {
+        loongclaw_daemon::onboard_cli::SelectAction::Selected(index) => assert_eq!(index, 1),
+        loongclaw_daemon::onboard_cli::SelectAction::Back => {
+            panic!("slug selection test should not return back")
+        }
+    }
     assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
 }
 
