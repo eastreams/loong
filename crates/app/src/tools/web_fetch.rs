@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-webfetch")]
 use serde_json::{Map, Value, json};
@@ -255,103 +253,18 @@ pub(crate) fn validate_web_target(
     policy: &super::runtime_config::WebFetchRuntimePolicy,
     surface_name: &str,
 ) -> Result<String, String> {
-    use std::net::{IpAddr, ToSocketAddrs};
+    let options = super::web_http::HttpTargetValidationOptions {
+        allow_private_hosts: policy.allow_private_hosts,
+        reject_userinfo: false,
+        resolve_dns: true,
+        enforce_allowed_domains: policy.enforce_allowed_domains,
+        allowed_domains: policy
+            .enforce_allowed_domains
+            .then_some(&policy.allowed_domains),
+        blocked_domains: Some(&policy.blocked_domains),
+    };
 
-    match url.scheme() {
-        "http" | "https" => {}
-        other => {
-            return Err(format!(
-                "{surface_name} requires http or https url, got scheme `{other}`"
-            ));
-        }
-    }
-
-    let host = url
-        .host_str()
-        .map(str::to_ascii_lowercase)
-        .ok_or_else(|| format!("{surface_name} url `{url}` has no host"))?;
-
-    if let Some(rule) = first_matching_domain_rule(&host, &policy.blocked_domains) {
-        return Err(format!(
-            "{surface_name} blocked host `{host}` because it matches blocked domain rule `{rule}`"
-        ));
-    }
-    if policy.enforce_allowed_domains
-        && first_matching_domain_rule(&host, &policy.allowed_domains).is_none()
-    {
-        return Err(format!(
-            "{surface_name} denied host `{host}` because it is not in allowed_domains"
-        ));
-    }
-
-    if policy.allow_private_hosts {
-        return Ok(host);
-    }
-
-    if host == "localhost" {
-        return Err(format!(
-            "{surface_name} blocked private or special-use host `localhost`"
-        ));
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if super::web_http::is_private_or_special_ip(ip) {
-            return Err(format!(
-                "{surface_name} blocked private or special-use address `{ip}`"
-            ));
-        }
-        return Ok(host);
-    }
-
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| format!("{surface_name} url `{url}` has no known port"))?;
-    let addrs = (host.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|error| format!("{surface_name} failed to resolve host `{host}`: {error}"))?;
-
-    let mut saw_addr = false;
-    for addr in addrs {
-        saw_addr = true;
-        if super::web_http::is_private_or_special_ip(addr.ip()) {
-            return Err(format!(
-                "{surface_name} blocked private or special-use address `{}` for host `{host}`",
-                addr.ip()
-            ));
-        }
-    }
-
-    if !saw_addr {
-        return Err(format!(
-            "{surface_name} resolved no addresses for host `{host}`"
-        ));
-    }
-
-    Ok(host)
-}
-
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
-fn first_matching_domain_rule<'a>(host: &str, rules: &'a BTreeSet<String>) -> Option<&'a str> {
-    rules
-        .iter()
-        .find(|rule| domain_rule_matches(host, rule.as_str()))
-        .map(String::as_str)
-}
-
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
-fn domain_rule_matches(host: &str, rule: &str) -> bool {
-    if let Some(suffix) = rule.strip_prefix("*.") {
-        return host == suffix || host.ends_with(&format!(".{suffix}"));
-    }
-    host == rule
+    super::web_http::validate_http_target(url, &options, surface_name)
 }
 
 #[cfg(any(

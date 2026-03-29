@@ -157,6 +157,9 @@ fn compose_provider_domain(
     } else {
         chosen.config.provider.clone()
     };
+    merged_config
+        .provider
+        .canonicalize_configured_auth_env_bindings();
     let mut supplemented_from = Vec::new();
     for candidate in candidates {
         if Some(candidate.source.as_str()) == base_source.as_deref() {
@@ -259,6 +262,9 @@ fn supplement_provider_config(
     if target.kind != source.kind {
         return false;
     }
+    target.canonicalize_configured_auth_env_bindings();
+    let mut source = source.clone();
+    source.canonicalize_configured_auth_env_bindings();
     let default_provider = mvp::config::ProviderConfig::default();
     let target_has_auth = target.authorization_header().is_some();
     let source_has_auth = source.authorization_header().is_some();
@@ -269,31 +275,19 @@ fn supplement_provider_config(
         target.model = source.model.clone();
         changed = true;
     }
-    changed |= provider_transport::supplement_provider_transport(target, source);
+    changed |= provider_transport::supplement_provider_transport(target, &source);
     if (target.api_key.is_none() || (!target_has_auth && source_has_auth))
         && source.api_key.is_some()
+        && target.api_key != source.api_key
     {
         target.api_key = source.api_key.clone();
         changed = true;
     }
-    if (target.api_key_env.is_none() || (!target_has_auth && source_has_auth))
-        && source.api_key_env.is_some()
-        && target.api_key_env != source.api_key_env
-    {
-        target.api_key_env = source.api_key_env.clone();
-        changed = true;
-    }
     if (target.oauth_access_token.is_none() || (!target_has_auth && source_has_auth))
         && source.oauth_access_token.is_some()
+        && target.oauth_access_token != source.oauth_access_token
     {
         target.oauth_access_token = source.oauth_access_token.clone();
-        changed = true;
-    }
-    if (target.oauth_access_token_env.is_none() || (!target_has_auth && source_has_auth))
-        && source.oauth_access_token_env.is_some()
-        && target.oauth_access_token_env != source.oauth_access_token_env
-    {
-        target.oauth_access_token_env = source.oauth_access_token_env.clone();
         changed = true;
     }
     if target.endpoint.is_none() && source.endpoint.is_some() {
@@ -359,6 +353,72 @@ fn supplement_provider_config(
         }
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn supplement_provider_config_canonicalizes_legacy_api_key_env_binding() {
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        target.api_key = None;
+        target.set_api_key_env(None);
+
+        let mut source =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        source.set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+
+        let changed = supplement_provider_config(&mut target, &source);
+
+        assert!(changed);
+        assert_eq!(
+            target.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(target.api_key_env, None);
+    }
+
+    #[test]
+    fn compose_provider_domain_canonicalizes_selected_current_provider() {
+        let mut merged_config = mvp::config::LoongClawConfig::default();
+        let mut current = ImportCandidate {
+            source_kind: ImportSourceKind::ExistingLoongClawConfig,
+            source: "current config".to_owned(),
+            config: mvp::config::LoongClawConfig::default(),
+            surfaces: Vec::new(),
+            domains: Vec::new(),
+            channel_candidates: Vec::new(),
+            workspace_guidance: Vec::new(),
+        };
+        current.config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        current
+            .config
+            .provider
+            .set_api_key_env(Some("OPENAI_API_KEY".to_owned()));
+        current.domains.push(DomainPreview {
+            kind: SetupDomainKind::Provider,
+            status: PreviewStatus::Ready,
+            decision: Some(PreviewDecision::KeepCurrent),
+            source: current.source.clone(),
+            summary: String::new(),
+        });
+
+        let domain = compose_provider_domain(&mut merged_config, &[current]);
+
+        assert!(domain.is_some());
+        assert_eq!(
+            merged_config.provider.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_API_KEY".to_owned(),
+            })
+        );
+        assert_eq!(merged_config.provider.api_key_env, None);
+    }
 }
 
 fn compose_cli_domain(

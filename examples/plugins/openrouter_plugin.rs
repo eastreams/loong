@@ -6,6 +6,7 @@
 //   "channel_id": "primary",
 //   "endpoint": "https://openrouter.ai/api/v1/chat/completions",
 //   "capabilities": ["InvokeConnector", "ObserveTelemetry"],
+//   "trust_tier": "verified-community",
 //   "metadata": {
 //     "version": "0.5.0",
 //     "author": "community",

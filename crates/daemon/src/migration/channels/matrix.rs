@@ -283,10 +283,11 @@ fn merge_matrix_config(
 
 fn effective_matrix_config(config: &mvp::config::LoongClawConfig) -> EffectiveMatrixConfig {
     if let Ok(resolved) = config.matrix.resolve_account(None) {
+        let access_token = resolved.access_token();
         return EffectiveMatrixConfig {
             enabled: resolved.enabled,
             user_id: resolved.user_id,
-            access_token: resolved.access_token,
+            access_token,
             access_token_env: resolved.access_token_env,
             base_url: resolved.base_url,
             sync_timeout_s: resolved.sync_timeout_s,
@@ -295,10 +296,11 @@ fn effective_matrix_config(config: &mvp::config::LoongClawConfig) -> EffectiveMa
         };
     }
 
+    let access_token = config.matrix.access_token();
     EffectiveMatrixConfig {
         enabled: config.matrix.enabled,
         user_id: config.matrix.user_id.clone(),
-        access_token: config.matrix.access_token.clone(),
+        access_token,
         access_token_env: config.matrix.access_token_env.clone(),
         base_url: config.matrix.base_url.clone(),
         sync_timeout_s: config.matrix.sync_timeout_s,
@@ -390,7 +392,9 @@ mod tests {
         config.matrix.accounts.insert(
             "ops".to_owned(),
             mvp::config::MatrixAccountConfig {
-                access_token: Some("matrix-token".to_owned()),
+                access_token: Some(loongclaw_contracts::SecretRef::Inline(
+                    "matrix-token".to_owned(),
+                )),
                 base_url: Some("https://matrix.example.org".to_owned()),
                 allowed_room_ids: Some(vec!["!ops:example.org".to_owned()]),
                 ..Default::default()

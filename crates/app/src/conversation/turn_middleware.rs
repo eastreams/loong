@@ -7,7 +7,10 @@ use crate::config::LoongClawConfig;
 use crate::tools::ToolView;
 use crate::{CliResult, KernelContext};
 
-use super::context_engine::AssembledConversationContext;
+use super::context_engine::{
+    AssembledConversationContext, ContextArtifactDescriptor, ContextArtifactKind,
+    ToolOutputStreamingPolicy,
+};
 use super::runtime_binding::ConversationRuntimeBinding;
 
 pub const TURN_MIDDLEWARE_API_VERSION: u16 = 1;
@@ -206,6 +209,7 @@ impl ConversationTurnMiddleware for SystemPromptAdditionTurnMiddleware {
     ) -> CliResult<AssembledConversationContext> {
         apply_system_prompt_addition(
             &mut assembled.messages,
+            &mut assembled.artifacts,
             assembled.system_prompt_addition.as_deref(),
         );
         Ok(assembled)
@@ -239,7 +243,11 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
     }
 }
 
-pub(crate) fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: Option<&str>) {
+pub(crate) fn apply_system_prompt_addition(
+    messages: &mut Vec<Value>,
+    artifacts: &mut Vec<ContextArtifactDescriptor>,
+    addition: Option<&str>,
+) {
     let Some(addition) = addition
         .map(str::trim)
         .filter(|content| !content.is_empty())
@@ -247,7 +255,7 @@ pub(crate) fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: 
         return;
     };
 
-    for message in messages.iter_mut() {
+    for (index, message) in messages.iter_mut().enumerate() {
         let is_system = message.get("role").and_then(Value::as_str) == Some("system");
         if !is_system {
             continue;
@@ -261,10 +269,14 @@ pub(crate) fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: 
                 _ => addition.to_owned(),
             };
             object.insert("content".to_owned(), Value::String(merged_content));
+            ensure_runtime_contract_artifact(artifacts, index);
             return;
         }
     }
 
+    for artifact in artifacts.iter_mut() {
+        artifact.message_index += 1;
+    }
     messages.insert(
         0,
         json!({
@@ -272,6 +284,7 @@ pub(crate) fn apply_system_prompt_addition(messages: &mut Vec<Value>, addition: 
             "content": addition,
         }),
     );
+    ensure_runtime_contract_artifact(artifacts, 0);
 }
 
 fn apply_tool_view_to_system_prompt(messages: &mut [Value], tool_view: &ToolView) {
@@ -305,6 +318,25 @@ fn apply_tool_view_to_system_prompt(messages: &mut [Value], tool_view: &ToolView
         }
         return;
     }
+}
+
+fn ensure_runtime_contract_artifact(
+    artifacts: &mut Vec<ContextArtifactDescriptor>,
+    message_index: usize,
+) {
+    if artifacts.iter().any(|artifact| {
+        artifact.message_index == message_index
+            && artifact.artifact_kind == ContextArtifactKind::RuntimeContract
+    }) {
+        return;
+    }
+
+    artifacts.push(ContextArtifactDescriptor {
+        message_index,
+        artifact_kind: ContextArtifactKind::RuntimeContract,
+        maskable: false,
+        streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+    });
 }
 
 #[async_trait]
@@ -414,5 +446,133 @@ where
         self.as_ref()
             .on_subagent_ended(parent_session_id, subagent_session_id, kernel_ctx)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn builtin_turn_middlewares_preserve_context_artifact_descriptors() {
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                json!({
+                    "role": "system",
+                    "content": "base system\n\n[available_tools]\n- delegate: spawn a child session"
+                }),
+                json!({
+                    "role": "system",
+                    "content": "## Memory Summary\nOlder context"
+                }),
+                json!({
+                    "role": "user",
+                    "content": "latest user turn"
+                }),
+            ],
+            artifacts: vec![
+                ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+                },
+                ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: ContextArtifactKind::RuntimeContract,
+                    maskable: false,
+                    streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+                },
+                ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: ContextArtifactKind::Summary,
+                    maskable: false,
+                    streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+                },
+                ContextArtifactDescriptor {
+                    message_index: 2,
+                    artifact_kind: ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: None,
+            system_prompt_addition: Some("runtime-policy-addition".to_owned()),
+        };
+        let runtime_tool_view = crate::tools::runtime_tool_view();
+        let requested_tool_view = crate::tools::ToolView::from_tool_names(["file.read"]);
+
+        let assembled = SystemPromptAdditionTurnMiddleware
+            .transform_context(
+                &crate::config::LoongClawConfig::default(),
+                "session-artifact-preservation",
+                true,
+                assembled,
+                &runtime_tool_view,
+                &requested_tool_view,
+                ConversationRuntimeBinding::direct(),
+            )
+            .await
+            .expect("system prompt addition middleware should succeed");
+        let transformed = SystemPromptToolViewTurnMiddleware
+            .transform_context(
+                &crate::config::LoongClawConfig::default(),
+                "session-artifact-preservation",
+                true,
+                assembled,
+                &runtime_tool_view,
+                &requested_tool_view,
+                ConversationRuntimeBinding::direct(),
+            )
+            .await
+            .expect("tool view middleware should succeed");
+
+        assert_eq!(transformed.artifacts.len(), 4);
+        assert!(
+            transformed
+                .artifacts
+                .iter()
+                .any(
+                    |artifact| artifact.artifact_kind == ContextArtifactKind::SystemPrompt
+                        && artifact.message_index == 0
+                )
+        );
+        assert!(
+            transformed
+                .artifacts
+                .iter()
+                .any(
+                    |artifact| artifact.artifact_kind == ContextArtifactKind::RuntimeContract
+                        && artifact.message_index == 0
+                )
+        );
+        assert!(transformed.artifacts.iter().any(|artifact| {
+            artifact.artifact_kind == ContextArtifactKind::Summary
+                && transformed.messages[artifact.message_index]["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        }));
+        assert!(
+            transformed
+                .artifacts
+                .iter()
+                .any(
+                    |artifact| artifact.artifact_kind == ContextArtifactKind::ConversationTurn
+                        && transformed.messages[artifact.message_index]["content"]
+                            == "latest user turn"
+                )
+        );
+        assert!(
+            transformed
+                .artifacts
+                .iter()
+                .all(|artifact| artifact.message_index < transformed.messages.len())
+        );
+
+        let system_content = transformed.messages[0]["content"]
+            .as_str()
+            .expect("system content");
+        assert!(system_content.contains("runtime-policy-addition"));
+        assert!(system_content.contains("Non-core tools are intentionally hidden"));
     }
 }

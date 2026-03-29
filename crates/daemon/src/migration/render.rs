@@ -14,6 +14,10 @@ fn push_source_label(labels: &mut Vec<String>, seen: &mut BTreeSet<String>, labe
     }
 }
 
+fn display_line(prefix: &str, value: &str) -> String {
+    format!("{prefix}{value}")
+}
+
 pub fn candidate_source_rollup_labels(candidate: &ImportCandidate) -> Vec<String> {
     let mut labels = Vec::new();
     let mut seen = BTreeSet::new();
@@ -253,6 +257,53 @@ pub fn render_candidate_preview_lines(candidate: &ImportCandidate, width: usize)
     lines
 }
 
+pub fn candidate_preview_display_lines(candidate: &ImportCandidate) -> Vec<String> {
+    let mut lines = vec![display_line("source: ", &candidate.source)];
+    let source_labels = candidate_source_rollup_labels(candidate);
+    let should_render_source_rollup = if candidate.source_kind == ImportSourceKind::RecommendedPlan
+    {
+        !source_labels.is_empty()
+    } else {
+        source_labels.len() > 1
+    };
+
+    if should_render_source_rollup {
+        lines.push(display_line("derived from: ", &source_labels.join(" + ")));
+    }
+
+    if let Some(transport_summary) = candidate.config.provider.preview_transport_summary() {
+        lines.push(display_line("provider transport: ", &transport_summary));
+    }
+
+    if candidate.domains.is_empty() && candidate.channel_candidates.is_empty() {
+        return lines;
+    }
+
+    for domain in &candidate.domains {
+        lines.push(format!(
+            "- {} [{}]",
+            domain.kind.label(),
+            domain.status.label()
+        ));
+        if let Some(decision) = domain.decision {
+            lines.push(display_line("  action: ", decision.label()));
+        }
+        lines.push(display_line("  source: ", &domain.source));
+        lines.push(display_line("  summary: ", &domain.summary));
+    }
+
+    if !candidate.channel_candidates.is_empty() {
+        lines.push("channels:".to_owned());
+        for channel in &candidate.channel_candidates {
+            lines.push(format!("- {} [{}]", channel.label, channel.status.label()));
+            lines.push(display_line("  source: ", &channel.source));
+            lines.push(display_line("  summary: ", &channel.summary));
+        }
+    }
+
+    lines
+}
+
 pub fn render_provider_selection_lines(plan: &ProviderSelectionPlan, width: usize) -> Vec<String> {
     if plan.imported_choices.is_empty()
         || (!plan.requires_explicit_choice && plan.imported_choices.len() <= 1)
@@ -305,5 +356,49 @@ pub fn render_provider_selection_lines(plan: &ProviderSelectionPlan, width: usiz
             width,
         ));
     }
+    lines
+}
+
+pub fn provider_selection_display_lines(plan: &ProviderSelectionPlan) -> Vec<String> {
+    if plan.imported_choices.is_empty()
+        || (!plan.requires_explicit_choice && plan.imported_choices.len() <= 1)
+    {
+        return Vec::new();
+    }
+
+    let mut lines = Vec::new();
+    let heading = if plan.requires_explicit_choice {
+        "provider choice required"
+    } else {
+        "provider choices"
+    };
+    lines.push(format!("{heading}:"));
+
+    for choice in &plan.imported_choices {
+        let suffix = if Some(choice.profile_id.as_str()) == plan.default_profile_id.as_deref() {
+            " (recommended)"
+        } else {
+            ""
+        };
+        let label =
+            crate::provider_presentation::provider_choice_label(&choice.profile_id, choice.kind);
+        lines.push(format!("- {label}{suffix}"));
+        lines.push(display_line("  source: ", &choice.source));
+        lines.push(display_line("  summary: ", &choice.summary));
+        if let Some(selector_detail) =
+            super::provider_selection::selector_detail_line(plan, &choice.profile_id, usize::MAX)
+        {
+            lines.push(display_line("  ", &selector_detail));
+        }
+        if let Some(transport_summary) = choice.config.preview_transport_summary() {
+            lines.push(display_line("  transport: ", &transport_summary));
+        }
+    }
+
+    if plan.requires_explicit_choice {
+        let note_segments = super::unresolved_choice_note_segments(plan);
+        lines.push(display_line("note: ", &note_segments.join("; ")));
+    }
+
     lines
 }

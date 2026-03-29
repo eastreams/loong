@@ -11,6 +11,13 @@ const SUGGESTED_STARTING_POINT_LABEL: &str = "suggested starting point";
 const EXISTING_CONFIG_SOURCE_PREFIX: &str = "existing config at ";
 const CODEX_CONFIG_SOURCE_PREFIX: &str = "Codex config at ";
 
+fn display_path(path: &Path) -> String {
+    dunce::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
 pub const fn recommended_plan_source_label() -> &'static str {
     RECOMMENDED_PLAN_SOURCE_LABEL
 }
@@ -36,11 +43,13 @@ pub const fn suggested_starting_point_label() -> &'static str {
 }
 
 pub fn existing_loongclaw_config_source_label(path: &Path) -> String {
-    format!("{EXISTING_CONFIG_SOURCE_PREFIX}{}", path.display())
+    let rendered_path = display_path(path);
+    format!("{EXISTING_CONFIG_SOURCE_PREFIX}{rendered_path}")
 }
 
 pub fn codex_config_source_label(path: &Path) -> String {
-    format!("{CODEX_CONFIG_SOURCE_PREFIX}{}", path.display())
+    let rendered_path = display_path(path);
+    format!("{CODEX_CONFIG_SOURCE_PREFIX}{rendered_path}")
 }
 
 pub fn source_path(source_kind: Option<ImportSourceKind>, source: &str) -> Option<PathBuf> {

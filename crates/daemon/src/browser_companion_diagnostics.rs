@@ -290,7 +290,12 @@ mod tests {
         let mut file = std::fs::File::create(script_path).expect("create browser companion script");
         file.write_all(body.as_bytes())
             .expect("write browser companion script");
-        let mut permissions = file.metadata().expect("script metadata").permissions();
+        file.sync_all()
+            .expect("sync browser companion script to disk");
+        drop(file);
+        let mut permissions = std::fs::metadata(script_path)
+            .expect("script metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
     }

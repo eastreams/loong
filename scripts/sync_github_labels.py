@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import functools
 import json
+import re
 import sys
 from pathlib import Path
 from textwrap import dedent, indent
@@ -33,6 +35,236 @@ def path_labeled_entries(taxonomy: dict) -> list[dict]:
             if entry.get("paths"):
                 entries.append(entry)
     return entries
+
+
+def normalize_repo_path(repo_path: str) -> str:
+    normalized_path = repo_path.replace("\\", "/")
+    while normalized_path.startswith("./"):
+        normalized_path = normalized_path[2:]
+    return normalized_path
+
+
+def unsupported_glob_constructs(normalized_pattern: str) -> list[str]:
+    found_unsupported_characters: list[str] = []
+    extglob_tokens = ("@(", "+(", "*(", "?(", "!(")
+
+    for token in extglob_tokens:
+        if token not in normalized_pattern:
+            continue
+        found_unsupported_characters.append(token)
+
+    has_leading_negation = normalized_pattern.startswith("!")
+    has_negation_extglob = "!(" in normalized_pattern
+    if has_leading_negation and not has_negation_extglob:
+        found_unsupported_characters.append("leading !")
+
+    has_character_class = re.search(r"\[[^][]+\]", normalized_pattern) is not None
+    if has_character_class:
+        found_unsupported_characters.append("[]")
+
+    has_brace_expansion = re.search(r"\{[^{}]*,[^{}]*\}", normalized_pattern) is not None
+    if has_brace_expansion:
+        found_unsupported_characters.append("{,}")
+
+    return found_unsupported_characters
+
+
+def validate_supported_glob_pattern(pattern: str) -> str:
+    normalized_pattern = normalize_repo_path(pattern)
+
+    if not normalized_pattern:
+        raise ValueError("empty patterns are not supported")
+
+    if "//" in normalized_pattern:
+        raise ValueError("empty path segments are not supported")
+
+    found_unsupported_characters = unsupported_glob_constructs(normalized_pattern)
+
+    if found_unsupported_characters:
+        unsupported_summary = " ".join(found_unsupported_characters)
+        raise ValueError(
+            "unsupported glob tokens found; "
+            "semantic matcher only supports literals, *, ?, and ** path segments "
+            f"({unsupported_summary})"
+        )
+
+    segments = normalized_pattern.split("/")
+    for segment in segments:
+        if segment:
+            has_double_star = "**" in segment
+            is_double_star_segment = segment == "**"
+            if has_double_star and not is_double_star_segment:
+                raise ValueError(
+                    "semantic matcher only supports ** as a full path segment "
+                    f"(pattern: {normalized_pattern})"
+                )
+            continue
+
+        raise ValueError("empty path segments are not supported")
+
+    return normalized_pattern
+
+
+def glob_segment_to_regex(segment: str) -> str:
+    regex_parts: list[str] = []
+    for character in segment:
+        if character == "*":
+            regex_parts.append("[^/]*")
+            continue
+        if character == "?":
+            regex_parts.append("[^/]")
+            continue
+        regex_parts.append(re.escape(character))
+    return "".join(regex_parts)
+
+
+def glob_pattern_to_regex(pattern: str) -> str:
+    # The managed taxonomy uses a small glob subset, so the matcher stays deliberately narrow.
+    normalized_pattern = validate_supported_glob_pattern(pattern)
+    segments = normalized_pattern.split("/")
+    regex_parts: list[str] = ["^"]
+    segment_count = len(segments)
+
+    for index, segment in enumerate(segments):
+        is_last_segment = index == segment_count - 1
+
+        if segment == "**":
+            if is_last_segment:
+                regex_parts.append(".*")
+            else:
+                regex_parts.append("(?:[^/]+/)*")
+            continue
+
+        segment_regex = glob_segment_to_regex(segment)
+        regex_parts.append(segment_regex)
+
+        if not is_last_segment:
+            regex_parts.append("/")
+
+    regex_parts.append("$")
+    return "".join(regex_parts)
+
+
+@functools.lru_cache(maxsize=None)
+def compile_glob_pattern(pattern: str) -> re.Pattern[str]:
+    regex_text = glob_pattern_to_regex(pattern)
+    return re.compile(regex_text)
+
+
+def path_matches_pattern(repo_path: str, pattern: str) -> bool:
+    normalized_path = normalize_repo_path(repo_path)
+    compiled_pattern = compile_glob_pattern(pattern)
+    return compiled_pattern.match(normalized_path) is not None
+
+
+def labels_for_path(taxonomy: dict, repo_path: str) -> list[str]:
+    matching_labels: list[str] = []
+    entries = path_labeled_entries(taxonomy)
+    for entry in entries:
+        patterns = entry["paths"]
+        for pattern in patterns:
+            does_match = path_matches_pattern(repo_path, pattern)
+            if not does_match:
+                continue
+            matching_labels.append(entry["name"])
+            break
+    matching_labels.sort()
+    return matching_labels
+
+
+def check_semantic_matcher_support(taxonomy: dict) -> list[str]:
+    failures: list[str] = []
+    entries = path_labeled_entries(taxonomy)
+
+    for entry in entries:
+        label_name = entry["name"]
+        patterns = entry["paths"]
+
+        for pattern in patterns:
+            try:
+                compile_glob_pattern(pattern)
+            except ValueError as error:
+                failure_message = (
+                    f"unsupported semantic matcher pattern for {label_name}: "
+                    f"{pattern} ({error})"
+                )
+                failures.append(failure_message)
+
+    return failures
+
+
+def semantic_regression_cases() -> list[dict]:
+    # These representative paths lock the intended routing semantics without duplicating the full repo tree.
+    cases: list[dict] = []
+
+    cases.append(
+        {
+            "path": "README.md",
+            "labels": ["docs", "documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/references/github-collaboration.md",
+            "labels": ["docs", "documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/design-docs/provider-runtime-roadmap.md",
+            "labels": ["documentation", "spec"],
+        }
+    )
+    cases.append(
+        {
+            "path": "docs/releases/v0.1.0-alpha.2.md",
+            "labels": ["documentation"],
+        }
+    )
+    cases.append(
+        {
+            "path": ".github/workflows/labeler.yml",
+            "labels": ["ci", "github_actions"],
+        }
+    )
+    cases.append(
+        {
+            "path": "Cargo.toml",
+            "labels": ["dependencies"],
+        }
+    )
+    cases.append(
+        {
+            "path": "crates/app/Cargo.toml",
+            "labels": ["dependencies"],
+        }
+    )
+
+    return cases
+
+
+def check_semantic_regression_cases(taxonomy: dict) -> list[str]:
+    failures = check_semantic_matcher_support(taxonomy)
+    if failures:
+        return failures
+
+    cases = semantic_regression_cases()
+
+    for case in cases:
+        case_path = case["path"]
+        expected_labels = sorted(case["labels"])
+        actual_labels = labels_for_path(taxonomy, case_path)
+
+        if actual_labels == expected_labels:
+            continue
+
+        failure_message = (
+            f"semantic label mismatch for {case_path}: "
+            f"expected {expected_labels}, got {actual_labels}"
+        )
+        failures.append(failure_message)
+
+    return failures
 
 
 def render_labeler(taxonomy: dict) -> str:

@@ -34,7 +34,9 @@ pub struct MockEmbeddedPiHarness {
 pub struct MockCrmConnector;
 pub struct MockCoreConnector;
 pub struct MockCoreConnectorGrpc;
+pub struct MockPanickingCoreConnector;
 pub struct MockConnectorExtension;
+pub struct MockPanickingConnectorExtension;
 pub struct MockAcpHarness;
 pub struct MockCoreRuntime;
 pub struct MockCoreRuntimeFallback;
@@ -44,6 +46,17 @@ pub struct MockToolExtension;
 pub struct MockCoreMemory;
 pub struct MockMemoryExtension;
 pub struct NoNetworkEgressPolicyExtension;
+pub const TEST_CAPABILITY_VARIANTS: [Capability; 8] = [
+    Capability::InvokeTool,
+    Capability::InvokeConnector,
+    Capability::MemoryRead,
+    Capability::MemoryWrite,
+    Capability::FilesystemRead,
+    Capability::FilesystemWrite,
+    Capability::NetworkEgress,
+    Capability::ObserveTelemetry,
+];
+pub const TEST_CAPABILITY_VARIANT_COUNT: u8 = TEST_CAPABILITY_VARIANTS.len() as u8;
 #[derive(Debug, Clone, Copy)]
 pub enum ToolGateMode {
     Deny,
@@ -130,6 +143,18 @@ impl CoreConnectorAdapter for MockCoreConnectorGrpc {
     }
 }
 #[async_trait]
+impl CoreConnectorAdapter for MockPanickingCoreConnector {
+    fn name(&self) -> &str {
+        "panic-core"
+    }
+    async fn invoke_core(
+        &self,
+        _command: ConnectorCommand,
+    ) -> Result<ConnectorOutcome, ConnectorError> {
+        panic!("simulated connector core panic");
+    }
+}
+#[async_trait]
 impl ConnectorExtensionAdapter for MockConnectorExtension {
     fn name(&self) -> &str {
         "shielded-bridge"
@@ -151,6 +176,19 @@ impl ConnectorExtensionAdapter for MockConnectorExtension {
             status: "ok".to_owned(),
             payload: json!({"tier":"extension","extension":"shielded-bridge","operation":command.operation,"core_probe":core_probe.payload,"payload":command.payload}),
         })
+    }
+}
+#[async_trait]
+impl ConnectorExtensionAdapter for MockPanickingConnectorExtension {
+    fn name(&self) -> &str {
+        "panic-extension"
+    }
+    async fn invoke_extension(
+        &self,
+        _command: ConnectorCommand,
+        _core: &(dyn CoreConnectorAdapter + Sync),
+    ) -> Result<ConnectorOutcome, ConnectorError> {
+        panic!("simulated connector extension panic");
     }
 }
 #[async_trait]
@@ -370,23 +408,19 @@ pub fn acp_pack_without_explicit_adapter() -> VerticalPackManifest {
     }
 }
 pub fn capability_from_bit(bit: u8) -> Capability {
-    match bit {
-        0 => Capability::InvokeTool,
-        1 => Capability::InvokeConnector,
-        2 => Capability::MemoryRead,
-        3 => Capability::MemoryWrite,
-        4 => Capability::FilesystemRead,
-        5 => Capability::FilesystemWrite,
-        6 => Capability::NetworkEgress,
-        7 => Capability::ScheduleTask,
-        _ => Capability::ObserveTelemetry,
-    }
+    let bit_index = usize::from(bit);
+    TEST_CAPABILITY_VARIANTS
+        .get(bit_index)
+        .copied()
+        .expect("test capability bit should be in range")
 }
 pub fn capability_set_from_mask(mask: u16) -> BTreeSet<Capability> {
     let mut capabilities = BTreeSet::new();
-    for bit in 0_u8..9 {
-        if (mask & (1_u16 << bit)) != 0 {
-            capabilities.insert(capability_from_bit(bit));
+    for (bit_index, capability) in TEST_CAPABILITY_VARIANTS.iter().copied().enumerate() {
+        let bit_mask = 1_u16 << bit_index;
+        let is_enabled = (mask & bit_mask) != 0;
+        if is_enabled {
+            capabilities.insert(capability);
         }
     }
     capabilities

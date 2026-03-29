@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use clap::ValueEnum;
-use rand::Rng;
+use rand::RngExt;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -359,8 +359,12 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.feishu.enabled = false;
         config.feishu.account_id = Some("feishu_main".to_owned());
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+            "cli_a1b2c3".to_owned(),
+        ));
+        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "app-secret".to_owned(),
+        ));
         config.feishu_integration.sqlite_path =
             temp_dir.join("feishu.sqlite3").display().to_string();
         mvp::config::write(config_path.to_str(), &config, true).expect("write config");

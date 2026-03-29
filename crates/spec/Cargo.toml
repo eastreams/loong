@@ -24,6 +24,7 @@ wasmparser.workspace = true
 base64.workspace = true
 ed25519-dalek.workspace = true
 wasmtime.workspace = true
+semver.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

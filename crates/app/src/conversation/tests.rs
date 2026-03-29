@@ -32,7 +32,34 @@ use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{NewSessionRecord, SessionKind, SessionRepository, SessionState};
+use crate::memory::{
+    MemorySystem, MemorySystemCapability, MemorySystemMetadata, register_memory_system,
+};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{
+    NewSessionEvent, NewSessionRecord, NewSessionToolPolicyRecord, SessionKind, SessionRepository,
+    SessionState,
+};
+
+#[cfg(feature = "memory-sqlite")]
+const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
+#[cfg(feature = "memory-sqlite")]
+fn run_conversation_test_on_large_stack<F>(thread_name: &str, operation: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    let thread_builder = std::thread::Builder::new();
+    let thread_builder = thread_builder.name(thread_name.to_owned());
+    let thread_builder = thread_builder.stack_size(DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES);
+    let join_handle = thread_builder
+        .spawn(operation)
+        .expect("spawn conversation test stack thread");
+    match join_handle.join() {
+        Ok(()) => {}
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
 
 struct FakeRuntime {
     seed_messages: Vec<Value>,
@@ -62,6 +89,7 @@ struct FakeRuntime {
     turn_calls: Mutex<usize>,
     after_turn_calls: Mutex<Vec<(String, String, String, usize)>>,
     compact_calls: Mutex<Vec<(String, usize)>>,
+    compact_hook: Option<CompactHook>,
     persist_failure: Option<(String, String)>,
     prepare_subagent_spawn_result: Result<(), String>,
     on_subagent_ended_result: Result<(), String>,
@@ -71,6 +99,27 @@ struct FakeRuntime {
 enum FakeTurnResponse {
     Parsed(ProviderTurn),
     RawBody(Value),
+}
+
+type CompactHook = Arc<dyn Fn(&str, &[Value]) -> Result<(), String> + Send + Sync>;
+
+#[cfg(feature = "memory-sqlite")]
+struct RegistryRetrieveOnlyConversationMemorySystem;
+
+#[cfg(feature = "memory-sqlite")]
+impl MemorySystem for RegistryRetrieveOnlyConversationMemorySystem {
+    fn id(&self) -> &'static str {
+        "registry-retrieve-only-conversation"
+    }
+
+    fn metadata(&self) -> MemorySystemMetadata {
+        MemorySystemMetadata::new(
+            "registry-retrieve-only-conversation",
+            [MemorySystemCapability::PromptHydration],
+            "Conversation test registry-selected memory system",
+        )
+        .with_supported_pre_assembly_stage_families([crate::memory::MemoryStageFamily::Retrieve])
+    }
 }
 
 struct TraitDefaultToolViewRuntime;
@@ -113,6 +162,19 @@ impl ConversationRuntime for TraitDefaultToolViewRuntime {
         _messages: &[Value],
         _tool_view: &crate::tools::ToolView,
         _binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ProviderTurn> {
+        Err("trait default tool view test should not request a provider turn".to_owned())
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        _config: &LoongClawConfig,
+        _session_id: &str,
+        _turn_id: &str,
+        _messages: &[Value],
+        _tool_view: &crate::tools::ToolView,
+        _binding: ConversationRuntimeBinding<'_>,
+        _on_token: crate::provider::StreamingTokenCallback,
     ) -> CliResult<ProviderTurn> {
         Err("trait default tool view test should not request a provider turn".to_owned())
     }
@@ -320,6 +382,25 @@ struct RecordingLifecycleContextEngine {
 }
 
 #[derive(Default)]
+struct RecordingTurnObserver {
+    phase_events: Mutex<Vec<ConversationTurnPhaseEvent>>,
+}
+
+impl ConversationTurnObserver for RecordingTurnObserver {
+    fn on_phase(&self, event: ConversationTurnPhaseEvent) {
+        let mut phase_events = self
+            .phase_events
+            .lock()
+            .expect("phase event lock should not be poisoned");
+        phase_events.push(event);
+    }
+
+    fn on_streaming_token(&self, event: crate::acp::StreamingTokenEvent) {
+        let _ = event;
+    }
+}
+
+#[derive(Default)]
 struct RoutedAcpState {
     ensure_calls: usize,
     turn_calls: usize,
@@ -420,6 +501,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
                 "role": "system",
                 "content": "base-system-prompt",
             })],
+            artifacts: vec![],
             estimated_tokens: Some(42),
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
         })
@@ -724,6 +806,7 @@ impl FakeRuntime {
             turn_calls: Mutex::new(0),
             after_turn_calls: Mutex::new(Vec::new()),
             compact_calls: Mutex::new(Vec::new()),
+            compact_hook: None,
             persist_failure: None,
             prepare_subagent_spawn_result: Ok(()),
             on_subagent_ended_result: Ok(()),
@@ -759,6 +842,11 @@ impl FakeRuntime {
 
     fn with_compact_result(mut self, result: Result<(), String>) -> Self {
         self.compact_result = result;
+        self
+    }
+
+    fn with_compact_hook(mut self, compact_hook: CompactHook) -> Self {
+        self.compact_hook = Some(compact_hook);
         self
     }
 
@@ -1278,6 +1366,20 @@ impl ConversationRuntime for FakeRuntime {
         }
     }
 
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        _on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
+
     async fn persist_turn(
         &self,
         session_id: &str,
@@ -1330,6 +1432,9 @@ impl ConversationRuntime for FakeRuntime {
         messages: &[Value],
         _kernel_ctx: &KernelContext,
     ) -> CliResult<()> {
+        if let Some(compact_hook) = self.compact_hook.as_ref() {
+            compact_hook(session_id, messages)?;
+        }
         self.compact_calls
             .lock()
             .expect("compact lock")
@@ -1378,6 +1483,30 @@ fn test_config() -> LoongClawConfig {
 fn test_kernel_context(agent_id: &str) -> KernelContext {
     crate::context::bootstrap_test_kernel_context(agent_id, 60)
         .expect("bootstrap test kernel context")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn collect_markdown_file_paths(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if !root.exists() {
+        return paths;
+    }
+
+    let read_dir = std::fs::read_dir(root).expect("read markdown directory");
+    for entry_result in read_dir {
+        let entry = entry_result.expect("read markdown entry");
+        let path = entry.path();
+        let extension = path.extension().and_then(|value| value.to_str());
+        let is_markdown = extension.is_some_and(|value| value.eq_ignore_ascii_case("md"));
+        if !is_markdown {
+            continue;
+        }
+        paths.push(path);
+    }
+
+    paths.sort();
+    paths
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1431,6 +1560,7 @@ fn sample_delegate_runtime_narrowing() -> crate::tools::runtime_config::ToolRunt
         },
         web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
             allow_private_hosts: Some(false),
+            enforce_allowed_domains: false,
             allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
             blocked_domains: BTreeSet::from(["deny.example.com".to_owned()]),
             timeout_seconds: Some(5),
@@ -1493,6 +1623,126 @@ fn seed_delegate_child_session_with_runtime_narrowing(
     .expect("append delegate_started event");
 
     child_session_id
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn runtime_self_continuity_fixture(identity_text: &str) -> Value {
+    let continuity = json!({
+        "runtime_self": {
+            "standing_instructions": [
+                "Keep continuity explicit."
+            ],
+            "tool_usage_policy": [
+                "Search durable workspace memory before guessing project facts."
+            ],
+            "soul_guidance": [
+                "Prefer rigorous execution."
+            ],
+            "identity_context": [
+                identity_text
+            ],
+            "user_context": [
+                "The operator prefers concise technical summaries."
+            ]
+        },
+        "resolved_identity": {
+            "source": "workspace_self",
+            "content": identity_text
+        },
+        "session_profile_projection": "## Session Profile\nDurable preferences and advisory session context carried into this session:\nOperator prefers concise technical summaries."
+    });
+    continuity
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_runtime_self_workspace(suffix: &str, identity_text: &str) -> PathBuf {
+    let directory_name = unique_acp_test_id("conversation-runtime-self-workspace", suffix);
+    let workspace_root = std::env::temp_dir().join(directory_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create runtime self workspace");
+
+    let agents_path = workspace_root.join("AGENTS.md");
+    let tools_path = workspace_root.join("TOOLS.md");
+    let soul_path = workspace_root.join("SOUL.md");
+    let identity_path = workspace_root.join("IDENTITY.md");
+    let user_path = workspace_root.join("USER.md");
+
+    let agents_text = "Keep continuity explicit.";
+    let tools_text = "Search durable workspace memory before guessing project facts.";
+    let soul_text = "Prefer rigorous execution.";
+    let user_text = "The operator prefers concise technical summaries.";
+
+    std::fs::write(&agents_path, agents_text).expect("write AGENTS");
+    std::fs::write(&tools_path, tools_text).expect("write TOOLS");
+    std::fs::write(&soul_path, soul_text).expect("write SOUL");
+    std::fs::write(&identity_path, identity_text).expect("write IDENTITY");
+    std::fs::write(&user_path, user_text).expect("write USER");
+
+    workspace_root
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_root_session_record(session_id: &str) -> NewSessionRecord {
+    NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: None,
+        state: SessionState::Ready,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn create_child_session_record(session_id: &str, parent_session_id: &str) -> NewSessionRecord {
+    NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some(parent_session_id.to_owned()),
+        label: Some("Child".to_owned()),
+        state: SessionState::Running,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_runtime_self_continuity_refresh_event(
+    repo: &SessionRepository,
+    session_id: &str,
+    identity_text: &str,
+) {
+    let payload = json!({
+        "source": "compaction",
+        "runtime_self_continuity": runtime_self_continuity_fixture(identity_text),
+    });
+    let event = NewSessionEvent {
+        session_id: session_id.to_owned(),
+        event_kind: "runtime_self_continuity_refreshed".to_owned(),
+        actor_session_id: Some(session_id.to_owned()),
+        payload_json: payload,
+    };
+    repo.append_event(event)
+        .expect("append runtime self continuity refresh event");
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_delegate_started_event_with_runtime_self_continuity(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    parent_session_id: &str,
+    identity_text: &str,
+) {
+    let payload = json!({
+        "task": "research continuity",
+        "label": "Child",
+        "runtime_self_continuity": runtime_self_continuity_fixture(identity_text),
+    });
+    let event = NewSessionEvent {
+        session_id: child_session_id.to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        payload_json: payload,
+    };
+    repo.append_event(event)
+        .expect("append delegate_started event");
 }
 
 fn provider_tool_intent(
@@ -1853,6 +2103,84 @@ fn default_runtime_tool_view_uses_persisted_delegate_child_restrictions() {
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn default_runtime_tool_view_intersects_root_session_with_persisted_tool_policy() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-tool-view", "session-policy")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.upsert_session_tool_policy(NewSessionToolPolicyRecord {
+        session_id: "root-session".to_owned(),
+        requested_tool_ids: vec![
+            "tool.search".to_owned(),
+            "tool.invoke".to_owned(),
+            "session_status".to_owned(),
+        ],
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+    })
+    .expect("upsert session tool policy");
+
+    let runtime = DefaultConversationRuntime::default();
+    let root_view = runtime
+        .tool_view(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("root tool view");
+
+    assert!(root_view.contains("tool.search"));
+    assert!(root_view.contains("tool.invoke"));
+    assert!(root_view.contains("session_status"));
+    assert!(!root_view.contains("web.fetch"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn default_runtime_tool_view_errors_when_session_repository_is_unavailable() {
+    let db_path = std::env::temp_dir().join(unique_acp_test_id(
+        "conversation-tool-view",
+        "repo-unavailable",
+    ));
+    let _ = std::fs::remove_dir_all(&db_path);
+    std::fs::create_dir_all(&db_path).expect("create invalid sqlite directory");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let runtime = DefaultConversationRuntime::default();
+    let error = runtime
+        .tool_view(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect_err("tool view should fail closed when the session repository is unavailable");
+
+    assert!(
+        error.contains("open session repository failed"),
+        "error={error}"
+    );
+
+    std::fs::remove_dir_all(&db_path).ok();
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn default_runtime_tool_view_denies_delegate_for_broken_lineage_child() {
     let mut config = test_config();
     config.tools.delegate.allow_shell_in_child = false;
@@ -1936,6 +2264,38 @@ fn default_runtime_session_context_uses_persisted_parent_session_id() {
         session_context.parent_session_id.as_deref(),
         Some("root-session")
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn default_runtime_session_context_errors_when_session_repository_is_unavailable() {
+    let db_path = std::env::temp_dir().join(unique_acp_test_id(
+        "conversation-session-context",
+        "repo-unavailable",
+    ));
+    let _ = std::fs::remove_dir_all(&db_path);
+    std::fs::create_dir_all(&db_path).expect("create invalid sqlite directory");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+
+    let runtime = DefaultConversationRuntime::default();
+    let error = runtime
+        .session_context(
+            &config,
+            "root-session",
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect_err(
+            "session context should fail closed when the session repository is unavailable",
+        );
+
+    assert!(
+        error.contains("open session repository failed"),
+        "error={error}"
+    );
+
+    std::fs::remove_dir_all(&db_path).ok();
 }
 
 #[tokio::test]
@@ -2071,6 +2431,76 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
     assert!(
         merged.find("runtime-policy-addition") < merged.find("[delegate_child_runtime_contract]"),
         "expected the existing system prompt addition to remain ahead of the child contract block, got: {merged}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addition_and_tool_view()
+{
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "kernel-stage-hydration-tool-view",
+        sample_delegate_runtime_narrowing(),
+    );
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&child_session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&child_session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&child_session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+    crate::memory::append_turn_direct(&child_session_id, "assistant", "turn 4", &runtime_config)
+        .expect("append turn 4 should succeed");
+
+    let runtime = DefaultConversationRuntime::default();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "default-runtime-kernel-stage-hydration-tool-view",
+        &runtime_config,
+    );
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &child_session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context with staged hydration and runtime middlewares");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+    assert!(
+        system_content.contains("[delegate_child_runtime_contract]"),
+        "expected runtime-owned system prompt addition in kernel-bound staged assembly, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Plan within these child-session runtime limits:"),
+        "expected delegate runtime contract body, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("- delegate:"),
+        "expected child tool-view shaping to hide delegate tools in the rewritten system prompt, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("- shell.exec:"),
+        "expected child tool-view shaping to keep shell hidden by default, got: {system_content}"
+    );
+    assert!(
+        assembled.messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        }),
+        "expected staged hydration summary block to remain present after runtime middlewares"
     );
 }
 
@@ -2278,8 +2708,253 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
         }),
         "expected hydrated summary block in default runtime messages"
     );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::Summary),
+        "direct-mode builtin summary projection should preserve summary artifacts"
+    );
 
     let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_rehydrates_runtime_self_continuity_when_live_sources_are_missing()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "stored-self-fallback");
+    let sqlite_path = unique_memory_sqlite_path("stored-self-fallback");
+    let empty_workspace_root =
+        crate::test_support::unique_temp_dir("stored-self-fallback-empty-workspace");
+    let mut config = test_config();
+    let identity_text = "# Identity\n\n- Name: Stored continuity identity";
+
+    std::fs::create_dir_all(&empty_workspace_root).expect("create empty workspace root");
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(empty_workspace_root.display().to_string());
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    append_runtime_self_continuity_refresh_event(&repo, &session_id, identity_text);
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context from stored continuity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("[runtime_self_continuity]"),
+        "expected stored continuity marker in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Stored continuity identity"),
+        "expected stored identity in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Keep continuity explicit."),
+        "expected stored standing instructions in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Search durable workspace memory before guessing project facts."),
+        "expected stored tool usage policy in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("## Session Profile"),
+        "expected stored session profile in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Operator prefers concise technical summaries."),
+        "expected stored session profile text in system prompt, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_rehydrates_delegate_child_runtime_self_continuity_when_live_sources_are_missing()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let root_session_id = unique_acp_test_id("default-runtime-context", "delegate-parent");
+    let child_session_id = unique_acp_test_id("default-runtime-context", "delegate-child");
+    let sqlite_path = unique_memory_sqlite_path("delegate-self-fallback");
+    let empty_workspace_root =
+        crate::test_support::unique_temp_dir("delegate-self-fallback-empty-workspace");
+    let mut config = test_config();
+    let identity_text = "# Identity\n\n- Name: Inherited child identity";
+
+    std::fs::create_dir_all(&empty_workspace_root).expect("create empty workspace root");
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(empty_workspace_root.display().to_string());
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&root_session_id);
+    let child_session = create_child_session_record(&child_session_id, &root_session_id);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    repo.create_session(child_session)
+        .expect("create child session");
+    append_delegate_started_event_with_runtime_self_continuity(
+        &repo,
+        &child_session_id,
+        &root_session_id,
+        identity_text,
+    );
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &child_session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build child context from inherited continuity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("[runtime_self_continuity]"),
+        "expected inherited continuity marker in child system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Inherited child identity"),
+        "expected inherited identity in child system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Search durable workspace memory before guessing project facts."),
+        "expected inherited tool usage policy in child system prompt, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_prefers_live_identity_over_stored_runtime_self_continuity() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "live-over-stored");
+    let sqlite_path = unique_memory_sqlite_path("live-over-stored");
+    let workspace_root = create_runtime_self_workspace(
+        "live-over-stored",
+        "# Identity\n\n- Name: Live workspace identity",
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+    let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context with live identity");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("Live workspace identity"),
+        "expected live identity in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("## Session Profile"),
+        "stored session profile should still rehydrate when the live profile lane is missing, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Operator prefers concise technical summaries."),
+        "stored session profile text should still rehydrate when the live profile lane is missing, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("Stored continuity identity"),
+        "stored continuity should not override live identity, got: {system_content}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_rehydrates_missing_session_profile_from_stored_runtime_self_continuity()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "live-identity-stored-profile");
+    let sqlite_path = unique_memory_sqlite_path("live-identity-stored-profile");
+    let workspace_root = create_runtime_self_workspace(
+        "live-identity-stored-profile",
+        "# Identity\n\n- Name: Live workspace identity",
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+    let stored_identity_text = "# Identity\n\n- Name: Stored continuity identity";
+
+    repo.create_session(root_session)
+        .expect("create root session");
+    append_runtime_self_continuity_refresh_event(&repo, &session_id, stored_identity_text);
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context with live identity and stored profile");
+
+    let system_content = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should be text");
+
+    assert!(
+        system_content.contains("Live workspace identity"),
+        "expected live identity in system prompt, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("## Session Profile"),
+        "expected stored session profile to rehydrate, got: {system_content}"
+    );
+    assert!(
+        system_content.contains("Operator prefers concise technical summaries."),
+        "expected stored session profile text to rehydrate, got: {system_content}"
+    );
+    assert!(
+        !system_content.contains("Stored continuity identity"),
+        "stored identity should stay shadowed by live identity, got: {system_content}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2325,8 +3000,109 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
         }),
         "expected hydrated profile block in default runtime messages"
     );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::Profile),
+        "direct-mode builtin profile projection should preserve profile artifacts"
+    );
 
     let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_records_runtime_self_continuity_before_compaction() {
+    let session_id = unique_acp_test_id("conversation-runtime-self", "compaction");
+    let sqlite_path = unique_memory_sqlite_path("runtime-self-compaction");
+    let workspace_root = create_runtime_self_workspace(
+        "runtime-self-compaction",
+        "# Identity\n\n- Name: Workspace continuity identity",
+    );
+    let mut config = test_config();
+
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let root_session = create_root_session_record(&session_id);
+    let session_id_for_hook = session_id.clone();
+    let memory_config_for_hook = memory_config.clone();
+    let compact_hook: CompactHook = Arc::new(move |hook_session_id, _messages| {
+        let hook_repo = SessionRepository::new(&memory_config_for_hook)?;
+        if hook_session_id != session_id_for_hook {
+            return Err(format!(
+                "compact hook invoked for unexpected session: expected {session_id_for_hook}, got {hook_session_id}"
+            ));
+        }
+        let events = hook_repo.list_recent_events(hook_session_id, 20)?;
+        let continuity_event = events
+            .iter()
+            .find(|event| event.event_kind == "runtime_self_continuity_refreshed");
+        let continuity_event = continuity_event.ok_or_else(|| {
+            format!(
+                "runtime self continuity event must exist before compaction for session {hook_session_id}"
+            )
+        })?;
+        let payload_text = continuity_event.payload_json.to_string();
+        let contains_identity = payload_text.contains("Workspace continuity identity");
+        if !contains_identity {
+            return Err(format!(
+                "runtime self continuity payload must be persisted before compaction for session {hook_session_id}"
+            ));
+        }
+        Ok(())
+    });
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("I am Temporary Bob".to_owned()),
+    )
+    .with_compact_hook(compact_hook);
+
+    repo.create_session(root_session)
+        .expect("create root session");
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("test-runtime-self-compaction");
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            &session_id,
+            "hello",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "I am Temporary Bob");
+
+    let events = repo
+        .list_recent_events(&session_id, 20)
+        .expect("list recent events");
+    let continuity_event = events
+        .iter()
+        .find(|event| event.event_kind == "runtime_self_continuity_refreshed")
+        .expect("runtime self continuity event");
+    let payload_text = continuity_event.payload_json.to_string();
+
+    assert!(
+        payload_text.contains("Workspace continuity identity"),
+        "expected workspace identity in continuity payload, got: {payload_text}"
+    );
+    assert!(
+        payload_text.contains("Search durable workspace memory before guessing project facts."),
+        "expected tool usage policy in continuity payload, got: {payload_text}"
+    );
+    assert!(
+        !payload_text.contains("Temporary Bob"),
+        "session-local assistant reply must not be promoted into continuity payload: {payload_text}"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2383,6 +3159,248 @@ async fn default_runtime_build_context_fail_open_memory_derivation_preserves_rec
             ("assistant".to_owned(), "turn 2".to_owned()),
             ("user".to_owned(), "turn 3".to_owned()),
         ]
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_matches_builtin_summary_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "summary");
+    let sqlite_path = unique_memory_sqlite_path("kernel-summary");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 4", &runtime_config)
+        .expect("append turn 4 should succeed");
+
+    let kernel_ctx =
+        test_kernel_context_with_memory("default-runtime-kernel-context-summary", &runtime_config);
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "kernel-bound default runtime should match the builtin staged projection"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_preserves_profile_projection() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "profile");
+    let sqlite_path = unique_memory_sqlite_path("kernel-profile");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::ProfilePlusWindow;
+    config.memory.profile_note = Some("Imported ZeroClaw preferences".to_owned());
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 1", &runtime_config)
+        .expect("append turn should succeed");
+
+    let kernel_ctx =
+        test_kernel_context_with_memory("default-runtime-kernel-context-profile", &runtime_config);
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
+        .expect("build provider messages");
+
+    assert_eq!(
+        assembled.messages, provider_messages,
+        "kernel-bound default runtime should preserve builtin profile projection"
+    );
+    assert!(
+        assembled.artifacts.iter().any(|artifact| {
+            artifact.artifact_kind == ContextArtifactKind::Profile
+                && artifact.message_index < assembled.messages.len()
+        }),
+        "expected a profile artifact descriptor for the injected profile block"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_with_registry_selected_system_skips_builtin_memory_projection()
+ {
+    register_memory_system("registry-retrieve-only-conversation", || {
+        Box::new(RegistryRetrieveOnlyConversationMemorySystem)
+    })
+    .expect("register conversation registry-selected memory system");
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "registry-selected-system");
+    let sqlite_path = unique_memory_sqlite_path("registry-selected-system");
+    let mut config = test_config();
+    config.memory.system_id = Some("registry-retrieve-only-conversation".to_owned());
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context with registry-selected system");
+
+    let projected_turns = assembled
+        .messages
+        .iter()
+        .filter_map(|message| {
+            let role = message.get("role")?.as_str()?;
+            let content = message.get("content")?.as_str()?;
+            matches!(role, "user" | "assistant").then_some((role.to_owned(), content.to_owned()))
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        projected_turns,
+        vec![
+            ("assistant".to_owned(), "turn 2".to_owned()),
+            ("user".to_owned(), "turn 3".to_owned()),
+        ]
+    );
+    assert!(
+        !assembled.messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        }),
+        "registry-selected systems without executors should not reuse builtin summary projection"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_kernel_build_context_emits_context_artifact_annotations() {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-kernel-context", "artifacts");
+    let sqlite_path = unique_memory_sqlite_path("kernel-artifacts");
+    let mut config = test_config();
+    config.memory.system = MemorySystemKind::Builtin;
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+
+    let kernel_ctx = test_kernel_context_with_memory(
+        "default-runtime-kernel-context-artifacts",
+        &runtime_config,
+    );
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("build kernel context from default runtime");
+
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::SystemPrompt),
+        "expected a system prompt artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::RuntimeContract),
+        "expected a runtime-contract artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.artifact_kind == ContextArtifactKind::Summary),
+        "expected a summary artifact descriptor"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .filter(|artifact| artifact.artifact_kind == ContextArtifactKind::ConversationTurn)
+            .count()
+            >= 2,
+        "expected conversation-turn artifact descriptors for projected turns"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.message_index < assembled.messages.len()),
+        "artifact indices must point at emitted messages"
+    );
+    assert!(
+        assembled
+            .artifacts
+            .iter()
+            .all(|artifact| artifact.streaming_policy == ToolOutputStreamingPolicy::BufferFull),
+        "slice 1 artifacts should use buffered delivery"
     );
 
     let _ = std::fs::remove_file(sqlite_path);
@@ -2486,8 +3504,12 @@ fn conversation_runtime_trait_default_tool_view_includes_runtime_discovered_feis
     let config = LoongClawConfig {
         feishu: crate::config::FeishuChannelConfig {
             enabled: true,
-            app_id: Some("test-feishu-app-id".to_owned()),
-            app_secret: Some("test-feishu-app-secret".to_owned()),
+            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                "test-feishu-app-id".to_owned(),
+            )),
+            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                "test-feishu-app-secret".to_owned(),
+            )),
             ..crate::config::FeishuChannelConfig::default()
         },
         ..test_config()
@@ -2511,12 +3533,15 @@ async fn handle_turn_with_runtime_success_with_kernel_runs_lifecycle_hooks() {
         vec![json!({"role": "system", "content": "sys"})],
         Ok("assistant-reply".to_owned()),
     );
+    let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = crate::context::bootstrap_test_kernel_context("test-handle-turn-success", 60)
         .expect("bootstrap kernel context");
     let reply = coordinator
         .handle_turn_with_runtime(
-            &test_config(),
+            &config,
             "session-1",
             "hello",
             ProviderErrorMode::Propagate,
@@ -2864,6 +3889,65 @@ async fn handle_turn_with_runtime_routes_explicit_acp_turns_through_acp() {
             .get("loongclaw.acp.routing_origin")
             .map(String::as_str),
         Some("explicit_request")
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_observer_routes_explicit_acp_turns_through_acp() {
+    let (backend_id, shared) = register_routed_acp_backend("success-explicit-observer", false);
+    let coordinator = ConversationTurnCoordinator::new();
+    let mut config = test_config();
+    config.acp.enabled = true;
+    config.acp.default_agent = Some("claude".to_owned());
+    config.acp.allowed_agents = vec!["claude".to_owned()];
+    config.acp.backend = Some(backend_id.to_owned());
+    config.acp.bindings_enabled = true;
+    config.acp.dispatch.bootstrap_mcp_servers =
+        vec![" Filesystem ".to_owned(), "filesystem".to_owned()];
+    config.memory.sqlite_path = unique_acp_sqlite_path("success-explicit-observer");
+
+    let observer = Arc::new(RecordingTurnObserver::default());
+    let observer_handle: ConversationTurnObserverHandle = observer.clone();
+    let address = ConversationSessionAddress::from_session_id("telegram:42");
+    let acp_options = AcpConversationTurnOptions {
+        routing_intent: AcpRoutingIntent::Explicit,
+        ..AcpConversationTurnOptions::default()
+    };
+    let reply = coordinator
+        .handle_turn_with_address_and_acp_options_and_observer(
+            &config,
+            &address,
+            "hello from channel",
+            ProviderErrorMode::Propagate,
+            &acp_options,
+            ConversationRuntimeBinding::direct(),
+            Some(observer_handle),
+        )
+        .await
+        .expect("explicit ACP turn with observer should route through ACP");
+
+    assert_eq!(reply, "acp: hello from channel");
+
+    let state = shared.lock().expect("ACP shared state");
+    assert_eq!(state.ensure_calls, 1);
+    assert_eq!(state.turn_calls, 1);
+    drop(state);
+
+    let phase_events = observer
+        .phase_events
+        .lock()
+        .expect("phase event lock should not be poisoned");
+    let phase_names = phase_events
+        .iter()
+        .map(|event| event.phase)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        phase_names,
+        vec![
+            ConversationTurnPhase::Preparing,
+            ConversationTurnPhase::FinalizingReply,
+            ConversationTurnPhase::Completed,
+        ]
     );
 }
 
@@ -4199,6 +5283,134 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
     assert_eq!(compact[0].0, "session-compact-token-threshold");
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
+    let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-flush");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let db_path = workspace_root.join("memory.sqlite3");
+    let mut config = test_config();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 1;
+    config.conversation.compact_min_messages = Some(999);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let workspace_root_for_hook = workspace_root.clone();
+    let compact_hook: CompactHook = Arc::new(move |session_id, _messages| {
+        let memory_dir = workspace_root_for_hook.join("memory");
+        let exported_paths = collect_markdown_file_paths(memory_dir.as_path());
+        let exported_path = exported_paths.first().ok_or_else(|| {
+            format!("expected durable memory export before compaction for session {session_id}")
+        })?;
+        let exported = std::fs::read_to_string(exported_path).map_err(|error| error.to_string())?;
+        let contains_intro = exported.contains("Advisory durable recall");
+        if !contains_intro {
+            return Err(format!(
+                "durable export must include advisory durable recall label before compaction for session {session_id}"
+            ));
+        }
+        let contains_identity = exported.contains("Resolved Runtime Identity");
+        if !contains_identity {
+            return Err(format!(
+                "durable export must include resolved identity before compaction for session {session_id}"
+            ));
+        }
+        let contains_turn_text = exported.contains("hello before compaction");
+        if !contains_turn_text {
+            return Err(format!(
+                "durable export must include the pre-compaction summary before compaction for session {session_id}"
+            ));
+        }
+        Ok(())
+    });
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    )
+    .with_durable_memory_config(memory_config.clone())
+    .with_compact_hook(compact_hook);
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory("test-pre-compaction-flush", &memory_config);
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-pre-compaction-flush",
+            "hello before compaction",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+
+    let compact = runtime.compact_calls.lock().expect("compact lock").clone();
+    assert_eq!(compact.len(), 1);
+
+    let memory_dir = workspace_root.join("memory");
+    let exported_paths = collect_markdown_file_paths(&memory_dir);
+    assert_eq!(
+        exported_paths.len(),
+        1,
+        "expected one durable memory export"
+    );
+
+    let exported = std::fs::read_to_string(&exported_paths[0]).expect("read durable memory export");
+    assert!(exported.contains("Advisory durable recall"));
+    assert!(exported.contains("Resolved Runtime Identity"));
+    assert!(exported.contains("hello before compaction"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_is_skipped() {
+    let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-skip");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let db_path = workspace_root.join("memory.sqlite3");
+    let mut config = test_config();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 1;
+    config.conversation.compact_enabled = false;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let runtime = FakeRuntime::new(
+        vec![json!({"role": "system", "content": "sys"})],
+        Ok("assistant-reply".to_owned()),
+    )
+    .with_durable_memory_config(memory_config.clone());
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-pre-compaction-flush-skipped", &memory_config);
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-pre-compaction-flush-skipped",
+            "hello without compaction",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("handle turn success");
+
+    assert_eq!(reply, "assistant-reply");
+
+    let memory_dir = workspace_root.join("memory");
+    let exported_paths = collect_markdown_file_paths(&memory_dir);
+    assert!(
+        exported_paths.is_empty(),
+        "compaction skip should not create durable exports"
+    );
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
     let mut runtime = FakeRuntime::new(
@@ -4207,6 +5419,8 @@ async fn handle_turn_with_runtime_compaction_error_is_ignored_when_fail_open() {
     );
     runtime.compact_result = Err("compact failure".to_owned());
     let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = true;
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -4236,6 +5450,8 @@ async fn handle_turn_with_runtime_compaction_error_propagates_when_fail_closed()
     );
     runtime.compact_result = Err("compact failure".to_owned());
     let mut config = test_config();
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
     config.conversation.compact_fail_open = false;
 
     let coordinator = ConversationTurnCoordinator::new();
@@ -5738,18 +6954,13 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
     assert_eq!(payload["total_intents"], 5);
     assert_eq!(payload["parallel_execution_enabled"], true);
     assert_eq!(payload["parallel_execution_max_in_flight"], 2);
-    assert!(
-        payload["observed_peak_in_flight"]
-            .as_u64()
-            .expect("observed peak should exist")
-            >= 1
-    );
-    assert!(
-        payload["observed_wall_time_ms"]
-            .as_u64()
-            .expect("observed wall time should exist")
-            >= 1
-    );
+    let observed_peak_in_flight = payload["observed_peak_in_flight"]
+        .as_u64()
+        .expect("observed peak should exist");
+    let observed_wall_time_ms = payload["observed_wall_time_ms"]
+        .as_u64()
+        .expect("observed wall time should exist");
+    assert!(observed_peak_in_flight >= 1);
     assert_eq!(payload["parallel_safe_intents"], 4);
     assert_eq!(payload["serial_only_intents"], 1);
     assert_eq!(payload["parallel_segments"], 2);
@@ -5761,49 +6972,46 @@ async fn handle_turn_with_runtime_persists_fast_lane_tool_batch_event_for_mixed_
         3,
         "expected contiguous mixed-batch segments"
     );
-    assert_eq!(segments[0]["segment_index"], 0);
-    assert_eq!(segments[0]["scheduling_class"], "parallel_safe");
-    assert_eq!(segments[0]["execution_mode"], "parallel");
-    assert_eq!(segments[0]["intent_count"], 2);
+    let first_segment = &segments[0];
+    let second_segment = &segments[1];
+    let third_segment = &segments[2];
+    let first_segment_observed_wall_time_ms = first_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("parallel segment wall time should exist");
+    assert_eq!(first_segment["segment_index"], 0);
+    assert_eq!(first_segment["scheduling_class"], "parallel_safe");
+    assert_eq!(first_segment["execution_mode"], "parallel");
+    assert_eq!(first_segment["intent_count"], 2);
     assert!(
-        segments[0]["observed_peak_in_flight"]
+        first_segment["observed_peak_in_flight"]
             .as_u64()
             .expect("parallel segment observed peak should exist")
             >= 1
     );
+    let second_segment_observed_wall_time_ms = second_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("sequential segment wall time should exist");
+    assert_eq!(second_segment["segment_index"], 1);
+    assert_eq!(second_segment["scheduling_class"], "serial_only");
+    assert_eq!(second_segment["execution_mode"], "sequential");
+    assert_eq!(second_segment["intent_count"], 1);
+    assert_eq!(second_segment["observed_peak_in_flight"], 1);
+    let third_segment_observed_wall_time_ms = third_segment["observed_wall_time_ms"]
+        .as_u64()
+        .expect("parallel segment wall time should exist");
+    assert_eq!(third_segment["segment_index"], 2);
+    assert_eq!(third_segment["scheduling_class"], "parallel_safe");
+    assert_eq!(third_segment["execution_mode"], "parallel");
+    assert_eq!(third_segment["intent_count"], 2);
     assert!(
-        segments[0]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("parallel segment wall time should exist")
-            >= 1
-    );
-    assert_eq!(segments[1]["segment_index"], 1);
-    assert_eq!(segments[1]["scheduling_class"], "serial_only");
-    assert_eq!(segments[1]["execution_mode"], "sequential");
-    assert_eq!(segments[1]["intent_count"], 1);
-    assert_eq!(segments[1]["observed_peak_in_flight"], 1);
-    assert!(
-        segments[1]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("sequential segment wall time should exist")
-            >= 1
-    );
-    assert_eq!(segments[2]["segment_index"], 2);
-    assert_eq!(segments[2]["scheduling_class"], "parallel_safe");
-    assert_eq!(segments[2]["execution_mode"], "parallel");
-    assert_eq!(segments[2]["intent_count"], 2);
-    assert!(
-        segments[2]["observed_peak_in_flight"]
+        third_segment["observed_peak_in_flight"]
             .as_u64()
             .expect("parallel segment observed peak should exist")
             >= 1
     );
-    assert!(
-        segments[2]["observed_wall_time_ms"]
-            .as_u64()
-            .expect("parallel segment wall time should exist")
-            >= 1
-    );
+    assert!(observed_wall_time_ms >= first_segment_observed_wall_time_ms);
+    assert!(observed_wall_time_ms >= second_segment_observed_wall_time_ms);
+    assert!(observed_wall_time_ms >= third_segment_observed_wall_time_ms);
 
     let _ = std::fs::remove_file(sqlite_path);
 }
@@ -8193,6 +9401,8 @@ fn provider_hidden_tool_denial_does_not_leak_name() {
             );
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
@@ -8337,6 +9547,8 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
             );
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
@@ -8426,7 +9638,9 @@ async fn turn_engine_routes_app_tools_through_dispatcher() {
         other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => {
+        | other @ TurnResult::ProviderError(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_) => {
             panic!("expected FinalText, got: {other:?}")
         }
     }
@@ -8525,7 +9739,9 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
         other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => {
+        | other @ TurnResult::ProviderError(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_) => {
             panic!("expected FinalText, got: {other:?}")
         }
     }
@@ -8643,6 +9859,8 @@ async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent(
             );
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
@@ -8736,6 +9954,8 @@ async fn turn_engine_fails_closed_before_kernel_binding_error_for_later_core_int
             assert_eq!(failure.reason.as_str(), "no_kernel_context");
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
@@ -8876,7 +10096,9 @@ async fn turn_engine_parallel_safe_app_batch_executes_concurrently_in_source_ord
         other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => {
+        | other @ TurnResult::ProviderError(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_) => {
             panic!("expected FinalText, got: {other:?}")
         }
     }
@@ -8993,6 +10215,8 @@ async fn turn_engine_parallel_safe_app_batch_returns_failure_without_waiting_for
             );
         }
         other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
         | other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ProviderError(_) => {
@@ -9197,7 +10421,9 @@ async fn turn_engine_mixed_batch_parallelizes_parallel_safe_segments_without_cro
         other @ TurnResult::NeedsApproval(_)
         | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
-        | other @ TurnResult::ProviderError(_) => {
+        | other @ TurnResult::ProviderError(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_) => {
             panic!("expected FinalText, got: {other:?}")
         }
     }
@@ -9973,7 +11199,9 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         )
         .await;
     match result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
             let line = text.lines().next().expect("tool result line should exist");
             let payload = line
                 .strip_prefix("[ok] ")
@@ -10062,7 +11290,7 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
             adapter: None,
         },
         allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress]),
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
@@ -10109,7 +11337,9 @@ async fn turn_engine_injects_browser_scope_into_kernel_request() {
         .await;
 
     match result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
             let line = text.lines().next().expect("tool result line should exist");
             let payload = line
                 .strip_prefix("[ok] ")
@@ -10496,6 +11726,92 @@ fn build_kernel_context_with_raw_window_payload(
     (ctx, invocations)
 }
 
+fn build_kernel_context_with_compaction_conflict(
+    audit: Arc<InMemoryAuditSink>,
+) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    let adapter = ConflictOnFirstReplaceMemoryAdapter {
+        invocations: invocations.clone(),
+        state: Mutex::new(ConflictOnFirstReplaceState::default()),
+    };
+    kernel.register_core_memory_adapter(adapter);
+    kernel
+        .set_default_core_memory_adapter("test-memory-conflict-retry")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    (ctx, invocations)
+}
+
+fn build_kernel_context_with_incomplete_compaction_snapshot(
+    audit: Arc<InMemoryAuditSink>,
+    window_turns: Value,
+    turn_count: usize,
+) -> (KernelContext, Arc<Mutex<Vec<MemoryCoreRequest>>>) {
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::MemoryWrite, Capability::MemoryRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+
+    let invocations = Arc::new(Mutex::new(Vec::new()));
+    kernel.register_core_memory_adapter(IncompleteCompactionSnapshotMemoryAdapter {
+        invocations: invocations.clone(),
+        window_turns,
+        turn_count,
+    });
+    kernel
+        .set_default_core_memory_adapter("test-memory-incomplete-compaction-snapshot")
+        .expect("set default memory adapter");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    (ctx, invocations)
+}
+
 #[cfg(feature = "memory-sqlite")]
 fn prepare_discovery_first_summary_test(
     db_scope: &str,
@@ -10535,6 +11851,59 @@ fn discovery_first_window_turns(payloads: &[String]) -> Value {
     )
 }
 
+fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Value {
+    let recent_window: Vec<crate::memory::WindowTurn> = window_turns
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|turn| crate::memory::WindowTurn {
+            role: turn
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant")
+                .to_owned(),
+            content: turn
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            ts: turn.get("ts").and_then(Value::as_i64),
+        })
+        .collect();
+    let entries = recent_window
+        .iter()
+        .map(|turn| crate::memory::MemoryContextEntry {
+            kind: crate::memory::MemoryContextKind::Turn,
+            role: turn.role.clone(),
+            content: turn.content.clone(),
+        })
+        .collect::<Vec<_>>();
+    let envelope = crate::memory::StageEnvelope {
+        hydrated: crate::memory::HydratedMemoryContext {
+            diagnostics: crate::memory::MemoryDiagnostics {
+                system_id: "builtin".to_owned(),
+                fail_open: true,
+                strict_mode_requested: false,
+                strict_mode_active: false,
+                degraded: false,
+                derivation_error: None,
+                retrieval_error: None,
+                recent_window_count: recent_window.len(),
+                entry_count: entries.len(),
+            },
+            entries,
+            recent_window,
+        },
+        retrieval_request: None,
+        diagnostics: vec![
+            crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Derive),
+            crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Retrieve),
+            crate::memory::StageDiagnostics::succeeded(crate::memory::MemoryStageFamily::Rank),
+        ],
+    };
+    crate::memory::encode_stage_envelope_payload(&envelope)
+}
+
 struct SharedTestMemoryAdapter {
     invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
     window_turns: Value,
@@ -10550,7 +11919,9 @@ impl CoreMemoryAdapter for SharedTestMemoryAdapter {
         &self,
         request: MemoryCoreRequest,
     ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
-        let payload = if request.operation == crate::memory::MEMORY_OP_WINDOW {
+        let payload = if request.operation == crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE {
+            staged_memory_envelope_payload_from_window_turns(&self.window_turns)
+        } else if request.operation == crate::memory::MEMORY_OP_WINDOW {
             json!({
                 "turns": self.window_turns.clone()
             })
@@ -10583,7 +11954,13 @@ impl CoreMemoryAdapter for SequencedTestMemoryAdapter {
         &self,
         request: MemoryCoreRequest,
     ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
-        let payload = if request.operation == crate::memory::MEMORY_OP_WINDOW {
+        let payload = if request.operation == crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE {
+            let turns = {
+                let mut queued_turns = self.window_turns.lock().expect("window turns lock");
+                queued_turns.pop_front().unwrap_or_else(|| json!([]))
+            };
+            staged_memory_envelope_payload_from_window_turns(&turns)
+        } else if request.operation == crate::memory::MEMORY_OP_WINDOW {
             let turns = {
                 let mut queued_turns = self.window_turns.lock().expect("window turns lock");
                 queued_turns.pop_front().unwrap_or_else(|| json!([]))
@@ -10624,7 +12001,9 @@ impl CoreMemoryAdapter for FailingWindowMemoryAdapter {
             .lock()
             .expect("invocations lock")
             .push(request.clone());
-        if request.operation == crate::memory::MEMORY_OP_WINDOW {
+        if request.operation == crate::memory::MEMORY_OP_WINDOW
+            || request.operation == crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE
+        {
             return Err(MemoryPlaneError::Execution(self.error.clone()));
         }
         Ok(MemoryCoreOutcome {
@@ -10653,7 +12032,9 @@ impl CoreMemoryAdapter for RawWindowPayloadMemoryAdapter {
             .lock()
             .expect("invocations lock")
             .push(request.clone());
-        if request.operation == crate::memory::MEMORY_OP_WINDOW {
+        if request.operation == crate::memory::MEMORY_OP_WINDOW
+            || request.operation == crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE
+        {
             return Ok(MemoryCoreOutcome {
                 status: "ok".to_owned(),
                 payload: self.payload.clone(),
@@ -10663,6 +12044,165 @@ impl CoreMemoryAdapter for RawWindowPayloadMemoryAdapter {
             status: "ok".to_owned(),
             payload: json!({}),
         })
+    }
+}
+
+struct ConflictOnFirstReplaceState {
+    turn_count: usize,
+    window_turns: Vec<Value>,
+    conflict_emitted: bool,
+}
+
+impl Default for ConflictOnFirstReplaceState {
+    fn default() -> Self {
+        Self {
+            turn_count: 6,
+            window_turns: vec![
+                json!({"role": "user", "content": "ask 1", "ts": 1}),
+                json!({"role": "assistant", "content": "reply 1", "ts": 2}),
+                json!({"role": "user", "content": "ask 2", "ts": 3}),
+                json!({"role": "assistant", "content": "reply 2", "ts": 4}),
+                json!({"role": "user", "content": "recent ask", "ts": 5}),
+                json!({"role": "assistant", "content": "recent reply", "ts": 6}),
+            ],
+            conflict_emitted: false,
+        }
+    }
+}
+
+struct ConflictOnFirstReplaceMemoryAdapter {
+    invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+    state: Mutex<ConflictOnFirstReplaceState>,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for ConflictOnFirstReplaceMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-conflict-retry"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        self.invocations
+            .lock()
+            .expect("invocations lock")
+            .push(request.clone());
+
+        let mut state = self.state.lock().expect("conflict state lock");
+        match request.operation.as_str() {
+            crate::memory::MEMORY_OP_READ_CONTEXT => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"entries": []}),
+            }),
+            crate::memory::MEMORY_OP_WINDOW => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "turns": state.window_turns.clone(),
+                    "turn_count": state.turn_count,
+                }),
+            }),
+            crate::memory::MEMORY_OP_REPLACE_TURNS => {
+                let expected_turn_count = request
+                    .payload
+                    .get("expected_turn_count")
+                    .and_then(Value::as_u64)
+                    .map(|value| value as usize);
+
+                if !state.conflict_emitted {
+                    state.turn_count += 1;
+                    let concurrent_ts = state.turn_count as i64;
+                    state.window_turns.push(json!({
+                        "role": "user",
+                        "content": "concurrent ask",
+                        "ts": concurrent_ts,
+                    }));
+                    state.conflict_emitted = true;
+                    return Ok(MemoryCoreOutcome {
+                        status: "conflict".to_owned(),
+                        payload: json!({
+                            "expected_turn_count": expected_turn_count,
+                            "actual_turn_count": state.turn_count,
+                        }),
+                    });
+                }
+
+                if expected_turn_count != Some(state.turn_count) {
+                    return Ok(MemoryCoreOutcome {
+                        status: "conflict".to_owned(),
+                        payload: json!({
+                            "expected_turn_count": expected_turn_count,
+                            "actual_turn_count": state.turn_count,
+                        }),
+                    });
+                }
+
+                let turns = request
+                    .payload
+                    .get("turns")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                state.turn_count = turns.len();
+                state.window_turns = turns;
+                Ok(MemoryCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "replaced_turns": state.turn_count,
+                    }),
+                })
+            }
+            _ => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            }),
+        }
+    }
+}
+
+struct IncompleteCompactionSnapshotMemoryAdapter {
+    invocations: Arc<Mutex<Vec<MemoryCoreRequest>>>,
+    window_turns: Value,
+    turn_count: usize,
+}
+
+#[async_trait]
+impl CoreMemoryAdapter for IncompleteCompactionSnapshotMemoryAdapter {
+    fn name(&self) -> &str {
+        "test-memory-incomplete-compaction-snapshot"
+    }
+
+    async fn execute_core_memory(
+        &self,
+        request: MemoryCoreRequest,
+    ) -> Result<MemoryCoreOutcome, MemoryPlaneError> {
+        self.invocations
+            .lock()
+            .expect("invocations lock")
+            .push(request.clone());
+
+        match request.operation.as_str() {
+            crate::memory::MEMORY_OP_READ_CONTEXT => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"entries": []}),
+            }),
+            crate::memory::MEMORY_OP_WINDOW => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "turns": self.window_turns.clone(),
+                    "turn_count": self.turn_count,
+                }),
+            }),
+            crate::memory::MEMORY_OP_REPLACE_TURNS => Err(MemoryPlaneError::Execution(
+                "replace_turns should not run when the compaction snapshot is incomplete"
+                    .to_owned(),
+            )),
+            _ => Ok(MemoryCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({}),
+            }),
+        }
     }
 }
 
@@ -10704,7 +12244,7 @@ async fn persist_turn_routes_through_kernel_when_context_provided() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn build_messages_routes_memory_window_through_kernel_when_context_provided() {
+async fn build_messages_routes_memory_context_through_kernel_when_context_provided() {
     let audit = Arc::new(InMemoryAuditSink::default());
     let (ctx, invocations) = build_kernel_context(audit.clone());
     let runtime = DefaultConversationRuntime::default();
@@ -10732,11 +12272,22 @@ async fn build_messages_routes_memory_window_through_kernel_when_context_provide
 
     let captured = invocations.lock().expect("invocations lock");
     assert_eq!(captured.len(), 1);
-    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(
+        captured[0].operation,
+        crate::memory::MEMORY_OP_READ_STAGE_ENVELOPE
+    );
     assert_eq!(captured[0].payload["session_id"], "session-k-window");
     assert_eq!(
-        captured[0].payload["limit"],
+        captured[0].payload["profile"],
+        config.memory.profile.as_str()
+    );
+    assert_eq!(
+        captured[0].payload["sliding_window"],
         json!(config.memory.sliding_window)
+    );
+    assert_eq!(
+        captured[0].payload["summary_max_chars"],
+        json!(config.memory.summary_char_budget())
     );
 
     let events = audit.snapshot();
@@ -12217,6 +13768,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                     json!({"role": "user", "content": "hello"}),
                     json!({"role": "assistant", "content": "assistant-reply"}),
                 ],
+                artifacts: vec![],
                 estimated_tokens: Some(3),
                 system_prompt_addition: None,
             },
@@ -12225,6 +13777,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                     json!({"role": "user", "content": "hello"}),
                     json!({"role": "assistant", "content": "assistant-reply"}),
                 ],
+                artifacts: vec![],
                 estimated_tokens: Some(2),
                 system_prompt_addition: None,
             },
@@ -12338,6 +13891,7 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(1),
             system_prompt_addition: None,
         });
@@ -12450,6 +14004,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -12961,6 +14516,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -13085,6 +14641,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -13291,7 +14848,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
             adapter: None,
         },
         allowed_connectors: BTreeSet::new(),
-        granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress]),
         metadata: BTreeMap::new(),
     };
     kernel.register_pack(pack).expect("register pack");
@@ -13332,7 +14889,9 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         .await;
 
     match result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
             let line = text.lines().next().expect("tool result line should exist");
             let payload = line
                 .strip_prefix("[ok] ")
@@ -13458,6 +15017,66 @@ async fn session_context_preserves_child_runtime_narrowing_after_many_later_even
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
+async fn session_context_merges_persisted_session_policy_runtime_narrowing() {
+    let mut config = test_config();
+    let child_session_id = seed_delegate_child_session_with_runtime_narrowing(
+        &mut config,
+        "session-policy-merge",
+        sample_delegate_runtime_narrowing(),
+    );
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.upsert_session_tool_policy(NewSessionToolPolicyRecord {
+        session_id: child_session_id.clone(),
+        requested_tool_ids: Vec::new(),
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing {
+            browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+                max_sessions: Some(3),
+                ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+                allow_private_hosts: None,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["extra-block.example.com".to_owned()]),
+                timeout_seconds: None,
+                max_bytes: None,
+                max_redirects: None,
+            },
+        },
+    })
+    .expect("upsert child session tool policy");
+
+    let runtime = DefaultConversationRuntime::default();
+    let session_context = runtime
+        .session_context(
+            &config,
+            &child_session_id,
+            ConversationRuntimeBinding::direct(),
+        )
+        .expect("load child session context");
+
+    let runtime_narrowing = session_context
+        .runtime_narrowing
+        .expect("effective runtime narrowing");
+    assert_eq!(runtime_narrowing.browser.max_sessions, Some(1));
+    assert!(runtime_narrowing.web_fetch.enforce_allowed_domains);
+    assert!(
+        runtime_narrowing.web_fetch.allowed_domains.is_empty(),
+        "disjoint allowlists should fail closed"
+    );
+    assert_eq!(
+        runtime_narrowing.web_fetch.blocked_domains,
+        BTreeSet::from([
+            "deny.example.com".to_owned(),
+            "extra-block.example.com".to_owned(),
+        ])
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
 async fn handle_turn_with_runtime_executes_session_tools_via_default_dispatcher() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -13540,7 +15159,9 @@ async fn handle_turn_with_runtime_executes_sessions_send_via_default_dispatcher(
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.messages.enabled = true;
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:telegram-test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:telegram-test-token".to_owned(),
+    ));
     config.telegram.bot_token_env = None;
     config.telegram.base_url = base_url;
     config.telegram.allowed_chat_ids = vec![123];
@@ -15707,8 +17328,20 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
 }
 
 #[cfg(feature = "memory-sqlite")]
-#[tokio::test]
-async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows() {
+#[test]
+fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows() {
+    run_conversation_test_on_large_stack("conversation-delegate-reentry", || {
+        let mut runtime_builder = tokio::runtime::Builder::new_current_thread();
+        runtime_builder.enable_all();
+        let runtime = runtime_builder.build().expect("build tokio runtime");
+        runtime.block_on(
+            handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows_impl(),
+        );
+    });
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allows_impl() {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-delegate", "nested-allowed")
@@ -15987,7 +17620,9 @@ async fn handle_turn_with_runtime_safe_lane_executes_sessions_send_via_default_d
     config.conversation.safe_lane_plan_execution_enabled = true;
     config.tools.messages.enabled = true;
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:telegram-test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:telegram-test-token".to_owned(),
+    ));
     config.telegram.bot_token_env = None;
     config.telegram.base_url = base_url;
     config.telegram.allowed_chat_ids = vec![123];
@@ -16228,6 +17863,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -16346,6 +17982,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -16464,6 +18101,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
                 json!({"role": "user", "content": "hello"}),
                 json!({"role": "assistant", "content": "assistant-reply"}),
             ],
+            artifacts: vec![],
             estimated_tokens: Some(99),
             system_prompt_addition: None,
         });
@@ -17245,6 +18883,1028 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
             .len(),
         1,
         "finalized durable checkpoint must not trigger another compaction"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn compact_window_preserves_recent_turns_and_summarizes_history() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "ask 1".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply 1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "ask 2".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply 2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+
+    assert_eq!(compacted.len(), 3);
+    assert_eq!(compacted[0].role, "user");
+    assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
+    assert_eq!(compacted[1].content, "recent ask");
+    assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_skips_small_histories() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "short".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "reply".into(),
+            ts: Some(2),
+        },
+    ];
+
+    assert!(compact_window(&turns, CompactPolicy::new(2)).is_none());
+}
+
+#[test]
+fn compact_window_skips_recompacting_single_prior_summary() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "Compacted 4 earlier turns\nuser: ask 1".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    assert!(compact_window(&turns, CompactPolicy::new(2)).is_none());
+}
+
+#[test]
+fn compact_window_bounds_summary_content_and_prior_summaries() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let prior_summary = format!("Compacted 9 earlier turns\nuser: {}", "history ".repeat(64));
+    let long_payload = "payload ".repeat(96);
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: prior_summary,
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: long_payload.clone(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: long_payload.clone(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: long_payload.clone(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: long_payload,
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(6),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(7),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("history"));
+    assert!(summary.contains("earlier turns omitted"));
+    assert!(
+        summary.len() < 512,
+        "summary should stay bounded: {}",
+        summary.len()
+    );
+    assert_eq!(compacted[1].content, "recent ask");
+    assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_retains_prior_summary_details_across_repeated_compaction() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let prior_summary = "Compacted 1 earlier turns\nuser: For this test, remember these facts exactly: - codename: NIMBUS-17 - owner: Mina - budget: 47";
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: prior_summary.into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "Add these facts too: - launch month: October - fallback code: RIVER-9".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(6),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("Mina"));
+    assert!(summary.contains("47"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(
+        !summary.contains("[prior compacted summary]"),
+        "repeated compaction should retain prior summary details: {summary}"
+    );
+}
+
+#[test]
+fn compact_window_prioritizes_user_fact_turns_when_summary_budget_is_limited() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "codename: NIMBUS-17 owner: Mina budget: 47".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "launch month: October fallback code: RIVER-9".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-2".into(),
+            ts: Some(4),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "escalation contact: Owen".into(),
+            ts: Some(5),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-3".into(),
+            ts: Some(6),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(7),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(8),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(summary.contains("Owen"));
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn default_context_engine_metadata_advertises_context_compaction() {
+    use super::context_engine::{
+        ContextEngineCapability, ConversationContextEngine, DefaultContextEngine,
+    };
+
+    let engine = DefaultContextEngine;
+    let metadata = engine.metadata();
+
+    assert!(
+        metadata
+            .capabilities
+            .contains(&ContextEngineCapability::KernelMemoryWindowRead)
+    );
+    assert!(
+        metadata
+            .capabilities
+            .contains(&ContextEngineCapability::ContextCompaction)
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_rewrites_persisted_window() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 32;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-default-context-engine-compaction", &memory_config);
+    let session_id = "default-context-engine-compaction";
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "ask 3"),
+        ("assistant", "reply 3"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+
+    assert_eq!(turns.len(), 7);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 2 earlier turns"));
+    assert_eq!(turns[1].content, "ask 2");
+    assert_eq!(turns[2].content, "reply 2");
+    assert_eq!(turns[5].content, "recent ask");
+    assert_eq!(turns[6].content, "recent reply");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_compacts_full_session_but_assembles_within_sliding_window()
+ {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction-clamp");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 4;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-clamp",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-clamp";
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+    assert_eq!(turns.len(), 4);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 3 earlier turns"));
+    assert_eq!(turns[1].content, "reply 2");
+    assert_eq!(turns[2].content, "recent ask");
+    assert_eq!(turns[3].content, "recent reply");
+
+    let messages = engine
+        .assemble_messages(
+            &config,
+            session_id,
+            false,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("assemble messages should preserve summary inside sliding window");
+    assert_eq!(messages.len(), 4);
+    assert!(
+        messages[0]["content"]
+            .as_str()
+            .expect("summary content")
+            .contains("Compacted 3 earlier turns")
+    );
+    assert_eq!(
+        messages[3]["content"]
+            .as_str()
+            .expect("recent reply content"),
+        "recent reply"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_rewrites_from_full_session_snapshot() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path =
+        unique_memory_sqlite_path("default-context-engine-compaction-full-session-snapshot");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 4;
+    config.conversation.compact_preserve_recent_turns = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-full-session-snapshot",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-full-session-snapshot";
+
+    for (role, content) in [
+        ("user", "turn 1"),
+        ("assistant", "turn 2"),
+        ("user", "turn 3"),
+        ("assistant", "turn 4"),
+        ("user", "turn 5"),
+        ("assistant", "turn 6"),
+        ("user", "turn 7"),
+        ("assistant", "turn 8"),
+        ("user", "turn 9"),
+        ("assistant", "turn 10"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+    assert_eq!(turns.len(), 3);
+    assert_eq!(turns[0].role, "user");
+    assert!(turns[0].content.contains("Compacted 8 earlier turns"));
+    assert!(turns[0].content.contains("turn 1"));
+    assert_eq!(turns[1].content, "turn 9");
+    assert_eq!(turns[2].content, "turn 10");
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_summarizes_visible_history_not_checkpoint_noise() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-compaction-visible-history");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-compaction-visible-history",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-compaction-visible-history";
+    let checkpoint_event = crate::memory::build_conversation_event_content(
+        "turn_checkpoint",
+        json!({
+            "stage": "finalized",
+            "checkpoint": {
+                "lane": {
+                    "lane": "safe",
+                    "result_kind": "final_reply",
+                },
+            },
+        }),
+    );
+
+    for (role, content) in [
+        (
+            "user",
+            "For this test, remember these facts exactly:\n- codename: NIMBUS-17\n- owner: Mina\n- budget: 47",
+        ),
+        ("assistant", "ack-1"),
+        ("assistant", checkpoint_event.as_str()),
+        (
+            "user",
+            "Add these facts too:\n- launch month: October\n- fallback code: RIVER-9",
+        ),
+        ("assistant", "ack-2"),
+        ("assistant", checkpoint_event.as_str()),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let messages = engine
+        .assemble_messages(
+            &config,
+            session_id,
+            false,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("assemble messages should preserve visible history");
+    let summary = messages[0]["content"].as_str().expect("summary content");
+
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("Mina"));
+    assert!(summary.contains("47"));
+    assert!(summary.contains("October"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(
+        !summary.contains("turn_checkpoint"),
+        "summary should exclude internal checkpoint payloads: {summary}"
+    );
+    assert!(
+        !summary.contains("conversation_event"),
+        "summary should exclude internal event envelopes: {summary}"
+    );
+    assert_eq!(messages[1]["content"], json!("recent ask"));
+    assert_eq!(messages[2]["content"], json!("recent reply"));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_retries_conflict_and_preserves_concurrent_turn() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) = build_kernel_context_with_compaction_conflict(audit);
+    let mut config = test_config();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 3;
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(
+            &config,
+            "default-context-engine-conflict-retry",
+            &[],
+            &kernel_ctx,
+        )
+        .await
+        .expect("default engine compaction should retry conflict and succeed");
+
+    let captured = invocations.lock().expect("invocations lock").clone();
+    let replace_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_REPLACE_TURNS)
+        .collect::<Vec<_>>();
+    let window_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_WINDOW)
+        .collect::<Vec<_>>();
+
+    assert_eq!(window_requests.len(), 2);
+    for request in &window_requests {
+        assert_eq!(request.payload["allow_extended_limit"], json!(true));
+        assert_eq!(request.payload["limit"], json!(512));
+    }
+    assert_eq!(replace_requests.len(), 2);
+    assert_eq!(replace_requests[0].payload["expected_turn_count"], 6);
+    assert_eq!(replace_requests[1].payload["expected_turn_count"], 7);
+    assert!(
+        replace_requests[1].payload["turns"]
+            .as_array()
+            .expect("replacement turns payload")
+            .iter()
+            .any(|turn| turn["content"] == "concurrent ask"),
+        "retry should preserve the turn appended during the conflict window"
+    );
+    assert!(
+        replace_requests[1].payload["turns"]
+            .as_array()
+            .expect("replacement turns payload")
+            .iter()
+            .any(|turn| turn["content"] == "recent ask"),
+        "retry should preserve the most recent user turn as well as the concurrent append"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_skips_incomplete_extended_snapshot() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let window_turns = json!(
+        (1..=512)
+            .map(|turn| {
+                let role = if turn % 2 == 0 { "assistant" } else { "user" };
+                json!({
+                    "role": role,
+                    "content": format!("turn {turn}"),
+                    "ts": turn,
+                })
+            })
+            .collect::<Vec<_>>()
+    );
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_incomplete_compaction_snapshot(audit, window_turns, 513);
+    let mut config = test_config();
+    config.memory.sliding_window = 32;
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(
+            &config,
+            "default-context-engine-incomplete-compaction-snapshot",
+            &[],
+            &kernel_ctx,
+        )
+        .await
+        .expect("default engine should skip incomplete compaction snapshots");
+
+    let captured = invocations.lock().expect("invocations lock").clone();
+    let window_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_WINDOW)
+        .collect::<Vec<_>>();
+    let replace_requests = captured
+        .iter()
+        .filter(|request| request.operation == crate::memory::MEMORY_OP_REPLACE_TURNS)
+        .collect::<Vec<_>>();
+
+    assert_eq!(window_requests.len(), 1);
+    assert_eq!(
+        window_requests[0].payload["allow_extended_limit"],
+        json!(true)
+    );
+    assert_eq!(window_requests[0].payload["limit"], json!(512));
+    assert!(
+        replace_requests.is_empty(),
+        "compaction should fail closed instead of rewriting from an incomplete snapshot"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_preserves_existing_summarized_history() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-preserve-summary-history");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.conversation.compact_preserve_recent_turns = 1;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-preserve-summary-history",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-preserve-summary-history";
+
+    for (role, content) in [
+        ("user", "turn 1"),
+        ("assistant", "turn 2"),
+        ("user", "turn 3"),
+        ("assistant", "turn 4"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed turns should succeed");
+    }
+
+    let before = crate::provider::build_messages_for_session(&config, session_id, false)
+        .expect("provider history before compaction");
+    assert!(
+        before.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("turn 1"))
+        }),
+        "precondition: summarized history should include the earliest turn"
+    );
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("default engine compaction should succeed");
+
+    let after = crate::provider::build_messages_for_session(&config, session_id, false)
+        .expect("provider history after compaction");
+    assert!(
+        after.iter().any(|message| {
+            message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("turn 1"))
+        }),
+        "compaction should preserve preexisting summarized history"
+    );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+struct DefaultCompactingRuntime {
+    inner: FakeRuntime,
+    context_runtime: DefaultConversationRuntime,
+}
+
+#[cfg(feature = "memory-sqlite")]
+impl DefaultCompactingRuntime {
+    fn new(inner: FakeRuntime) -> Self {
+        Self {
+            inner,
+            context_runtime: DefaultConversationRuntime::default(),
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[async_trait]
+impl ConversationRuntime for DefaultCompactingRuntime {
+    async fn build_messages(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        include_system_prompt: bool,
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<Vec<Value>> {
+        self.context_runtime
+            .build_messages(
+                config,
+                session_id,
+                include_system_prompt,
+                tool_view,
+                binding,
+            )
+            .await
+    }
+
+    async fn request_completion(
+        &self,
+        config: &LoongClawConfig,
+        messages: &[Value],
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<String> {
+        self.inner
+            .request_completion(config, messages, binding)
+            .await
+    }
+
+    async fn request_turn(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn(config, session_id, turn_id, messages, tool_view, binding)
+            .await
+    }
+
+    async fn request_turn_streaming(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        turn_id: &str,
+        messages: &[Value],
+        tool_view: &crate::tools::ToolView,
+        binding: ConversationRuntimeBinding<'_>,
+        on_token: crate::provider::StreamingTokenCallback,
+    ) -> CliResult<ProviderTurn> {
+        self.inner
+            .request_turn_streaming(
+                config, session_id, turn_id, messages, tool_view, binding, on_token,
+            )
+            .await
+    }
+
+    async fn persist_turn(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<()> {
+        self.inner
+            .persist_turn(session_id, role, content, binding)
+            .await
+    }
+
+    async fn after_turn(
+        &self,
+        session_id: &str,
+        user_input: &str,
+        assistant_reply: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.inner
+            .after_turn(
+                session_id,
+                user_input,
+                assistant_reply,
+                messages,
+                kernel_ctx,
+            )
+            .await
+    }
+
+    async fn compact_context(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        messages: &[Value],
+        kernel_ctx: &KernelContext,
+    ) -> CliResult<()> {
+        self.context_runtime
+            .compact_context(config, session_id, messages, kernel_ctx)
+            .await
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_completed_compaction_checkpoint_when_default_context_engine_compacts_history()
+ {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-turn-checkpoint", "default-engine-compaction")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_fail_open = false;
+
+    let session_id = "session-turn-checkpoint-default-engine-compaction";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    for (role, content) in [
+        ("user", "ask 1"),
+        ("assistant", "reply 1"),
+        ("user", "ask 2"),
+        ("assistant", "reply 2"),
+        ("user", "ask 3"),
+        ("assistant", "reply 3"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &mem_config)
+            .expect("seed turn should succeed");
+    }
+
+    let runtime = DefaultCompactingRuntime::new(
+        FakeRuntime::with_turns_and_completions(
+            vec![],
+            vec![Ok(ProviderTurn {
+                assistant_text: "fresh reply".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            })],
+            vec![],
+        )
+        .with_durable_memory_config(mem_config.clone()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-turn-checkpoint-default-engine-compaction",
+        &mem_config,
+    );
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            session_id,
+            "latest ask",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("turn should succeed with durable compaction");
+    assert_eq!(reply, "fresh reply");
+
+    let turns =
+        crate::memory::window_direct(session_id, 32, &mem_config).expect("load compacted turns");
+    let assistant_contents = turns
+        .iter()
+        .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoint_summary = summarize_turn_checkpoint_events(assistant_contents.iter().copied());
+    assert_eq!(checkpoint_summary.checkpoint_events, 2);
+    assert_eq!(
+        checkpoint_summary.latest_stage,
+        Some(TurnCheckpointStage::Finalized)
+    );
+    assert_eq!(
+        checkpoint_summary.latest_compaction,
+        Some(TurnCheckpointProgressStatus::Completed)
+    );
+
+    let prompt_messages = DefaultConversationRuntime::default()
+        .build_messages(
+            &config,
+            session_id,
+            true,
+            &crate::tools::runtime_tool_view_for_config(&config.tools),
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("load prompt history after compaction");
+    assert!(prompt_messages.iter().any(|message| {
+        message["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("Compacted "))
+    }));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_when_compaction_fails()
+{
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-turn-checkpoint", "compaction-failed-open")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.memory.sliding_window = 16;
+    config.conversation.compact_enabled = true;
+    config.conversation.compact_min_messages = Some(1);
+    config.conversation.compact_trigger_estimated_tokens = Some(1);
+    config.conversation.compact_fail_open = true;
+
+    let session_id = "session-turn-checkpoint-compaction-failed-open";
+    let mem_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    crate::memory::append_turn_direct(session_id, "user", "hello", &mem_config)
+        .expect("persist user turn");
+    crate::memory::append_turn_direct(session_id, "assistant", "assistant-reply", &mem_config)
+        .expect("persist assistant turn");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![
+            json!({"role": "system", "content": "sys"}),
+            json!({"role": "user", "content": "hello"}),
+            json!({"role": "assistant", "content": "assistant-reply"}),
+        ],
+        vec![Ok(ProviderTurn {
+            assistant_text: "assistant-reply-2".to_owned(),
+            tool_intents: vec![],
+            raw_meta: Value::Null,
+        })],
+        vec![],
+    )
+    .with_durable_memory_config(mem_config.clone())
+    .with_compact_result(Err("compact failure".to_owned()));
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx =
+        test_kernel_context_with_memory("test-turn-checkpoint-compaction-failed-open", &mem_config);
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            session_id,
+            "hello again",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("fail-open compaction should keep turn successful");
+    assert_eq!(reply, "assistant-reply-2");
+    assert_eq!(runtime.compact_calls.lock().expect("compact lock").len(), 1);
+
+    let turns =
+        crate::memory::window_direct(session_id, 16, &mem_config).expect("load fail-open turns");
+    let assistant_contents = turns
+        .iter()
+        .filter_map(|turn| (turn.role == "assistant").then_some(turn.content.as_str()))
+        .collect::<Vec<_>>();
+    let checkpoint_summary = summarize_turn_checkpoint_events(assistant_contents.iter().copied());
+    assert_eq!(checkpoint_summary.checkpoint_events, 2);
+    assert_eq!(
+        checkpoint_summary.latest_stage,
+        Some(TurnCheckpointStage::Finalized)
+    );
+    assert_eq!(
+        checkpoint_summary.latest_compaction,
+        Some(TurnCheckpointProgressStatus::FailedOpen)
     );
 
     let _ = std::fs::remove_file(&db_path);

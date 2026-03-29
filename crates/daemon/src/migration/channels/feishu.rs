@@ -79,16 +79,8 @@ pub(super) fn apply(
 }
 
 pub(super) fn readiness_state(config: &mvp::config::LoongClawConfig) -> ChannelCredentialState {
-    let app_id_resolved = crate::doctor_cli::resolve_secret_value(
-        config.feishu.app_id.as_deref(),
-        config.feishu.app_id_env.as_deref(),
-    )
-    .is_some();
-    let app_secret_resolved = crate::doctor_cli::resolve_secret_value(
-        config.feishu.app_secret.as_deref(),
-        config.feishu.app_secret_env.as_deref(),
-    )
-    .is_some();
+    let app_id_resolved = config.feishu.app_id().is_some();
+    let app_secret_resolved = config.feishu.app_secret().is_some();
     match (app_id_resolved, app_secret_resolved) {
         (true, true) => ChannelCredentialState::Ready,
         (true, false) | (false, true) => ChannelCredentialState::Partial,
@@ -286,14 +278,8 @@ fn inbound_transport_check(config: &mvp::config::LoongClawConfig) -> (ChannelChe
         );
     }
 
-    let verification_token = crate::doctor_cli::resolve_secret_value(
-        config.feishu.verification_token.as_deref(),
-        config.feishu.verification_token_env.as_deref(),
-    );
-    let encrypt_key = crate::doctor_cli::resolve_secret_value(
-        config.feishu.encrypt_key.as_deref(),
-        config.feishu.encrypt_key_env.as_deref(),
-    );
+    let verification_token = config.feishu.verification_token();
+    let encrypt_key = config.feishu.encrypt_key();
     if verification_token.is_some() || encrypt_key.is_some() {
         (
             ChannelCheckLevel::Pass,

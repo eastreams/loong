@@ -17,10 +17,16 @@ fn unique_temp_dir(label: &str) -> PathBuf {
         .expect("system time before unix epoch")
         .as_nanos();
     let counter = MIGRATION_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    canonical_temp_dir.join(format!(
         "loongclaw-migration-{label}-{}-{nanos}-{counter}",
         std::process::id(),
     ))
+}
+
+fn normalized_path_text(value: &str) -> String {
+    value.replace('\\', "/")
 }
 
 #[test]
@@ -275,9 +281,11 @@ model = "deepseek-chat"
         mvp::config::ProviderKind::Deepseek
     );
     assert_eq!(
-        codex_candidate.config.provider.api_key_env.as_deref(),
-        Some("DEEPSEEK_API_KEY"),
-        "recognized Codex providers should start from their provider baseline so imports keep the correct credential env even without an explicit provider section"
+        codex_candidate.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "DEEPSEEK_API_KEY".to_owned(),
+        }),
+        "recognized Codex providers should start from their provider baseline so imports keep the correct canonical credential binding even without an explicit provider section"
     );
     assert_eq!(
         codex_candidate.config.provider.oauth_access_token_env, None,
@@ -289,7 +297,9 @@ model = "deepseek-chat"
 fn migration_channel_registry_includes_matrix_when_enabled() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.matrix.enabled = true;
-    config.matrix.access_token = Some("matrix-token".to_owned());
+    config.matrix.access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "matrix-token".to_owned(),
+    ));
     config.matrix.base_url = Some("https://matrix.example.org".to_owned());
 
     let checks = loongclaw_daemon::migration::channels::collect_channel_doctor_checks(&config);
@@ -299,9 +309,29 @@ fn migration_channel_registry_includes_matrix_when_enabled() {
 }
 
 #[test]
-fn migration_channel_env_binding_applies_matrix_default() {
+fn migration_channel_registry_includes_wecom_when_enabled() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-bot".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-secret".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_doctor_checks(&config);
+    let names = checks.iter().map(|check| check.name).collect::<Vec<_>>();
+
+    assert_eq!(names, vec!["wecom channel", "wecom aibot long connection"]);
+}
+
+#[test]
+fn migration_channel_env_binding_applies_matrix_and_wecom_defaults() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.matrix.access_token_env = None;
+    config.wecom.bot_id_env = None;
+    config.wecom.secret_env = None;
 
     let fixes =
         loongclaw_daemon::migration::channels::apply_default_channel_env_bindings(&mut config);
@@ -310,10 +340,22 @@ fn migration_channel_env_binding_applies_matrix_default() {
         config.matrix.access_token_env.as_deref(),
         Some("MATRIX_ACCESS_TOKEN")
     );
+    assert_eq!(config.wecom.bot_id_env.as_deref(), Some("WECOM_BOT_ID"));
+    assert_eq!(config.wecom.secret_env.as_deref(), Some("WECOM_SECRET"));
     assert!(
         fixes
             .iter()
             .any(|fix| fix == "set matrix.access_token_env=MATRIX_ACCESS_TOKEN")
+    );
+    assert!(
+        fixes
+            .iter()
+            .any(|fix| fix == "set wecom.bot_id_env=WECOM_BOT_ID")
+    );
+    assert!(
+        fixes
+            .iter()
+            .any(|fix| fix == "set wecom.secret_env=WECOM_SECRET")
     );
 }
 
@@ -352,9 +394,12 @@ model = "openai/gpt-5.1-codex"
         mvp::config::ProviderKind::Openai
     );
     assert_eq!(
-        codex_candidate.config.provider.api_key_env.as_deref(),
-        Some("OPENAI_API_KEY")
+        codex_candidate.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        })
     );
+    assert_eq!(codex_candidate.config.provider.api_key_env, None);
     assert_eq!(
         codex_candidate.config.provider.oauth_access_token_env, None,
         "Codex imports should keep the portable API-key path by default instead of auto-enabling machine-local OAuth envs"
@@ -412,18 +457,21 @@ model = "deepseek-chat"
         })
         .map(|candidate| candidate.source.as_str())
         .collect::<Vec<_>>();
+    let normalized_codex_sources = codex_sources
+        .iter()
+        .map(|source| normalized_path_text(source))
+        .collect::<Vec<_>>();
 
     assert!(
-        codex_sources.contains(&"Codex config at /home/.codex/config.toml")
-            || codex_sources
-                .iter()
-                .any(|source: &&str| source.ends_with("/.codex/config.toml")),
+        normalized_codex_sources
+            .iter()
+            .any(|source| source.ends_with("/.codex/config.toml")),
         "detected candidates should include the base Codex config path: {codex_sources:#?}"
     );
     assert!(
-        codex_sources
+        normalized_codex_sources
             .iter()
-            .any(|source: &&str| source.ends_with(&format!(
+            .any(|source| source.ends_with(&format!(
                 "/.codex/agents/{}/config.toml",
                 mvp::config::CLI_COMMAND_NAME
             ))),
@@ -438,10 +486,14 @@ fn migration_domain_previews_preserve_source_attribution() {
     std::fs::write(workspace_root.join("AGENTS.md"), "# repo guidance\n").expect("write AGENTS");
 
     let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.api_key = Some("provider-secret".to_owned());
+    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "provider-secret".to_owned(),
+    ));
     config.provider.model = "openai/gpt-5.1-codex".to_owned();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     config.cli.system_prompt = "Use the repo rules.".to_owned();
 
     let guidance =
@@ -475,8 +527,13 @@ fn migration_domain_previews_preserve_source_attribution() {
 fn migration_classify_current_setup_distinguishes_basic_states() {
     let home = unique_temp_dir("classify-home");
     std::fs::create_dir_all(&home).expect("create classify home");
-    let _env_guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+    let _env_guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     let missing = unique_temp_dir("missing").join("config.toml");
     assert_eq!(
@@ -486,7 +543,9 @@ fn migration_classify_current_setup_distinguishes_basic_states() {
 
     let healthy_path = unique_temp_dir("healthy").join("config.toml");
     let mut healthy = mvp::config::LoongClawConfig::default();
-    healthy.provider.api_key = Some("provider-secret".to_owned());
+    healthy.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "provider-secret".to_owned(),
+    ));
     healthy.provider.model = "openai/gpt-5.1-codex".to_owned();
     mvp::config::write(
         Some(healthy_path.to_string_lossy().as_ref()),
@@ -582,8 +641,13 @@ fn migration_classify_current_setup_ignores_home_drift_for_default_memory_path()
 
     let path = unique_temp_dir("classify-home-drift").join("config.toml");
     {
-        let _guard =
-            MigrationEnvironmentGuard::set(&[("HOME", Some(home_a.to_string_lossy().as_ref()))]);
+        let _guard = MigrationEnvironmentGuard::set(&[
+            ("HOME", Some(home_a.to_string_lossy().as_ref())),
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_CODEX_OAUTH_TOKEN", None),
+            ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+            ("TELEGRAM_BOT_TOKEN", None),
+        ]);
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Ollama;
@@ -596,8 +660,13 @@ fn migration_classify_current_setup_ignores_home_drift_for_default_memory_path()
             .expect("write legacy-style config under first home");
     }
 
-    let _guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home_b.to_string_lossy().as_ref()))]);
+    let _guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home_b.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     assert_eq!(
         crate::migration::discovery::classify_current_setup(&path),
@@ -684,7 +753,7 @@ fn migration_recommended_plan_supplements_cli_prompt_metadata_and_memory_profile
 fn channel_registry_lists_registered_channel_ids() {
     assert_eq!(
         loongclaw_daemon::migration::channels::registered_channel_ids(),
-        vec!["telegram", "feishu", "matrix"]
+        vec!["telegram", "feishu", "matrix", "wecom"]
     );
 }
 
@@ -733,10 +802,24 @@ fn channel_import_readiness_tracks_channel_states_by_id() {
 fn channel_registry_collects_ready_channel_candidates() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     config.feishu.enabled = true;
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    config.feishu.app_secret = Some("feishu-secret".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "feishu-secret".to_owned(),
+    ));
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-bot".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-secret".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
 
     let previews = loongclaw_daemon::migration::channels::collect_channel_previews(
         &config,
@@ -750,7 +833,7 @@ fn channel_registry_collects_ready_channel_candidates() {
         .map(|preview| preview.candidate.id)
         .collect::<Vec<_>>();
 
-    assert_eq!(ids, vec!["telegram", "feishu"]);
+    assert_eq!(ids, vec!["telegram", "feishu", "wecom"]);
     assert!(
         previews.iter().all(|preview| {
             preview.candidate.status == loongclaw_daemon::migration::types::PreviewStatus::Ready
@@ -763,10 +846,24 @@ fn channel_registry_collects_ready_channel_candidates() {
 fn channel_preview_order_follows_shared_service_channel_catalog_order() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     config.feishu.enabled = true;
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    config.feishu.app_secret = Some("feishu-secret".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "feishu-secret".to_owned(),
+    ));
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-bot".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-secret".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
 
     let previews = loongclaw_daemon::migration::channels::collect_channel_previews(
         &config,
@@ -793,7 +890,9 @@ fn resolve_channel_import_readiness_reports_partial_channel_credentials() {
     let _env = MigrationEnvironmentGuard::set(&[("TELEGRAM_BOT_TOKEN", None)]);
 
     let mut config = mvp::config::LoongClawConfig::default();
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
 
     let readiness =
         loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config(
@@ -815,10 +914,11 @@ fn channel_registry_lists_enabled_channel_ids() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
+    config.wecom.enabled = true;
 
     assert_eq!(
         loongclaw_daemon::migration::channels::registered_enabled_channel_ids(&config),
-        vec!["telegram", "feishu"]
+        vec!["telegram", "feishu", "wecom"]
     );
 }
 
@@ -827,14 +927,19 @@ fn channel_registry_enabled_ids_follow_app_service_channel_catalog() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
+    config.wecom.enabled = true;
 
     assert_eq!(
         config.enabled_service_channel_ids(),
-        vec!["telegram".to_owned(), "feishu".to_owned()]
+        vec![
+            "telegram".to_owned(),
+            "feishu".to_owned(),
+            "wecom".to_owned()
+        ]
     );
     assert_eq!(
         loongclaw_daemon::migration::channels::registered_enabled_channel_ids(&config),
-        vec!["telegram", "feishu"]
+        vec!["telegram", "feishu", "wecom"]
     );
 }
 
@@ -842,11 +947,27 @@ fn channel_registry_enabled_ids_follow_app_service_channel_catalog() {
 fn channel_registry_collects_preflight_checks_for_enabled_channels() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
-    config.telegram.bot_token = Some("123456:test-token".to_owned());
+    config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     config.feishu.enabled = true;
-    config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    config.feishu.app_secret = Some("feishu-secret".to_owned());
-    config.feishu.verification_token = Some("verify-token".to_owned());
+    config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "feishu-secret".to_owned(),
+    ));
+    config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "verify-token".to_owned(),
+    ));
+    config.wecom.enabled = true;
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-bot".to_owned(),
+    ));
+    config.wecom.secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-secret".to_owned(),
+    ));
+    config.wecom.allowed_conversation_ids = vec!["group_demo".to_owned()];
 
     let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
 
@@ -873,6 +994,21 @@ fn channel_registry_collects_preflight_checks_for_enabled_channels() {
         }),
         "registry preflight should include feishu inbound transport readiness: {checks:#?}"
     );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "wecom channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("bot credentials resolved")
+        }),
+        "registry preflight should include wecom credential readiness: {checks:#?}"
+    );
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "wecom aibot long connection"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
+        }),
+        "registry preflight should include wecom long-connection readiness: {checks:#?}"
+    );
 }
 
 #[test]
@@ -880,22 +1016,114 @@ fn channel_registry_collects_serve_actions_for_enabled_channels() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
     config.feishu.enabled = true;
+    config.wecom.enabled = true;
 
     let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
         &config,
         "/tmp/loongclaw-config.toml",
     );
 
-    assert_eq!(actions.len(), 2);
-    assert_eq!(actions[0].label, "telegram");
+    assert_eq!(actions.len(), 3);
+    assert_eq!(actions[0].label, "Telegram");
     assert_eq!(
         actions[0].command,
         "loongclaw telegram-serve --config '/tmp/loongclaw-config.toml'"
     );
-    assert_eq!(actions[1].label, "feishu");
+    assert_eq!(actions[1].label, "Feishu/Lark");
     assert_eq!(
         actions[1].command,
         "loongclaw feishu-serve --config '/tmp/loongclaw-config.toml'"
+    );
+    assert_eq!(actions[2].label, "WeCom");
+    assert_eq!(
+        actions[2].command,
+        "loongclaw wecom-serve --config '/tmp/loongclaw-config.toml'"
+    );
+}
+
+#[test]
+fn channel_registry_apply_selected_channels_merges_wecom_config() {
+    let mut target = mvp::config::LoongClawConfig::default();
+    target.wecom.secret_env = Some("TARGET_WECOM_SECRET".to_owned());
+
+    let mut source = mvp::config::LoongClawConfig::default();
+    source.wecom.enabled = true;
+    source.wecom.default_account = Some("ops".to_owned());
+    source.wecom.bot_id_env = Some("SOURCE_WECOM_BOT_ID".to_owned());
+    source.wecom.secret_env = Some("SOURCE_WECOM_SECRET".to_owned());
+    source.wecom.allowed_conversation_ids = vec!["group_alpha".to_owned()];
+    source.wecom.accounts.insert(
+        "ops".to_owned(),
+        mvp::config::WecomAccountConfig {
+            websocket_url: Some("wss://wecom.example.test".to_owned()),
+            allowed_conversation_ids: Some(vec!["group_ops".to_owned()]),
+            ..Default::default()
+        },
+    );
+
+    let changed = loongclaw_daemon::migration::channels::apply_selected_channels(
+        &mut target,
+        &source,
+        &["wecom"],
+    );
+
+    assert!(changed);
+    assert!(target.wecom.enabled);
+    assert_eq!(target.wecom.default_account.as_deref(), Some("ops"));
+    assert_eq!(
+        target.wecom.bot_id_env.as_deref(),
+        Some("SOURCE_WECOM_BOT_ID")
+    );
+    assert_eq!(
+        target.wecom.secret_env.as_deref(),
+        Some("TARGET_WECOM_SECRET")
+    );
+    assert_eq!(target.wecom.allowed_conversation_ids, vec!["group_alpha"]);
+    assert_eq!(
+        target
+            .wecom
+            .accounts
+            .get("ops")
+            .and_then(|account| account.websocket_url.as_deref()),
+        Some("wss://wecom.example.test")
+    );
+}
+
+#[test]
+fn resolve_channel_import_readiness_reports_partial_wecom_channel_credentials() {
+    let _env = MigrationEnvironmentGuard::set(&[("WECOM_BOT_ID", None), ("WECOM_SECRET", None)]);
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.wecom.bot_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "wecom-bot".to_owned(),
+    ));
+
+    let readiness =
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config(
+            &config,
+        );
+
+    assert_eq!(
+        readiness.state("wecom"),
+        loongclaw_daemon::migration::ChannelCredentialState::Partial
+    );
+}
+
+#[test]
+fn channel_registry_collects_catalog_action_when_no_service_channels_are_enabled() {
+    let config = mvp::config::LoongClawConfig::default();
+
+    let actions = loongclaw_daemon::migration::channels::collect_channel_next_actions(
+        &config,
+        "/tmp/loongclaw-config.toml",
+    );
+
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].id, "channel_catalog");
+    assert_eq!(actions[0].label, "channels");
+    assert_eq!(
+        actions[0].command,
+        "loongclaw channels --config '/tmp/loongclaw-config.toml'"
     );
 }
 
@@ -1300,11 +1528,17 @@ fn migration_compose_recommended_candidate_supplements_channels_without_overwrit
     let _env = MigrationEnvironmentGuard::set(&[("TELEGRAM_BOT_TOKEN", None)]);
 
     let mut existing = mvp::config::LoongClawConfig::default();
-    existing.provider.api_key = Some("openai-secret".to_owned());
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openai-secret".to_owned(),
+    ));
     existing.provider.model = "openai/gpt-5.1-codex".to_owned();
     existing.feishu.enabled = true;
-    existing.feishu.app_id = Some("cli_a1b2c3".to_owned());
-    existing.feishu.app_secret = Some("feishu-secret".to_owned());
+    existing.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+        "cli_a1b2c3".to_owned(),
+    ));
+    existing.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+        "feishu-secret".to_owned(),
+    ));
     let existing_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
         "existing config at ~/.config/loongclaw/config.toml".to_owned(),
@@ -1319,7 +1553,9 @@ fn migration_compose_recommended_candidate_supplements_channels_without_overwrit
     let profile = codex.provider.kind.profile();
     codex.provider.base_url = profile.base_url.to_owned();
     codex.provider.chat_completions_path = profile.chat_completions_path.to_owned();
-    codex.provider.api_key = Some("deepseek-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "deepseek-secret".to_owned(),
+    ));
     codex.provider.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
@@ -1332,7 +1568,9 @@ fn migration_compose_recommended_candidate_supplements_channels_without_overwrit
 
     let mut env = mvp::config::LoongClawConfig::default();
     env.telegram.enabled = true;
-    env.telegram.bot_token = Some("123456:test-token".to_owned());
+    env.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     let env_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment".to_owned(),
@@ -1423,7 +1661,9 @@ fn migration_compose_recommended_candidate_upgrades_incomplete_provider_from_com
     codex.provider.chat_completions_path = codex_profile.chat_completions_path.to_owned();
     codex.provider.model = "kimi-for-coding".to_owned();
     codex.provider.api_key_env = Some("KIMI_CODING_API_KEY".to_owned());
-    codex.provider.api_key = Some("kimi-coding-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "kimi-coding-secret".to_owned(),
+    ));
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml".to_owned(),
@@ -1449,9 +1689,12 @@ fn migration_compose_recommended_candidate_upgrades_incomplete_provider_from_com
         "compatible ready provider should upgrade an incomplete current provider"
     );
     assert_eq!(
-        composed.config.provider.api_key_env.as_deref(),
-        Some("KIMI_CODING_API_KEY")
+        composed.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Inline(
+            "kimi-coding-secret".to_owned(),
+        ))
     );
+    assert_eq!(composed.config.provider.api_key_env, None);
 }
 
 #[test]
@@ -1471,7 +1714,9 @@ fn migration_compose_recommended_candidate_supplements_channel_fields_across_sou
 
     let mut env = mvp::config::LoongClawConfig::default();
     env.telegram.enabled = true;
-    env.telegram.bot_token = Some("123456:test-token".to_owned());
+    env.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     let env_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment".to_owned(),
@@ -1497,8 +1742,8 @@ fn migration_compose_recommended_candidate_supplements_channel_fields_across_sou
         "recommended plan should preserve non-default channel settings from the existing config"
     );
     assert_eq!(
-        composed.config.telegram.bot_token.as_deref(),
-        Some("123456:test-token"),
+        composed.config.telegram.bot_token(),
+        Some("123456:test-token".to_owned()),
         "recommended plan should still fill missing telegram credentials from another source"
     );
 }
@@ -1534,7 +1779,9 @@ fn migration_compose_recommended_candidate_preserves_current_custom_provider_end
     codex.provider.base_url = profile.base_url.to_owned();
     codex.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     codex.provider.model = "openrouter/openai/gpt-5.1".to_owned();
-    codex.provider.api_key = Some("openrouter-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openrouter-secret".to_owned(),
+    ));
     codex.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
@@ -1560,10 +1807,13 @@ fn migration_compose_recommended_candidate_preserves_current_custom_provider_end
         "recommended plan should preserve the current compatible endpoint path when only credentials are supplemented"
     );
     assert_eq!(
-        composed.config.provider.api_key_env.as_deref(),
-        Some("OPENROUTER_API_KEY"),
-        "recommended plan should still upgrade missing credentials from the compatible source"
+        composed.config.provider.api_key,
+        Some(loongclaw_contracts::SecretRef::Inline(
+            "openrouter-secret".to_owned(),
+        )),
+        "recommended plan should still upgrade missing credentials from the compatible source into the canonical api_key field"
     );
+    assert_eq!(composed.config.provider.api_key_env, None);
 }
 
 #[test]
@@ -1591,7 +1841,9 @@ fn migration_compose_recommended_candidate_supplements_provider_wire_api() {
     env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     env.provider.model = "openrouter/openai/gpt-5.1".to_owned();
     env.provider.wire_api = mvp::config::ProviderWireApi::Responses;
-    env.provider.api_key = Some("openrouter-secret".to_owned());
+    env.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openrouter-secret".to_owned(),
+    ));
     env.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
     let env_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::Environment,
@@ -1641,7 +1893,9 @@ fn migration_compose_recommended_candidate_supplements_provider_transport_tuning
     let mut env = mvp::config::LoongClawConfig::default();
     env.provider.kind = mvp::config::ProviderKind::Openrouter;
     env.provider.model = "openrouter/openai/gpt-5.1".to_owned();
-    env.provider.api_key = Some("openrouter-secret".to_owned());
+    env.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openrouter-secret".to_owned(),
+    ));
     env.provider.api_key_env = Some("OPENROUTER_API_KEY".to_owned());
     env.provider.temperature = 0.55;
     env.provider.request_timeout_ms = 45_000;
@@ -1676,7 +1930,9 @@ fn migration_compose_recommended_candidate_avoids_provider_auto_pick_on_cross_so
 
     let mut codex = mvp::config::LoongClawConfig::default();
     codex.provider.model = "openai/gpt-5.1-codex".to_owned();
-    codex.provider.api_key = Some("openai-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openai-secret".to_owned(),
+    ));
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml".to_owned(),
@@ -1692,7 +1948,9 @@ fn migration_compose_recommended_candidate_avoids_provider_auto_pick_on_cross_so
     env.provider.base_url = profile.base_url.to_owned();
     env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     env.provider.model = "deepseek-chat".to_owned();
-    env.provider.api_key = Some("deepseek-secret".to_owned());
+    env.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "deepseek-secret".to_owned(),
+    ));
     let env_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment".to_owned(),
@@ -1720,12 +1978,19 @@ fn migration_compose_recommended_candidate_ignores_home_drift_for_default_memory
     std::fs::create_dir_all(&home_b).expect("create second home");
 
     let (codex, env) = {
-        let _guard =
-            MigrationEnvironmentGuard::set(&[("HOME", Some(home_a.to_string_lossy().as_ref()))]);
+        let _guard = MigrationEnvironmentGuard::set(&[
+            ("HOME", Some(home_a.to_string_lossy().as_ref())),
+            ("OPENAI_API_KEY", None),
+            ("OPENAI_CODEX_OAUTH_TOKEN", None),
+            ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+            ("TELEGRAM_BOT_TOKEN", None),
+        ]);
 
         let mut codex = mvp::config::LoongClawConfig::default();
         codex.provider.model = "openai/gpt-5.1-codex".to_owned();
-        codex.provider.api_key = Some("openai-secret".to_owned());
+        codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "openai-secret".to_owned(),
+        ));
 
         let mut env = mvp::config::LoongClawConfig::default();
         env.provider.kind = mvp::config::ProviderKind::Deepseek;
@@ -1733,12 +1998,19 @@ fn migration_compose_recommended_candidate_ignores_home_drift_for_default_memory
         env.provider.base_url = profile.base_url.to_owned();
         env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
         env.provider.model = "deepseek-chat".to_owned();
-        env.provider.api_key = Some("deepseek-secret".to_owned());
+        env.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "deepseek-secret".to_owned(),
+        ));
         (codex, env)
     };
 
-    let _guard =
-        MigrationEnvironmentGuard::set(&[("HOME", Some(home_b.to_string_lossy().as_ref()))]);
+    let _guard = MigrationEnvironmentGuard::set(&[
+        ("HOME", Some(home_b.to_string_lossy().as_ref())),
+        ("OPENAI_API_KEY", None),
+        ("OPENAI_CODEX_OAUTH_TOKEN", None),
+        ("OPENAI_OAUTH_ACCESS_TOKEN", None),
+        ("TELEGRAM_BOT_TOKEN", None),
+    ]);
 
     let codex_candidate = crate::migration::discovery::build_import_candidate(
         crate::migration::types::ImportSourceKind::CodexConfig,
@@ -1772,9 +2044,13 @@ fn migration_compose_recommended_candidate_keeps_non_provider_domains_when_cross
  {
     let mut codex = mvp::config::LoongClawConfig::default();
     codex.provider.model = "openai/gpt-5.1-codex".to_owned();
-    codex.provider.api_key = Some("openai-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openai-secret".to_owned(),
+    ));
     codex.telegram.enabled = true;
-    codex.telegram.bot_token = Some("123456:test-token".to_owned());
+    codex.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "123456:test-token".to_owned(),
+    ));
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         "Codex config at ~/.codex/config.toml".to_owned(),
@@ -1790,7 +2066,9 @@ fn migration_compose_recommended_candidate_keeps_non_provider_domains_when_cross
     env.provider.base_url = profile.base_url.to_owned();
     env.provider.chat_completions_path = profile.chat_completions_path.to_owned();
     env.provider.model = "deepseek-chat".to_owned();
-    env.provider.api_key = Some("deepseek-secret".to_owned());
+    env.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "deepseek-secret".to_owned(),
+    ));
     let env_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::Environment,
         "your current environment".to_owned(),
@@ -1927,7 +2205,9 @@ fn migration_compose_recommended_candidate_keeps_incomplete_current_provider_whe
     codex.provider.base_url = codex_profile.base_url.to_owned();
     codex.provider.chat_completions_path = codex_profile.chat_completions_path.to_owned();
     codex.provider.model = "deepseek-chat".to_owned();
-    codex.provider.api_key = Some("deepseek-secret".to_owned());
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "deepseek-secret".to_owned(),
+    ));
     codex.provider.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
     let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
         loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,

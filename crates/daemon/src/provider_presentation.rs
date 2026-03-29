@@ -58,10 +58,21 @@ pub fn render_provider_profile_state_lines(
     width: usize,
     single_provider_prefix: Option<&str>,
 ) -> Vec<String> {
+    let display_lines = provider_profile_state_display_lines(config, single_provider_prefix);
+
+    display_lines
+        .into_iter()
+        .flat_map(|line| mvp::presentation::render_wrapped_display_line(&line, width))
+        .collect()
+}
+
+pub fn provider_profile_state_display_lines(
+    config: &mvp::config::LoongClawConfig,
+    single_provider_prefix: Option<&str>,
+) -> Vec<String> {
     render_provider_profile_state_lines_from_parts(
         &active_provider_label(config),
         &saved_provider_profile_ids(config),
-        width,
         single_provider_prefix,
     )
 }
@@ -69,31 +80,20 @@ pub fn render_provider_profile_state_lines(
 pub fn render_provider_profile_state_lines_from_parts(
     active_provider_label: &str,
     saved_provider_profiles: &[String],
-    width: usize,
     single_provider_prefix: Option<&str>,
 ) -> Vec<String> {
     if saved_provider_profiles.len() > 1 {
-        let mut lines = mvp::presentation::render_wrapped_text_line(
-            "- active provider: ",
-            active_provider_label,
-            width,
-        );
-        let profiles = saved_provider_profiles
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>();
-        lines.extend(mvp::presentation::render_wrapped_csv_line(
-            "- saved provider profiles: ",
-            &profiles,
-            width,
+        let mut lines = Vec::new();
+        lines.push(format!("- active provider: {active_provider_label}"));
+        lines.push(format!(
+            "- saved provider profiles: {}",
+            saved_provider_profiles.join(", ")
         ));
         return lines;
     }
 
     single_provider_prefix
-        .map(|prefix| {
-            mvp::presentation::render_wrapped_text_line(prefix, active_provider_label, width)
-        })
+        .map(|prefix| vec![format!("{prefix}{active_provider_label}")])
         .unwrap_or_default()
 }
 

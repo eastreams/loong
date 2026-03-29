@@ -176,16 +176,16 @@ mod tests {
             kind: ProviderKind::Minimax,
             model: "auto".to_owned(),
             preferred_models: vec![
-                "MiniMax-M1".to_owned(),
-                "MiniMax-M1".to_owned(),
-                "MiniMax-Text-01".to_owned(),
+                "MiniMax-M2.5".to_owned(),
+                "MiniMax-M2.5".to_owned(),
+                "MiniMax-M2.7-highspeed".to_owned(),
             ],
             ..ProviderConfig::default()
         };
 
         assert_eq!(
             preferred_model_fallback_candidates(&provider),
-            vec!["MiniMax-M1", "MiniMax-Text-01"],
+            vec!["MiniMax-M2.5", "MiniMax-M2.7-highspeed"],
         );
     }
 
@@ -193,8 +193,11 @@ mod tests {
     fn preferred_model_fallback_candidates_ignore_explicit_model() {
         let provider = ProviderConfig {
             kind: ProviderKind::Minimax,
-            model: "MiniMax-M1".to_owned(),
-            preferred_models: vec!["MiniMax-M1".to_owned(), "MiniMax-Text-01".to_owned()],
+            model: "MiniMax-M2.5".to_owned(),
+            preferred_models: vec![
+                "MiniMax-M2.5".to_owned(),
+                "MiniMax-M2.7-highspeed".to_owned(),
+            ],
             ..ProviderConfig::default()
         };
 

@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use loongclaw_contracts::SecretRef;
+
 pub(super) const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub(super) const DEFAULT_SQLITE_FILE: &str = "memory.sqlite3";
 pub const CLI_COMMAND_NAME: &str = "loongclaw";
@@ -67,6 +69,7 @@ pub(super) enum ConfigValidationCode {
     PercentWrapped,
     SecretLiteral,
     InvalidName,
+    InvalidValue,
     NumericRange,
     DuplicateChannelAccountId,
     UnknownChannelDefaultAccount,
@@ -83,6 +86,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name",
+            ConfigValidationCode::InvalidValue => "config.value.invalid",
             ConfigValidationCode::NumericRange => "config.numeric_range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "config.channel_account.duplicate_id"
@@ -117,6 +121,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::InvalidName => {
                 "urn:loongclaw:problem:config.env_pointer.invalid_name"
             }
+            ConfigValidationCode::InvalidValue => "urn:loongclaw:problem:config.value.invalid",
             ConfigValidationCode::NumericRange => "urn:loongclaw:problem:config.numeric_range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "urn:loongclaw:problem:config.channel_account.duplicate_id"
@@ -143,6 +148,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "config.env_pointer.percent_wrapped.title",
             ConfigValidationCode::SecretLiteral => "config.env_pointer.secret_literal.title",
             ConfigValidationCode::InvalidName => "config.env_pointer.invalid_name.title",
+            ConfigValidationCode::InvalidValue => "config.value.invalid.title",
             ConfigValidationCode::NumericRange => "config.numeric_range.title",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "config.channel_account.duplicate_id.title"
@@ -179,6 +185,7 @@ impl ConfigValidationCode {
             ConfigValidationCode::PercentWrapped => "Percent-Wrapped Env Pointer Notation",
             ConfigValidationCode::SecretLiteral => "Secret Literal Used In Env Pointer",
             ConfigValidationCode::InvalidName => "Invalid Env Pointer Name",
+            ConfigValidationCode::InvalidValue => "Invalid Config Value",
             ConfigValidationCode::NumericRange => "Config Value Out Of Range",
             ConfigValidationCode::DuplicateChannelAccountId => {
                 "Duplicate Normalized Channel Account ID"
@@ -207,6 +214,9 @@ impl ConfigValidationCode {
             ConfigValidationCode::InvalidName => {
                 "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`"
             }
+            ConfigValidationCode::InvalidValue => {
+                "[{code}] {field_path} is invalid: {invalid_reason}. {suggested_fix}"
+            }
             ConfigValidationCode::NumericRange => {
                 "[{code}] {field_path} must be between {min} and {max}; got {actual_value}"
             }
@@ -230,14 +240,14 @@ impl ConfigValidationCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ConfigValidationIssue {
-    pub severity: ConfigValidationSeverity,
-    pub code: ConfigValidationCode,
-    pub field_path: String,
-    pub inline_field_path: String,
-    pub example_env_name: String,
-    pub suggested_env_name: Option<String>,
-    pub extra_message_variables: BTreeMap<String, String>,
+pub(crate) struct ConfigValidationIssue {
+    pub(super) severity: ConfigValidationSeverity,
+    pub(super) code: ConfigValidationCode,
+    pub(super) field_path: String,
+    pub(super) inline_field_path: String,
+    pub(super) example_env_name: String,
+    pub(super) suggested_env_name: Option<String>,
+    pub(super) extra_message_variables: BTreeMap<String, String>,
 }
 
 impl ConfigValidationIssue {
@@ -328,6 +338,7 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
         "config.env_pointer.invalid_name.title",
         "Invalid Env Pointer Name",
     ),
+    ConfigValidationCatalogEntry::new("config.value.invalid.title", "Invalid Config Value"),
     ConfigValidationCatalogEntry::new("config.numeric_range.title", "Config Value Out Of Range"),
     ConfigValidationCatalogEntry::new(
         "config.channel_account.duplicate_id.title",
@@ -364,6 +375,10 @@ const EN_VALIDATION_MESSAGE_CATALOG: &[ConfigValidationCatalogEntry] = &[
     ConfigValidationCatalogEntry::new(
         "config.env_pointer.invalid_name",
         "[{code}] {field_path} is not a valid environment variable name reference. use `{field_path}` with a name like `{example_env_name}`",
+    ),
+    ConfigValidationCatalogEntry::new(
+        "config.value.invalid",
+        "[{code}] {field_path} is invalid: {invalid_reason}. {suggested_fix}",
     ),
     ConfigValidationCatalogEntry::new(
         "config.numeric_range",
@@ -544,6 +559,23 @@ pub(super) fn validate_env_pointer_field(
     Ok(())
 }
 
+pub(super) fn validate_secret_ref_env_pointer_field(
+    field_path: &str,
+    secret_ref: Option<&SecretRef>,
+    hint: EnvPointerValidationHint<'_>,
+) -> Result<(), Box<ConfigValidationIssue>> {
+    let Some(secret_ref) = secret_ref else {
+        return Ok(());
+    };
+
+    let Some(env_name) = secret_ref.explicit_env_name() else {
+        return Ok(());
+    };
+
+    let env_field_path = format!("{field_path}.env");
+    validate_env_pointer_field(env_field_path.as_str(), Some(env_name.as_str()), hint)
+}
+
 pub(super) fn validate_numeric_range(
     field_path: &str,
     actual_value: usize,
@@ -592,6 +624,10 @@ fn looks_like_secret_literal(raw: &str, detect_telegram_token_shape: bool) -> bo
         return true;
     }
 
+    if looks_like_uuid_shaped_secret_literal(trimmed) {
+        return true;
+    }
+
     if looks_like_compatible_env_name(trimmed) {
         return false;
     }
@@ -601,6 +637,22 @@ fn looks_like_secret_literal(raw: &str, detect_telegram_token_shape: bool) -> bo
         && trimmed
             .chars()
             .any(|ch| matches!(ch, '-' | '.' | ':' | '/' | '+'))
+}
+
+fn looks_like_uuid_shaped_secret_literal(raw: &str) -> bool {
+    let mut groups = raw.split('-');
+    let expected_lengths = [8usize, 4, 4, 4, 12];
+
+    for expected_length in expected_lengths {
+        let Some(group) = groups.next() else {
+            return false;
+        };
+        if group.len() != expected_length || !group.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return false;
+        }
+    }
+
+    groups.next().is_none()
 }
 
 fn looks_like_compatible_env_name(raw: &str) -> bool {
@@ -676,81 +728,6 @@ fn normalize_dollar_prefixed_env_name(raw: &str, fallback: &str) -> String {
     trimmed.to_owned()
 }
 
-enum InlineSecretInput<'a> {
-    Literal(&'a str),
-    EnvReference(&'a str),
-}
-
-fn classify_inline_secret_input(raw: &str) -> Option<InlineSecretInput<'_>> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(env_key) = parse_explicit_env_reference(trimmed) {
-        return Some(InlineSecretInput::EnvReference(env_key));
-    }
-    Some(InlineSecretInput::Literal(trimmed))
-}
-
-pub(super) fn parse_explicit_env_reference(raw: &str) -> Option<&str> {
-    parse_dollar_env_reference(raw)
-        .or_else(|| parse_env_prefix_reference(raw))
-        .or_else(|| parse_percent_env_reference(raw))
-}
-
-fn parse_dollar_env_reference(raw: &str) -> Option<&str> {
-    let stripped = raw.trim().strip_prefix('$')?.trim();
-    if stripped.is_empty() {
-        return None;
-    }
-    let candidate = stripped
-        .strip_prefix('{')
-        .and_then(|rest| rest.strip_suffix('}'))
-        .map(str::trim)
-        .unwrap_or(stripped);
-    looks_like_compatible_env_name(candidate).then_some(candidate)
-}
-
-fn parse_env_prefix_reference(raw: &str) -> Option<&str> {
-    if raw.len() < 4 || !raw[..4].eq_ignore_ascii_case("env:") {
-        return None;
-    }
-    let candidate = raw[4..].trim();
-    looks_like_compatible_env_name(candidate).then_some(candidate)
-}
-
-fn parse_percent_env_reference(raw: &str) -> Option<&str> {
-    let candidate = parse_percent_wrapped_env_name(raw)?;
-    looks_like_compatible_env_name(candidate).then_some(candidate)
-}
-
-fn read_non_empty_env_value(key: &str) -> Option<String> {
-    let trimmed_key = key.trim();
-    if trimmed_key.is_empty() {
-        return None;
-    }
-    let value = env::var(trimmed_key).ok()?;
-    let trimmed_value = value.trim();
-    if trimmed_value.is_empty() {
-        return None;
-    }
-    Some(trimmed_value.to_owned())
-}
-
-pub(super) fn read_secret_prefer_inline(
-    inline: Option<&str>,
-    env_key: Option<&str>,
-) -> Option<String> {
-    if let Some(raw) = inline {
-        match classify_inline_secret_input(raw) {
-            Some(InlineSecretInput::Literal(value)) => return Some(value.to_owned()),
-            Some(InlineSecretInput::EnvReference(key)) => return read_non_empty_env_value(key),
-            None => {}
-        }
-    }
-    env_key.and_then(read_non_empty_env_value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -804,6 +781,14 @@ mod tests {
             parse_env_assignment("set OPENAI_API_KEY=sk-value"),
             Some(("OPENAI_API_KEY", "sk-value"))
         );
+    }
+
+    #[test]
+    fn uuid_shaped_values_are_treated_as_secret_literals() {
+        assert!(looks_like_secret_literal(
+            "9f479837-0a12-4b56-89ab-cdef01234567",
+            false
+        ));
     }
 
     #[test]

@@ -1333,6 +1333,7 @@ fn memory_context_shape(entries: &[MemoryContextEntry]) -> MemoryContextShape {
                 summary_chars = summary_chars.saturating_add(entry.content.len());
             }
             MemoryContextKind::Profile => {}
+            MemoryContextKind::RetrievedMemory => {}
         }
     }
 
@@ -1477,4 +1478,41 @@ fn benchmark_temp_root(prefix: &str, parent: Option<&Path>) -> PathBuf {
         std::process::id(),
         next_benchmark_temp_suffix()
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_context_shape_excludes_retrieved_memory_from_summary_counts() {
+        let retrieved_entry = MemoryContextEntry {
+            kind: MemoryContextKind::RetrievedMemory,
+            role: "system".to_owned(),
+            content: "durable recall".to_owned(),
+        };
+        let summary_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Summary,
+            role: "system".to_owned(),
+            content: "summary block".to_owned(),
+        };
+        let turn_entry = MemoryContextEntry {
+            kind: MemoryContextKind::Turn,
+            role: "user".to_owned(),
+            content: "hello".to_owned(),
+        };
+        let entries = vec![retrieved_entry, summary_entry, turn_entry];
+        let retrieved_payload_chars = "system".len() + "durable recall".len();
+        let summary_payload_chars = "system".len() + "summary block".len();
+        let turn_payload_chars = "user".len() + "hello".len();
+        let expected_payload_chars =
+            retrieved_payload_chars + summary_payload_chars + turn_payload_chars;
+
+        let shape = memory_context_shape(entries.as_slice());
+
+        assert_eq!(shape.entry_count, 3);
+        assert_eq!(shape.turn_entries, 1);
+        assert_eq!(shape.summary_chars, "summary block".len());
+        assert_eq!(shape.payload_chars, expected_payload_chars);
+    }
 }

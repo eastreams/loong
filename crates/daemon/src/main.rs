@@ -46,8 +46,13 @@ async fn main() {
             invoke_connector_cli(&operation, &payload).await
         }
         Commands::AuditDemo => run_audit_demo().await,
-        Commands::InitSpec { output } => init_spec_cli(&output),
-        Commands::RunSpec { spec, print_audit } => run_spec_cli(&spec, print_audit).await,
+        Commands::InitSpec { output, preset } => init_spec_cli(&output, preset),
+        Commands::RunSpec {
+            spec,
+            print_audit,
+            render_summary,
+            bridge_support,
+        } => run_spec_cli(&spec, print_audit, render_summary, &bridge_support).await,
         Commands::BenchmarkProgrammaticPressure {
             matrix,
             baseline,
@@ -143,6 +148,8 @@ async fn main() {
             provider,
             model,
             api_key_env,
+            web_search_provider,
+            web_search_api_key_env,
             personality,
             memory_profile,
             system_prompt,
@@ -156,6 +163,8 @@ async fn main() {
                 provider,
                 model,
                 api_key_env,
+                web_search_provider,
+                web_search_api_key_env,
                 personality,
                 memory_profile,
                 system_prompt,
@@ -244,6 +253,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Plugins { json, command } => {
+            plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
+        }
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::RuntimeSnapshot {
@@ -395,7 +407,7 @@ async fn main() {
                 ChannelSendCliArgs {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
-                    target: &target,
+                    target: Some(target.as_str()),
                     target_kind,
                     text: &text,
                     as_card: false,
@@ -491,7 +503,7 @@ async fn main() {
                 ChannelSendCliArgs {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
-                    target: &target,
+                    target: Some(target.as_str()),
                     target_kind,
                     text: &text,
                     as_card: false,
@@ -516,6 +528,404 @@ async fn main() {
             )
             .await
         }
+        Commands::WecomSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                WECOM_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WecomServe { config, account } => {
+            run_channel_serve_cli(
+                WECOM_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: None,
+                    path_override: None,
+                },
+            )
+            .await
+        }
+        Commands::DiscordSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                DISCORD_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::DingtalkSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                DINGTALK_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::SlackSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                SLACK_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::LineSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                LINE_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WhatsappSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                WHATSAPP_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::EmailSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                EMAIL_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::WebhookSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                WEBHOOK_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::GoogleChatSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                GOOGLE_CHAT_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::TeamsSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TEAMS_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::TlonSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TLON_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::SignalSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                SIGNAL_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::TwitchSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TWITCH_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::MattermostSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                MATTERMOST_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::NextcloudTalkSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                NEXTCLOUD_TALK_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::SynologyChatSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                SYNOLOGY_CHAT_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::IrcSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                IRC_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::ImessageSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                IMESSAGE_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::NostrSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                NOSTR_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::MultiChannelServe {
+            config,
+            session,
+            channel_account,
+        } => run_multi_channel_serve_cli(config.as_deref(), &session, channel_account).await,
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
         Commands::Web { command } => web_cli::run_web_command(command).await,
         Commands::Completions { shell } => {

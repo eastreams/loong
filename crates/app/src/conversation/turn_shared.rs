@@ -20,7 +20,68 @@ pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rou
 const FILE_READ_FOLLOWUP_CONTENT_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_PREVIEW_CHARS: usize = 384;
 const SHELL_FOLLOWUP_STDIO_OMISSION_MARKER: &str = "\n[... omitted ...]\n";
+const THINK_OPEN_TAG: &str = "<think>";
+const THINK_CLOSE_TAG: &str = "</think>";
 
+/// Strips <think>...</think> tags from model response text to prevent
+/// internal reasoning chains from leaking to user-facing output.
+/// This handles both standard think tags and case-insensitive variants.
+fn strip_think_tags(text: &str) -> String {
+    let mut cleaned_text = String::with_capacity(text.len());
+    let mut cursor = 0;
+    let mut think_depth = 0usize;
+
+    while cursor < text.len() {
+        let remaining_text = &text[cursor..];
+        let open_tag_length = think_tag_prefix_len(remaining_text, THINK_OPEN_TAG);
+
+        if let Some(tag_length) = open_tag_length {
+            think_depth = think_depth.saturating_add(1);
+            cursor += tag_length;
+            continue;
+        }
+
+        let close_tag_length = think_tag_prefix_len(remaining_text, THINK_CLOSE_TAG);
+
+        if let Some(tag_length) = close_tag_length {
+            think_depth = think_depth.saturating_sub(1);
+            cursor += tag_length;
+            continue;
+        }
+
+        let mut remaining_chars = remaining_text.chars();
+        let Some(current_char) = remaining_chars.next() else {
+            break;
+        };
+        let current_char_length = current_char.len_utf8();
+
+        if think_depth == 0 {
+            cleaned_text.push(current_char);
+        }
+
+        cursor += current_char_length;
+    }
+
+    cleaned_text
+}
+
+fn think_tag_prefix_len(input: &str, tag: &str) -> Option<usize> {
+    let tag_length = tag.len();
+    let input_prefix = input.get(..tag_length)?;
+    let matches_tag = input_prefix.eq_ignore_ascii_case(tag);
+
+    if !matches_tag {
+        return None;
+    }
+
+    Some(tag_length)
+}
+
+fn sanitize_reply_text(text: &str) -> String {
+    let stripped_text = strip_think_tags(text);
+    let trimmed_text = stripped_text.trim();
+    trimmed_text.to_owned()
+}
 pub fn next_conversation_turn_id() -> String {
     static NEXT_CONVERSATION_TURN_SEQ: AtomicU64 = AtomicU64::new(1);
     let seq = NEXT_CONVERSATION_TURN_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -81,8 +142,13 @@ pub fn tool_driven_followup_payload(
     }
 
     match turn_result {
-        TurnResult::FinalText(text) => {
-            Some(ToolDrivenFollowupPayload::ToolResult { text: text.clone() })
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let sanitized_text = sanitize_reply_text(text);
+            Some(ToolDrivenFollowupPayload::ToolResult {
+                text: sanitized_text,
+            })
         }
         TurnResult::NeedsApproval(_) => None,
         TurnResult::ToolDenied(failure) | TurnResult::ToolError(failure) => {
@@ -240,10 +306,14 @@ impl<'a> ToolDrivenReplyKernel<'a> {
             return None;
         }
         match self.turn_result {
-            TurnResult::FinalText(text) => Some(join_non_empty_lines(&[
-                self.assistant_preface,
-                text.as_str(),
-            ])),
+            TurnResult::FinalText(text)
+            | TurnResult::StreamingText(text)
+            | TurnResult::StreamingDone(text) => {
+                let sanitized_text = sanitize_reply_text(text);
+                let reply =
+                    join_non_empty_lines(&[self.assistant_preface, sanitized_text.as_str()]);
+                Some(reply)
+            }
             TurnResult::NeedsApproval(requirement) => Some(format_approval_required_reply(
                 self.assistant_preface,
                 requirement,
@@ -300,11 +370,14 @@ pub fn compose_assistant_reply(
     turn_result: TurnResult,
 ) -> String {
     match turn_result {
-        TurnResult::FinalText(text) => {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let sanitized_text = sanitize_reply_text(text.as_str());
             if had_tool_intents {
-                join_non_empty_lines(&[assistant_preface, text.as_str()])
+                join_non_empty_lines(&[assistant_preface, sanitized_text.as_str()])
             } else {
-                text
+                sanitized_text
             }
         }
         TurnResult::NeedsApproval(requirement) => {
@@ -857,14 +930,14 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
 ) -> String {
     match runtime.request_completion(config, messages, binding).await {
         Ok(final_reply) => {
-            let trimmed = final_reply.trim();
-            if trimmed.is_empty() {
-                raw_reply.to_owned()
+            let sanitized_reply = sanitize_reply_text(final_reply.as_str());
+            if sanitized_reply.is_empty() {
+                sanitize_reply_text(raw_reply)
             } else {
-                trimmed.to_owned()
+                sanitized_reply
             }
         }
-        Err(_) => raw_reply.to_owned(),
+        Err(_) => sanitize_reply_text(raw_reply),
     }
 }
 
@@ -1042,6 +1115,17 @@ mod tests {
     }
 
     #[test]
+    fn compose_assistant_reply_strips_think_tags_from_final_text() {
+        let reply = compose_assistant_reply(
+            "preface",
+            false,
+            TurnResult::FinalText("<think>internal reasoning</think>visible reply".to_owned()),
+        );
+
+        assert_eq!(reply, "visible reply");
+    }
+
+    #[test]
     fn tool_driven_reply_kernel_extracts_raw_reply_and_result_followup() {
         let result = TurnResult::FinalText("tool output".to_owned());
         let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
@@ -1053,6 +1137,19 @@ mod tests {
             Some(ToolDrivenFollowupPayload::ToolResult {
                 text: "tool output".to_owned(),
             })
+        );
+    }
+
+    #[test]
+    fn tool_driven_reply_kernel_strips_think_tags_from_raw_reply() {
+        let result = TurnResult::FinalText(
+            "<think>internal reasoning</think>visible tool output".to_owned(),
+        );
+        let kernel = ToolDrivenReplyKernel::new("preface", true, &result);
+
+        assert_eq!(
+            kernel.raw_reply(),
+            Some("preface\nvisible tool output".to_owned())
         );
     }
 
@@ -1100,6 +1197,20 @@ mod tests {
 
         assert_eq!(payload.kind(), ToolDrivenFollowupKind::ToolResult);
         assert_eq!(payload.message_context(), ("tool_result", "tool output"));
+    }
+
+    #[test]
+    fn tool_driven_followup_payload_strips_think_tags_from_tool_result_text() {
+        let turn_result = TurnResult::FinalText(
+            "<think>internal reasoning</think>visible tool output".to_owned(),
+        );
+
+        assert_eq!(
+            tool_driven_followup_payload(true, &turn_result),
+            Some(ToolDrivenFollowupPayload::ToolResult {
+                text: "visible tool output".to_owned(),
+            })
+        );
     }
 
     #[test]
@@ -1959,5 +2070,54 @@ mod tests {
 
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
+    }
+
+    #[test]
+    fn strip_think_tags_removes_think_content() {
+        let input = "<think>Let me think about this...\nThe user wants to know the weather.\nI should check the forecast.</think>The weather today is sunny.";
+        let expected = "The weather today is sunny.";
+        assert_eq!(strip_think_tags(input), expected);
+    }
+
+    #[test]
+    fn strip_think_tags_handles_empty_tags() {
+        let input = "Hello <think></think>world";
+        assert_eq!(strip_think_tags(input), "Hello world");
+    }
+
+    #[test]
+    fn strip_think_tags_handles_multiple_tags() {
+        let input = "<think>First thought</think>Middle<think>Second thought</think>End";
+        assert_eq!(strip_think_tags(input), "MiddleEnd");
+    }
+
+    #[test]
+    fn strip_think_tags_handles_nested_content() {
+        let input = "<think>Think content with <tag> inside</think>Real response";
+        assert_eq!(strip_think_tags(input), "Real response");
+    }
+
+    #[test]
+    fn strip_think_tags_handles_nested_think_tags() {
+        let input = "<think>outer<think>inner</think>visible</think>done";
+        assert_eq!(strip_think_tags(input), "done");
+    }
+
+    #[test]
+    fn strip_think_tags_case_insensitive() {
+        let input = "<ThInK>think content</tHiNk>Result";
+        assert_eq!(strip_think_tags(input), "Result");
+    }
+
+    #[test]
+    fn strip_think_tags_drops_unterminated_opening_tag() {
+        let input = "Answer<think>internal reasoning";
+        assert_eq!(strip_think_tags(input), "Answer");
+    }
+
+    #[test]
+    fn strip_think_tags_drops_stray_closing_tag() {
+        let input = "Answer</think>";
+        assert_eq!(strip_think_tags(input), "Answer");
     }
 }

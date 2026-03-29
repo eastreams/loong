@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::runtime_self_continuity::RuntimeSelfContinuity;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +41,8 @@ pub struct ConstrainedSubagentSpawnEventPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     pub execution: ConstrainedSubagentExecution,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_self_continuity: Option<RuntimeSelfContinuity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,10 +58,20 @@ pub struct ConstrainedSubagentTerminalEventPayload {
 
 impl ConstrainedSubagentExecution {
     pub fn spawn_payload(&self, task: &str, label: Option<&str>) -> Value {
+        self.spawn_payload_with_runtime_self_continuity(task, label, None)
+    }
+
+    pub(crate) fn spawn_payload_with_runtime_self_continuity(
+        &self,
+        task: &str,
+        label: Option<&str>,
+        runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+    ) -> Value {
         json!(ConstrainedSubagentSpawnEventPayload {
             task: task.to_owned(),
             label: label.map(ToOwned::to_owned),
             execution: self.clone(),
+            runtime_self_continuity: runtime_self_continuity.cloned(),
         })
     }
 
@@ -87,6 +100,9 @@ impl ConstrainedSubagentExecution {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_identity::{ResolvedRuntimeIdentity, RuntimeIdentitySource};
+    use crate::runtime_self::RuntimeSelfModel;
+    use crate::runtime_self_continuity::RuntimeSelfContinuity;
 
     #[test]
     fn constrained_subagent_execution_round_trips_event_payload() {
@@ -111,6 +127,57 @@ mod tests {
         assert_eq!(
             ConstrainedSubagentExecution::from_event_payload(&payload),
             Some(execution)
+        );
+    }
+
+    #[test]
+    fn constrained_subagent_execution_preserves_runtime_self_continuity_in_spawn_payload() {
+        let execution = ConstrainedSubagentExecution {
+            mode: ConstrainedSubagentMode::Inline,
+            depth: 1,
+            max_depth: 2,
+            active_children: 0,
+            max_active_children: 2,
+            timeout_seconds: 30,
+            allow_shell_in_child: false,
+            child_tool_allowlist: vec!["web.fetch".to_owned()],
+            runtime_narrowing: ToolRuntimeNarrowing::default(),
+            kernel_bound: false,
+        };
+        let continuity = RuntimeSelfContinuity {
+            runtime_self: RuntimeSelfModel {
+                standing_instructions: vec!["Keep continuity explicit.".to_owned()],
+                tool_usage_policy: vec!["Search memory before guessing workspace facts.".to_owned()],
+                soul_guidance: vec!["Prefer rigorous execution.".to_owned()],
+                identity_context: vec!["# Identity\n- Name: Child".to_owned()],
+                user_context: vec!["User prefers concise output.".to_owned()],
+            },
+            resolved_identity: Some(ResolvedRuntimeIdentity {
+                source: RuntimeIdentitySource::WorkspaceSelf,
+                content: "# Identity\n- Name: Child".to_owned(),
+            }),
+            session_profile_projection: Some(
+                "## Session Profile\nDurable preferences and advisory session context carried into this session:\nUser prefers concise output.".to_owned(),
+            ),
+        };
+
+        let payload = execution.spawn_payload_with_runtime_self_continuity(
+            "research",
+            Some("child"),
+            Some(&continuity),
+        );
+
+        assert_eq!(
+            payload["runtime_self_continuity"]["resolved_identity"]["content"],
+            continuity
+                .resolved_identity
+                .as_ref()
+                .expect("resolved identity")
+                .content
+        );
+        assert_eq!(
+            payload["runtime_self_continuity"]["runtime_self"]["tool_usage_policy"][0],
+            "Search memory before guessing workspace facts."
         );
     }
 }

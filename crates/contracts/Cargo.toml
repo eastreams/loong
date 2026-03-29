@@ -10,6 +10,10 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 thiserror.workspace = true
+zeroize = "1.8"
+
+[dev-dependencies]
+toml.workspace = true
 
 [lints]
 workspace = true

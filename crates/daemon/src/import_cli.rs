@@ -253,7 +253,13 @@ fn candidate_matches_source_path(
     requested_source_path: &Path,
 ) -> bool {
     crate::source_presentation::source_path(Some(candidate.source_kind), &candidate.source)
-        .is_some_and(|candidate_path| candidate_path == requested_source_path)
+        .is_some_and(|candidate_path| {
+            let resolved_candidate_path =
+                dunce::canonicalize(&candidate_path).unwrap_or(candidate_path);
+            let resolved_requested_path = dunce::canonicalize(requested_source_path)
+                .unwrap_or_else(|_| requested_source_path.to_path_buf());
+            resolved_candidate_path == resolved_requested_path
+        })
 }
 
 pub fn render_import_preview_lines_for_width(
@@ -566,11 +572,7 @@ pub fn render_import_preview_json(candidates: &[ImportCandidate]) -> CliResult<S
 }
 
 fn detect_render_width() -> usize {
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|value| value.trim().parse::<usize>().ok())
-        .filter(|width| *width > 0)
-        .unwrap_or(80)
+    mvp::presentation::detect_render_width()
 }
 
 pub fn select_apply_candidate_index(candidates: &[ImportCandidate]) -> CliResult<usize> {

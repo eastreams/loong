@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -29,6 +30,42 @@ impl ToolSchedulingClass {
         match self {
             Self::SerialOnly => "serial_only",
             Self::ParallelSafe => "parallel_safe",
+        }
+    }
+}
+
+/// Semantic action families for the autonomy-policy kernel.
+///
+/// This taxonomy intentionally tracks policy-relevant boundary crossings
+/// instead of modeling every possible side effect as its own class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityActionClass {
+    Discover,
+    // Ordinary already-visible execution stays in this bucket unless it crosses
+    // a policy boundary such as acquisition, switching, or topology mutation.
+    ExecuteExisting,
+    CapabilityFetch,
+    CapabilityInstall,
+    CapabilityLoad,
+    RuntimeSwitch,
+    TopologyExpand,
+    PolicyMutation,
+    SessionMutation,
+}
+
+impl CapabilityActionClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Discover => "discover",
+            Self::ExecuteExisting => "execute_existing",
+            Self::CapabilityFetch => "capability_fetch",
+            Self::CapabilityInstall => "capability_install",
+            Self::CapabilityLoad => "capability_load",
+            Self::RuntimeSwitch => "runtime_switch",
+            Self::TopologyExpand => "topology_expand",
+            Self::PolicyMutation => "policy_mutation",
+            Self::SessionMutation => "session_mutation",
         }
     }
 }
@@ -87,44 +124,86 @@ pub struct ToolGovernanceProfile {
     pub approval_mode: ToolApprovalMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass,
+    governance_profile: ToolGovernanceProfile,
+}
+
+const ROUTINE_LOW_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::Low,
+    approval_mode: ToolApprovalMode::Never,
+};
+
+const ROUTINE_ELEVATED_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::Elevated,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const ROUTINE_HIGH_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::Routine,
+    risk_class: ToolRiskClass::High,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const FAIL_CLOSED_GOVERNANCE_PROFILE: ToolGovernanceProfile = ROUTINE_HIGH_GOVERNANCE_PROFILE;
+
+const TOPOLOGY_MUTATION_GOVERNANCE_PROFILE: ToolGovernanceProfile = ToolGovernanceProfile {
+    scope: ToolGovernanceScope::TopologyMutation,
+    risk_class: ToolRiskClass::High,
+    approval_mode: ToolApprovalMode::PolicyDriven,
+};
+
+const DEFAULT_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_LOW_GOVERNANCE_PROFILE,
+};
+
+const PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::ParallelSafe,
+    governance_profile: ROUTINE_LOW_GOVERNANCE_PROFILE,
+};
+
+const ELEVATED_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_ELEVATED_GOVERNANCE_PROFILE,
+};
+
+const HIGH_RISK_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: ROUTINE_HIGH_GOVERNANCE_PROFILE,
+};
+
+const TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR: ToolPolicyDescriptor = ToolPolicyDescriptor {
+    scheduling_class: ToolSchedulingClass::SerialOnly,
+    governance_profile: TOPOLOGY_MUTATION_GOVERNANCE_PROFILE,
+};
+
 pub fn governance_profile_for_tool_name(tool_name: &str) -> ToolGovernanceProfile {
-    match tool_name {
-        "delegate" | "delegate_async" => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::TopologyMutation,
-            risk_class: ToolRiskClass::High,
-            approval_mode: ToolApprovalMode::PolicyDriven,
-        },
-        "browser.companion.click" | "browser.companion.type" => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::Routine,
-            risk_class: ToolRiskClass::High,
-            approval_mode: ToolApprovalMode::PolicyDriven,
-        },
-        "session_archive" | "session_cancel" | "session_recover" | "sessions_send" => {
-            ToolGovernanceProfile {
-                scope: ToolGovernanceScope::Routine,
-                risk_class: ToolRiskClass::Elevated,
-                approval_mode: ToolApprovalMode::PolicyDriven,
-            }
-        }
-        _ => ToolGovernanceProfile {
-            scope: ToolGovernanceScope::Routine,
-            risk_class: ToolRiskClass::Low,
-            approval_mode: ToolApprovalMode::Never,
-        },
-    }
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(tool_name);
+    let Some(descriptor) = descriptor else {
+        return FAIL_CLOSED_GOVERNANCE_PROFILE;
+    };
+    descriptor.governance_profile()
 }
 
 pub fn governance_profile_for_descriptor(descriptor: &ToolDescriptor) -> ToolGovernanceProfile {
-    governance_profile_for_tool_name(descriptor.name)
+    descriptor.governance_profile()
 }
 
-pub fn scheduling_class_for_tool_name(tool_name: &str) -> ToolSchedulingClass {
-    match tool_name {
-        "tool.search" | "file.read" | "web.fetch" | "web.search" | "sessions_list" => {
-            ToolSchedulingClass::ParallelSafe
-        }
-        _ => ToolSchedulingClass::SerialOnly,
-    }
+pub fn capability_action_class_for_tool_name(tool_name: &str) -> Option<CapabilityActionClass> {
+    let catalog = tool_catalog();
+    let descriptor = catalog.resolve(tool_name)?;
+    Some(descriptor.capability_action_class())
+}
+
+pub fn capability_action_class_for_descriptor(
+    descriptor: &ToolDescriptor,
+) -> CapabilityActionClass {
+    descriptor.capability_action_class()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -137,11 +216,13 @@ pub enum ToolExposureClass {
 pub enum ToolVisibilityGate {
     Always,
     Sessions,
+    SessionMutation,
     Messages,
     Delegate,
     Browser,
     BrowserCompanion,
     ExternalSkills,
+    MemoryFileRoot,
     WebFetch,
     WebSearch,
 }
@@ -156,6 +237,8 @@ pub struct ToolDescriptor {
     pub availability: ToolAvailability,
     pub exposure: ToolExposureClass,
     pub visibility_gate: ToolVisibilityGate,
+    capability_action_class: CapabilityActionClass,
+    policy: ToolPolicyDescriptor,
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
@@ -192,8 +275,16 @@ impl ToolDescriptor {
         self.exposure == ToolExposureClass::Discoverable
     }
 
+    pub fn capability_action_class(&self) -> CapabilityActionClass {
+        self.capability_action_class
+    }
+
     pub fn scheduling_class(&self) -> ToolSchedulingClass {
-        scheduling_class_for_tool_name(self.name)
+        self.policy.scheduling_class
+    }
+
+    pub fn governance_profile(&self) -> ToolGovernanceProfile {
+        self.policy.governance_profile
     }
 }
 
@@ -209,6 +300,7 @@ pub struct ToolCatalogEntry {
     pub exposure: ToolExposureClass,
     pub execution_kind: ToolExecutionKind,
     pub availability: ToolAvailability,
+    pub capability_action_class: CapabilityActionClass,
     pub scheduling_class: ToolSchedulingClass,
 }
 
@@ -328,7 +420,7 @@ impl ToolCatalog {
     }
 }
 
-pub fn tool_catalog() -> ToolCatalog {
+fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
         ToolDescriptor {
             name: "tool.search",
@@ -339,6 +431,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: tool_search_definition,
         },
         ToolDescriptor {
@@ -350,6 +444,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
@@ -361,6 +457,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: claw_migrate_definition,
         },
         ToolDescriptor {
@@ -372,6 +470,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::CapabilityFetch,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -383,6 +483,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_inspect_definition,
         },
         ToolDescriptor {
@@ -394,6 +496,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::CapabilityInstall,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -405,6 +509,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::CapabilityLoad,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -416,6 +522,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_list_definition,
         },
         ToolDescriptor {
@@ -427,6 +535,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_policy_definition,
         },
         ToolDescriptor {
@@ -438,6 +548,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -449,6 +561,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::RuntimeSwitch,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -460,6 +574,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_resolve_definition,
         },
         ToolDescriptor {
@@ -471,6 +587,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_status_definition,
         },
         ToolDescriptor {
@@ -482,6 +600,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_requests_list_definition,
         },
         ToolDescriptor {
@@ -493,6 +613,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
+            capability_action_class: CapabilityActionClass::TopologyExpand,
+            policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: delegate_definition,
         },
         ToolDescriptor {
@@ -504,6 +626,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Delegate,
+            capability_action_class: CapabilityActionClass::TopologyExpand,
+            policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {
@@ -514,7 +638,9 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_archive_definition,
         },
         ToolDescriptor {
@@ -525,7 +651,9 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_cancel_definition,
         },
         ToolDescriptor {
@@ -537,7 +665,48 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_events_definition,
+        },
+        ToolDescriptor {
+            name: "session_tool_policy_status",
+            provider_name: "session_tool_policy_status",
+            aliases: &[],
+            description: "Inspect the session-scoped tool policy for a visible session",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_tool_policy_status_definition,
+        },
+        ToolDescriptor {
+            name: "session_tool_policy_set",
+            provider_name: "session_tool_policy_set",
+            aliases: &[],
+            description: "Update the session-scoped tool policy for a visible session",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_tool_policy_set_definition,
+        },
+        ToolDescriptor {
+            name: "session_tool_policy_clear",
+            provider_name: "session_tool_policy_clear",
+            aliases: &[],
+            description: "Clear the session-scoped tool policy for a visible session",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::PolicyMutation,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_tool_policy_clear_definition,
         },
         ToolDescriptor {
             name: "session_recover",
@@ -547,7 +716,9 @@ pub fn tool_catalog() -> ToolCatalog {
             execution_kind: ToolExecutionKind::App,
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::Sessions,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
@@ -559,6 +730,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_status_definition,
         },
         ToolDescriptor {
@@ -570,6 +743,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_wait_definition,
         },
         ToolDescriptor {
@@ -581,6 +756,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_history_definition,
         },
         ToolDescriptor {
@@ -592,6 +769,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_list_definition,
         },
         ToolDescriptor {
@@ -603,6 +782,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: runtime_messaging_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Messages,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: sessions_send_definition,
         },
     ];
@@ -618,7 +799,35 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_read_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "memory_search",
+            provider_name: "memory_search",
+            aliases: &[],
+            description: "Search durable workspace memory files with bounded citation-bearing snippets",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: memory_search_definition,
+        });
+        descriptors.push(ToolDescriptor {
+            name: "memory_get",
+            provider_name: "memory_get",
+            aliases: &[],
+            description: "Read a bounded line window from one durable workspace memory file",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: memory_get_definition,
         });
         descriptors.push(ToolDescriptor {
             name: "file.write",
@@ -629,6 +838,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_write_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -640,6 +851,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: file_edit_definition,
         });
     }
@@ -655,6 +868,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -670,6 +885,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -681,6 +898,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -692,6 +911,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_navigate_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -703,6 +924,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_session_start_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -714,6 +937,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_session_stop_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -725,6 +950,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_snapshot_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -736,6 +963,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_type_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -747,6 +976,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_companion_wait_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -758,6 +989,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_extract_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -770,6 +1003,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Browser,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: browser_open_definition,
         });
     }
@@ -785,6 +1020,8 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebFetch,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: web_fetch_definition,
         });
     }
@@ -801,12 +1038,20 @@ pub fn tool_catalog() -> ToolCatalog {
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::WebSearch,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: web_search_definition,
         });
     }
 
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
     ToolCatalog { descriptors }
+}
+
+pub fn tool_catalog() -> &'static ToolCatalog {
+    static TOOL_CATALOG: OnceLock<ToolCatalog> = OnceLock::new();
+
+    TOOL_CATALOG.get_or_init(build_tool_catalog)
 }
 
 pub fn runtime_tool_view() -> ToolView {
@@ -971,6 +1216,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         exposure: descriptor.exposure,
         execution_kind: descriptor.execution_kind,
         availability: descriptor.availability,
+        capability_action_class: descriptor.capability_action_class(),
         scheduling_class: descriptor.scheduling_class(),
     }
 }
@@ -983,11 +1229,20 @@ fn tool_visibility_gate_enabled_for_runtime_view(
     match gate {
         ToolVisibilityGate::Always => true,
         ToolVisibilityGate::Sessions => config.sessions.enabled,
+        ToolVisibilityGate::SessionMutation => {
+            let sessions_enabled = config.sessions.enabled;
+            let allow_mutation = config.sessions.allow_mutation;
+            sessions_enabled && allow_mutation
+        }
         ToolVisibilityGate::Messages => config.messages.enabled,
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
+        ToolVisibilityGate::MemoryFileRoot => config
+            .file_root
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
         ToolVisibilityGate::WebFetch => config.web.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
@@ -1000,11 +1255,36 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
     match gate {
         ToolVisibilityGate::Always => true,
         ToolVisibilityGate::Sessions => config.sessions_enabled,
+        ToolVisibilityGate::SessionMutation => {
+            let sessions_enabled = config.sessions_enabled;
+            let allow_mutation = config.sessions_allow_mutation;
+            sessions_enabled && allow_mutation
+        }
         ToolVisibilityGate::Messages => config.messages_enabled,
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
+        ToolVisibilityGate::MemoryFileRoot => {
+            let has_file_root = config
+                .file_root
+                .as_ref()
+                .is_some_and(|value| !value.as_os_str().is_empty());
+
+            if !has_file_root {
+                return false;
+            }
+
+            #[cfg(feature = "tool-file")]
+            {
+                super::memory_tools::memory_corpus_available(config)
+            }
+
+            #[cfg(not(feature = "tool-file"))]
+            {
+                has_file_root
+            }
+        }
         ToolVisibilityGate::WebFetch => config.web_fetch.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
@@ -1678,6 +1958,65 @@ fn file_write_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language lookup query for durable workspace memory."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 8,
+                        "description": "Optional maximum number of memory hits to return. Defaults to 5."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn memory_get_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative or absolute durable memory file path within the configured safe file root."
+                    },
+                    "from": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional 1-based starting line number. Defaults to 1."
+                    },
+                    "lines": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 200,
+                        "description": "Optional number of lines to read. Defaults to 40."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn file_edit_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2033,6 +2372,151 @@ fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn session_tool_runtime_narrowing_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "browser": {
+                "type": "object",
+                "properties": {
+                    "max_sessions": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional upper bound for browser session count."
+                    },
+                    "max_links": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional upper bound for extracted browser links."
+                    },
+                    "max_text_chars": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional upper bound for extracted browser text characters."
+                    }
+                },
+                "additionalProperties": false
+            },
+            "web_fetch": {
+                "type": "object",
+                "properties": {
+                    "allow_private_hosts": {
+                        "type": "boolean",
+                        "description": "Optional narrowing for private-host access. Use false to deny private hosts."
+                    },
+                    "enforce_allowed_domains": {
+                        "type": "boolean",
+                        "description": "When true, enforce the provided allowed_domains list even when it is empty."
+                    },
+                    "allowed_domains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional allowlist intersection for web.fetch."
+                    },
+                    "blocked_domains": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional additional blocked domains for web.fetch."
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional maximum web.fetch timeout."
+                    },
+                    "max_bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional maximum web.fetch response size in bytes."
+                    },
+                    "max_redirects": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Optional maximum web.fetch redirect count."
+                    }
+                },
+                "additionalProperties": false
+            }
+        },
+        "additionalProperties": false
+    })
+}
+
+fn session_tool_policy_status_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to inspect. Defaults to the current session."
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_tool_policy_set_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to update. Defaults to the current session."
+                    },
+                    "tool_ids": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        },
+                        "description": "Optional replacement visible tool id set. Use an empty array to clear the session-specific tool surface restriction."
+                    },
+                    "runtime_narrowing": session_tool_runtime_narrowing_schema()
+                },
+                "anyOf": [
+                    { "required": ["tool_ids"] },
+                    { "required": ["runtime_narrowing"] }
+                ],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn session_tool_policy_clear_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to clear. Defaults to the current session."
+                    }
+                },
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_recover_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2296,11 +2780,17 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "browser.companion.click" => "session_id:string,selector:string",
         "browser.companion.type" => "session_id:string,selector:string,text:string",
         "file.read" => "path:string,max_bytes?:integer",
+        "memory_search" => "query:string,max_results?:integer",
+        "memory_get" => "path:string,from?:integer,lines?:integer",
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
+        "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
+        "session_tool_policy_set" => {
+            "session_id?:string,tool_ids?:string[],runtime_narrowing?:object"
+        }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
         "sessions_list" => "limit?:integer,state?:string",
@@ -2361,6 +2851,12 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("blocked_domains", "array"),
         ],
         "file.read" => &[("path", "string"), ("max_bytes", "integer")],
+        "memory_search" => &[("query", "string"), ("max_results", "integer")],
+        "memory_get" => &[
+            ("path", "string"),
+            ("from", "integer"),
+            ("lines", "integer"),
+        ],
         "file.write" => &[
             ("path", "string"),
             ("content", "string"),
@@ -2384,6 +2880,12 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("label", "string"),
             ("timeout_seconds", "integer"),
         ],
+        "session_tool_policy_status" | "session_tool_policy_clear" => &[("session_id", "string")],
+        "session_tool_policy_set" => &[
+            ("session_id", "string"),
+            ("tool_ids", "array"),
+            ("runtime_narrowing", "object"),
+        ],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
         "sessions_list" => &[("limit", "integer"), ("state", "string")],
@@ -2396,10 +2898,6 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         _ => &[],
     }
 }
-
-const EMPTY_REQUIRED_FIELD_GROUPS: &[&[&str]] = &[];
-const EXTERNAL_SKILLS_INSTALL_REQUIRED_FIELD_GROUPS: &[&[&str]] =
-    &[&["path"], &["bundled_skill_id"]];
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
@@ -2419,22 +2917,19 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "browser.companion.click" => &["session_id", "selector"],
         "browser.companion.type" => &["session_id", "selector", "text"],
         "file.read" => &["path"],
+        "memory_search" => &["query"],
+        "memory_get" => &["path"],
         "file.write" => &["path", "content"],
         "file.edit" => &["path", "old_string", "new_string"],
         "shell.exec" => &["command"],
         "delegate" | "delegate_async" => &["task"],
+        "session_tool_policy_status" | "session_tool_policy_clear" => &[],
+        "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
-    }
-}
-
-pub(crate) fn tool_required_field_groups(name: &str) -> &'static [&'static [&'static str]] {
-    match name {
-        "external_skills.install" => EXTERNAL_SKILLS_INSTALL_REQUIRED_FIELD_GROUPS,
-        _ => EMPTY_REQUIRED_FIELD_GROUPS,
     }
 }
 
@@ -2459,11 +2954,16 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
             &["browser", "companion", "write", "approval"]
         }
         "file.read" => &["file", "read", "filesystem", "repo"],
+        "memory_search" => &["memory", "search", "recall", "durable", "workspace"],
+        "memory_get" => &["memory", "read", "recall", "durable", "workspace"],
         "file.write" => &["file", "write", "filesystem"],
         "file.edit" => &["file", "edit", "filesystem"],
         "shell.exec" => &["shell", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
         "delegate" | "delegate_async" => &["session", "delegate", "child"],
+        "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear" => {
+            &["session", "policy", "tools", "security"]
+        }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
             &["session", "history", "runtime"]
@@ -2477,6 +2977,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[cfg(feature = "tool-browser")]
     #[test]
@@ -2557,6 +3058,59 @@ mod tests {
     }
 
     #[test]
+    fn memory_file_root_visibility_gate_requires_safe_root_configuration() {
+        let hidden_config = ToolConfig::default();
+        assert!(!tool_visibility_gate_enabled_for_runtime_view(
+            ToolVisibilityGate::MemoryFileRoot,
+            &hidden_config,
+            false
+        ));
+
+        let visible_config = ToolConfig {
+            file_root: Some("/tmp/workspace".to_owned()),
+            ..ToolConfig::default()
+        };
+        assert!(tool_visibility_gate_enabled_for_runtime_view(
+            ToolVisibilityGate::MemoryFileRoot,
+            &visible_config,
+            false
+        ));
+
+        let hidden_runtime = ToolRuntimeConfig::default();
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &hidden_runtime
+        ));
+
+        let empty_runtime_dir = tempdir().expect("tempdir");
+        let empty_runtime = ToolRuntimeConfig {
+            file_root: Some(empty_runtime_dir.path().to_path_buf()),
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &empty_runtime
+        ));
+
+        let visible_runtime_dir = tempdir().expect("tempdir");
+        let visible_memory_path = visible_runtime_dir.path().join("MEMORY.md");
+        std::fs::write(
+            &visible_memory_path,
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+
+        let visible_runtime = ToolRuntimeConfig {
+            file_root: Some(visible_runtime_dir.path().to_path_buf()),
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &visible_runtime
+        ));
+    }
+
+    #[test]
     fn browser_visibility_gate_is_independent_from_companion_settings() {
         let mut config = ToolRuntimeConfig::default();
         config.browser.enabled = true;
@@ -2598,6 +3152,22 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::ParallelSafe
         );
+        #[cfg(feature = "tool-file")]
+        assert_eq!(
+            catalog
+                .descriptor("memory_search")
+                .expect("memory_search descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        #[cfg(feature = "tool-file")]
+        assert_eq!(
+            catalog
+                .descriptor("memory_get")
+                .expect("memory_get descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
         #[cfg(feature = "tool-webfetch")]
         assert_eq!(
             catalog
@@ -2620,6 +3190,209 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::SerialOnly
         );
+    }
+
+    #[test]
+    fn governance_profile_follows_descriptor_declared_policy() {
+        let catalog = tool_catalog();
+
+        let delegate_async = catalog
+            .descriptor("delegate_async")
+            .expect("delegate_async descriptor");
+        let delegate_async_policy = governance_profile_for_descriptor(delegate_async);
+
+        assert_eq!(
+            delegate_async_policy.scope,
+            ToolGovernanceScope::TopologyMutation
+        );
+        assert_eq!(delegate_async_policy.risk_class, ToolRiskClass::High);
+        assert_eq!(
+            delegate_async_policy.approval_mode,
+            ToolApprovalMode::PolicyDriven
+        );
+
+        let sessions_send_policy = governance_profile_for_tool_name("sessions_send");
+
+        assert_eq!(sessions_send_policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(sessions_send_policy.risk_class, ToolRiskClass::Elevated);
+        assert_eq!(
+            sessions_send_policy.approval_mode,
+            ToolApprovalMode::PolicyDriven
+        );
+
+        let external_skills_policy = governance_profile_for_tool_name("external_skills.policy");
+
+        assert_eq!(external_skills_policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(external_skills_policy.risk_class, ToolRiskClass::High);
+        assert_eq!(
+            external_skills_policy.approval_mode,
+            ToolApprovalMode::PolicyDriven
+        );
+
+        let unknown_policy = governance_profile_for_tool_name("unknown.tool");
+
+        assert_eq!(unknown_policy, FAIL_CLOSED_GOVERNANCE_PROFILE);
+    }
+
+    #[cfg(feature = "tool-browser")]
+    #[test]
+    fn governance_profile_resolves_alias_backed_tool_metadata() {
+        let policy = governance_profile_for_tool_name("browser_companion_click");
+
+        assert_eq!(policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(policy.risk_class, ToolRiskClass::High);
+        assert_eq!(policy.approval_mode, ToolApprovalMode::PolicyDriven);
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn governance_profile_resolves_alias_distinct_from_provider_name() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("shell.exec")
+            .expect("shell.exec descriptor");
+        let expected_policy = governance_profile_for_descriptor(descriptor);
+        let alias_policy = governance_profile_for_tool_name("shell");
+
+        assert_ne!(descriptor.provider_name, "shell");
+        assert!(descriptor.aliases.contains(&"shell"));
+        assert_eq!(alias_policy, expected_policy);
+    }
+
+    #[test]
+    fn autonomy_capability_action_is_independent_from_governance_profile() {
+        let catalog = tool_catalog();
+        let migrate = catalog
+            .descriptor("claw.migrate")
+            .expect("claw.migrate descriptor");
+        let provider_switch = catalog
+            .descriptor("provider.switch")
+            .expect("provider.switch descriptor");
+        let migrate_policy = governance_profile_for_descriptor(migrate);
+        let provider_switch_policy = governance_profile_for_descriptor(provider_switch);
+
+        assert_eq!(migrate_policy, provider_switch_policy);
+        assert_eq!(
+            migrate.scheduling_class(),
+            provider_switch.scheduling_class()
+        );
+        assert_eq!(
+            capability_action_class_for_descriptor(migrate),
+            CapabilityActionClass::ExecuteExisting
+        );
+        assert_eq!(
+            capability_action_class_for_descriptor(provider_switch),
+            CapabilityActionClass::RuntimeSwitch
+        );
+        assert_ne!(
+            migrate.capability_action_class(),
+            provider_switch.capability_action_class()
+        );
+    }
+
+    #[test]
+    fn autonomy_capability_action_classifies_representative_tool_families() {
+        let expectations = [
+            ("tool.search", CapabilityActionClass::Discover),
+            ("tool_search", CapabilityActionClass::Discover),
+            ("tool.invoke", CapabilityActionClass::ExecuteExisting),
+            ("claw.migrate", CapabilityActionClass::ExecuteExisting),
+            (
+                "external_skills.fetch",
+                CapabilityActionClass::CapabilityFetch,
+            ),
+            (
+                "external_skills.install",
+                CapabilityActionClass::CapabilityInstall,
+            ),
+            (
+                "external_skills.invoke",
+                CapabilityActionClass::CapabilityLoad,
+            ),
+            ("provider.switch", CapabilityActionClass::RuntimeSwitch),
+            ("delegate", CapabilityActionClass::TopologyExpand),
+            ("delegate_async", CapabilityActionClass::TopologyExpand),
+            (
+                "approval_request_resolve",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            (
+                "external_skills.policy",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            ("session_archive", CapabilityActionClass::SessionMutation),
+            ("session_cancel", CapabilityActionClass::SessionMutation),
+            ("session_events", CapabilityActionClass::ExecuteExisting),
+            (
+                "session_tool_policy_status",
+                CapabilityActionClass::ExecuteExisting,
+            ),
+            (
+                "session_tool_policy_set",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            (
+                "session_tool_policy_clear",
+                CapabilityActionClass::PolicyMutation,
+            ),
+            ("session_recover", CapabilityActionClass::SessionMutation),
+        ];
+
+        for (tool_name, expected_action_class) in expectations {
+            let resolved_action_class = capability_action_class_for_tool_name(tool_name)
+                .unwrap_or_else(|| panic!("missing action class for `{tool_name}`"));
+
+            assert_eq!(resolved_action_class, expected_action_class);
+        }
+    }
+
+    #[test]
+    fn autonomy_capability_action_catalog_entries_expose_serializable_metadata() {
+        let entry =
+            find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
+        let value = serde_json::to_value(entry).expect("serialize catalog entry");
+
+        assert_eq!(
+            entry.capability_action_class,
+            CapabilityActionClass::TopologyExpand
+        );
+        assert_eq!(value["capability_action_class"], "topology_expand");
+    }
+
+    #[test]
+    fn autonomy_capability_action_returns_none_for_unknown_tools() {
+        let action_class = capability_action_class_for_tool_name("unknown.tool");
+
+        assert_eq!(action_class, None);
+    }
+
+    #[test]
+    fn tool_catalog_lookup_tokens_are_globally_unambiguous() {
+        let catalog = tool_catalog();
+        let mut token_owners = std::collections::BTreeMap::new();
+
+        for descriptor in catalog.descriptors() {
+            let owner = descriptor.name;
+            let mut lookup_tokens = BTreeSet::new();
+
+            lookup_tokens.insert(descriptor.name);
+            lookup_tokens.insert(descriptor.provider_name);
+
+            for alias in descriptor.aliases {
+                lookup_tokens.insert(*alias);
+            }
+
+            for token in lookup_tokens {
+                let previous_owner = token_owners.insert(token, owner);
+
+                if let Some(previous_owner) = previous_owner {
+                    assert_eq!(
+                        previous_owner, owner,
+                        "lookup token `{token}` resolves to both `{previous_owner}` and `{owner}`"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

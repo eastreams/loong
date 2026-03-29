@@ -97,6 +97,112 @@ if "out of date" not in output:
     sys.exit(1)
 PY
 
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+unsupported_pattern = "docs/{references,design-docs}/**"
+
+try:
+    module.compile_glob_pattern(unsupported_pattern)
+except ValueError as error:
+    error_message = str(error)
+else:
+    print(
+        f"expected unsupported pattern {unsupported_pattern!r} to fail semantic matcher validation",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+if "semantic matcher only supports" not in error_message:
+    print(f"expected semantic matcher guidance in error, got: {error_message!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+literal_patterns = []
+literal_patterns.append("packages/@scope/pkg/package.json")
+literal_patterns.append("docs/design (draft).md")
+
+for literal_pattern in literal_patterns:
+    does_match = module.path_matches_pattern(literal_pattern, literal_pattern)
+    if does_match:
+        continue
+
+    print(
+        f"expected literal pattern {literal_pattern!r} to match itself",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+taxonomy = {
+    "surfaces": [
+        {
+            "name": "docs",
+            "paths": ["docs/@(references|design-docs)/**"],
+        }
+    ],
+    "general_labels": [],
+}
+
+failures = module.check_semantic_regression_cases(taxonomy)
+
+if not failures:
+    print("expected matcher-support failures for unsupported extglob patterns", file=sys.stderr)
+    sys.exit(1)
+
+first_failure = failures[0]
+if "unsupported semantic matcher pattern for docs" not in first_failure:
+    print(f"expected matcher-support failure text, got: {first_failure!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+python3 - "$SYNC_SCRIPT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+script_path = Path(sys.argv[1])
+repo_root = script_path.parents[1]
+spec = importlib.util.spec_from_file_location("sync_github_labels", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+taxonomy = module.load_taxonomy(repo_root)
+failures = module.check_semantic_regression_cases(taxonomy)
+
+if failures:
+    for failure in failures:
+        print(failure, file=sys.stderr)
+    sys.exit(1)
+PY
+
 assert_not_contains_regex "$REPO_ROOT/.github/labeler.yml" '(^|[[:space:]])"?rust"?[[:space:]]*:'
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "area:"
 assert_not_contains "$REPO_ROOT/docs/references/github-collaboration.md" "domain:"

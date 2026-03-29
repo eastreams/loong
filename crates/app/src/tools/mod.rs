@@ -5,8 +5,8 @@ use std::{
     ffi::OsString,
     future::Future,
     path::{Path, PathBuf},
-    sync::OnceLock,
-    time::{SystemTime, UNIX_EPOCH},
+    sync::{OnceLock, mpsc},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -14,9 +14,14 @@ use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tool_search::{
+    RankedSearchableToolEntry, SearchableToolEntry, rank_searchable_entries,
+    searchable_entry_from_descriptor, searchable_entry_from_provider_definition,
+};
 
 use crate::KernelContext;
 use crate::config::ToolConfig;
+use crate::crypto::timing_safe_eq;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 pub(crate) mod approval;
@@ -34,45 +39,55 @@ mod feishu;
 mod file;
 pub mod file_policy_ext;
 mod kernel_adapter;
+#[cfg(feature = "tool-file")]
+mod memory_tools;
 pub(crate) mod messaging;
+mod payload;
 mod provider_switch;
 pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
+mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
 #[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
 mod web_fetch;
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
-mod web_http;
+pub(crate) mod web_http;
 mod web_search;
 
 pub use catalog::{
-    ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor, ToolExecutionKind,
-    ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass, ToolSchedulingClass, ToolView,
-    delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
-    governance_profile_for_descriptor, governance_profile_for_tool_name,
-    planned_delegate_child_tool_view, planned_root_tool_view, runtime_tool_view,
-    runtime_tool_view_for_config, runtime_tool_view_for_config_with_external_skills,
-    runtime_tool_view_for_runtime_config, tool_catalog,
+    CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
+    ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
+    ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
+    capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
+    delegate_child_tool_view_for_config_with_delegate, governance_profile_for_descriptor,
+    governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
+    runtime_tool_view, runtime_tool_view_for_config,
+    runtime_tool_view_for_config_with_external_skills, runtime_tool_view_for_runtime_config,
+    tool_catalog,
 };
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::MvpToolAdapter;
+#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+pub use web_http::build_ssrf_safe_client;
 
 pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope";
 pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
 
+const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
+const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
+const DELEGATE_TOOL_NAME: &str = "delegate";
+pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
+const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
+const WEB_SEARCH_TOOL_NAME: &str = "web.search";
+
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
-const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
-const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
+pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
+pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
 pub(crate) const LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
 
 pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
@@ -156,10 +171,27 @@ fn trusted_internal_tool_payload_enabled() -> bool {
             .unwrap_or(false)
 }
 
-fn payload_uses_reserved_internal_tool_context(payload: &Value) -> bool {
+pub(crate) fn payload_uses_reserved_internal_tool_context(payload: &Value) -> bool {
     payload
         .as_object()
         .is_some_and(|body| body.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY))
+}
+
+fn ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+    tool_name: &str,
+    payload: &Value,
+    payload_path: &str,
+) -> Result<(), String> {
+    if trusted_internal_tool_payload_enabled() {
+        return Ok(());
+    }
+    if !payload_uses_reserved_internal_tool_context(payload) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "tool `{tool_name}` {payload_path}.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field"
+    ))
 }
 /// Execute a tool request, routing through the kernel for
 /// policy enforcement and audit recording.
@@ -261,15 +293,21 @@ fn execute_app_tool_with_browser_companion_readiness(
                 tool_config,
             )
         }
-        "sessions_list" | "sessions_history" | "session_status" | "session_events"
-        | "session_archive" | "session_cancel" | "session_recover" => {
-            session::execute_session_tool_with_policies(
-                request,
-                current_session_id,
-                memory_config,
-                tool_config,
-            )
-        }
+        "sessions_list"
+        | "sessions_history"
+        | "session_tool_policy_status"
+        | "session_tool_policy_set"
+        | "session_tool_policy_clear"
+        | "session_status"
+        | "session_events"
+        | "session_archive"
+        | "session_cancel"
+        | "session_recover" => session::execute_session_tool_with_policies(
+            request,
+            current_session_id,
+            memory_config,
+            tool_config,
+        ),
         #[cfg(feature = "tool-browser")]
         "browser.companion.click" | "browser.companion.type" => {
             if assume_browser_companion_ready {
@@ -459,6 +497,9 @@ fn required_capabilities_for_tool_name_and_payload(
     payload: &Value,
 ) -> BTreeSet<Capability> {
     let mut caps = BTreeSet::from([Capability::InvokeTool]);
+    if tool_requires_network_egress(tool_name) {
+        caps.insert(Capability::NetworkEgress);
+    }
     match tool_name {
         "tool.invoke" => {
             let Some((invoked_tool_name, invoked_payload)) =
@@ -472,6 +513,9 @@ fn required_capabilities_for_tool_name_and_payload(
             );
         }
         "file.read" => {
+            caps.insert(Capability::FilesystemRead);
+        }
+        "memory_search" | "memory_get" => {
             caps.insert(Capability::FilesystemRead);
         }
         "file.write" | "file.edit" => {
@@ -518,6 +562,13 @@ fn claw_migrate_mode_requires_write(payload: &Value) -> bool {
     )
 }
 
+fn tool_requires_network_egress(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "web.fetch" | "web.search" | "browser.open" | "browser.click"
+    )
+}
+
 pub fn is_known_tool_name(raw: &str) -> bool {
     if tool_catalog().resolve(raw).is_some() {
         return true;
@@ -557,7 +608,7 @@ fn build_runtime_tool_view_for_runtime_config(
 ) -> ToolView {
     let catalog = tool_catalog();
     let mut names = runtime_tool_view_for_runtime_config(runtime_config)
-        .iter(&catalog)
+        .iter(catalog)
         .map(|descriptor| descriptor.name)
         .collect::<Vec<_>>();
     #[cfg(feature = "feishu-integration")]
@@ -615,14 +666,11 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    if !trusted_internal_tool_payload_enabled()
-        && payload_uses_reserved_internal_tool_context(&request.payload)
-    {
-        return Err(format!(
-            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
-            request.tool_name
-        ));
-    }
+    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+        request.tool_name.as_str(),
+        &request.payload,
+        "payload",
+    )?;
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let request = ToolCoreRequest {
         tool_name: canonical_name.to_owned(),
@@ -688,6 +736,45 @@ fn execute_discoverable_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let tool_name = request.tool_name.clone();
+    let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
+
+    let inner = {
+        let config = config.clone();
+        move || dispatch_tool_request(request, &config)
+    };
+
+    match timeout_seconds {
+        Some(seconds) if seconds > 0 && !tool_uses_dedicated_timeout(&tool_name) => {
+            run_blocking_with_timeout(inner, seconds, &tool_name)
+        }
+        _ => inner(),
+    }
+}
+
+fn tool_uses_dedicated_timeout(tool_name: &str) -> bool {
+    if tool_name == SHELL_EXEC_TOOL_NAME {
+        return true;
+    }
+    if tool_name == WEB_FETCH_TOOL_NAME {
+        return true;
+    }
+    if tool_name == WEB_SEARCH_TOOL_NAME {
+        return true;
+    }
+    if tool_name == DELEGATE_TOOL_NAME {
+        return true;
+    }
+    if tool_name == DELEGATE_ASYNC_TOOL_NAME {
+        return true;
+    }
+    tool_name.starts_with(BROWSER_COMPANION_TOOL_PREFIX)
+}
+
+fn dispatch_tool_request(
+    request: ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<ToolCoreOutcome, String> {
     match request.tool_name.as_str() {
         "claw.migrate" => claw_migrate::execute_claw_migrate_tool_with_config(request, config),
         "external_skills.inspect" => {
@@ -729,6 +816,10 @@ fn execute_discoverable_tool_core_with_config(
         }
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
+        "memory_search" => memory_tools::execute_memory_search_tool_with_config(request, config),
+        #[cfg(feature = "tool-file")]
+        "memory_get" => memory_tools::execute_memory_get_tool_with_config(request, config),
         "file.write" => file::execute_file_write_tool_with_config(request, config),
         "file.edit" => file::execute_file_edit_tool_with_config(request, config),
         "provider.switch" => {
@@ -744,21 +835,56 @@ fn execute_discoverable_tool_core_with_config(
     }
 }
 
+fn run_blocking_with_timeout<F, T>(f: F, timeout_seconds: u64, tool_name: &str) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    let timeout = Duration::from_secs(timeout_seconds);
+    let tool_name = tool_name.to_owned();
+    let worker_name = format!("tool-timeout:{tool_name}");
+    let (sender, receiver) = mpsc::sync_channel(1);
+
+    let worker = std::thread::Builder::new()
+        .name(worker_name)
+        .spawn(move || {
+            let result = f();
+            let _ = sender.send(result);
+        })
+        .map_err(|error| format!("failed to spawn tool timeout worker for {tool_name}: {error}"))?;
+
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => {
+            let join_result = worker.join();
+            if join_result.is_err() {
+                return Err(format!(
+                    "tool_execution_join_error: {tool_name} worker thread panicked"
+                ));
+            }
+            result
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "tool_execution_timeout: {tool_name} exceeded {timeout_seconds}s"
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let join_result = worker.join();
+            if join_result.is_err() {
+                return Err(format!(
+                    "tool_execution_join_error: {tool_name} worker thread panicked"
+                ));
+            }
+            Err(format!(
+                "tool_execution_join_error: {tool_name} worker thread exited without returning a result"
+            ))
+        }
+    }
+}
+
 /// Tool registry entry for capability snapshot disclosure.
 #[derive(Debug, Clone)]
 pub struct ToolRegistryEntry {
     pub name: &'static str,
     pub description: &'static str,
-}
-
-#[derive(Debug, Clone)]
-struct SearchableToolEntry {
-    canonical_name: String,
-    summary: String,
-    argument_hint: String,
-    required_fields: Vec<String>,
-    required_field_groups: Vec<Vec<String>>,
-    tags: Vec<String>,
 }
 
 /// Returns a sorted list of all registered tools, gated by feature flags.
@@ -781,7 +907,7 @@ pub(crate) fn tool_registry_with_config(
     let mut entries: Vec<ToolRegistryEntry> = catalog::discoverable_tool_catalog()
         .into_iter()
         .filter(|entry| runtime_visible_tool_view.contains(entry.canonical_name))
-        .filter(|entry| tool_search_entry_is_runtime_usable(*entry, config))
+        .filter(|entry| tool_search_entry_is_runtime_usable(entry.canonical_name, config))
         .map(|entry| ToolRegistryEntry {
             name: entry.canonical_name,
             description: entry.summary,
@@ -859,107 +985,6 @@ fn provider_tool_definitions_for_view(_view: &ToolView) -> Vec<Value> {
     tools
 }
 
-fn search_argument_hint_from_provider_definition(parameters: &Value) -> String {
-    let Some(properties) = parameters.get("properties").and_then(Value::as_object) else {
-        return String::new();
-    };
-    let required = schema_required_fields(parameters)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let mut fields = properties
-        .iter()
-        .map(|(name, schema)| {
-            let schema_type = schema
-                .get("type")
-                .and_then(Value::as_str)
-                .unwrap_or("value");
-            let suffix = if required.contains(name.as_str()) {
-                ""
-            } else {
-                "?"
-            };
-            format!("{name}{suffix}:{schema_type}")
-        })
-        .collect::<Vec<_>>();
-    fields.sort();
-    fields.join(",")
-}
-
-fn schema_required_fields(parameters: &Value) -> Vec<String> {
-    parameters
-        .get("required")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
-fn schema_required_field_groups(parameters: &Value) -> Vec<Vec<String>> {
-    ["anyOf", "oneOf"]
-        .into_iter()
-        .filter_map(|key| parameters.get(key).and_then(Value::as_array))
-        .flatten()
-        .filter_map(|schema| {
-            let required = schema
-                .get("required")
-                .and_then(Value::as_array)?
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if required.is_empty() {
-                None
-            } else {
-                Some(required)
-            }
-        })
-        .collect()
-}
-
-fn default_required_field_groups(
-    required_fields: &[String],
-    mut required_field_groups: Vec<Vec<String>>,
-) -> Vec<Vec<String>> {
-    if required_field_groups.is_empty() && !required_fields.is_empty() {
-        required_field_groups.push(required_fields.to_vec());
-    }
-    required_field_groups
-}
-
-fn searchable_entry_from_catalog(entry: catalog::ToolCatalogEntry) -> SearchableToolEntry {
-    let required_fields = entry
-        .required_fields
-        .iter()
-        .map(|field| (*field).to_owned())
-        .collect::<Vec<_>>();
-    let required_field_groups = catalog::tool_required_field_groups(entry.canonical_name)
-        .iter()
-        .map(|group| {
-            group
-                .iter()
-                .map(|field| (*field).to_owned())
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    let required_field_groups =
-        default_required_field_groups(&required_fields, required_field_groups);
-
-    SearchableToolEntry {
-        canonical_name: entry.canonical_name.to_owned(),
-        summary: entry.summary.to_owned(),
-        argument_hint: entry.argument_hint.to_owned(),
-        required_fields,
-        required_field_groups,
-        tags: entry.tags.iter().map(|tag| (*tag).to_owned()).collect(),
-    }
-}
-
 #[cfg(feature = "feishu-integration")]
 fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
     feishu::feishu_provider_tool_definitions()
@@ -971,23 +996,23 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 .get("parameters")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let required_fields = schema_required_fields(&parameters);
-            let required_field_groups = default_required_field_groups(
-                &required_fields,
-                schema_required_field_groups(&parameters),
-            );
-            Some(SearchableToolEntry {
-                canonical_name: canonical_tool_name(provider_name).to_owned(),
-                summary: function
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
-                argument_hint: search_argument_hint_from_provider_definition(&parameters),
-                required_field_groups,
-                required_fields,
-                tags: vec!["feishu".to_owned()],
-            })
+            let summary = function
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let tags = vec!["feishu".to_owned()];
+            let canonical_name = canonical_tool_name(provider_name).to_owned();
+            let preferred_parameter_order: &[(&str, &str)] = &[];
+            Some(searchable_entry_from_provider_definition(
+                canonical_name.as_str(),
+                provider_name,
+                &[],
+                summary,
+                &parameters,
+                preferred_parameter_order,
+                tags,
+            ))
         })
         .collect()
 }
@@ -1034,11 +1059,13 @@ fn runtime_discoverable_tool_entries(
         }
         None => &runtime_view,
     };
-    let mut entries = catalog::discoverable_tool_catalog()
-        .into_iter()
-        .filter(|entry| visible_tool_view.contains(entry.canonical_name))
-        .filter(|entry| tool_search_entry_is_runtime_usable(*entry, config))
-        .map(searchable_entry_from_catalog)
+    let mut entries = catalog::tool_catalog()
+        .descriptors()
+        .iter()
+        .filter(|descriptor| descriptor.is_discoverable())
+        .filter(|descriptor| visible_tool_view.contains(descriptor.name))
+        .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
+        .map(searchable_entry_from_descriptor)
         .collect::<Vec<_>>();
     #[cfg(feature = "feishu-integration")]
     if config.feishu.is_some() {
@@ -1102,36 +1129,22 @@ fn execute_tool_search_tool_with_config(
         .and_then(|value| serde_json::from_value::<BTreeSet<Capability>>(value).ok());
     let visible_tool_view = search_tool_view_from_payload(payload, config);
 
-    let query_normalized = query.to_ascii_lowercase();
-    let tokens = tokenize_search_query(query_normalized.as_str());
-    let mut ranked: Vec<(u32, Vec<String>, SearchableToolEntry)> =
-        runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
-            .into_iter()
-            .filter(|entry| {
-                tool_search_entry_is_capability_usable(
-                    entry.canonical_name.as_str(),
-                    granted_capabilities.as_ref(),
-                )
-            })
-            .filter_map(|entry| {
-                let (score, why) = search_score(&entry, query_normalized.as_str(), &tokens);
-                if score == 0 {
-                    None
-                } else {
-                    Some((score, why, entry))
-                }
-            })
-            .collect();
-    ranked.sort_by(|(left_score, _, left), (right_score, _, right)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left.canonical_name.cmp(&right.canonical_name))
-    });
-
-    let results: Vec<Value> = ranked
+    let searchable_entries = runtime_discoverable_tool_entries(config, Some(&visible_tool_view))
         .into_iter()
-        .take(limit)
-        .map(|(_score, why, entry)| {
+        .filter(|entry| {
+            tool_search_entry_is_capability_usable(
+                entry.canonical_name.as_str(),
+                granted_capabilities.as_ref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let ranking = rank_searchable_entries(searchable_entries, query, limit);
+
+    let results: Vec<Value> = ranking
+        .results
+        .into_iter()
+        .map(|ranked_entry| {
+            let RankedSearchableToolEntry { entry, why } = ranked_entry;
             json!({
                 "tool_id": entry.canonical_name,
                 "summary": entry.summary,
@@ -1158,10 +1171,10 @@ fn execute_tool_search_tool_with_config(
 }
 
 fn tool_search_entry_is_runtime_usable(
-    entry: catalog::ToolCatalogEntry,
+    tool_name: &str,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> bool {
-    match entry.canonical_name {
+    match tool_name {
         "shell.exec" => {
             !config.shell_allow.is_empty()
                 || matches!(
@@ -1175,6 +1188,8 @@ fn tool_search_entry_is_runtime_usable(
         | "external_skills.invoke"
         | "external_skills.list"
         | "external_skills.remove" => config.external_skills.enabled,
+        #[cfg(feature = "tool-file")]
+        "memory_search" | "memory_get" => memory_tools::memory_corpus_available(config),
         _ => true,
     }
 }
@@ -1252,6 +1267,12 @@ fn execute_tool_invoke_tool_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let inner_arguments = request.payload.get("arguments").unwrap_or(&Value::Null);
+    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+        request.tool_name.as_str(),
+        inner_arguments,
+        "payload.arguments",
+    )?;
     let (entry, effective_request) = resolve_tool_invoke_request(&request)?;
     match entry.execution_kind {
         ToolExecutionKind::Core => {
@@ -1262,59 +1283,6 @@ fn execute_tool_invoke_tool_with_config(
             entry.canonical_name
         )),
     }
-}
-
-fn tokenize_search_query(query: &str) -> Vec<String> {
-    query
-        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
-}
-
-fn search_score(entry: &SearchableToolEntry, query: &str, tokens: &[String]) -> (u32, Vec<String>) {
-    let name = entry.canonical_name.to_ascii_lowercase();
-    let summary = entry.summary.to_ascii_lowercase();
-    let argument_hint = entry.argument_hint.to_ascii_lowercase();
-    let tags = entry.tags.join(" ").to_ascii_lowercase();
-
-    let mut score = 0u32;
-    let mut why = Vec::new();
-
-    if name.contains(query) {
-        score += 50;
-        why.push("name_match".to_owned());
-    }
-    if summary.contains(query) {
-        score += 30;
-        why.push("summary_match".to_owned());
-    }
-    if argument_hint.contains(query) {
-        score += 20;
-        why.push("argument_match".to_owned());
-    }
-
-    for token in tokens {
-        if name.contains(token) {
-            score += 16;
-            why.push(format!("name:{token}"));
-        }
-        if summary.contains(token) {
-            score += 10;
-            why.push(format!("summary:{token}"));
-        }
-        if argument_hint.contains(token) {
-            score += 8;
-            why.push(format!("argument:{token}"));
-        }
-        if tags.contains(token) {
-            score += 12;
-            why.push(format!("tag:{token}"));
-        }
-    }
-
-    (score, why)
 }
 
 fn issue_tool_lease(tool_id: &str, payload: &serde_json::Map<String, Value>) -> String {
@@ -1388,7 +1356,7 @@ fn validate_tool_lease(
         return Err("invalid_tool_lease: malformed lease".to_owned());
     };
     let expected_signature = sign_tool_lease(encoded_claims);
-    if expected_signature != signature {
+    if !timing_safe_eq(expected_signature.as_bytes(), signature.as_bytes()) {
         return Err("invalid_tool_lease: signature mismatch".to_owned());
     }
     let claims_bytes = URL_SAFE_NO_PAD
@@ -1533,6 +1501,21 @@ fn _shape_examples() -> BTreeMap<&'static str, Value> {
             json!({
                 "path": "README.md",
                 "max_bytes": 4096
+            }),
+        ),
+        (
+            "memory_search",
+            json!({
+                "query": "deploy freeze window",
+                "max_results": 3
+            }),
+        ),
+        (
+            "memory_get",
+            json!({
+                "path": "MEMORY.md",
+                "from": 1,
+                "lines": 20
             }),
         ),
         (
@@ -1774,39 +1757,36 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 24);
-        let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
-        assert!(names.contains(&"approval_request_resolve"));
-        assert!(names.contains(&"approval_request_status"));
-        assert!(names.contains(&"approval_requests_list"));
-        assert!(names.contains(&"browser.click"));
-        assert!(names.contains(&"browser.extract"));
-        assert!(names.contains(&"browser.open"));
-        assert!(names.contains(&"claw.migrate"));
-        assert!(names.contains(&"delegate"));
-        assert!(names.contains(&"delegate_async"));
-        assert!(names.contains(&"file.read"));
-        assert!(names.contains(&"file.write"));
-        assert!(names.contains(&"file.edit"));
-        assert!(names.contains(&"provider.switch"));
-        assert!(names.contains(&"session_archive"));
-        assert!(names.contains(&"session_cancel"));
-        assert!(names.contains(&"session_events"));
-        assert!(names.contains(&"session_recover"));
-        assert!(names.contains(&"session_status"));
-        assert!(names.contains(&"session_wait"));
-        assert!(names.contains(&"sessions_history"));
-        assert!(names.contains(&"sessions_list"));
-        assert!(names.contains(&"web.search"));
-        assert!(!names.contains(&"external_skills.fetch"));
-        assert!(!names.contains(&"external_skills.install"));
-        assert!(!names.contains(&"external_skills.inspect"));
-        assert!(!names.contains(&"external_skills.invoke"));
-        assert!(!names.contains(&"external_skills.list"));
-        assert!(names.contains(&"external_skills.policy"));
-        assert!(!names.contains(&"external_skills.remove"));
-        assert!(!names.contains(&"shell.exec"));
-        assert!(!names.contains(&"sessions_send"));
+        let names = entries
+            .iter()
+            .map(|entry| entry.name)
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([
+            "approval_request_resolve",
+            "approval_request_status",
+            "approval_requests_list",
+            "browser.click",
+            "browser.extract",
+            "browser.open",
+            "claw.migrate",
+            "delegate",
+            "delegate_async",
+            "external_skills.policy",
+            "file.edit",
+            "file.read",
+            "file.write",
+            "provider.switch",
+            "session_events",
+            "session_tool_policy_status",
+            "session_status",
+            "session_wait",
+            "sessions_history",
+            "sessions_list",
+            "web.fetch",
+            "web.search",
+        ]);
+
+        assert_eq!(names, expected);
     }
 
     #[cfg(all(
@@ -1819,39 +1799,54 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 23);
-        let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
-        assert!(names.contains(&"approval_request_resolve"));
-        assert!(names.contains(&"approval_request_status"));
-        assert!(names.contains(&"approval_requests_list"));
-        assert!(names.contains(&"browser.click"));
-        assert!(names.contains(&"browser.extract"));
-        assert!(names.contains(&"browser.open"));
-        assert!(names.contains(&"claw.migrate"));
-        assert!(names.contains(&"delegate"));
-        assert!(names.contains(&"delegate_async"));
-        assert!(names.contains(&"file.read"));
-        assert!(names.contains(&"file.write"));
-        assert!(names.contains(&"file.edit"));
-        assert!(names.contains(&"provider.switch"));
+        let names = entries
+            .iter()
+            .map(|entry| entry.name)
+            .collect::<BTreeSet<_>>();
+        let expected = BTreeSet::from([
+            "approval_request_resolve",
+            "approval_request_status",
+            "approval_requests_list",
+            "browser.click",
+            "browser.extract",
+            "browser.open",
+            "claw.migrate",
+            "delegate",
+            "delegate_async",
+            "external_skills.policy",
+            "file.edit",
+            "file.read",
+            "file.write",
+            "provider.switch",
+            "session_events",
+            "session_tool_policy_status",
+            "session_status",
+            "session_wait",
+            "sessions_history",
+            "sessions_list",
+            "web.fetch",
+        ]);
+
+        assert_eq!(names, expected);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn tool_registry_re_exposes_session_mutation_tools_when_runtime_policy_allows_them() {
+        let config = runtime_config::ToolRuntimeConfig {
+            sessions_enabled: true,
+            sessions_allow_mutation: true,
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let entries = tool_registry_with_config(Some(&config));
+        let names: Vec<&str> = entries.iter().map(|entry| entry.name).collect();
+
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
-        assert!(names.contains(&"session_events"));
         assert!(names.contains(&"session_recover"));
-        assert!(names.contains(&"session_status"));
-        assert!(names.contains(&"session_wait"));
-        assert!(names.contains(&"sessions_history"));
-        assert!(names.contains(&"sessions_list"));
-        assert!(!names.contains(&"web.search"));
-        assert!(!names.contains(&"external_skills.fetch"));
-        assert!(!names.contains(&"external_skills.install"));
-        assert!(!names.contains(&"external_skills.inspect"));
-        assert!(!names.contains(&"external_skills.invoke"));
-        assert!(!names.contains(&"external_skills.list"));
-        assert!(names.contains(&"external_skills.policy"));
-        assert!(!names.contains(&"external_skills.remove"));
-        assert!(!names.contains(&"shell.exec"));
-        assert!(!names.contains(&"sessions_send"));
+        assert!(names.contains(&"session_tool_policy_set"));
+        assert!(names.contains(&"session_tool_policy_clear"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -1884,7 +1879,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
-    fn runtime_tool_view_includes_runtime_session_tools_but_hides_planned_ones() {
+    fn runtime_tool_view_hides_session_mutation_tools_by_default() {
         let view = runtime_tool_view_for_config(&crate::config::ToolConfig::default());
 
         for tool_name in [
@@ -1893,10 +1888,8 @@ mod tests {
             "approval_requests_list",
             "delegate",
             "delegate_async",
-            "session_archive",
-            "session_cancel",
             "session_events",
-            "session_recover",
+            "session_tool_policy_status",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -1911,12 +1904,41 @@ mod tests {
             );
         }
 
+        for tool_name in [
+            "session_archive",
+            "session_cancel",
+            "session_recover",
+            "session_tool_policy_set",
+            "session_tool_policy_clear",
+        ] {
+            assert!(
+                !view.contains(tool_name),
+                "expected runtime view to hide `{tool_name}` by default"
+            );
+        }
+
         let tool_name = "sessions_send";
         assert!(
             !view.contains(tool_name),
             "expected runtime view to keep `{tool_name}` hidden"
         );
         assert!(view.contains("web.fetch"));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn runtime_tool_view_re_exposes_session_mutation_tools_when_enabled() {
+        let mut config = crate::config::ToolConfig::default();
+        config.sessions.enabled = true;
+        config.sessions.allow_mutation = true;
+
+        let view = runtime_tool_view_for_config(&config);
+
+        assert!(view.contains("session_archive"));
+        assert!(view.contains("session_cancel"));
+        assert!(view.contains("session_recover"));
+        assert!(view.contains("session_tool_policy_set"));
+        assert!(view.contains("session_tool_policy_clear"));
     }
 
     #[test]
@@ -1984,6 +2006,7 @@ mod tests {
     fn capability_snapshot_with_config_uses_runtime_enabled_tool_view() {
         let config = runtime_config::ToolRuntimeConfig {
             sessions_enabled: false,
+            sessions_allow_mutation: false,
             messages_enabled: false,
             delegate_enabled: false,
             browser: runtime_config::BrowserRuntimePolicy {
@@ -2291,6 +2314,69 @@ mod tests {
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
         );
 
+        let direct_memory_search = ToolCoreRequest {
+            tool_name: "memory_search".to_owned(),
+            payload: json!({"query": "deploy freeze"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_memory_search),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let direct_memory_get = ToolCoreRequest {
+            tool_name: "memory_get".to_owned(),
+            payload: json!({"path": "MEMORY.md"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_memory_get),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let direct_web_fetch = ToolCoreRequest {
+            tool_name: "web.fetch".to_owned(),
+            payload: json!({"url": "https://example.com"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_web_fetch),
+            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
+        let direct_web_search = ToolCoreRequest {
+            tool_name: "web.search".to_owned(),
+            payload: json!({"query": "loongclaw"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_web_search),
+            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
+        let direct_browser_open = ToolCoreRequest {
+            tool_name: "browser.open".to_owned(),
+            payload: json!({"url": "https://example.com"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_browser_open),
+            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
+        let direct_browser_extract = ToolCoreRequest {
+            tool_name: "browser.extract".to_owned(),
+            payload: json!({"mode": "page_text"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_browser_extract),
+            BTreeSet::from([Capability::InvokeTool])
+        );
+
+        let direct_browser_click = ToolCoreRequest {
+            tool_name: "browser.click".to_owned(),
+            payload: json!({"id": 1}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_browser_click),
+            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
         let invoked_file_read = ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
             payload: json!({
@@ -2302,6 +2388,32 @@ mod tests {
         assert_eq!(
             required_capabilities_for_request(&invoked_file_read),
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let invoked_memory_search = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "memory_search",
+                "lease": "unused",
+                "arguments": {"query": "deploy freeze"}
+            }),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&invoked_memory_search),
+            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let invoked_web_fetch = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "web.fetch",
+                "lease": "unused",
+                "arguments": {"url": "https://example.com"}
+            }),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&invoked_web_fetch),
+            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
         );
 
         let invoked_claw_plan = ToolCoreRequest {
@@ -2348,6 +2460,40 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn runtime_tool_view_hides_memory_tools_when_memory_corpus_is_empty() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-empty");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let config = test_tool_runtime_config(root);
+        let tool_view = runtime_tool_view_for_runtime_config(&config);
+
+        assert!(!tool_view.contains("memory_search"));
+        assert!(!tool_view.contains("memory_get"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn runtime_tool_view_includes_memory_tools_when_memory_corpus_exists() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-view-visible");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+
+        let config = test_tool_runtime_config(root);
+        let tool_view = runtime_tool_view_for_runtime_config(&config);
+
+        assert!(tool_view.contains("memory_search"));
+        assert!(tool_view.contains("memory_get"));
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_returns_discoverable_tools_with_leases() {
@@ -2390,6 +2536,310 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_surfaces_memory_tools_when_memory_corpus_is_available() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-search");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(root.join("MEMORY.md"), "Deploy freeze window: Friday.\n")
+            .expect("write root memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Migration starts tomorrow.\n",
+        )
+        .expect("write daily log");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "search memory recall durable notes",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(
+            results
+                .iter()
+                .any(|entry| entry["tool_id"] == "memory_search")
+        );
+        assert!(results.iter().any(|entry| entry["tool_id"] == "memory_get"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_hides_memory_tools_when_memory_corpus_is_empty() {
+        let root = unique_tool_temp_dir("loongclaw-memory-tool-search-empty");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "search memory recall durable notes",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["tool_id"] != "memory_search")
+        );
+        assert!(results.iter().all(|entry| entry["tool_id"] != "memory_get"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
+        let root = unique_tool_temp_dir("loongclaw-memory-search");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Customer migration starts tomorrow.\n",
+        )
+        .expect("write daily log");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy freeze window",
+                    "max_results": 4
+                }),
+            },
+            &config,
+        )
+        .expect("memory search should succeed");
+
+        assert_eq!(outcome.status, "ok");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|entry| entry["path"] == "MEMORY.md"));
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["start_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["end_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| entry["snippet"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())),
+            "expected non-empty snippets: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            "line one\nline two\nline three\nline four\nline five\n",
+        )
+        .expect("write root memory");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 2,
+                    "lines": 2
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["path"], "MEMORY.md");
+        assert_eq!(outcome.payload["start_line"], 2);
+        assert_eq!(outcome.payload["end_line"], 3);
+        assert_eq!(outcome.payload["text"], "line two\nline three");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_reads_requested_window_without_loading_invalid_tail() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-tail");
+        let memory_path = root.join("MEMORY.md");
+        let mut bytes = b"line one\nline two\n".to_vec();
+
+        bytes.push(0xff);
+        bytes.push(0xfe);
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, bytes).expect("write root memory");
+
+        let config = test_tool_runtime_config(root);
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 2
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should ignore invalid bytes beyond requested window");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["start_line"], 1);
+        assert_eq!(outcome.payload["end_line"], 2);
+        assert_eq!(outcome.payload["text"], "line one\nline two");
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_rejects_invalid_max_results_values() {
+        let root = unique_tool_temp_dir("loongclaw-memory-search-invalid-max-results");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n").expect("write memory");
+
+        let config = test_tool_runtime_config(root);
+        let non_numeric_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy",
+                    "max_results": "3"
+                }),
+            },
+            &config,
+        )
+        .expect_err("non-numeric max_results should fail");
+        let out_of_range_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy",
+                    "max_results": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("out-of-range max_results should fail");
+
+        assert!(non_numeric_error.contains("payload.max_results"));
+        assert!(out_of_range_error.contains("payload.max_results"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_rejects_invalid_window_arguments() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-invalid-window");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
+
+        let config = test_tool_runtime_config(root);
+        let invalid_from_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": "2"
+                }),
+            },
+            &config,
+        )
+        .expect_err("non-numeric from should fail");
+        let invalid_lines_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "lines": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("out-of-range lines should fail");
+
+        assert!(invalid_from_error.contains("payload.from"));
+        assert!(invalid_lines_error.contains("payload.lines"));
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_hides_non_corpus_file_existence() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-corpus-boundary");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(root.join("MEMORY.md"), "line one\nline two\n").expect("write memory");
+        std::fs::write(root.join("README.md"), "not in corpus\n").expect("write readme");
+
+        let config = test_tool_runtime_config(root);
+        let existing_non_corpus_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "README.md"
+                }),
+            },
+            &config,
+        )
+        .expect_err("existing non-corpus file should fail");
+        let missing_non_corpus_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "missing.md"
+                }),
+            },
+            &config,
+        )
+        .expect_err("missing non-corpus file should fail");
+
+        assert!(
+            existing_non_corpus_error.contains("not part of the workspace durable memory corpus")
+        );
+        assert!(
+            missing_non_corpus_error.contains("not part of the workspace durable memory corpus")
+        );
+        assert!(!existing_non_corpus_error.contains("not an existing file"));
+        assert!(!missing_non_corpus_error.contains("not an existing file"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -2475,6 +2925,132 @@ mod tests {
                 "expected path separator rejection for `{cmd}`, got: {error}"
             );
         }
+    }
+
+    #[test]
+    fn tool_execution_config_timeout_for_tool_prefers_per_tool() {
+        use std::collections::BTreeMap;
+
+        let mut per_tool = BTreeMap::new();
+        per_tool.insert("file.read".to_owned(), 30u64);
+
+        let config = runtime_config::ToolExecutionConfig {
+            default_timeout_seconds: Some(60u64),
+            per_tool_timeout: per_tool,
+        };
+
+        assert_eq!(config.timeout_for_tool("file.read"), Some(30));
+        assert_eq!(config.timeout_for_tool("file.write"), Some(60));
+        assert_eq!(config.timeout_for_tool("unknown"), Some(60));
+    }
+
+    #[test]
+    fn tool_execution_config_timeout_for_tool_none_when_no_default() {
+        let config = runtime_config::ToolExecutionConfig {
+            default_timeout_seconds: None,
+            per_tool_timeout: BTreeMap::new(),
+        };
+
+        assert_eq!(config.timeout_for_tool("file.read"), None);
+    }
+
+    #[test]
+    fn tool_execution_config_default_is_no_timeout() {
+        let config = runtime_config::ToolExecutionConfig::default();
+        assert_eq!(config.default_timeout_seconds, None);
+        assert!(config.per_tool_timeout.is_empty());
+    }
+
+    #[test]
+    fn framework_timeout_excludes_tools_with_dedicated_timeout_controls() {
+        assert!(tool_uses_dedicated_timeout(
+            "browser.companion.session.start"
+        ));
+        assert!(tool_uses_dedicated_timeout("browser.companion.wait"));
+        assert!(tool_uses_dedicated_timeout("delegate"));
+        assert!(tool_uses_dedicated_timeout("delegate_async"));
+        assert!(tool_uses_dedicated_timeout("shell.exec"));
+        assert!(tool_uses_dedicated_timeout("web.fetch"));
+        assert!(tool_uses_dedicated_timeout("web.search"));
+        assert!(!tool_uses_dedicated_timeout("file.read"));
+    }
+
+    #[test]
+    fn tool_without_timeout_config_completes_normally() {
+        use std::fs;
+
+        let root = unique_temp_dir("no-timeout-test");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let readme_path = root.join("README.md");
+        fs::write(&readme_path, "readme content").expect("write test file");
+
+        let config = test_tool_runtime_config(root);
+
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "README.md"
+            }),
+        };
+
+        let result = execute_tool_core_with_test_context(request, &config);
+
+        assert!(
+            result.is_ok(),
+            "tool should complete normally without timeout, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn framework_timeout_returns_without_waiting_for_worker_completion() {
+        let start = std::time::Instant::now();
+
+        let error = run_blocking_with_timeout(
+            || {
+                let (_sender, receiver) = mpsc::channel::<()>();
+                let _ = receiver.recv_timeout(Duration::from_secs(3));
+                Ok::<(), String>(())
+            },
+            1,
+            "file.read",
+        )
+        .expect_err("timeout should be reported");
+
+        let elapsed = start.elapsed();
+
+        assert_eq!(error, "tool_execution_timeout: file.read exceeded 1s");
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "timeout helper should return promptly, got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn framework_timeout_supports_async_core_tool_calls() {
+        use std::fs;
+
+        let root = unique_temp_dir("tool-timeout-async-core");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let readme_path = root.join("README.md");
+        fs::write(&readme_path, "readme content").expect("write test file");
+
+        let mut config = test_tool_runtime_config(root);
+        config.tool_execution.default_timeout_seconds = Some(1);
+
+        let adapter = MvpToolAdapter::with_config(config);
+        let request = ToolCoreRequest {
+            tool_name: "file.read".to_owned(),
+            payload: json!({
+                "path": "README.md"
+            }),
+        };
+
+        let result = loongclaw_kernel::CoreToolAdapter::execute_core_tool(&adapter, request).await;
+
+        assert!(
+            result.is_ok(),
+            "async core tool execution should stay usable with framework timeouts, got: {result:?}"
+        );
     }
 
     #[cfg(feature = "tool-shell")]
@@ -2709,6 +3285,127 @@ mod tests {
                 && entry["argument_hint"].as_str()
                     == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
         }));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
+    #[test]
+    fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-schema-derived");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "raw_text",
+                    "limit": 6
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            results.iter().any(|entry| entry["tool_id"] == "web.fetch"),
+            "schema-derived enum terms should make web.fetch discoverable: {results:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-websearch"))]
+    #[test]
+    fn tool_search_matches_multilingual_queries_across_languages() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-multilingual");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(root.join("MEMORY.md"), "deploy freeze window\n")
+            .expect("write root memory");
+
+        let config = test_tool_runtime_config(root.clone());
+        let cases = vec![
+            ("编辑文件", "file.edit"),
+            ("ファイルを読む", "file.read"),
+            ("메모 검색", "memory_search"),
+            ("искать веб", "web.search"),
+            ("تثبيت مهارة", "external_skills.install"),
+            ("cambiar proveedor", "provider.switch"),
+            ("प्रदाता बदलें", "provider.switch"),
+        ];
+
+        for (query, expected_tool) in cases {
+            let payload = json!({
+                "query": query,
+                "limit": 8
+            });
+            let request = ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload,
+            };
+            let outcome = execute_tool_core_with_config(request, &config)
+                .expect("tool search should succeed");
+            let results = outcome.payload["results"].as_array().expect("results");
+            let expected_entry = results
+                .iter()
+                .find(|entry| entry["tool_id"] == expected_tool);
+
+            assert!(
+                expected_entry.is_some(),
+                "expected `{expected_tool}` for multilingual query `{query}`, got {results:?}"
+            );
+
+            let expected_entry = expected_entry.expect("expected tool entry");
+            let why = expected_entry["why"].as_array().expect("why");
+            let used_coarse_fallback = why
+                .iter()
+                .any(|reason| reason.as_str() == Some("coarse_fallback"));
+
+            assert!(
+                !used_coarse_fallback,
+                "expected semantic match for `{query}`, got coarse fallback: {expected_entry:?}"
+            );
+        }
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_returns_coarse_fallback_for_zero_match_queries() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-coarse-fallback");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "สวัสดีโลก",
+                    "limit": 4
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            !results.is_empty(),
+            "coarse fallback should surface visible tools instead of an empty set"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["why"].as_array().is_some_and(|why| why
+                    .iter()
+                    .any(|reason| reason.as_str() == Some("coarse_fallback")))),
+            "coarse fallback results should explain their fallback mode: {results:?}"
+        );
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -2992,13 +3689,14 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn tool_search_reports_alternative_required_fields_for_bundled_skill_install() {
-        let entry = catalog::find_tool_catalog_entry("external_skills.install")
+        let descriptor = catalog::tool_catalog()
+            .descriptor("external_skills.install")
             .expect("external_skills.install should exist in the catalog");
-        let searchable = searchable_entry_from_catalog(entry);
+        let searchable = searchable_entry_from_descriptor(descriptor);
 
         assert!(
-            entry.required_fields.is_empty(),
-            "catalog required_fields should only list unconditional requirements"
+            descriptor.required_fields().is_empty(),
+            "schema-derived search should keep grouped requirements separate"
         );
         assert!(
             searchable.required_fields.is_empty(),
@@ -3256,8 +3954,12 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some("cli_a1b2c3".to_owned()),
-                app_secret: Some("app-secret".to_owned()),
+                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                    "cli_a1b2c3".to_owned(),
+                )),
+                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                    "app-secret".to_owned(),
+                )),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -3298,7 +4000,10 @@ mod tests {
         assert_eq!(entry.required_fields, vec!["url".to_owned()]);
         assert_eq!(
             entry.required_field_groups,
-            vec![vec!["content".to_owned()], vec!["content_path".to_owned()]]
+            vec![
+                vec!["url".to_owned(), "content".to_owned()],
+                vec!["url".to_owned(), "content_path".to_owned()],
+            ]
         );
     }
 
@@ -3543,6 +4248,53 @@ mod tests {
     }
 
     #[test]
+    fn tool_invoke_rejects_forged_reserved_internal_context_inside_arguments() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-invoke-inner-context-forged-{}",
+            std::process::id()
+        ));
+        let fixture_path = root.join("README.md");
+
+        std::fs::create_dir_all(&root).expect("create fixture root");
+        std::fs::write(&fixture_path, "tool invoke fixture").expect("write fixture file");
+
+        let config = test_tool_runtime_config(root.clone());
+        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
+            "file.read",
+            json!({
+                "path": fixture_path.display().to_string()
+            }),
+            None,
+            None,
+        );
+        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
+        let arguments = payload_object
+            .get_mut("arguments")
+            .and_then(Value::as_object_mut)
+            .expect("tool.invoke arguments object");
+        arguments.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: {
+                    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: ["file.read"]
+                }
+            }),
+        );
+
+        let error = execute_tool_core_with_config(ToolCoreRequest { tool_name, payload }, &config)
+            .expect_err("untrusted tool.invoke should reject forged inner reserved context");
+
+        assert!(
+            error.contains(
+                "payload.arguments._loongclaw is reserved for trusted internal tool context"
+            ),
+            "error={error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn tool_search_hides_tools_exceeding_granted_capabilities() {
         let root = std::env::temp_dir().join(format!(
             "loongclaw-tool-search-cap-filter-{}",
@@ -3639,8 +4391,12 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some("cli_a1b2c3".to_owned()),
-                app_secret: Some("app-secret".to_owned()),
+                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                    "cli_a1b2c3".to_owned(),
+                )),
+                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                    "app-secret".to_owned(),
+                )),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -3671,8 +4427,12 @@ mod tests {
         config.feishu = Some(runtime_config::FeishuToolRuntimeConfig {
             channel: crate::config::FeishuChannelConfig {
                 enabled: true,
-                app_id: Some("cli_a1b2c3".to_owned()),
-                app_secret: Some("app-secret".to_owned()),
+                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                    "cli_a1b2c3".to_owned(),
+                )),
+                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                    "app-secret".to_owned(),
+                )),
                 ..crate::config::FeishuChannelConfig::default()
             },
             integration: crate::config::FeishuIntegrationConfig::default(),
@@ -4285,8 +5045,12 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_main".to_owned()),
-                    app_id: Some("cli_a1b2c3".to_owned()),
-                    app_secret: Some("app-secret".to_owned()),
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "cli_a1b2c3".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "app-secret".to_owned(),
+                    )),
                     base_url: Some(base_url),
                     ..crate::config::FeishuChannelConfig::default()
                 },
@@ -4424,8 +5188,12 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_main".to_owned()),
-                    app_id: Some("cli_a1b2c3".to_owned()),
-                    app_secret: Some("app-secret".to_owned()),
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "cli_a1b2c3".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "app-secret".to_owned(),
+                    )),
                     base_url: Some(base_url),
                     ..crate::config::FeishuChannelConfig::default()
                 },
@@ -6441,8 +7209,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -6451,8 +7223,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -6687,8 +7463,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -6697,8 +7477,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -6973,8 +7757,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -6983,8 +7771,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -7039,7 +7831,14 @@ mod tests {
         let saved_path = outcome.payload["path"]
             .as_str()
             .expect("resource output path");
-        assert!(saved_path.ends_with("/artifacts/images/incoming.png"));
+        assert!(
+            std::path::Path::new(saved_path).ends_with(
+                std::path::Path::new("artifacts")
+                    .join("images")
+                    .join("incoming.png")
+            ),
+            "saved_path {saved_path} should end with artifacts/images/incoming.png",
+        );
         assert_eq!(
             fs::read(saved_path).expect("read downloaded image"),
             b"png-demo-bytes"
@@ -7149,8 +7948,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some(base_url),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7209,7 +8012,14 @@ mod tests {
         let saved_path = outcome.payload["path"]
             .as_str()
             .expect("resource output path");
-        assert!(saved_path.ends_with("/artifacts/audio/voice.ogg"));
+        assert!(
+            std::path::Path::new(saved_path).ends_with(
+                std::path::Path::new("artifacts")
+                    .join("audio")
+                    .join("voice.ogg")
+            ),
+            "saved_path {saved_path} should end with artifacts/audio/voice.ogg",
+        );
         assert_eq!(
             fs::read(saved_path).expect("read downloaded audio"),
             b"voice-demo-bytes"
@@ -7315,8 +8125,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some(base_url),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7376,7 +8190,14 @@ mod tests {
         let saved_path = outcome.payload["path"]
             .as_str()
             .expect("resource output path");
-        assert!(saved_path.ends_with("/artifacts/media/preview.png"));
+        assert!(
+            std::path::Path::new(saved_path).ends_with(
+                std::path::Path::new("artifacts")
+                    .join("media")
+                    .join("preview.png")
+            ),
+            "saved_path {saved_path} should end with artifacts/media/preview.png",
+        );
         assert_eq!(
             fs::read(saved_path).expect("read downloaded image"),
             b"png-media-preview"
@@ -7478,8 +8299,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some(base_url),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7539,7 +8364,14 @@ mod tests {
         let saved_path = outcome.payload["path"]
             .as_str()
             .expect("resource output path");
-        assert!(saved_path.ends_with("/artifacts/post/image.jpg"));
+        assert!(
+            std::path::Path::new(saved_path).ends_with(
+                std::path::Path::new("artifacts")
+                    .join("post")
+                    .join("image.jpg")
+            ),
+            "saved_path {saved_path} should end with artifacts/post/image.jpg",
+        );
         assert_eq!(
             fs::read(saved_path).expect("read downloaded image"),
             b"jpeg-post-image"
@@ -7584,8 +8416,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7680,8 +8516,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7773,8 +8613,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7862,8 +8706,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -7955,8 +8803,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_shared".to_owned()),
-                            app_id: Some("cli_work".to_owned()),
-                            app_secret: Some("app-secret-work".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_work".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-work".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -8237,8 +9089,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some("cli_secondary".to_owned()),
-                            app_secret: Some("app-secret-secondary".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_secondary".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-secondary".to_owned(),
+                            )),
                             base_url: Some(base_url),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -8320,8 +9176,12 @@ mod tests {
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some("cli_secondary".to_owned()),
-                            app_secret: Some("app-secret-secondary".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_secondary".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-secondary".to_owned(),
+                            )),
                             base_url: Some("http://127.0.0.1:9".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
                         },
@@ -8637,8 +9497,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -8647,8 +9511,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -8878,15 +9746,23 @@ mod tests {
                 channel: crate::config::FeishuChannelConfig {
                     enabled: true,
                     account_id: Some("feishu_primary".to_owned()),
-                    app_id: Some("cli_primary".to_owned()),
-                    app_secret: Some("app-secret-primary".to_owned()),
+                    app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                        "cli_primary".to_owned(),
+                    )),
+                    app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                        "app-secret-primary".to_owned(),
+                    )),
                     receive_id_type: "open_id".to_owned(),
                     accounts: BTreeMap::from([(
                         "work".to_owned(),
                         crate::config::FeishuAccountConfig {
                             account_id: Some("feishu_secondary".to_owned()),
-                            app_id: Some("cli_secondary".to_owned()),
-                            app_secret: Some("app-secret-secondary".to_owned()),
+                            app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                "cli_secondary".to_owned(),
+                            )),
+                            app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                "app-secret-secondary".to_owned(),
+                            )),
                             base_url: Some(base_url),
                             receive_id_type: Some("chat_id".to_owned()),
                             ..crate::config::FeishuAccountConfig::default()
@@ -9027,8 +9903,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 receive_id_type: Some("chat_id".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
@@ -9038,8 +9918,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 receive_id_type: Some("open_id".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
@@ -10770,8 +11654,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some(base_url),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -10780,8 +11668,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -11711,8 +12603,12 @@ mod tests {
                             "work".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_work".to_owned()),
-                                app_secret: Some("app-secret-work".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_work".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-work".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -11721,8 +12617,12 @@ mod tests {
                             "alerts".to_owned(),
                             crate::config::FeishuAccountConfig {
                                 account_id: Some("feishu_shared".to_owned()),
-                                app_id: Some("cli_alerts".to_owned()),
-                                app_secret: Some("app-secret-alerts".to_owned()),
+                                app_id: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "cli_alerts".to_owned(),
+                                )),
+                                app_secret: Some(loongclaw_contracts::SecretRef::Inline(
+                                    "app-secret-alerts".to_owned(),
+                                )),
                                 base_url: Some("http://127.0.0.1:9".to_owned()),
                                 ..crate::config::FeishuAccountConfig::default()
                             },
@@ -13043,7 +13943,10 @@ mod tests {
                 adapter: None,
             },
             allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            granted_capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::NetworkEgress,
+            ]),
             metadata: BTreeMap::new(),
         };
         kernel.register_pack(pack).expect("register pack");
@@ -13090,7 +13993,10 @@ mod tests {
                 adapter: None,
             },
             allowed_connectors: BTreeSet::new(),
-            granted_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            granted_capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::NetworkEgress,
+            ]),
             metadata: BTreeMap::new(),
         };
         kernel.register_pack(pack).expect("register pack");
@@ -13158,5 +14064,131 @@ mod tests {
             err.contains("denied") || err.contains("capability") || err.contains("Capability"),
             "error should mention denial or capability, got: {err}"
         );
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn web_fetch_through_kernel_requires_network_egress_capability() {
+        use kernel_adapter::MvpToolAdapter;
+
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let clock = Arc::new(FixedClock::new(1_700_000_000));
+        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+        let pack = VerticalPackManifest {
+            pack_id: "test-pack".to_owned(),
+            domain: "testing".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::NetworkEgress,
+            ]),
+            metadata: BTreeMap::new(),
+        };
+        kernel.register_pack(pack).expect("register pack");
+
+        let mut config = runtime_config::ToolRuntimeConfig::default();
+        config.web_fetch.enabled = true;
+        kernel.register_core_tool_adapter(MvpToolAdapter::with_config(config));
+        kernel
+            .set_default_core_tool_adapter("mvp-tools")
+            .expect("set default");
+
+        let mut token = kernel
+            .issue_token("test-pack", "test-agent", 3600)
+            .expect("issue token");
+        let removed_network_egress = token
+            .allowed_capabilities
+            .remove(&Capability::NetworkEgress);
+        assert!(
+            removed_network_egress,
+            "issued token should include network egress before we remove it for the test"
+        );
+
+        let ctx = KernelContext {
+            kernel: Arc::new(kernel),
+            token,
+        };
+        let request = ToolCoreRequest {
+            tool_name: "web.fetch".to_owned(),
+            payload: json!({"url": "https://example.com"}),
+        };
+
+        let error = execute_kernel_tool_request(&ctx, request, false)
+            .await
+            .expect_err("web.fetch should fail closed without network egress capability");
+
+        assert!(matches!(
+            error,
+            loongclaw_kernel::KernelError::Policy(
+                loongclaw_kernel::PolicyError::MissingCapability { capability, .. }
+            ) if capability == Capability::NetworkEgress
+        ));
+    }
+
+    #[cfg(feature = "tool-webfetch")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn web_fetch_through_kernel_exposes_network_egress_to_policy_extensions() {
+        use kernel_adapter::MvpToolAdapter;
+
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let clock = Arc::new(FixedClock::new(1_700_000_000));
+        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+        let pack = VerticalPackManifest {
+            pack_id: "test-pack".to_owned(),
+            domain: "testing".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::NetworkEgress,
+            ]),
+            metadata: BTreeMap::new(),
+        };
+        kernel.register_pack(pack).expect("register pack");
+        kernel.register_policy_extension(
+            loongclaw_kernel::test_support::NoNetworkEgressPolicyExtension,
+        );
+
+        let mut config = runtime_config::ToolRuntimeConfig::default();
+        config.web_fetch.enabled = true;
+        kernel.register_core_tool_adapter(MvpToolAdapter::with_config(config));
+        kernel
+            .set_default_core_tool_adapter("mvp-tools")
+            .expect("set default");
+
+        let token = kernel
+            .issue_token("test-pack", "test-agent", 3600)
+            .expect("issue token");
+
+        let ctx = KernelContext {
+            kernel: Arc::new(kernel),
+            token,
+        };
+        let request = ToolCoreRequest {
+            tool_name: "web.fetch".to_owned(),
+            payload: json!({"url": "https://example.com"}),
+        };
+
+        let error = execute_kernel_tool_request(&ctx, request, false)
+            .await
+            .expect_err("policy extension should block web.fetch network egress");
+
+        assert!(matches!(
+            error,
+            loongclaw_kernel::KernelError::Policy(
+                loongclaw_kernel::PolicyError::ExtensionDenied { ref extension, .. }
+            ) if extension == "no-network-egress"
+        ));
     }
 }

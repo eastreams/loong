@@ -189,8 +189,11 @@ impl fmt::Display for TurnFailure {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum TurnResult {
     FinalText(String),
+    StreamingText(String),
+    StreamingDone(String),
     NeedsApproval(ApprovalRequirement),
     ToolDenied(TurnFailure),
     ToolError(TurnFailure),
@@ -216,7 +219,10 @@ impl TurnResult {
 
     pub fn failure(&self) -> Option<&TurnFailure> {
         match self {
-            TurnResult::FinalText(_) | TurnResult::NeedsApproval(_) => None,
+            TurnResult::FinalText(_)
+            | TurnResult::StreamingText(_)
+            | TurnResult::StreamingDone(_)
+            | TurnResult::NeedsApproval(_) => None,
             TurnResult::ToolDenied(failure)
             | TurnResult::ToolError(failure)
             | TurnResult::ProviderError(failure) => Some(failure),
@@ -260,6 +266,18 @@ pub trait AppToolDispatcher: Send + Sync {
         _kernel_ctx: Option<&KernelContext>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         Ok(None)
+    }
+
+    async fn maybe_require_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let kernel_ctx = binding.kernel_context();
+        self.maybe_require_approval(session_context, intent, descriptor, kernel_ctx)
+            .await
     }
 
     async fn execute_app_tool(
@@ -453,16 +471,29 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         session_context: &SessionContext,
         intent: &ToolIntent,
         descriptor: &crate::tools::ToolDescriptor,
-        _kernel_ctx: Option<&KernelContext>,
+        kernel_ctx: Option<&KernelContext>,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(kernel_ctx);
+        self.maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .await
+    }
+
+    async fn maybe_require_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         #[cfg(not(feature = "memory-sqlite"))]
         {
-            let _ = (session_context, intent, descriptor);
+            let _ = (session_context, intent, descriptor, binding);
             Ok(None)
         }
 
         #[cfg(feature = "memory-sqlite")]
         {
+            let _ = binding;
             let governance = governance_profile_for_descriptor(descriptor);
             if descriptor.execution_kind != ToolExecutionKind::App
                 || governance.approval_mode != ToolApprovalMode::PolicyDriven
@@ -653,6 +684,8 @@ fn augment_tool_payload_for_kernel(
     session_context: &SessionContext,
 ) -> serde_json::Value {
     let payload = inject_runtime_narrowing_context(payload, session_context);
+    let payload =
+        inject_tool_search_visibility_context(canonical_tool_name, payload, session_context);
 
     // Direct browser tool calls: inject scope at the top level.
     if browser_scope_injection_required(canonical_tool_name) {
@@ -677,6 +710,47 @@ fn augment_tool_payload_for_kernel(
     }
 
     payload
+}
+
+fn inject_tool_search_visibility_context(
+    canonical_tool_name: &str,
+    payload: serde_json::Value,
+    session_context: &SessionContext,
+) -> serde_json::Value {
+    if canonical_tool_name != "tool.search" {
+        return payload;
+    }
+
+    let serde_json::Value::Object(mut object) = payload else {
+        return payload;
+    };
+
+    let mut internal = object
+        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let mut tool_search_context = internal
+        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY)
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let visible_tool_ids = session_context
+        .tool_view
+        .tool_names()
+        .map(|tool_name| serde_json::Value::String(tool_name.to_owned()))
+        .collect::<Vec<_>>();
+    tool_search_context.insert(
+        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
+        serde_json::Value::Array(visible_tool_ids),
+    );
+    internal.insert(
+        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
+        serde_json::Value::Object(tool_search_context),
+    );
+    object.insert(
+        crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+        serde_json::Value::Object(internal),
+    );
+    serde_json::Value::Object(object)
 }
 
 fn inject_runtime_narrowing_context(
@@ -808,7 +882,7 @@ fn effective_payload_summary_limit(intent: &ToolIntent, default_limit: usize) ->
     default_limit
 }
 
-fn effective_result_tool_name(intent: &ToolIntent) -> String {
+pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
     let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
     if canonical_tool_name != "tool.invoke" {
         return canonical_tool_name.to_owned();
@@ -824,6 +898,75 @@ fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .filter(|tool_name| !crate::tools::is_provider_exposed_tool_name(tool_name))
         .unwrap_or(canonical_tool_name)
         .to_owned()
+}
+
+fn build_tool_intent_completed_trace(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> ToolBatchExecutionIntentTrace {
+    let tool_name = effective_result_tool_name(intent);
+    let detail = summarize_completed_tool_trace_detail(tool_name.as_str(), outcome);
+
+    ToolBatchExecutionIntentTrace {
+        tool_call_id: intent.tool_call_id.clone(),
+        tool_name,
+        status: ToolBatchExecutionIntentStatus::Completed,
+        detail,
+    }
+}
+
+fn summarize_completed_tool_trace_detail(
+    tool_name: &str,
+    outcome: &ToolCoreOutcome,
+) -> Option<String> {
+    let normalized_status = outcome.status.trim();
+    if !normalized_status.is_empty() && normalized_status != "ok" {
+        return Some(normalized_status.to_owned());
+    }
+
+    match tool_name {
+        "tool.search" => summarize_tool_search_completed_trace_detail(&outcome.payload),
+        _ => None,
+    }
+}
+
+fn summarize_tool_search_completed_trace_detail(payload: &serde_json::Value) -> Option<String> {
+    let returned = payload.get("returned")?.as_u64()?;
+    let noun = if returned == 1 { "result" } else { "results" };
+    Some(format!("returned {returned} {noun}"))
+}
+
+fn build_tool_intent_failure_trace(
+    intent: &ToolIntent,
+    turn_result: &TurnResult,
+) -> Option<ToolBatchExecutionIntentTrace> {
+    let tool_name = effective_result_tool_name(intent);
+
+    match turn_result {
+        TurnResult::NeedsApproval(requirement) => Some(ToolBatchExecutionIntentTrace {
+            tool_call_id: intent.tool_call_id.clone(),
+            tool_name,
+            status: ToolBatchExecutionIntentStatus::NeedsApproval,
+            detail: Some(requirement.reason.clone()),
+        }),
+        TurnResult::ToolDenied(failure) => Some(ToolBatchExecutionIntentTrace {
+            tool_call_id: intent.tool_call_id.clone(),
+            tool_name,
+            status: ToolBatchExecutionIntentStatus::Denied,
+            detail: Some(failure.reason.clone()),
+        }),
+        TurnResult::ToolError(failure) | TurnResult::ProviderError(failure) => {
+            Some(ToolBatchExecutionIntentTrace {
+                tool_call_id: intent.tool_call_id.clone(),
+                tool_name,
+                status: ToolBatchExecutionIntentStatus::Failed,
+                detail: Some(failure.reason.clone()),
+            })
+        }
+        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
+            None
+        }
+    }
 }
 
 fn truncate_by_chars(value: &str, limit: usize) -> (String, usize, bool) {
@@ -970,6 +1113,22 @@ pub(crate) struct ToolBatchExecutionSegmentTrace {
     pub observed_wall_time_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolBatchExecutionIntentStatus {
+    Completed,
+    NeedsApproval,
+    Denied,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolBatchExecutionIntentTrace {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub status: ToolBatchExecutionIntentStatus,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolBatchExecutionTrace {
     pub total_intents: usize,
@@ -978,6 +1137,7 @@ pub(crate) struct ToolBatchExecutionTrace {
     pub observed_peak_in_flight: usize,
     pub observed_wall_time_ms: u64,
     pub segments: Vec<ToolBatchExecutionSegmentTrace>,
+    pub intent_outcomes: Vec<ToolBatchExecutionIntentTrace>,
 }
 
 impl ToolBatchExecutionSegmentTrace {
@@ -1368,6 +1528,7 @@ impl TurnEngine {
                             session_context,
                             app_dispatcher,
                             binding,
+                            &mut trace.intent_outcomes,
                             trace_segment,
                         )
                         .await?
@@ -1378,6 +1539,7 @@ impl TurnEngine {
                             session_context,
                             app_dispatcher,
                             binding,
+                            &mut trace.intent_outcomes,
                             trace_segment,
                         )
                         .await?
@@ -1417,6 +1579,7 @@ impl TurnEngine {
                     observed_wall_time_ms: None,
                 })
                 .collect(),
+            intent_outcomes: Vec::new(),
         }
     }
 
@@ -1465,20 +1628,35 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
         let result = async {
             let mut outputs = Vec::with_capacity(prepared.len());
             for prepared_intent in prepared {
-                let outcome = self
+                let outcome = match self
                     .execute_prepared_tool_intent(
                         prepared_intent,
                         session_context,
                         app_dispatcher,
                         binding,
                     )
-                    .await?;
+                    .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(turn_result) => {
+                        let intent_outcome =
+                            build_tool_intent_failure_trace(&prepared_intent.intent, &turn_result);
+                        if let Some(intent_outcome) = intent_outcome {
+                            intent_outcomes.push(intent_outcome);
+                        }
+                        return Err(turn_result);
+                    }
+                };
+                let intent_outcome =
+                    build_tool_intent_completed_trace(&prepared_intent.intent, &outcome);
+                intent_outcomes.push(intent_outcome);
                 outputs.push(format_tool_result_line_with_limit(
                     &prepared_intent.intent,
                     &outcome,
@@ -1501,6 +1679,7 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -1524,11 +1703,23 @@ impl TurnEngine {
                         )
                         .await
                         .map(|outcome| {
-                            format_tool_result_line_with_limit(
+                            let output = format_tool_result_line_with_limit(
                                 &prepared_intent.intent,
                                 &outcome,
                                 payload_summary_limit_chars,
-                            )
+                            );
+                            let intent_outcome = build_tool_intent_completed_trace(
+                                &prepared_intent.intent,
+                                &outcome,
+                            );
+                            (output, intent_outcome)
+                        })
+                        .map_err(|turn_result| {
+                            let intent_outcome = build_tool_intent_failure_trace(
+                                &prepared_intent.intent,
+                                &turn_result,
+                            );
+                            (turn_result, intent_outcome)
                         });
                     in_flight.fetch_sub(1, Ordering::Relaxed);
                     (index, result)
@@ -1540,8 +1731,16 @@ impl TurnEngine {
         let result = async {
             while let Some((index, result)) = executions.next().await {
                 match result {
-                    Ok(output) => results.push((index, output)),
-                    Err(turn_result) => return Err(turn_result),
+                    Ok((output, intent_outcome)) => {
+                        intent_outcomes.push(intent_outcome);
+                        results.push((index, output));
+                    }
+                    Err((turn_result, intent_outcome)) => {
+                        if let Some(intent_outcome) = intent_outcome {
+                            intent_outcomes.push(intent_outcome);
+                        }
+                        return Err(turn_result);
+                    }
                 }
             }
             Ok(())
@@ -1574,11 +1773,15 @@ impl TurnEngine {
             intent.args_json.clone(),
             ingress,
         );
+        let injected_payload_uses_reserved_internal_context =
+            crate::tools::payload_uses_reserved_internal_tool_context(&injected.payload);
         let augmented_payload = augment_tool_payload_for_kernel(
             resolved_tool.canonical_name,
             injected.payload,
             session_context,
         );
+        let augmented_payload_uses_reserved_internal_context =
+            crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload);
         let request = ToolCoreRequest {
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload,
@@ -1624,13 +1827,12 @@ impl TurnEngine {
                 }
             }
             ToolExecutionKind::App => {
-                let kernel_ctx = binding.kernel_context();
                 match app_dispatcher
-                    .maybe_require_approval(
+                    .maybe_require_approval_with_binding(
                         session_context,
                         &effective_intent,
                         descriptor,
-                        kernel_ctx,
+                        binding,
                     )
                     .await
                 {
@@ -1654,7 +1856,9 @@ impl TurnEngine {
             request: effective_request,
             execution_kind: effective_execution_kind,
             scheduling_class,
-            trusted_internal_context: injected.trusted_internal_context,
+            trusted_internal_context: injected.trusted_internal_context
+                || (!injected_payload_uses_reserved_internal_context
+                    && augmented_payload_uses_reserved_internal_context),
         })
     }
 
@@ -1905,6 +2109,53 @@ mod tests {
         }
     }
 
+    fn partially_failing_observed_execution_turn(session_id: &str, turn_id: &str) -> ProviderTurn {
+        ProviderTurn {
+            assistant_text: "observing a partial tool failure".to_owned(),
+            tool_intents: vec![
+                provider_app_tool_intent(
+                    "sessions_list",
+                    json!({}),
+                    session_id,
+                    turn_id,
+                    "call-partial-1",
+                ),
+                provider_app_tool_intent(
+                    "session_status",
+                    json!({"session_id": session_id}),
+                    session_id,
+                    turn_id,
+                    "call-partial-2",
+                ),
+            ],
+            raw_meta: json!({}),
+        }
+    }
+
+    struct PartiallyFailingObservedExecutionDispatcher;
+
+    #[async_trait::async_trait]
+    impl AppToolDispatcher for PartiallyFailingObservedExecutionDispatcher {
+        async fn execute_app_tool(
+            &self,
+            session_context: &SessionContext,
+            request: ToolCoreRequest,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            match request.tool_name.as_str() {
+                "sessions_list" => Ok(ToolCoreOutcome {
+                    status: "ok".to_owned(),
+                    payload: json!({
+                        "tool": request.tool_name,
+                        "session_id": session_context.session_id,
+                    }),
+                }),
+                "session_status" => Err("simulated observed tool failure".to_owned()),
+                other => Err(format!("app_tool_not_found: {other}")),
+            }
+        }
+    }
+
     fn unique_browser_companion_temp_dir(prefix: &str) -> PathBuf {
         unique_temp_dir(prefix)
     }
@@ -1989,6 +2240,8 @@ mod tests {
                     .expect("approval request id should be present")
             }
             other @ TurnResult::FinalText(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2052,6 +2305,8 @@ mod tests {
                     .expect("approval request id should be present")
             }
             other @ TurnResult::FinalText(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2121,6 +2376,8 @@ mod tests {
                 .approval_request_id
                 .expect("first approval request id"),
             other @ TurnResult::FinalText(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2132,6 +2389,8 @@ mod tests {
                 .approval_request_id
                 .expect("second approval request id"),
             other @ TurnResult::FinalText(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2205,6 +2464,8 @@ mod tests {
                     .expect("approval request id should exist")
             }
             other @ TurnResult::FinalText(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
             | other @ TurnResult::ProviderError(_) => {
@@ -2299,7 +2560,9 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_) => {
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };
@@ -2397,7 +2660,9 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_) => {
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };
@@ -2497,7 +2762,9 @@ mod tests {
             other @ TurnResult::NeedsApproval(_)
             | other @ TurnResult::ToolDenied(_)
             | other @ TurnResult::ToolError(_)
-            | other @ TurnResult::ProviderError(_) => {
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
                 panic!("expected FinalText, got {other:?}")
             }
         };
@@ -2622,6 +2889,56 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn observed_fast_lane_execution_trace_records_partial_tool_failure_outcomes() {
+        let turn = partially_failing_observed_execution_turn(
+            "session-observed-partial-failure",
+            "turn-observed-partial-failure",
+        );
+        let session_context = SessionContext::root_with_tool_view(
+            "session-observed-partial-failure",
+            runtime_tool_view(),
+        );
+        let dispatcher = PartiallyFailingObservedExecutionDispatcher;
+        let engine = TurnEngine::with_parallel_tool_execution(4, 512, false, 1);
+
+        let (result, trace) = engine
+            .execute_turn_in_context_with_trace(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(result, TurnResult::ToolError(_)),
+            "expected ToolError, got {result:?}"
+        );
+
+        let trace = trace.expect("trace should exist");
+        assert_eq!(trace.intent_outcomes.len(), 2);
+        assert_eq!(
+            trace.intent_outcomes[0].status,
+            ToolBatchExecutionIntentStatus::Completed
+        );
+        assert_eq!(trace.intent_outcomes[0].tool_call_id, "call-partial-1");
+        assert_eq!(
+            trace.intent_outcomes[1].status,
+            ToolBatchExecutionIntentStatus::Failed
+        );
+        assert_eq!(trace.intent_outcomes[1].tool_call_id, "call-partial-2");
+        assert!(
+            trace.intent_outcomes[1]
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("simulated observed tool failure")),
+            "expected failure detail in trace, got {:?}",
+            trace.intent_outcomes[1].detail
+        );
+    }
+
     #[test]
     fn augment_tool_payload_injects_browser_scope_for_companion_tool_invoke() {
         let (tool_name, payload) = crate::tools::synthesize_test_provider_tool_call_with_scope(
@@ -2643,6 +2960,39 @@ mod tests {
         assert_eq!(
             augmented["arguments"][crate::tools::BROWSER_SESSION_SCOPE_FIELD],
             "root-session"
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_injects_visible_tool_ids_for_tool_search() {
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.search", "tool.invoke", "file.read"]),
+        )
+        .with_runtime_narrowing(crate::tools::runtime_config::ToolRuntimeNarrowing {
+            browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+            },
+            ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+        });
+        let payload = json!({
+            "query": "read note.md",
+            "limit": 3,
+        });
+
+        let augmented = augment_tool_payload_for_kernel("tool.search", payload, &session_context);
+
+        assert_eq!(
+            augmented[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
+            json!(["file.read", "tool.invoke", "tool.search"])
+        );
+        assert_eq!(
+            augmented[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
+            1
         );
     }
 }

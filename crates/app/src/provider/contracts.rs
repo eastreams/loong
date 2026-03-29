@@ -59,6 +59,10 @@ impl ProviderTransportMode {
             }
         }
     }
+
+    pub(super) fn supports_turn_streaming_events(self) -> bool {
+        matches!(self, Self::AnthropicMessages)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +153,12 @@ pub(super) struct ProviderRuntimeContract {
     pub(super) validation: ProviderValidationContract,
     pub(super) error_classification: ProviderErrorClassificationContract,
     pub(super) capability: ProviderCapabilityContract,
+}
+
+impl ProviderRuntimeContract {
+    pub(super) fn supports_turn_streaming_events(self) -> bool {
+        self.transport_mode.supports_turn_streaming_events()
+    }
 }
 
 pub(super) fn provider_runtime_contract(provider: &ProviderConfig) -> ProviderRuntimeContract {

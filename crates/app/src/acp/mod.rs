@@ -23,7 +23,7 @@ pub use backend::{
     AcpSessionHandle, AcpSessionMetadata, AcpSessionMode, AcpSessionState, AcpSessionStatus,
     AcpTurnEventSink, AcpTurnProvenance, AcpTurnRequest, AcpTurnResult, AcpTurnStopReason,
     BufferedAcpTurnEventSink, CompositeAcpTurnEventSink, JsonlAcpTurnEventSink,
-    PlanningStubAcpBackend,
+    PlanningStubAcpBackend, StreamingTokenEvent, TokenDelta, ToolCallDelta,
 };
 pub use binding::AcpSessionBindingScope;
 pub use manager::{

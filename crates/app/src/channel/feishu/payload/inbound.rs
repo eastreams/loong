@@ -6,6 +6,7 @@ use crate::CliResult;
 use crate::channel::{
     ChannelDeliveryResource, ChannelOutboundTarget, ChannelPlatform, ChannelSession,
 };
+use crate::crypto::timing_safe_eq;
 use crate::feishu::FeishuUserPrincipal;
 
 use super::crypto::decrypt_payload_if_needed;
@@ -295,7 +296,7 @@ fn verify_feishu_token(payload: &Value, verification_token: Option<&str>) -> Cli
     if incoming.is_empty() {
         return Err("unauthorized: feishu payload missing token".to_owned());
     }
-    if incoming != expected_token {
+    if !timing_safe_eq(incoming.as_bytes(), expected_token.as_bytes()) {
         return Err("unauthorized: feishu verification token mismatch".to_owned());
     }
     Ok(())

@@ -1,4 +1,5 @@
 pub mod analytics;
+mod compaction;
 mod context_engine;
 mod context_engine_registry;
 mod ingress;
@@ -14,11 +15,13 @@ mod session_address;
 mod session_history;
 mod subagent;
 mod turn_budget;
+mod turn_checkpoint;
 mod turn_coordinator;
 pub mod turn_engine;
 mod turn_loop;
 mod turn_middleware;
 mod turn_middleware_registry;
+mod turn_observer;
 mod turn_shared;
 
 pub use analytics::{
@@ -33,9 +36,10 @@ pub use analytics::{
     summarize_turn_checkpoint_events,
 };
 pub use context_engine::{
-    AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextEngineBootstrapResult,
-    ContextEngineCapability, ContextEngineIngestResult, ContextEngineMetadata,
-    ConversationContextEngine, DefaultContextEngine, LegacyContextEngine,
+    AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
+    ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
+    ContextEngineIngestResult, ContextEngineMetadata, ConversationContextEngine,
+    DefaultContextEngine, LegacyContextEngine, ToolOutputStreamingPolicy,
 };
 pub use context_engine_registry::{
     CONTEXT_ENGINE_ENV, DEFAULT_CONTEXT_ENGINE_ID, LEGACY_CONTEXT_ENGINE_ID,
@@ -77,13 +81,13 @@ pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
 pub use turn_budget::SafeLaneFailureRouteReason;
-pub use turn_coordinator::ConversationTurnCoordinator;
-pub(crate) use turn_coordinator::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
-pub use turn_coordinator::{
+pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
+pub use turn_checkpoint::{
     TurnCheckpointTailRepairOutcome, TurnCheckpointTailRepairReason,
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
+pub use turn_coordinator::ConversationTurnCoordinator;
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
     ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
@@ -98,6 +102,10 @@ pub use turn_middleware_registry::{
     TURN_MIDDLEWARE_ENV, default_turn_middleware_ids, describe_turn_middlewares,
     list_turn_middleware_ids, list_turn_middleware_metadata, register_turn_middleware,
     resolve_turn_middleware, resolve_turn_middlewares, turn_middleware_ids_from_env,
+};
+pub use turn_observer::{
+    ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
+    ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

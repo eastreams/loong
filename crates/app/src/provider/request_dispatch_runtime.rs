@@ -13,7 +13,8 @@ use super::contracts::{
 use super::failover::ModelRequestError;
 use super::policy;
 use super::request_executor::{
-    ModelRequestRuntime, execute_model_request, execute_openai_streaming_turn_request,
+    ModelRequestRuntime, StreamingModelRequestRuntime, execute_model_request,
+    execute_openai_streaming_turn_request, execute_streaming_turn_request,
 };
 use super::request_payload_runtime::{
     build_completion_request_body_with_capability, build_turn_request_body_with_capability,
@@ -220,6 +221,7 @@ async fn request_turn_with_provider(
                         capability,
                         include_tool_schema.load(Ordering::Relaxed),
                         tool_definitions,
+                        true,
                     )
                 },
                 messages,
@@ -256,6 +258,7 @@ async fn request_turn_with_provider(
                     capability,
                     include_tool_schema.load(Ordering::Relaxed),
                     tool_definitions,
+                    false,
                 )
             },
             |body| {
@@ -293,6 +296,133 @@ async fn request_turn_with_provider(
             result => return result,
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn request_turn_streaming(
+    base_config: &LoongClawConfig,
+    request_provider: &ProviderConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    model: &str,
+    auto_model_mode: bool,
+    tool_definitions: &[Value],
+    initial_endpoint: &str,
+    auth_profile: &ProviderAuthProfile,
+    auth_context: &super::transport::RequestAuthContext,
+    headers: &reqwest::header::HeaderMap,
+    request_policy: &policy::ProviderRequestPolicy,
+    client: &reqwest::Client,
+    on_token: super::request_executor::StreamingTokenCallback,
+) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    let mut current_provider = request_provider.clone();
+    let mut current_endpoint = initial_endpoint.to_owned();
+    loop {
+        let runtime_contract = provider_runtime_contract(&current_provider);
+        let capability_profile =
+            ProviderCapabilityProfile::from_provider(&current_provider, runtime_contract);
+        let capability = capability_profile.resolve_for_model(model);
+        let include_tool_schema =
+            AtomicBool::new(capability.turn_tool_schema_enabled() && !tool_definitions.is_empty());
+        let mut request_config = base_config.clone();
+        request_config.provider = current_provider.clone();
+        let runtime = StreamingModelRequestRuntime {
+            provider: &current_provider,
+            model,
+            runtime_contract,
+            capability,
+            auto_model_mode,
+            auth_profile,
+            endpoint: current_endpoint.as_str(),
+            headers,
+            request_policy,
+            client,
+            auth_context,
+        };
+
+        match execute_streaming_turn_request(
+            runtime,
+            |payload_mode| {
+                build_turn_request_body_with_capability(
+                    &request_config,
+                    messages,
+                    model,
+                    payload_mode,
+                    runtime_contract,
+                    capability,
+                    include_tool_schema.load(Ordering::Relaxed),
+                    tool_definitions,
+                    true,
+                )
+            },
+            Some(session_id),
+            Some(turn_id),
+            messages,
+            on_token.clone(),
+            |api_error| {
+                if include_tool_schema.load(Ordering::Relaxed)
+                    && capability.tool_schema_downgrade_on_unsupported()
+                    && should_disable_tool_schema_for_error(api_error, runtime_contract)
+                {
+                    include_tool_schema.store(false, Ordering::Relaxed);
+                    return true;
+                }
+                false
+            },
+        )
+        .await
+        {
+            Err(error)
+                if should_retry_with_chat_completions_fallback(&current_provider, &error) =>
+            {
+                if let Some(fallback_provider) = current_provider.responses_fallback_provider() {
+                    current_provider = fallback_provider;
+                    current_endpoint = current_provider.endpoint();
+                    continue;
+                }
+                return Err(error);
+            }
+            result => return result,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn request_turn_streaming_with_model(
+    config: &LoongClawConfig,
+    session_id: &str,
+    turn_id: &str,
+    messages: &[Value],
+    model: String,
+    auto_model_mode: bool,
+    tool_definitions: &[Value],
+    auth_profile: ProviderAuthProfile,
+    endpoint: &str,
+    headers: &reqwest::header::HeaderMap,
+    request_policy: &policy::ProviderRequestPolicy,
+    client: &reqwest::Client,
+    auth_context: &super::transport::RequestAuthContext,
+    on_token: super::request_executor::StreamingTokenCallback,
+) -> Result<crate::conversation::turn_engine::ProviderTurn, ModelRequestError> {
+    request_turn_streaming(
+        config,
+        &config.provider,
+        session_id,
+        turn_id,
+        messages,
+        model.as_str(),
+        auto_model_mode,
+        tool_definitions,
+        endpoint,
+        &auth_profile,
+        auth_context,
+        headers,
+        request_policy,
+        client,
+        on_token,
+    )
+    .await
 }
 
 fn should_retry_with_chat_completions_fallback(

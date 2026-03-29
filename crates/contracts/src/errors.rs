@@ -127,6 +127,16 @@ pub enum IntegrationError {
     PluginFileRead { path: String, reason: String },
     #[error("invalid plugin manifest in {path}: {reason}")]
     PluginManifestParse { path: String, reason: String },
+    #[error(
+        "plugin manifest conflict between package {package_manifest_path} and source {source_path} on {field}: package {package_value} vs source {source_value}"
+    )]
+    PluginManifestConflict {
+        package_manifest_path: String,
+        source_path: String,
+        field: String,
+        package_value: String,
+        source_value: String,
+    },
     #[error("awareness root does not exist: {0}")]
     AwarenessRootNotFound(String),
     #[error("failed to inspect awareness file {path}: {reason}")]

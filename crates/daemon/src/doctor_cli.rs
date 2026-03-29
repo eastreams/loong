@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 
 use kernel::probe_jsonl_audit_journal_runtime_ready;
 use loongclaw_app as mvp;
+use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 use serde_json::json;
 
-const MODEL_CATALOG_PROBE_FAILED_MARKER: &str = "model catalog probe failed";
+use crate::provider_credential_policy;
+use crate::provider_model_probe_policy;
 
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
@@ -38,12 +40,6 @@ struct DoctorSummary {
     pass: usize,
     warn: usize,
     fail: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct DoctorChannelCheckSpec {
-    config_name: &'static str,
-    runtime_name: Option<&'static str>,
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -83,12 +79,17 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
                 detail: format!("{} model(s) available", models.len()),
             }),
             Err(error) => {
-                let transport_style_failure =
-                    crate::provider_route_diagnostics::is_transport_style_model_probe_failure(
-                        error.as_str(),
-                    );
-                checks.push(provider_model_probe_failure_check(&config, error));
-                if transport_style_failure
+                let probe_failure = provider_model_probe_policy::provider_model_probe_failure(
+                    &config,
+                    error.as_str(),
+                );
+                let should_collect_route_probe = matches!(
+                    &probe_failure.kind,
+                    provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure
+                );
+                let check = doctor_check_from_provider_model_probe_failure(probe_failure);
+                checks.push(check);
+                if should_collect_route_probe
                     && let Some(route_probe) =
                         crate::provider_route_diagnostics::collect_provider_route_probe(
                             &config.provider,
@@ -920,17 +921,17 @@ fn feishu_integration_requested(config: &mvp::config::FeishuChannelConfig) -> bo
             .as_deref()
             .map(str::trim)
             .is_some_and(|value| !value.is_empty())
-        || config
-            .app_id
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
-        || config
-            .app_secret
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty())
+        || secret_ref_is_configured(config.app_id.as_ref())
+        || secret_ref_is_configured(config.app_secret.as_ref())
         || !config.accounts.is_empty()
+}
+
+fn secret_ref_is_configured(secret_ref: Option<&SecretRef>) -> bool {
+    let Some(secret_ref) = secret_ref else {
+        return false;
+    };
+
+    secret_ref.is_configured()
 }
 
 fn scoped_feishu_check_name(base_name: &str, configured_account_id: &str, scoped: bool) -> String {
@@ -966,23 +967,9 @@ fn build_channel_surface_checks(
             });
         }
         for operation in &snapshot.operations {
-            let Some(spec) = doctor_check_spec(snapshot.id, operation.id) else {
-                continue;
-            };
-            checks.push(DoctorCheck {
-                name: scoped_doctor_check_name(spec.config_name, snapshot, scoped),
-                level: doctor_check_level_for_health(operation.health),
-                detail: operation.detail.clone(),
-            });
-
-            if let Some(runtime_name) = spec.runtime_name
-                && operation.health == mvp::channel::ChannelOperationHealth::Ready
-            {
-                checks.push(build_channel_runtime_check(
-                    scoped_doctor_check_name(runtime_name, snapshot, scoped).as_str(),
-                    operation,
-                ));
-            }
+            let operation_checks =
+                build_channel_operation_doctor_checks(snapshot, scoped, operation);
+            checks.extend(operation_checks);
         }
         if let Some(check) = build_feishu_inbound_support_check(snapshot, scoped) {
             checks.push(check);
@@ -1007,7 +994,7 @@ fn build_feishu_inbound_support_check(
     snapshot: &mvp::channel::ChannelStatusSnapshot,
     scoped: bool,
 ) -> Option<DoctorCheck> {
-    if snapshot.id != "feishu" {
+    if !snapshot_matches_channel_id(snapshot, "feishu") {
         return None;
     }
     let serve = snapshot.operation("serve")?;
@@ -1038,6 +1025,14 @@ fn build_feishu_inbound_support_check(
     })
 }
 
+fn snapshot_matches_channel_id(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    expected_channel_id: &str,
+) -> bool {
+    let normalized_channel_id = mvp::channel::normalize_channel_catalog_id(snapshot.id);
+    normalized_channel_id == Some(expected_channel_id)
+}
+
 fn snapshot_note_value<'a>(
     snapshot: &'a mvp::channel::ChannelStatusSnapshot,
     key: &str,
@@ -1049,29 +1044,54 @@ fn snapshot_note_value<'a>(
         .find_map(|note| note.strip_prefix(prefix.as_str()))
 }
 
-fn doctor_check_spec(channel_id: &str, operation_id: &str) -> Option<DoctorChannelCheckSpec> {
-    match (channel_id, operation_id) {
-        ("telegram", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "telegram channel",
-            runtime_name: Some("telegram channel runtime"),
-        }),
-        ("feishu", "send") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu channel",
-            runtime_name: None,
-        }),
-        ("feishu", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "feishu inbound transport",
-            runtime_name: Some("feishu serve runtime"),
-        }),
-        ("matrix", "send") => Some(DoctorChannelCheckSpec {
-            config_name: "matrix channel",
-            runtime_name: None,
-        }),
-        ("matrix", "serve") => Some(DoctorChannelCheckSpec {
-            config_name: "matrix room sync",
-            runtime_name: Some("matrix channel runtime"),
-        }),
-        _ => None,
+fn build_channel_operation_doctor_checks(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> Vec<DoctorCheck> {
+    let doctor_spec =
+        mvp::channel::resolve_channel_doctor_operation_spec(snapshot.id, operation.id);
+    let Some(doctor_spec) = doctor_spec else {
+        return Vec::new();
+    };
+
+    let mut checks = Vec::new();
+    for check_spec in doctor_spec.checks {
+        let doctor_check =
+            build_channel_operation_doctor_check(snapshot, scoped, operation, check_spec);
+        if let Some(doctor_check) = doctor_check {
+            checks.push(doctor_check);
+        }
+    }
+    checks
+}
+
+fn build_channel_operation_doctor_check(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    scoped: bool,
+    operation: &mvp::channel::ChannelOperationStatus,
+    check_spec: &mvp::channel::ChannelDoctorCheckSpec,
+) -> Option<DoctorCheck> {
+    let check_name = scoped_doctor_check_name(check_spec.name, snapshot, scoped);
+    match check_spec.trigger {
+        mvp::channel::ChannelDoctorCheckTrigger::OperationHealth => {
+            if operation.health == mvp::channel::ChannelOperationHealth::Disabled {
+                return None;
+            }
+
+            Some(DoctorCheck {
+                name: check_name,
+                level: doctor_check_level_for_health(operation.health),
+                detail: operation.detail.clone(),
+            })
+        }
+        mvp::channel::ChannelDoctorCheckTrigger::ReadyRuntime => {
+            if operation.health != mvp::channel::ChannelOperationHealth::Ready {
+                return None;
+            }
+            let runtime_check = build_channel_runtime_check(check_name.as_str(), operation);
+            Some(runtime_check)
+        }
     }
 }
 
@@ -1158,24 +1178,30 @@ fn maybe_apply_provider_env_fix(
     if !fix {
         return false;
     }
-    let Some(binding) =
-        crate::onboard_cli::preferred_provider_credential_env_binding(&config.provider)
-    else {
+    let binding =
+        provider_credential_policy::preferred_provider_credential_env_binding(&config.provider);
+    let Some(binding) = binding else {
         return false;
     };
     match binding.field {
-        crate::onboard_cli::ProviderCredentialEnvField::ApiKey => ensure_env_binding(
-            &mut config.provider.api_key_env,
-            &binding.env_name,
-            fixes,
-            "set provider.api_key_env",
-        ),
-        crate::onboard_cli::ProviderCredentialEnvField::OAuthAccessToken => ensure_env_binding(
-            &mut config.provider.oauth_access_token_env,
-            &binding.env_name,
-            fixes,
-            "set provider.oauth_access_token_env",
-        ),
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            ensure_provider_env_binding(
+                &mut config.provider,
+                provider_credential_policy::ProviderCredentialEnvField::ApiKey,
+                &binding.env_name,
+                fixes,
+                "set provider.api_key.env",
+            )
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            ensure_provider_env_binding(
+                &mut config.provider,
+                provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken,
+                &binding.env_name,
+                fixes,
+                "set provider.oauth_access_token.env",
+            )
+        }
     }
 }
 
@@ -1193,6 +1219,7 @@ fn maybe_apply_channel_env_fix(
     changed
 }
 
+#[cfg(test)]
 fn ensure_env_binding(
     slot: &mut Option<String>,
     default_key: &str,
@@ -1210,6 +1237,54 @@ fn ensure_env_binding(
     *slot = Some(default_key.to_owned());
     fixes.push(format!("{label}={default_key}"));
     true
+}
+
+fn ensure_provider_env_binding(
+    provider: &mut mvp::config::ProviderConfig,
+    field: provider_credential_policy::ProviderCredentialEnvField,
+    default_key: &str,
+    fixes: &mut Vec<String>,
+    label: &'static str,
+) -> bool {
+    let configured = match field {
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            provider.configured_api_key_env_override()
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.configured_oauth_access_token_env_override()
+        }
+    };
+    if configured.is_some() {
+        return false;
+    }
+    if provider_has_non_env_credential(provider) {
+        return false;
+    }
+
+    match field {
+        provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+            provider.set_api_key_env_binding(Some(default_key.to_owned()));
+        }
+        provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+            provider.set_oauth_access_token_env_binding(Some(default_key.to_owned()));
+        }
+    }
+
+    fixes.push(format!("{label}={default_key}"));
+    true
+}
+
+fn provider_has_non_env_credential(provider: &mvp::config::ProviderConfig) -> bool {
+    provider_secret_ref_is_non_env_credential(provider.api_key.as_ref())
+        || provider_secret_ref_is_non_env_credential(provider.oauth_access_token.as_ref())
+}
+
+fn provider_secret_ref_is_non_env_credential(secret_ref: Option<&SecretRef>) -> bool {
+    let Some(secret_ref) = secret_ref else {
+        return false;
+    };
+
+    secret_ref.is_configured() && secret_ref.explicit_env_name().is_none()
 }
 
 fn provider_transport_doctor_check(provider: &mvp::config::ProviderConfig) -> DoctorCheck {
@@ -1258,7 +1333,7 @@ fn provider_credentials_doctor_check(
         };
     }
 
-    let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+    let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
     let mut detail = if hints.is_empty() {
         "provider credentials are missing".to_owned()
     } else {
@@ -1278,95 +1353,52 @@ fn provider_credentials_doctor_check(
     }
 }
 
-fn provider_model_probe_failure_check(
-    config: &mvp::config::LoongClawConfig,
-    error: String,
+fn doctor_check_from_provider_model_probe_failure(
+    probe_failure: provider_model_probe_policy::ProviderModelProbeFailure,
 ) -> DoctorCheck {
-    let provider_prefix = crate::provider_presentation::active_provider_detail_label(config);
-    if crate::provider_route_diagnostics::is_transport_style_model_probe_failure(error.as_str()) {
-        return DoctorCheck {
-            name: "provider model probe".to_owned(),
-            level: DoctorCheckLevel::Fail,
-            detail: format!(
-                "{provider_prefix}: {} ({error}); runtime could not verify the provider route. inspect provider route diagnostics and retry once dns / proxy / TUN routing is stable",
-                crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER
-            ),
-        };
-    }
-    let auth_style_failure = mvp::provider::is_auth_style_failure_message(error.as_str());
-    let append_region_hint = |mut detail: String| {
-        if auth_style_failure && let Some(hint) = config.provider.region_endpoint_failure_hint() {
-            detail.push(' ');
-            detail.push_str(hint.as_str());
-        }
-        detail
-    };
-    let (level, detail) = match config.provider.model_catalog_probe_recovery() {
-        mvp::config::ModelCatalogProbeRecovery::ExplicitModel(model) => (
-            DoctorCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); chat may still work because model `{model}` is explicitly configured"
-            )),
-        ),
-        mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(fallback_models) => (
-            DoctorCheckLevel::Warn,
-            append_region_hint(format!(
-                "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); runtime will try configured preferred model fallback(s): {}",
-                fallback_models
-                    .iter()
-                    .map(|model| format!("`{model}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )),
-        ),
-        mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
-            recommended_onboarding_model,
-        } => (
-            DoctorCheckLevel::Fail,
-            append_region_hint(provider_model_probe_requires_explicit_model_detail(
-                provider_prefix.as_str(),
-                error.as_str(),
-                recommended_onboarding_model,
-            )),
-        ),
+    let level = match probe_failure.level {
+        provider_model_probe_policy::ProviderModelProbeFailureLevel::Warn => DoctorCheckLevel::Warn,
+        provider_model_probe_policy::ProviderModelProbeFailureLevel::Fail => DoctorCheckLevel::Fail,
     };
 
     DoctorCheck {
         name: "provider model probe".to_owned(),
         level,
-        detail,
+        detail: probe_failure.detail,
     }
 }
 
-fn provider_model_probe_requires_explicit_model_detail(
-    provider_prefix: &str,
-    error: &str,
-    recommended_onboarding_model: Option<&str>,
-) -> String {
-    match recommended_onboarding_model {
-        Some(model) => format!(
-            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; rerun onboarding and accept reviewed model `{model}`, or set `provider.model` / `preferred_models` explicitly"
-        ),
-        None => format!(
-            "{provider_prefix}: {MODEL_CATALOG_PROBE_FAILED_MARKER} ({error}); current config still uses `model = auto`; set `provider.model` explicitly or configure `preferred_models` before retrying"
-        ),
-    }
+#[cfg(test)]
+fn provider_model_probe_failure_check(
+    config: &mvp::config::LoongClawConfig,
+    error: String,
+) -> DoctorCheck {
+    let probe_failure =
+        provider_model_probe_policy::provider_model_probe_failure(config, error.as_str());
+    doctor_check_from_provider_model_probe_failure(probe_failure)
 }
 
-#[allow(dead_code)]
-fn collect_channel_doctor_checks(config: &mvp::config::LoongClawConfig) -> Vec<DoctorCheck> {
-    crate::migration::channels::collect_channel_doctor_checks(config)
-        .into_iter()
-        .map(|check| DoctorCheck {
-            name: check.name.to_owned(),
-            level: match check.level {
-                crate::migration::channels::ChannelCheckLevel::Pass => DoctorCheckLevel::Pass,
-                crate::migration::channels::ChannelCheckLevel::Warn => DoctorCheckLevel::Warn,
-                crate::migration::channels::ChannelCheckLevel::Fail => DoctorCheckLevel::Fail,
-            },
-            detail: check.detail,
-        })
-        .collect()
+fn is_provider_model_probe_failure_check(check: &DoctorCheck) -> bool {
+    let is_provider_model_probe = check.name == "provider model probe";
+    let is_failure = check.level != DoctorCheckLevel::Pass;
+    let matches_probe_failure_detail =
+        provider_model_probe_policy::provider_model_probe_failed_detail(check.detail.as_str());
+
+    is_provider_model_probe && is_failure && matches_probe_failure_detail
+}
+
+fn provider_model_probe_recovery_advice_for_checks(
+    checks: &[DoctorCheck],
+    config: &mvp::config::LoongClawConfig,
+) -> Option<provider_model_probe_policy::ProviderModelProbeRecoveryAdvice> {
+    let probe_failure_check = checks
+        .iter()
+        .find(|check| is_provider_model_probe_failure_check(check))?;
+    let recovery_advice = provider_model_probe_policy::provider_model_probe_recovery_advice(
+        config,
+        probe_failure_check.detail.as_str(),
+    )?;
+    Some(recovery_advice)
 }
 
 async fn collect_browser_companion_doctor_checks(
@@ -1516,7 +1548,7 @@ fn build_doctor_next_steps_with_path_env(
         .iter()
         .any(|check| check.name == "provider credentials" && check.level != DoctorCheckLevel::Pass)
     {
-        let hints = crate::onboard_cli::provider_credential_env_hints(&config.provider);
+        let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
         if !hints.is_empty() {
             push_unique_step(
                 &mut steps,
@@ -1525,22 +1557,18 @@ fn build_doctor_next_steps_with_path_env(
         }
     }
 
-    if checks.iter().any(|check| {
-        check.name == "provider model probe"
-            && check.level != DoctorCheckLevel::Pass
-            && (check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
-                || check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
-                ))
-    }) {
-        let provider_model_probe_transport_failure = checks.iter().any(|check| {
-            check.name == "provider model probe"
-                && check.level != DoctorCheckLevel::Pass
-                && check.detail.contains(
-                    crate::provider_route_diagnostics::MODEL_CATALOG_TRANSPORT_FAILED_MARKER,
-                )
-        });
-        if provider_model_probe_transport_failure {
+    let provider_model_probe_recovery =
+        provider_model_probe_recovery_advice_for_checks(checks, config);
+    if let Some(provider_model_probe_recovery) = provider_model_probe_recovery {
+        let provider_model_probe_policy::ProviderModelProbeRecoveryAdvice {
+            kind: provider_model_probe_kind,
+            region_endpoint_hint,
+        } = provider_model_probe_recovery;
+        let is_transport_failure = matches!(
+            provider_model_probe_kind,
+            provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure
+        );
+        if is_transport_failure {
             if checks.iter().any(|check| {
                 check.name == crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
                     && check.level != DoctorCheckLevel::Pass
@@ -1569,14 +1597,9 @@ fn build_doctor_next_steps_with_path_env(
                 );
             }
         } else {
-            let provider_model_probe_auth_failure = checks.iter().any(|check| {
-                check.name == "provider model probe"
-                    && check.level != DoctorCheckLevel::Pass
-                    && check.detail.contains(MODEL_CATALOG_PROBE_FAILED_MARKER)
-                    && mvp::provider::is_auth_style_failure_message(check.detail.as_str())
-            });
-            match config.provider.model_catalog_probe_recovery() {
-                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+            match provider_model_probe_kind {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::TransportFailure => {}
+                provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: Some(model),
                 } => {
                     push_unique_step(
@@ -1592,7 +1615,7 @@ fn build_doctor_next_steps_with_path_env(
                         ),
                     );
                 }
-                mvp::config::ModelCatalogProbeRecovery::RequiresExplicitModel {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::RequiresExplicitModel {
                     recommended_onboarding_model: None,
                 } => {
                     push_unique_step(
@@ -1602,8 +1625,10 @@ fn build_doctor_next_steps_with_path_env(
                         ),
                     );
                 }
-                mvp::config::ModelCatalogProbeRecovery::ExplicitModel(_)
-                | mvp::config::ModelCatalogProbeRecovery::ConfiguredPreferredModels(_) => {
+                provider_model_probe_policy::ProviderModelProbeFailureKind::ExplicitModel { .. }
+                | provider_model_probe_policy::ProviderModelProbeFailureKind::PreferredModels {
+                    ..
+                } => {
                     push_unique_step(
                         &mut steps,
                         format!(
@@ -1618,9 +1643,7 @@ fn build_doctor_next_steps_with_path_env(
                     );
                 }
             }
-            if provider_model_probe_auth_failure
-                && let Some(hint) = config.provider.region_endpoint_failure_hint()
-            {
+            if let Some(hint) = region_endpoint_hint {
                 push_unique_step(&mut steps, hint);
             }
         }
@@ -1780,14 +1803,13 @@ fn select_doctor_first_turn_actions(
         action.kind == crate::next_actions::SetupNextActionKind::Chat
     });
     push_first_matching_action(&mut prioritized, &actions, |action| {
-        action.kind == crate::next_actions::SetupNextActionKind::BrowserPreview
-            && matches!(
-                action.browser_preview_phase,
-                Some(crate::next_actions::BrowserPreviewActionPhase::Ready)
-                    | Some(crate::next_actions::BrowserPreviewActionPhase::Unblock)
-                    | Some(crate::next_actions::BrowserPreviewActionPhase::Enable)
-                    | Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime)
-            )
+        is_repair_priority_browser_preview_action(action)
+    });
+    push_first_matching_action(&mut prioritized, &actions, |action| {
+        is_channel_catalog_action(action)
+    });
+    push_first_matching_action(&mut prioritized, &actions, |action| {
+        is_general_browser_preview_action(action)
     });
 
     for action in actions {
@@ -1799,6 +1821,38 @@ fn select_doctor_first_turn_actions(
 
     prioritized.truncate(3);
     prioritized
+}
+
+fn is_channel_catalog_action(action: &crate::next_actions::SetupNextAction) -> bool {
+    let kind = &action.kind;
+    let channel_action_id = action.channel_action_id;
+    *kind == crate::next_actions::SetupNextActionKind::Channel
+        && channel_action_id == Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID)
+}
+
+fn is_repair_priority_browser_preview_action(
+    action: &crate::next_actions::SetupNextAction,
+) -> bool {
+    let kind = &action.kind;
+    let phase = action.browser_preview_phase;
+    *kind == crate::next_actions::SetupNextActionKind::BrowserPreview
+        && matches!(
+            phase,
+            Some(crate::next_actions::BrowserPreviewActionPhase::Unblock)
+                | Some(crate::next_actions::BrowserPreviewActionPhase::InstallRuntime)
+        )
+}
+
+fn is_general_browser_preview_action(action: &crate::next_actions::SetupNextAction) -> bool {
+    let kind = &action.kind;
+    let phase = action.browser_preview_phase;
+    let is_browser_preview = *kind == crate::next_actions::SetupNextActionKind::BrowserPreview;
+    let is_general_phase = matches!(
+        phase,
+        Some(crate::next_actions::BrowserPreviewActionPhase::Ready)
+            | Some(crate::next_actions::BrowserPreviewActionPhase::Enable)
+    );
+    is_browser_preview && is_general_phase
 }
 
 fn push_first_matching_action<F>(
@@ -1849,6 +1903,7 @@ mod tests {
     static FEISHU_TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     use super::*;
+    use crate::test_support::ScopedEnv;
     use mvp::channel::{
         ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
         ChannelStatusSnapshot,
@@ -1979,8 +2034,9 @@ mod tests {
     }
 
     #[test]
-    fn channel_doctor_checks_omit_disabled_channels() {
-        let checks = collect_channel_doctor_checks(&mvp::config::LoongClawConfig::default());
+    fn check_channel_surfaces_omit_disabled_channels() {
+        let config = mvp::config::LoongClawConfig::default();
+        let checks = check_channel_surfaces(&config);
         assert!(
             checks.is_empty(),
             "disabled optional channels should not generate doctor warnings by default: {checks:#?}"
@@ -1988,16 +2044,51 @@ mod tests {
     }
 
     #[test]
+    fn build_channel_surface_checks_omit_disabled_registry_operations() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "telegram",
+            configured_account_id: "ops".to_owned(),
+            configured_account_label: "ops".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Telegram",
+            aliases: Vec::new(),
+            transport: "telegram_bot_api",
+            compiled: true,
+            enabled: false,
+            api_base_url: Some("https://api.telegram.org".to_owned()),
+            notes: Vec::new(),
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "event listener",
+                command: "telegram-serve",
+                health: ChannelOperationHealth::Disabled,
+                detail: "disabled by telegram account configuration".to_owned(),
+                issues: Vec::new(),
+                runtime: None,
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks.is_empty(),
+            "disabled registry-backed operations should not emit live doctor checks: {checks:#?}"
+        );
+    }
+
+    #[test]
     fn channel_doctor_checks_report_enabled_channels_from_registry() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.telegram.enabled = true;
-        config.telegram.bot_token = Some("123456:test-token".to_owned());
+        config.telegram.bot_token = Some(SecretRef::Inline("123456:test-token".to_owned()));
         config.telegram.allowed_chat_ids = vec![123_i64];
         config.feishu.enabled = true;
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("feishu-secret".to_owned());
+        config.feishu.app_id = Some(SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret = Some(SecretRef::Inline("feishu-secret".to_owned()));
         config.matrix.enabled = true;
-        config.matrix.access_token = Some("matrix-token".to_owned());
+        config.matrix.access_token = Some(SecretRef::Inline("matrix-token".to_owned()));
         config.matrix.base_url = Some("https://matrix.example.org".to_owned());
         config.matrix.allowed_room_ids = vec!["!ops:example.org".to_owned()];
         config.matrix.user_id = Some("@ops-bot:example.org".to_owned());
@@ -2077,9 +2168,8 @@ mod tests {
 
     #[test]
     fn provider_credential_env_hints_prioritize_oauth_defaults() {
-        let hints = crate::onboard_cli::provider_credential_env_hints(
-            &mvp::config::ProviderConfig::default(),
-        );
+        let provider = mvp::config::ProviderConfig::default();
+        let hints = provider_credential_policy::provider_credential_env_hints(&provider);
 
         assert!(
             hints.contains(&"OPENAI_CODEX_OAUTH_TOKEN".to_owned()),
@@ -2102,14 +2192,67 @@ mod tests {
 
         assert!(changed);
         assert_eq!(
-            config.provider.oauth_access_token_env.as_deref(),
-            Some("OPENAI_CODEX_OAUTH_TOKEN")
+            config.provider.oauth_access_token,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+            })
         );
         assert_eq!(config.provider.api_key_env, None);
         assert_eq!(
             fixes,
-            vec!["set provider.oauth_access_token_env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
+            vec!["set provider.oauth_access_token.env=OPENAI_CODEX_OAUTH_TOKEN".to_owned()]
         );
+    }
+
+    #[test]
+    fn provider_env_fix_does_not_overwrite_inline_api_key() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "inline-secret".to_owned(),
+        ));
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let mut fixes = Vec::new();
+        let changed = maybe_apply_provider_env_fix(&mut config, true, &mut fixes);
+
+        assert!(!changed);
+        assert_eq!(
+            config.provider.api_key,
+            Some(loongclaw_contracts::SecretRef::Inline(
+                "inline-secret".to_owned(),
+            ))
+        );
+        assert_eq!(config.provider.api_key_env, None);
+        assert!(fixes.is_empty());
+    }
+
+    #[test]
+    fn provider_env_fix_does_not_overwrite_file_backed_api_key() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let credential_path = PathBuf::from("/tmp/openai-api-key.txt");
+        config.provider.api_key = Some(loongclaw_contracts::SecretRef::File {
+            file: credential_path.clone(),
+        });
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let mut fixes = Vec::new();
+        let changed = maybe_apply_provider_env_fix(&mut config, true, &mut fixes);
+
+        assert!(!changed);
+        assert_eq!(
+            config.provider.api_key,
+            Some(loongclaw_contracts::SecretRef::File {
+                file: credential_path,
+            })
+        );
+        assert_eq!(config.provider.oauth_access_token, None);
+        assert_eq!(config.provider.api_key_env, None);
+        assert_eq!(config.provider.oauth_access_token_env, None);
+        assert!(fixes.is_empty());
     }
 
     #[test]
@@ -2214,7 +2357,7 @@ mod tests {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
         config.provider.model = "auto".to_owned();
-        config.provider.preferred_models = vec!["MiniMax-M1".to_owned()];
+        config.provider.preferred_models = vec!["MiniMax-M2.5".to_owned()];
 
         let check = provider_model_probe_failure_check(
             &config,
@@ -2228,7 +2371,7 @@ mod tests {
             "doctor should only advertise fallback continuation for explicitly configured preferred models: {check:#?}"
         );
         assert!(
-            check.detail.contains("MiniMax-M1"),
+            check.detail.contains("MiniMax-M2.5"),
             "doctor warning should surface the fallback candidate to keep remediation concrete: {check:#?}"
         );
     }
@@ -2575,8 +2718,8 @@ mod tests {
     fn check_feishu_integration_warns_when_user_grants_are_missing() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu.app_id = Some(SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret = Some(SecretRef::Inline("app-secret".to_owned()));
         config.feishu_integration.sqlite_path = unique_temp_feishu_db("missing-grant");
         let mut fixes = Vec::new();
 
@@ -2603,8 +2746,8 @@ mod tests {
     fn check_feishu_integration_passes_when_ready_grant_exists() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.feishu.enabled = true;
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("app-secret".to_owned());
+        config.feishu.app_id = Some(SecretRef::Inline("cli_a1b2c3".to_owned()));
+        config.feishu.app_secret = Some(SecretRef::Inline("app-secret".to_owned()));
         config.feishu_integration.sqlite_path = unique_temp_feishu_db("ready-grant");
         let resolved = config
             .feishu
@@ -2813,6 +2956,76 @@ mod tests {
                     && check.detail.contains("running_instances=2")
             }),
             "duplicate running telegram runtimes should emit runtime warning"
+        );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_resolves_alias_metadata_from_channel_registry() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "lark",
+            configured_account_id: "feishu_main".to_owned(),
+            configured_account_label: "feishu_main".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Feishu/Lark",
+            aliases: vec!["feishu"],
+            transport: "feishu_openapi_webhook_or_websocket",
+            compiled: true,
+            enabled: true,
+            api_base_url: Some("https://open.feishu.cn".to_owned()),
+            notes: vec![
+                "webhook_inbound_message_types=text,image,file".to_owned(),
+                "webhook_inbound_non_text_mode=structured_text_summary".to_owned(),
+                "webhook_inbound_binary_fetch=disabled".to_owned(),
+                "webhook_resource_download_tool=feishu.messages.resource.get".to_owned(),
+                "webhook_resource_selection_mode=single_resource_default_or_unique_partial_inference_or_resource_inventory".to_owned(),
+                "webhook_callback_event_types=card.action.trigger".to_owned(),
+                "webhook_callback_response_mode=noop_json".to_owned(),
+            ],
+            operations: vec![ChannelOperationStatus {
+                id: "serve",
+                label: "inbound reply service",
+                command: "feishu-serve",
+                health: ChannelOperationHealth::Ready,
+                detail: "ready".to_owned(),
+                issues: Vec::new(),
+                runtime: Some(ChannelOperationRuntime {
+                    running: true,
+                    stale: false,
+                    busy: false,
+                    active_runs: 1,
+                    last_run_activity_at: Some(1_700_000_000_000),
+                    last_heartbeat_at: Some(1_700_000_005_000),
+                    pid: Some(4242),
+                    account_id: Some("feishu_main".to_owned()),
+                    account_label: Some("feishu:main".to_owned()),
+                    instance_count: 1,
+                    running_instances: 1,
+                    stale_instances: 0,
+                }),
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu inbound transport"),
+            "alias channel ids should reuse registry-backed operation-health metadata: {checks:#?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu serve runtime"),
+            "alias channel ids should reuse registry-backed runtime metadata: {checks:#?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "feishu webhook inbound support"),
+            "alias channel ids should preserve feishu inbound support checks: {checks:#?}"
         );
     }
 
@@ -3085,6 +3298,11 @@ mod tests {
         config.provider.api_key_env = None;
         config.provider.oauth_access_token = None;
         config.provider.oauth_access_token_env = None;
+        let auth_env_names = config.provider.auth_hint_env_names();
+        let mut env = ScopedEnv::new();
+        for env_name in auth_env_names {
+            env.remove(env_name);
+        }
 
         let check = provider_credentials_doctor_check(&config, false);
 
@@ -3457,9 +3675,15 @@ mod tests {
         );
         assert!(
             next_steps.iter().any(|step| {
+                step == "Open a channel: loongclaw channels --config '/tmp/loongclaw.toml'"
+            }),
+            "green doctor runs should surface the channel catalog when no service channel is enabled yet: {next_steps:#?}"
+        );
+        assert!(
+            !next_steps.iter().any(|step| {
                 step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
-            "green doctor runs should surface the optional browser preview with a single concrete command: {next_steps:#?}"
+            "green doctor runs should prioritize the channel catalog ahead of optional browser preview when no service channel is enabled yet: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {

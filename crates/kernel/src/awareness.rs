@@ -10,7 +10,10 @@ use crate::{
     architecture::{ArchitectureBoundaryPolicy, ArchitectureGuardReport},
     errors::IntegrationError,
     plugin::{PluginScanReport, PluginScanner},
-    plugin_ir::{PluginIR, PluginTranslationReport, PluginTranslator},
+    plugin_ir::{
+        BridgeSupportMatrix, PluginActivationInventoryEntry, PluginActivationPlan, PluginIR,
+        PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,7 +43,9 @@ pub struct CodebaseAwarenessSnapshot {
     pub deterministic_fingerprint: String,
     pub plugin_scan_reports: Vec<PluginScanReport>,
     pub plugin_translation_reports: Vec<PluginTranslationReport>,
+    pub plugin_activation_reports: Vec<PluginActivationPlan>,
     pub plugin_inventory: Vec<PluginIR>,
+    pub plugin_activation_inventory: Vec<PluginActivationInventoryEntry>,
     pub architecture_guard: ArchitectureGuardReport,
 }
 
@@ -102,14 +107,25 @@ impl CodebaseAwarenessEngine {
 
         let mut plugin_scan_reports = Vec::new();
         let mut plugin_translation_reports = Vec::new();
+        let mut plugin_activation_reports = Vec::new();
         let mut plugin_inventory = Vec::new();
+        let mut plugin_activation_inventory = Vec::new();
+        let bridge_matrix = BridgeSupportMatrix::default();
+        let setup_readiness_context = PluginSetupReadinessContext::default();
 
         for root in &plugin_roots {
             let report = self.plugin_scanner.scan_path(root)?;
             let translation = self.plugin_translator.translate_scan_report(&report);
+            let activation = self.plugin_translator.plan_activation(
+                &translation,
+                &bridge_matrix,
+                &setup_readiness_context,
+            );
             plugin_inventory.extend(translation.entries.iter().cloned());
+            plugin_activation_inventory.extend(activation.inventory_entries(&translation));
             plugin_scan_reports.push(report);
             plugin_translation_reports.push(translation);
+            plugin_activation_reports.push(activation);
         }
 
         let architecture_guard = config
@@ -123,7 +139,9 @@ impl CodebaseAwarenessEngine {
             deterministic_fingerprint: fingerprint(&file_facts),
             plugin_scan_reports,
             plugin_translation_reports,
+            plugin_activation_reports,
             plugin_inventory,
+            plugin_activation_inventory,
             architecture_guard,
         })
     }
@@ -278,6 +296,14 @@ mod tests {
 
         assert_eq!(snapshot.scanned_roots.len(), 1);
         assert_eq!(snapshot.plugin_inventory.len(), 1);
+        assert_eq!(snapshot.plugin_activation_reports.len(), 1);
+        assert_eq!(snapshot.plugin_activation_inventory.len(), 1);
+        assert_eq!(
+            snapshot.plugin_activation_inventory[0]
+                .activation_status
+                .map(|status| status.as_str().to_owned()),
+            Some("ready".to_owned())
+        );
         assert!(
             snapshot
                 .language_distribution
@@ -343,5 +369,67 @@ mod tests {
 
         assert_eq!(snapshot.scanned_files, 1);
         assert_eq!(snapshot.language_distribution.get("rust").copied(), Some(1));
+    }
+
+    #[test]
+    fn awareness_snapshot_projects_plugin_activation_inventory_with_slot_conflicts() {
+        let root = unique_tmp_dir("loongclaw-awareness-slots");
+        fs::create_dir_all(&root).expect("create temp root");
+
+        fs::write(
+            root.join("first.py"),
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-a",
+#   "provider_id": "search-a",
+#   "connector_name": "search-a",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/a",
+#   "capabilities": ["InvokeConnector"],
+#   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write first plugin");
+        fs::write(
+            root.join("second.py"),
+            r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-b",
+#   "provider_id": "search-b",
+#   "connector_name": "search-b",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/b",
+#   "capabilities": ["InvokeConnector"],
+#   "slot_claims": [{"slot":"provider:web_search","key":"default","mode":"exclusive"}],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+        )
+        .expect("write second plugin");
+
+        let engine = CodebaseAwarenessEngine::new();
+        let snapshot = engine
+            .snapshot(&CodebaseAwarenessConfig {
+                roots: vec![root.display().to_string()],
+                plugin_roots: vec![root.display().to_string()],
+                proposed_mutations: Vec::new(),
+                architecture_policy: ArchitectureBoundaryPolicy::default(),
+            })
+            .expect("awareness snapshot should succeed");
+
+        assert_eq!(snapshot.plugin_activation_reports.len(), 1);
+        assert_eq!(snapshot.plugin_activation_reports[0].blocked_plugins, 2);
+        assert_eq!(snapshot.plugin_activation_inventory.len(), 2);
+        assert!(snapshot.plugin_activation_inventory.iter().all(|entry| {
+            entry
+                .activation_status
+                .is_some_and(|status| status.as_str() == "blocked_slot_claim_conflict")
+        }));
     }
 }

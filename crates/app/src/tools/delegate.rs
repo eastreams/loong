@@ -4,6 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
+use super::payload::{optional_payload_string, required_payload_string};
+
 #[cfg(test)]
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 
@@ -23,13 +25,8 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
     payload: &Value,
     default_timeout_seconds: u64,
 ) -> Result<DelegateRequest, String> {
-    let task = required_payload_string(payload, "task")?;
-    let label = payload
-        .get("label")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|label| !label.is_empty())
-        .map(ToOwned::to_owned);
+    let task = required_payload_string(payload, "task", "delegate tool")?;
+    let label = optional_payload_string(payload, "label");
     let timeout_seconds = payload
         .get("timeout_seconds")
         .and_then(Value::as_u64)
@@ -120,16 +117,6 @@ pub(crate) fn delegate_error_outcome(
             "error": error,
         }),
     }
-}
-
-fn required_payload_string(payload: &Value, field: &str) -> Result<String, String> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("delegate tool requires payload.{field}"))
 }
 
 #[cfg(test)]

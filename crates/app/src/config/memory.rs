@@ -18,6 +18,8 @@ pub struct MemoryConfig {
     pub profile: MemoryProfile,
     #[serde(default)]
     pub system: MemorySystemKind,
+    #[serde(default, deserialize_with = "deserialize_memory_system_id")]
+    pub system_id: Option<String>,
     #[serde(default = "default_true")]
     pub fail_open: bool,
     #[serde(default)]
@@ -191,6 +193,7 @@ impl Default for MemoryConfig {
             backend: MemoryBackendKind::default(),
             profile: MemoryProfile::default(),
             system: MemorySystemKind::default(),
+            system_id: None,
             fail_open: default_true(),
             ingest_mode: MemoryIngestMode::default(),
             sqlite_path: default_sqlite_path(),
@@ -231,6 +234,12 @@ impl MemoryConfig {
         self.system
     }
 
+    pub fn resolved_system_id(&self) -> String {
+        self.system_id
+            .clone()
+            .unwrap_or_else(|| self.system.as_str().to_owned())
+    }
+
     pub const fn resolved_mode(&self) -> MemoryMode {
         self.profile.mode()
     }
@@ -260,6 +269,14 @@ impl MemoryConfig {
     }
 }
 
+fn deserialize_memory_system_id<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    Ok(raw.and_then(|value| crate::memory::normalize_system_id(value.as_str())))
+}
+
 fn default_sqlite_path() -> String {
     default_loongclaw_home()
         .join(DEFAULT_SQLITE_FILE)
@@ -283,6 +300,7 @@ const fn default_summary_max_chars() -> usize {
 mod tests {
     use super::*;
     use crate::memory::DEFAULT_MEMORY_SYSTEM_ID;
+    use serde_json::json;
 
     #[test]
     fn memory_profile_defaults_to_window_only() {
@@ -303,6 +321,18 @@ mod tests {
     #[test]
     fn memory_system_rejects_unimplemented_future_variant_ids() {
         assert_eq!(MemorySystemKind::parse_id("lucid"), None);
+    }
+
+    #[test]
+    fn memory_system_field_accepts_registry_backed_string_ids() {
+        let raw = json!({
+            "system_id": "Lucid"
+        });
+
+        let config: MemoryConfig =
+            serde_json::from_value(raw).expect("registry-backed memory.system should deserialize");
+
+        assert_eq!(config.system_id.as_deref(), Some("lucid"));
     }
 
     #[test]

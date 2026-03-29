@@ -6,6 +6,7 @@
 #   "channel_id": "primary",
 #   "endpoint": "local://stdio-echo",
 #   "capabilities": ["InvokeConnector"],
+#   "trust_tier": "unverified",
 #   "metadata": {
 #     "bridge_kind": "process_stdio",
 #     "command": "cat",

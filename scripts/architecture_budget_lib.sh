@@ -15,32 +15,92 @@ count_pattern_in_file() {
 }
 
 architecture_hotspot_keys() {
+  local row
+  local key
+
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    IFS='|' read -r key _file _max_lines _max_functions _classes <<EOF_ROW
+$row
+EOF_ROW
+    printf '%s\n' "$key"
+  done <<EOF_ROWS
+$(architecture_hotspot_metadata_rows)
+EOF_ROWS
+}
+
+architecture_hotspot_metadata_rows() {
   cat <<'HOTSPOTS'
-spec_runtime
-spec_execution
-provider_mod
-memory_mod
+spec_runtime|crates/spec/src/spec_runtime.rs|3600|65|foundation
+spec_execution|crates/spec/src/spec_execution.rs|3700|80|foundation
+provider_mod|crates/app/src/provider/mod.rs|1000|20|foundation
+memory_mod|crates/app/src/memory/mod.rs|650|16|foundation
+acp_manager|crates/app/src/acp/manager.rs|3600|12|operational_density
+acpx_runtime|crates/app/src/acp/acpx.rs|2800|65|operational_density
+channel_registry|crates/app/src/channel/registry.rs|10500|90|structural_size
+channel_config|crates/app/src/config/channels.rs|9800|90|structural_size
+chat_runtime|crates/app/src/chat.rs|7300|160|structural_size,operational_density
+channel_mod|crates/app/src/channel/mod.rs|6400|110|structural_size,operational_density
+turn_coordinator|crates/app/src/conversation/turn_coordinator.rs|11200|120|structural_size,operational_density
+tools_mod|crates/app/src/tools/mod.rs|15000|70|structural_size
+daemon_lib|crates/daemon/src/lib.rs|6000|190|structural_size
+onboard_cli|crates/daemon/src/onboard_cli.rs|9800|250|structural_size
 HOTSPOTS
 }
 
+architecture_hotspot_metadata_for_key() {
+  local requested_key="$1"
+  local row
+  local key
+
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    IFS='|' read -r key _file _max_lines _max_functions _classes <<EOF_ROW
+$row
+EOF_ROW
+    if [[ "$key" == "$requested_key" ]]; then
+      printf '%s\n' "$row"
+      return 0
+    fi
+  done <<EOF_ROWS
+$(architecture_hotspot_metadata_rows)
+EOF_ROWS
+
+  return 1
+}
+
 architecture_hotspot_spec() {
-  case "$1" in
-    spec_runtime)
-      echo "crates/spec/src/spec_runtime.rs|3600|65"
-      ;;
-    spec_execution)
-      echo "crates/spec/src/spec_execution.rs|3700|80"
-      ;;
-    provider_mod)
-      echo "crates/app/src/provider/mod.rs|1000|20"
-      ;;
-    memory_mod)
-      echo "crates/app/src/memory/mod.rs|650|16"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+  local requested_key="$1"
+  local metadata_row
+  local key
+  local file
+  local max_lines
+  local max_functions
+  local classes
+
+  metadata_row="$(architecture_hotspot_metadata_for_key "$requested_key")" || return 1
+  IFS='|' read -r key file max_lines max_functions classes <<EOF_ROW
+$metadata_row
+EOF_ROW
+
+  printf '%s|%s|%s\n' "$file" "$max_lines" "$max_functions"
+}
+
+architecture_hotspot_classes() {
+  local requested_key="$1"
+  local metadata_row
+  local key
+  local file
+  local max_lines
+  local max_functions
+  local classes
+
+  metadata_row="$(architecture_hotspot_metadata_for_key "$requested_key")" || return 1
+  IFS='|' read -r key file max_lines max_functions classes <<EOF_ROW
+$metadata_row
+EOF_ROW
+
+  printf '%s\n' "$classes"
 }
 
 architecture_file_line_count() {
@@ -53,14 +113,67 @@ architecture_file_function_count() {
   count_pattern_in_file '^(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+' "$file"
 }
 
+architecture_hotspot_peak_usage_percent() {
+  local lines="$1"
+  local max_lines="$2"
+  local functions="$3"
+  local max_functions="$4"
+  awk -v lines="$lines" -v max_lines="$max_lines" -v functions="$functions" -v max_functions="$max_functions" '
+    BEGIN {
+      line_pct = (lines / max_lines) * 100
+      fn_pct = (functions / max_functions) * 100
+      peak_pct = line_pct
+      if (fn_pct > peak_pct) {
+        peak_pct = fn_pct
+      }
+      printf "%.1f%%", peak_pct
+    }
+  '
+}
+
+architecture_hotspot_pressure() {
+  local lines="$1"
+  local max_lines="$2"
+  local functions="$3"
+  local max_functions="$4"
+
+  if (( lines > max_lines || functions > max_functions )); then
+    echo "BREACH"
+    return 0
+  fi
+
+  if (( lines * 100 >= max_lines * 95 || functions * 100 >= max_functions * 95 )); then
+    echo "TIGHT"
+    return 0
+  fi
+
+  if (( lines * 100 >= max_lines * 85 || functions * 100 >= max_functions * 85 )); then
+    echo "WATCH"
+    return 0
+  fi
+
+  echo "HEALTHY"
+}
+
 architecture_hotspot_rows() {
-  local key spec file max_lines max_functions lines functions line_status fn_status
-  while IFS= read -r key; do
-    [[ -z "$key" ]] && continue
-    spec="$(architecture_hotspot_spec "$key")" || return 1
-    IFS='|' read -r file max_lines max_functions <<EOF_SPEC
-$spec
-EOF_SPEC
+  local metadata_row
+  local key
+  local file
+  local classes
+  local max_lines
+  local max_functions
+  local lines
+  local functions
+  local line_status
+  local fn_status
+  local peak_usage
+  local pressure
+
+  while IFS= read -r metadata_row; do
+    [[ -z "$metadata_row" ]] && continue
+    IFS='|' read -r key file max_lines max_functions classes <<EOF_ROW
+$metadata_row
+EOF_ROW
     if [[ ! -f "$file" ]]; then
       echo "missing hotspot file: $file" >&2
       return 1
@@ -75,11 +188,14 @@ EOF_SPEC
     if (( functions > max_functions )); then
       fn_status="over"
     fi
-    printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
-      "$key" "$file" "$lines" "$max_lines" "$line_status" "$functions" "$max_functions" "$fn_status"
-  done <<EOF_KEYS
-$(architecture_hotspot_keys)
-EOF_KEYS
+    peak_usage="$(architecture_hotspot_peak_usage_percent "$lines" "$max_lines" "$functions" "$max_functions")"
+    pressure="$(architecture_hotspot_pressure "$lines" "$max_lines" "$functions" "$max_functions")"
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+      "$key" "$file" "$classes" "$lines" "$max_lines" "$line_status" "$functions" "$max_functions" "$fn_status" \
+      "$peak_usage" "$pressure"
+  done <<EOF_ROWS
+$(architecture_hotspot_metadata_rows)
+EOF_ROWS
 }
 
 architecture_boundary_check_keys() {

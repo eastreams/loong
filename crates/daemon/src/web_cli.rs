@@ -1313,7 +1313,8 @@ fn provider_item_from_parts(
 ) -> ProviderItemPayload {
     let api_key_value = provider
         .api_key
-        .as_deref()
+        .as_ref()
+        .and_then(|secret| secret.inline_value())
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let api_key_env = provider

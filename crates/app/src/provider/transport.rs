@@ -13,6 +13,9 @@ use aws_sigv4::{
     http_request::{self, SignableBody, SignableRequest, SigningSettings},
     sign::v4,
 };
+use bytes::Bytes;
+use futures_util::Stream;
+use futures_util::StreamExt;
 use reqwest::header::{
     AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue, USER_AGENT,
 };
@@ -70,6 +73,73 @@ impl BedrockService {
 pub(super) enum RequestExecutionError {
     Transport(reqwest::Error),
     Setup(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub(super) enum SseLine {
+    EventType { name: String },
+    Data { content: String },
+    Retry { timeout_ms: u64 },
+    Comment,
+    Empty,
+}
+
+pub(super) fn parse_sse_line(line: &str) -> SseLine {
+    if line.is_empty() {
+        return SseLine::Empty;
+    }
+    if line.starts_with(':') {
+        return SseLine::Comment;
+    }
+    if let Some(rest) = line.strip_prefix("event:") {
+        let trimmed = rest.trim();
+        return SseLine::EventType {
+            name: trimmed.to_owned(),
+        };
+    }
+    if let Some(rest) = line.strip_prefix("retry:") {
+        let trimmed = rest.trim();
+        let timeout_ms = trimmed.parse().unwrap_or(3000);
+        return SseLine::Retry { timeout_ms };
+    }
+    if let Some(rest) = line.strip_prefix("data:") {
+        let content = rest.trim().to_owned();
+        return SseLine::Data { content };
+    }
+    SseLine::Empty
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum SseStreamEvent {
+    Message {
+        data: Value,
+        event_type: Option<String>,
+    },
+    #[allow(dead_code)]
+    Error { message: String },
+    #[allow(dead_code)]
+    Done,
+}
+
+impl SseStreamEvent {
+    pub(super) fn from_sse_lines(
+        event_type: Option<String>,
+        data_lines: &[String],
+    ) -> Result<Option<Self>, serde_json::Error> {
+        if data_lines.is_empty() {
+            return Ok(None);
+        }
+        let combined = data_lines.join("\n");
+        if combined.is_empty() {
+            return Ok(None);
+        }
+        let parsed: Value = serde_json::from_str(&combined)?;
+        Ok(Some(SseStreamEvent::Message {
+            data: parsed,
+            event_type,
+        }))
+    }
 }
 
 pub(super) async fn resolve_request_auth_context(
@@ -380,6 +450,17 @@ pub(super) async fn decode_response_body(response: reqwest::Response) -> CliResu
     Ok(serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({"raw_body": text.as_ref()})))
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn decode_streaming_response(
+    response: reqwest::Response,
+) -> impl Stream<Item = Result<Bytes, RequestExecutionError>> + Unpin {
+    response
+        .bytes_stream()
+        .map(|result: Result<Bytes, reqwest::Error>| {
+            result.map_err(RequestExecutionError::Transport)
+        })
+}
+
 async fn resolve_bedrock_region(provider: &ProviderConfig) -> CliResult<String> {
     let derived_endpoint = provider.endpoint();
     let derived_models_endpoint = provider.models_endpoint();
@@ -632,7 +713,9 @@ mod tests {
 
         let provider = ProviderConfig {
             kind: ProviderKind::Bedrock,
-            api_key: Some("bedrock-bearer-token".to_owned()),
+            api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                "bedrock-bearer-token".to_owned(),
+            )),
             ..ProviderConfig::default()
         };
 
@@ -641,5 +724,146 @@ mod tests {
             .expect("bedrock auth context");
         assert_eq!(auth_context.bedrock_region.as_deref(), Some("us-west-2"));
         assert!(auth_context.bedrock_signing.is_some());
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_extracts_data_field() {
+        let line = "data: {\"type\":\"content_block_delta\",\"text\":\"Hello\"}";
+        let parsed = parse_sse_line(line);
+        match parsed {
+            SseLine::Data { content } => {
+                assert_eq!(
+                    content,
+                    "{\"type\":\"content_block_delta\",\"text\":\"Hello\"}"
+                );
+            }
+            other => {
+                panic!("expected SseLine::Data, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_extracts_event_type() {
+        let line = "event: content_block_delta";
+        let parsed = parse_sse_line(line);
+        match parsed {
+            SseLine::EventType { name } => {
+                assert_eq!(name.as_str(), "content_block_delta");
+            }
+            other => {
+                panic!("expected SseLine::EventType, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_extracts_retry_field() {
+        let line = "retry: 1000";
+        let parsed = parse_sse_line(line);
+        match parsed {
+            SseLine::Retry { timeout_ms } => {
+                assert_eq!(timeout_ms, 1000);
+            }
+            other => {
+                panic!("expected SseLine::Retry, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_handles_empty_line() {
+        let parsed = parse_sse_line("");
+        match parsed {
+            SseLine::Empty => {}
+            other => {
+                panic!("expected SseLine::Empty, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_handles_comment_line() {
+        let parsed = parse_sse_line(": this is a comment");
+        match parsed {
+            SseLine::Comment => {}
+            other => {
+                panic!("expected SseLine::Comment, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_line_parser_data_field_without_json_value() {
+        let line = "data:";
+        let parsed = parse_sse_line(line);
+        match parsed {
+            SseLine::Data { content } => {
+                assert_eq!(content, "");
+            }
+            other => {
+                panic!("expected SseLine::Data, got {:?}", other)
+            }
+        }
+    }
+
+    #[allow(clippy::wildcard_enum_match_arm)]
+    #[test]
+    fn sse_lines_accumulate_into_complete_event() {
+        let event_type_line = parse_sse_line("event: content_block_delta");
+        let data_line = parse_sse_line("data: {\"type\":\"text_delta\",\"text\":\"Hello\"}");
+
+        let (event_type, data) = match (&event_type_line, &data_line) {
+            (SseLine::EventType { name: e1 }, SseLine::Data { content: d2 }) => {
+                (e1.clone(), d2.clone())
+            }
+            _ => panic!("expected EventType and Data"),
+        };
+
+        assert_eq!(event_type.as_str(), "content_block_delta");
+        assert_eq!(data, "{\"type\":\"text_delta\",\"text\":\"Hello\"}");
+    }
+
+    #[test]
+    fn sse_stream_event_from_lines_parses_json() {
+        let event_type = Some("content_block_delta".to_owned());
+        let data_lines = vec!["{\"type\":\"text_delta\",\"text\":\"Hello\"}".to_owned()];
+        let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
+
+        match event {
+            Ok(Some(SseStreamEvent::Message { data, event_type })) => {
+                assert_eq!(event_type.as_deref(), Some("content_block_delta"));
+                assert_eq!(
+                    data.get("type").and_then(|v| v.as_str()),
+                    Some("text_delta")
+                );
+                assert_eq!(data.get("text").and_then(|v| v.as_str()), Some("Hello"));
+            }
+            Ok(Some(SseStreamEvent::Error { .. } | SseStreamEvent::Done)) | Err(_) | Ok(None) => {
+                panic!("expected SseStreamEvent::Message, got {:?}", event)
+            }
+        }
+    }
+
+    #[test]
+    fn sse_stream_event_from_lines_returns_none_for_empty_data() {
+        let event_type = Some("content_block_delta".to_owned());
+        let data_lines: Vec<String> = vec![];
+        let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
+        assert!(event.unwrap().is_none());
+    }
+
+    #[test]
+    fn sse_stream_event_from_lines_returns_err_for_invalid_json() {
+        let event_type = Some("content_block_delta".to_owned());
+        let data_lines = vec!["not valid json".to_owned()];
+        let event = SseStreamEvent::from_sse_lines(event_type, &data_lines);
+        assert!(event.is_err());
     }
 }

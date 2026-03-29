@@ -23,13 +23,14 @@ use tokio::sync::Mutex;
 use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::{
-    ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
+    ChannelAdapter, ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
     process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
+use crate::crypto::timing_safe_eq;
 use crate::feishu::{FeishuClient, resources::cards};
 
-use super::adapter::FeishuAdapter;
+use super::adapter::{FeishuAdapter, outbound_reply_message_from_text};
 use super::payload::{FeishuCardCallbackEvent, FeishuWebhookAction};
 
 const FEISHU_CALLBACK_RESPONSE_MARKER: &str = "[feishu_callback_response]";
@@ -551,7 +552,8 @@ async fn handle_feishu_card_callback_event(
         &state.config,
         state.resolved_path.as_deref(),
         &inbound,
-        Some(state.kernel_ctx.as_ref()),
+        state.kernel_ctx.as_ref(),
+        ChannelTurnFeedbackPolicy::disabled(),
     )
     .await
     .map(|reply| {
@@ -601,7 +603,8 @@ async fn handle_feishu_inbound_event(
             &state.config,
             state.resolved_path.as_deref(),
             &channel_message,
-            Some(state.kernel_ctx.as_ref()),
+            state.kernel_ctx.as_ref(),
+            ChannelTurnFeedbackPolicy::final_trace_significant(),
         )
         .await
         .map_err(|error| {
@@ -611,7 +614,7 @@ async fn handle_feishu_inbound_event(
             )
         })?;
         let reply_target = channel_message.reply_target.clone();
-        let outbound = ChannelOutboundMessage::Text(reply);
+        let outbound = outbound_reply_message_from_text(reply);
 
         let mut adapter = state.adapter.lock().await;
         if let Err(first_error) = adapter.send_message(&reply_target, &outbound).await {
@@ -838,7 +841,7 @@ fn verify_feishu_signature(
     hasher.update(raw_body.as_bytes());
     let expected = format!("{:x}", hasher.finalize());
 
-    if expected != signature {
+    if !timing_safe_eq(expected.as_bytes(), signature.as_bytes()) {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthorized: feishu signature mismatch".to_owned(),
@@ -901,6 +904,8 @@ mod tests {
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::Mutex;
+
+    const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockRequest {
@@ -1034,7 +1039,7 @@ mod tests {
                         Json(json!({
                             "choices": [{
                                 "message": {
-                                    "content": "structured inbound ack"
+                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
                                 }
                             }]
                         }))
@@ -1116,7 +1121,7 @@ mod tests {
                         Json(json!({
                             "choices": [{
                                 "message": {
-                                    "content": "structured inbound ack"
+                                    "content": MOCK_PROVIDER_MARKDOWN_REPLY
                                 }
                             }]
                         }))
@@ -1423,7 +1428,9 @@ mod tests {
         let mut config = LoongClawConfig {
             provider: ProviderConfig {
                 base_url: provider_base_url.to_owned(),
-                api_key: Some("test-provider-key".to_owned()),
+                api_key: Some(loongclaw_contracts::SecretRef::Inline(
+                    "test-provider-key".to_owned(),
+                )),
                 model: "test-model".to_owned(),
                 ..ProviderConfig::default()
             },
@@ -1433,13 +1440,21 @@ mod tests {
         config.tools.file_root = Some(temp_dir.join("tool-root").display().to_string());
         config.feishu.enabled = true;
         config.feishu.account_id = Some("feishu_main".to_owned());
-        config.feishu.app_id = Some("cli_a1b2c3".to_owned());
-        config.feishu.app_secret = Some("secret-123".to_owned());
+        config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline(
+            "cli_a1b2c3".to_owned(),
+        ));
+        config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "secret-123".to_owned(),
+        ));
         config.feishu.base_url = Some(feishu_base_url.to_owned());
         config.feishu.receive_id_type = "chat_id".to_owned();
         config.feishu.allowed_chat_ids = vec!["oc_demo".to_owned()];
-        config.feishu.verification_token = Some("verify-token".to_owned());
-        config.feishu.encrypt_key = Some("encrypt-key".to_owned());
+        config.feishu.verification_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "verify-token".to_owned(),
+        ));
+        config.feishu.encrypt_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "encrypt-key".to_owned(),
+        ));
         config
     }
 
@@ -1688,14 +1703,22 @@ mod tests {
             Some("Bearer t-token-webhook")
         );
         assert!(
-            feishu_requests[1].body.contains("\"msg_type\":\"text\""),
-            "webhook reply should still go out as text"
+            feishu_requests[1]
+                .body
+                .contains("\"msg_type\":\"interactive\""),
+            "webhook reply should send markdown-capable interactive cards"
         );
         assert!(
             feishu_requests[1]
                 .body
-                .contains("\\\"text\\\":\\\"structured inbound ack\\\""),
-            "reply body should include provider text"
+                .contains("\\\"tag\\\":\\\"markdown\\\""),
+            "reply body should wrap the provider reply in a markdown card"
+        );
+        assert!(
+            feishu_requests[1]
+                .body
+                .contains("\\\"content\\\":\\\"## structured inbound ack\\\\n\\\\n- rendered\\\""),
+            "reply body should preserve provider markdown content"
         );
 
         provider_server.abort();
