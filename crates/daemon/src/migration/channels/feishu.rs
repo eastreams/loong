@@ -29,7 +29,7 @@ pub(super) fn collect_preview(
         || config.feishu.app_id_env != default_feishu.app_id_env
         || config.feishu.app_secret_env != default_feishu.app_secret_env
         || config.feishu.base_url != default_feishu.base_url
-        || config.feishu.mode.is_some()
+        || config.feishu.mode != default_feishu.mode
         || config.feishu.receive_id_type != default_feishu.receive_id_type
         || config.feishu.webhook_bind != default_feishu.webhook_bind
         || config.feishu.webhook_path != default_feishu.webhook_path

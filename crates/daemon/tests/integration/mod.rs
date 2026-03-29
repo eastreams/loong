@@ -909,7 +909,7 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
         channel_send_command("feishu")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
+        "op serve ({}) misconfigured: allowed_chat_ids is empty target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
         channel_serve_command("feishu")
     )));
     assert!(rendered.contains("WeCom [wecom]"));
