@@ -43,6 +43,8 @@ wasmtime = { version = "43.0.0", default-features = false, features = ["std", "r
 rusqlite = { version = "0.39", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 which = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 [profile.release]
 lto = "thin"

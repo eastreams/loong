@@ -10,6 +10,7 @@ pub mod crypto;
 pub mod feishu;
 pub mod memory;
 pub mod migration;
+pub(crate) mod observability;
 pub mod presentation;
 pub mod prompt;
 pub mod provider;

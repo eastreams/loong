@@ -85,6 +85,7 @@ mod memory_context_benchmark;
 pub mod migrate_cli;
 pub mod migration;
 pub mod next_actions;
+mod observability;
 pub mod onboard_cli;
 mod onboard_finalize;
 mod onboard_preflight;
@@ -106,6 +107,7 @@ pub mod supervisor;
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
+pub use observability::init_tracing;
 
 #[allow(
     clippy::expect_used,

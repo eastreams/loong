@@ -648,6 +648,9 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let requested_tool_name = request.tool_name.clone();
+    let payload_kind = crate::observability::json_value_kind(&request.payload);
+    let payload_keys = crate::observability::top_level_json_keys(&request.payload);
     if !trusted_internal_tool_payload_enabled()
         && payload_uses_reserved_internal_tool_context(&request.payload)
     {
@@ -664,11 +667,40 @@ pub fn execute_tool_core_with_config(
     let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?
         .map(|narrowing| config.narrowed(&narrowing));
     let config = effective_config.as_ref().unwrap_or(config);
-    match canonical_name {
+    let started_at = std::time::Instant::now();
+    let result = match canonical_name {
         "tool.search" => execute_tool_search_tool_with_config(request, config),
         "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
         _ => execute_discoverable_tool_core_with_config(request, config),
+    };
+    let duration_ms = started_at.elapsed().as_millis();
+    match &result {
+        Ok(outcome) => {
+            tracing::debug!(
+                target: "loongclaw.tools",
+                requested_tool_name = %requested_tool_name,
+                canonical_tool_name = %canonical_name,
+                payload_kind,
+                payload_keys = ?payload_keys,
+                status = %outcome.status,
+                duration_ms,
+                "tool execution completed"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "loongclaw.tools",
+                requested_tool_name = %requested_tool_name,
+                canonical_tool_name = %canonical_name,
+                payload_kind,
+                payload_keys = ?payload_keys,
+                duration_ms,
+                error = %crate::observability::summarize_error(error),
+                "tool execution failed"
+            );
+        }
     }
+    result
 }
 
 fn trusted_runtime_narrowing_from_payload(

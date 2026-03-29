@@ -4241,16 +4241,51 @@ pub(super) async fn process_inbound_with_provider(
     kernel_ctx: &KernelContext,
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
+    let started_at = std::time::Instant::now();
     let turn_config = reload_channel_turn_config(config, resolved_path)?;
     let runtime = DefaultConversationRuntime::from_config_or_env(&turn_config)?;
-    process_inbound_with_runtime_and_feedback(
+    let result = process_inbound_with_runtime_and_feedback(
         &turn_config,
         &runtime,
         message,
         ConversationRuntimeBinding::kernel(kernel_ctx),
         feedback_policy,
     )
-    .await
+    .await;
+    let duration_ms = started_at.elapsed().as_millis();
+    match &result {
+        Ok(reply) => {
+            tracing::debug!(
+                target: "loongclaw.channel",
+                platform = %message.session.platform.as_str(),
+                conversation_id = %message.session.conversation_id,
+                configured_account_id = ?message.session.configured_account_id.as_deref(),
+                account_id = ?message.session.account_id.as_deref(),
+                source_message_id = ?message.delivery.source_message_id.as_deref(),
+                ack_cursor = ?message.delivery.ack_cursor.as_deref(),
+                text_len = message.text.chars().count(),
+                reply_len = reply.chars().count(),
+                duration_ms,
+                "channel inbound processed"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "loongclaw.channel",
+                platform = %message.session.platform.as_str(),
+                conversation_id = %message.session.conversation_id,
+                configured_account_id = ?message.session.configured_account_id.as_deref(),
+                account_id = ?message.session.account_id.as_deref(),
+                source_message_id = ?message.delivery.source_message_id.as_deref(),
+                ack_cursor = ?message.delivery.ack_cursor.as_deref(),
+                text_len = message.text.chars().count(),
+                duration_ms,
+                error = %crate::observability::summarize_error(error),
+                "channel inbound failed"
+            );
+        }
+    }
+    result
 }
 
 #[cfg(any(

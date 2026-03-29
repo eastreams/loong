@@ -87,6 +87,14 @@ pub(super) async fn prepare_provider_request_session(
                             classify_profile_failure_reason_from_message(error.as_str()),
                         );
                     }
+                    tracing::warn!(
+                        target: "loongclaw.provider",
+                        provider_id = %config.provider.kind.profile().id,
+                        auth_profile_id = %profile.id,
+                        auto_model_mode,
+                        error = %crate::observability::summarize_error(error.as_str()),
+                        "provider model catalog resolution failed for auth profile"
+                    );
                     last_error = Some(error);
                 }
             }
@@ -108,7 +116,7 @@ pub(super) async fn prepare_provider_request_session(
         .await?
     };
 
-    Ok(ProviderRequestSession {
+    let session = ProviderRequestSession {
         endpoint,
         headers,
         request_policy,
@@ -119,7 +127,16 @@ pub(super) async fn prepare_provider_request_session(
         auto_model_mode,
         model_candidate_cooldown_policy,
         auth_context,
-    })
+    };
+    tracing::debug!(
+        target: "loongclaw.provider",
+        provider_id = %config.provider.kind.profile().id,
+        auth_profile_count = session.auth_profiles.len(),
+        model_candidate_count = session.model_candidates.len(),
+        auto_model_mode = session.auto_model_mode,
+        "prepared provider request session"
+    );
+    Ok(session)
 }
 
 fn build_model_candidate_cooldown_policy(

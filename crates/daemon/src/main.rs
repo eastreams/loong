@@ -37,7 +37,9 @@ impl Drop for StdinGuard {
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
+    init_tracing();
     let cli = Cli::parse();
+    tracing::debug!(target: "loongclaw.daemon", command = ?cli.command, "parsed CLI command");
     let result = match cli.command.unwrap_or_else(resolve_default_entry_command) {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
@@ -846,6 +848,11 @@ async fn main() {
         }
     };
     if let Err(error) = result {
+        tracing::error!(
+            target: "loongclaw.daemon",
+            error = %error,
+            "CLI command failed"
+        );
         #[allow(clippy::print_stderr)]
         {
             eprintln!("error: {error}");

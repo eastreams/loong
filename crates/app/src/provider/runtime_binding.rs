@@ -23,7 +23,24 @@ impl<'a> ProviderRuntimeBinding<'a> {
         }
     }
 
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kernel(_) => "kernel",
+            Self::Direct => "direct",
+        }
+    }
+
     pub const fn is_kernel_bound(self) -> bool {
         matches!(self, Self::Kernel(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderRuntimeBinding;
+
+    #[test]
+    fn provider_runtime_binding_labels_are_stable() {
+        assert_eq!(ProviderRuntimeBinding::direct().as_str(), "direct");
     }
 }

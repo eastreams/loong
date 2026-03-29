@@ -70,6 +70,8 @@ rand.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
 dunce = "1"
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [[bin]]
 name = "loongclaw"
