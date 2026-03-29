@@ -110,6 +110,8 @@ struct SecretObservationCounts {
     inline_literal: usize,
 }
 
+const PROVIDER_SECRET_HEADER_NAMES: &[&str] = &["authorization", "x-api-key"];
+
 impl SecretObservationCounts {
     fn record(&mut self, kind: SecretReferenceKind) {
         match kind {
@@ -138,11 +140,10 @@ pub async fn run_doctor_security_cli(options: DoctorSecurityCommandOptions) -> C
         let encoded = serde_json::to_string_pretty(&payload)
             .map_err(|error| format!("serialize doctor security output failed: {error}"))?;
         println!("{encoded}");
-        return Ok(());
+    } else {
+        let rendered = render_doctor_security_cli_text(&execution);
+        println!("{rendered}");
     }
-
-    let rendered = render_doctor_security_cli_text(&execution);
-    println!("{rendered}");
 
     if !execution.ok {
         return Err("doctor security detected exposed surfaces".to_owned());
@@ -237,7 +238,15 @@ async fn build_doctor_security_execution(
     let web_fetch_finding = assess_web_fetch(runtime.web_fetch.clone());
     findings.push(web_fetch_finding);
 
-    let external_skills_finding = assess_external_skills(runtime.external_skills.clone());
+    let external_skills_finding =
+        match crate::external_skills_policy_probe::resolve_effective_external_skills_policy(
+            &runtime,
+        ) {
+            Ok(policy_probe) => assess_external_skills(policy_probe),
+            Err(error) => {
+                assess_external_skills_probe_failure(runtime.external_skills.clone(), error)
+            }
+        };
     findings.push(external_skills_finding);
 
     let secret_hygiene_finding = assess_secret_hygiene(config_path, config)?;
@@ -554,11 +563,15 @@ fn assess_web_fetch(policy: mvp::tools::runtime_config::WebFetchRuntimePolicy) -
 }
 
 fn assess_external_skills(
-    policy: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
+    policy_probe: crate::external_skills_policy_probe::EffectiveExternalSkillsPolicyProbe,
 ) -> SecurityFinding {
+    let policy = policy_probe.policy;
+    let override_active = policy_probe.override_active;
     let mut evidence = Vec::new();
     let enabled_evidence = format!("external_skills.enabled={}", policy.enabled);
     evidence.push(enabled_evidence);
+    let override_active_evidence = format!("external_skills.override_active={override_active}");
+    evidence.push(override_active_evidence);
     let approval_evidence = format!(
         "external_skills.require_download_approval={}",
         policy.require_download_approval
@@ -624,6 +637,49 @@ fn assess_external_skills(
         "external_skills",
         "External Skills",
         SecurityFindingStatus::Partial,
+        SecurityFindingSeverity::Warn,
+        summary,
+        evidence,
+        next_steps,
+    )
+}
+
+fn assess_external_skills_probe_failure(
+    config_projection: mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
+    error: String,
+) -> SecurityFinding {
+    let mut evidence = Vec::new();
+    let error_evidence = format!("effective_policy_probe.error={error}");
+    evidence.push(error_evidence);
+    let enabled_evidence = format!(
+        "config_projection.external_skills.enabled={}",
+        config_projection.enabled
+    );
+    evidence.push(enabled_evidence);
+    let approval_evidence = format!(
+        "config_projection.external_skills.require_download_approval={}",
+        config_projection.require_download_approval
+    );
+    evidence.push(approval_evidence);
+    let auto_expose_evidence = format!(
+        "config_projection.external_skills.auto_expose_installed={}",
+        config_projection.auto_expose_installed
+    );
+    evidence.push(auto_expose_evidence);
+
+    let summary =
+        "The effective external-skills runtime policy could not be resolved through the policy surface, so the live posture is unknown."
+            .to_owned();
+    let next_steps = vec![
+        "Run `loongclaw skills policy show --json` to confirm the effective runtime policy."
+            .to_owned(),
+        "Repair the external_skills.policy tool path before relying on this audit result."
+            .to_owned(),
+    ];
+    build_finding(
+        "external_skills",
+        "External Skills",
+        SecurityFindingStatus::Unknown,
         SecurityFindingSeverity::Warn,
         summary,
         evidence,
@@ -914,32 +970,55 @@ fn collect_provider_secret_observations(
     config: &mvp::config::LoongClawConfig,
     observations: &mut Vec<SecretObservation>,
 ) {
-    if config.providers.is_empty() {
-        let api_key_path = "provider.api_key".to_owned();
-        push_secret_ref_observation(observations, api_key_path, config.provider.api_key.as_ref());
-        let oauth_path = "provider.oauth_access_token".to_owned();
-        push_secret_ref_observation(
-            observations,
-            oauth_path,
-            config.provider.oauth_access_token.as_ref(),
-        );
-        return;
-    }
+    collect_single_provider_secret_observations("provider", &config.provider, observations);
 
     for (profile_id, profile) in &config.providers {
-        let api_key_path = format!("providers.{profile_id}.api_key");
-        push_secret_ref_observation(
+        let field_prefix = format!("providers.{profile_id}");
+        collect_single_provider_secret_observations(
+            field_prefix.as_str(),
+            &profile.provider,
             observations,
-            api_key_path,
-            profile.provider.api_key.as_ref(),
-        );
-        let oauth_path = format!("providers.{profile_id}.oauth_access_token");
-        push_secret_ref_observation(
-            observations,
-            oauth_path,
-            profile.provider.oauth_access_token.as_ref(),
         );
     }
+}
+
+fn collect_single_provider_secret_observations(
+    field_prefix: &str,
+    provider: &mvp::config::ProviderConfig,
+    observations: &mut Vec<SecretObservation>,
+) {
+    let api_key_path = format!("{field_prefix}.api_key");
+    push_secret_ref_observation(observations, api_key_path, provider.api_key.as_ref());
+
+    let oauth_path = format!("{field_prefix}.oauth_access_token");
+    push_secret_ref_observation(
+        observations,
+        oauth_path,
+        provider.oauth_access_token.as_ref(),
+    );
+
+    collect_provider_header_secret_observations(field_prefix, provider, observations);
+}
+
+fn collect_provider_header_secret_observations(
+    field_prefix: &str,
+    provider: &mvp::config::ProviderConfig,
+    observations: &mut Vec<SecretObservation>,
+) {
+    for (header_name, header_value) in &provider.headers {
+        if !provider_header_may_contain_secret(header_name.as_str()) {
+            continue;
+        }
+
+        let field_path = format!("{field_prefix}.headers.{header_name}");
+        push_string_secret_observation(observations, field_path, Some(header_value.as_str()));
+    }
+}
+
+fn provider_header_may_contain_secret(header_name: &str) -> bool {
+    PROVIDER_SECRET_HEADER_NAMES
+        .iter()
+        .any(|candidate| header_name.eq_ignore_ascii_case(candidate))
 }
 
 fn collect_web_search_secret_observations(
@@ -1556,6 +1635,8 @@ mod tests {
 
     use crate::test_support::ScopedEnv;
     use loongclaw_contracts::SecretRef;
+    use std::process::Command;
+    use std::sync::MutexGuard;
 
     fn temp_config_path(label: &str) -> PathBuf {
         let epoch = std::time::SystemTime::now()
@@ -1575,6 +1656,52 @@ mod tests {
             .iter()
             .find(|finding| finding.id == id)
             .unwrap_or_else(|| panic!("missing finding `{id}`"))
+    }
+
+    fn portable_browser_companion_probe() -> (String, String) {
+        let output = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .expect("run rustc --version");
+        assert!(output.status.success(), "rustc --version should succeed");
+
+        let observed_version = String::from_utf8(output.stdout).expect("utf-8 rustc version");
+        let observed_version = observed_version.trim().to_owned();
+        let expected_version = observed_version
+            .split_whitespace()
+            .nth(1)
+            .expect("rustc version token")
+            .to_owned();
+
+        ("rustc".to_owned(), expected_version)
+    }
+
+    struct ExternalSkillsPolicyResetGuard {
+        _lock: MutexGuard<'static, ()>,
+        runtime_config: mvp::tools::runtime_config::ToolRuntimeConfig,
+    }
+
+    impl ExternalSkillsPolicyResetGuard {
+        fn new(runtime_config: &mvp::tools::runtime_config::ToolRuntimeConfig) -> Self {
+            let lock = crate::test_support::lock_daemon_test_environment();
+            Self {
+                _lock: lock,
+                runtime_config: runtime_config.clone(),
+            }
+        }
+    }
+
+    impl Drop for ExternalSkillsPolicyResetGuard {
+        fn drop(&mut self) {
+            let request = kernel::ToolCoreRequest {
+                tool_name: "external_skills.policy".to_owned(),
+                payload: serde_json::json!({
+                    "action": "reset",
+                    "policy_update_approved": true,
+                }),
+            };
+            let _ = mvp::tools::execute_tool_core_with_config(request, &self.runtime_config);
+        }
     }
 
     #[tokio::test]
@@ -1631,6 +1758,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn secret_hygiene_scans_legacy_provider_fields_and_auth_headers_with_profiles_present() {
+        let path = temp_config_path("provider-secret-headers");
+        write_placeholder_config(&path);
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some(SecretRef::Inline("legacy-inline-secret".to_owned()));
+        config
+            .provider
+            .headers
+            .insert("X-API-Key".to_owned(), "top-level-header-secret".to_owned());
+
+        let mut profile = mvp::config::ProviderProfileConfig::default();
+        profile.provider.headers.insert(
+            "Authorization".to_owned(),
+            "Bearer profile-secret".to_owned(),
+        );
+        config.providers.insert("openai".to_owned(), profile);
+
+        let execution = build_doctor_security_execution(&path, &config)
+            .await
+            .expect("build security execution");
+        let finding = finding_by_id(&execution.findings, "secret_hygiene");
+        let rendered_evidence = finding.evidence.join("\n");
+
+        assert_eq!(finding.status, SecurityFindingStatus::Exposed);
+        assert!(rendered_evidence.contains("provider.api_key"));
+        assert!(rendered_evidence.contains("provider.headers.X-API-Key"));
+        assert!(rendered_evidence.contains("providers.openai.headers.Authorization"));
+    }
+
+    #[tokio::test]
     async fn external_skills_expose_when_auto_expose_or_approval_is_open() {
         let path = temp_config_path("external-skills");
         write_placeholder_config(&path);
@@ -1650,27 +1808,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_skills_audit_uses_effective_policy_override() {
+        let path = temp_config_path("external-skills-override");
+        write_placeholder_config(&path);
+
+        let config = mvp::config::LoongClawConfig::default();
+        let runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+            &config,
+            Some(&path),
+        );
+        let _reset_guard = ExternalSkillsPolicyResetGuard::new(&runtime_config);
+
+        let request = kernel::ToolCoreRequest {
+            tool_name: "external_skills.policy".to_owned(),
+            payload: serde_json::json!({
+                "action": "set",
+                "policy_update_approved": true,
+                "enabled": true,
+                "require_download_approval": false,
+                "allowed_domains": ["override.example"],
+                "blocked_domains": ["blocked.example"],
+            }),
+        };
+        mvp::tools::execute_tool_core_with_config(request, &runtime_config)
+            .expect("override external skills policy");
+
+        let execution = build_doctor_security_execution(&path, &config)
+            .await
+            .expect("build security execution");
+        let finding = finding_by_id(&execution.findings, "external_skills");
+        let rendered_evidence = finding.evidence.join("\n");
+
+        assert_eq!(finding.status, SecurityFindingStatus::Exposed);
+        assert!(rendered_evidence.contains("external_skills.override_active=true"));
+        assert!(rendered_evidence.contains("external_skills.enabled=true"));
+        assert!(rendered_evidence.contains("external_skills.allowed_domains.count=1"));
+    }
+
+    #[tokio::test]
     async fn browser_surfaces_become_unknown_when_companion_is_ready() {
         let path = temp_config_path("browser-companion");
         write_placeholder_config(&path);
 
-        let temp_dir = std::env::temp_dir();
-        let command_path = temp_dir.join("loongclaw-browser-companion-security-test.sh");
-        let script = "#!/bin/sh\necho 1.2.3\n";
-        fs::write(&command_path, script).expect("write browser companion script");
-
-        #[cfg(unix)]
-        {
-            let metadata = fs::metadata(&command_path).expect("script metadata");
-            let mut permissions = metadata.permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&command_path, permissions).expect("chmod script");
-        }
+        let (command_name, expected_version) = portable_browser_companion_probe();
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(command_path.display().to_string());
-        config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
+        config.tools.browser_companion.command = Some(command_name);
+        config.tools.browser_companion.expected_version = Some(expected_version);
 
         let mut env = ScopedEnv::new();
         env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
@@ -1679,8 +1864,6 @@ mod tests {
             .await
             .expect("build security execution");
         let finding = finding_by_id(&execution.findings, "browser_surfaces");
-
-        let _ = fs::remove_file(&command_path);
 
         assert_eq!(finding.status, SecurityFindingStatus::Unknown);
         assert_eq!(finding.severity, SecurityFindingSeverity::Warn);
@@ -1740,5 +1923,26 @@ mod tests {
 
         assert!(fix_error.contains("--fix"));
         assert!(probe_error.contains("--skip-model-probe"));
+    }
+
+    #[tokio::test]
+    async fn run_doctor_security_cli_json_fails_when_exposed_findings_exist() {
+        let path = temp_config_path("json-exposed");
+        let path_string = path.display().to_string();
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.audit.mode = mvp::config::AuditMode::InMemory;
+        mvp::config::write(Some(path_string.as_str()), &config, true).expect("write config");
+
+        let error = run_doctor_security_cli(DoctorSecurityCommandOptions {
+            config: Some(path_string),
+            json: true,
+            fix: false,
+            skip_model_probe: false,
+        })
+        .await
+        .expect_err("json mode should fail when exposed findings exist");
+
+        assert!(error.contains("exposed surfaces"));
     }
 }
