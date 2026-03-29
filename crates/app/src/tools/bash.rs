@@ -6,6 +6,8 @@ use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 
 #[cfg(feature = "tool-shell")]
+use super::bash_governance::{FinalGovernanceDecision, evaluate_bash_command};
+#[cfg(feature = "tool-shell")]
 use super::process_exec;
 use super::runtime_config::BashExecRuntimePolicy;
 
@@ -97,6 +99,24 @@ pub(super) fn execute_bash_tool_with_config(
         }
 
         let runtime = &config.bash_exec;
+        if let Some(load_error) = runtime.governance.load_error.as_deref() {
+            return Err(format!(
+                "policy_denied: bash governance rules failed to load: {load_error}"
+            ));
+        }
+
+        let governance = evaluate_bash_command(
+            command,
+            &runtime.governance.rules,
+            config.shell_default_mode,
+        );
+        if governance.final_decision == FinalGovernanceDecision::Deny {
+            let detail = governance
+                .denial_reason()
+                .unwrap_or_else(|| "bash governance denied command".to_owned());
+            return Err(format!("policy_denied: {detail}"));
+        }
+
         let runtime_command = runtime
             .command
             .as_deref()

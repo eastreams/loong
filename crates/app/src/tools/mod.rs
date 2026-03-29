@@ -29,6 +29,7 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 pub(crate) mod approval;
 mod bash;
 mod bash_ast;
+mod bash_governance;
 mod bash_rules;
 #[cfg(feature = "tool-browser")]
 mod browser;
@@ -1692,6 +1693,30 @@ mod tests {
     }
 
     #[cfg(all(feature = "tool-shell", unix))]
+    fn configured_test_bash_runtime_with_rules(
+        root: &Path,
+    ) -> (runtime_config::BashExecRuntimePolicy, PathBuf) {
+        let log_path = root.join("bash-args.log");
+        let runtime_path = write_fake_bash_runtime(root, "fake-bash", &log_path);
+        let rules_dir = root.join(".loongclaw").join("rules");
+        let rules = bash_rules::load_rules_from_dir(&rules_dir).expect("load rules");
+
+        (
+            runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(runtime_path),
+                governance: runtime_config::BashGovernanceRuntimePolicy {
+                    rules_dir,
+                    rules,
+                    load_error: None,
+                },
+                ..runtime_config::BashExecRuntimePolicy::default()
+            },
+            log_path,
+        )
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
     fn write_fake_bash_runtime(root: &Path, name: &str, log_path: &Path) -> PathBuf {
         let path = root.join(name);
         let script = format!(
@@ -3314,6 +3339,25 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_exec_fails_closed_when_rule_loading_failed() {
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        config.bash_exec = ready_bash_exec_runtime_policy();
+        config.bash_exec.governance.load_error = Some("broken rules".to_owned());
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "cargo test"}),
+            },
+            &config,
+        )
+        .expect_err("broken rules should fail closed");
+
+        assert!(error.contains("broken rules"));
+    }
+
     #[cfg(all(feature = "tool-shell", unix))]
     #[test]
     fn bash_exec_reports_failed_status_for_non_zero_exit() {
@@ -3325,6 +3369,7 @@ mod tests {
         let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
         let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
         config.bash_exec = runtime_config::BashExecRuntimePolicy {
             available: true,
             command: Some(runtime_path),
@@ -3366,6 +3411,7 @@ mod tests {
         let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
         let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
         config.bash_exec = runtime_config::BashExecRuntimePolicy {
             available: true,
             command: Some(runtime_path),
@@ -3396,6 +3442,160 @@ mod tests {
 
     #[cfg(all(feature = "tool-shell", unix))]
     #[test]
+    fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
+        use std::fs;
+
+        let root = unique_tool_temp_dir("loongclaw-bash-governance-allow");
+        let rules_dir = root.join(".loongclaw").join("rules");
+        fs::create_dir_all(&rules_dir).expect("rules dir");
+        fs::write(
+            rules_dir.join("allow.rules"),
+            "prefix_rule(pattern=[\"printf\",\"ok\"], decision=\"allow\")\n",
+        )
+        .expect("rule file");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        let (bash_exec, _log_path) = configured_test_bash_runtime_with_rules(&root);
+        config.bash_exec = bash_exec;
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "printf ok"}),
+            },
+            &config,
+        )
+        .expect("allow rule should permit execution");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["stdout"].as_str(), Some("ok"));
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn bash_exec_denies_plain_command_when_prefix_rule_denies() {
+        use std::fs;
+
+        let root = unique_tool_temp_dir("loongclaw-bash-governance-deny");
+        let rules_dir = root.join(".loongclaw").join("rules");
+        fs::create_dir_all(&rules_dir).expect("rules dir");
+        fs::write(
+            rules_dir.join("deny.rules"),
+            "prefix_rule(pattern=[\"cargo\",\"publish\"], decision=\"deny\")\n",
+        )
+        .expect("rule file");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        let (bash_exec, log_path) = configured_test_bash_runtime_with_rules(&root);
+        config.bash_exec = bash_exec;
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "cargo publish"}),
+            },
+            &config,
+        )
+        .expect_err("deny rule should block execution");
+
+        assert!(error.contains("policy_denied"));
+        assert!(error.contains("matched deny rule"));
+        assert!(
+            !log_path.exists(),
+            "bash runtime should not have been launched"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn bash_exec_denies_or_list_when_rhs_branch_matches_deny_rule() {
+        use std::fs;
+
+        let root = unique_tool_temp_dir("loongclaw-bash-governance-or-deny");
+        let rules_dir = root.join(".loongclaw").join("rules");
+        fs::create_dir_all(&rules_dir).expect("rules dir");
+        fs::write(
+            rules_dir.join("rules.rules"),
+            concat!(
+                "prefix_rule(pattern=[\"printf\",\"ok\"], decision=\"allow\")\n",
+                "prefix_rule(pattern=[\"printf\",\"blocked\"], decision=\"deny\")\n",
+            ),
+        )
+        .expect("rule file");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        let (bash_exec, log_path) = configured_test_bash_runtime_with_rules(&root);
+        config.bash_exec = bash_exec;
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "printf ok || printf blocked"}),
+            },
+            &config,
+        )
+        .expect_err("conservative || governance should deny the rhs branch");
+
+        assert!(error.contains("policy_denied"));
+        assert!(error.contains("matched deny rule"));
+        assert!(
+            !log_path.exists(),
+            "bash runtime should not have been launched"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn bash_exec_allows_parse_unreliable_command_when_shell_default_mode_is_allow() {
+        use std::fs;
+
+        let root = unique_tool_temp_dir("loongclaw-bash-governance-default-allow");
+        fs::create_dir_all(&root).expect("fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+        let (bash_exec, _log_path) = configured_test_bash_runtime_with_rules(&root);
+        config.bash_exec = bash_exec;
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "if then"}),
+            },
+            &config,
+        )
+        .expect("default-allow should permit parse-unreliable input to reach bash");
+
+        assert_eq!(outcome.status, "failed");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_exec_keeps_shell_exec_unchanged() {
+        let config = test_tool_runtime_config(std::env::temp_dir());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({"command": "echo", "args": ["hi"]}),
+            },
+            &config,
+        )
+        .expect("shell.exec should remain runnable");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["stdout"].as_str(), Some("hi"));
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
     fn bash_exec_honors_cwd() {
         use std::fs;
 
@@ -3406,6 +3606,7 @@ mod tests {
         let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
         let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
         config.bash_exec = runtime_config::BashExecRuntimePolicy {
             available: true,
             command: Some(runtime_path),
@@ -3444,6 +3645,7 @@ mod tests {
         let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
         let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
         config.bash_exec = runtime_config::BashExecRuntimePolicy {
             available: true,
             command: Some(runtime_path),
@@ -4722,6 +4924,7 @@ mod tests {
         let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
         let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
         config.bash_exec = runtime_config::BashExecRuntimePolicy {
             available: true,
             command: Some(runtime_path),
