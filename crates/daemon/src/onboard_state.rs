@@ -166,6 +166,7 @@ impl OnboardDraft {
         self.mark_user_selected(Self::CLI_PROMPT_MODE_KEY);
         self.mark_user_selected(Self::CLI_PERSONALITY_KEY);
         self.mark_user_selected(Self::CLI_PROMPT_ADDENDUM_KEY);
+        self.mark_user_selected(Self::CLI_SYSTEM_PROMPT_KEY);
     }
 
     pub fn restore_built_in_prompt(&mut self) {
@@ -313,6 +314,37 @@ mod tests {
         );
         assert_eq!(
             detected.origin_for(OnboardDraft::WORKSPACE_FILE_ROOT_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+    }
+
+    #[test]
+    fn native_prompt_pack_updates_effective_system_prompt_origin() {
+        let mut draft = OnboardDraft::from_config(
+            sample_config(),
+            PathBuf::from("/tmp/native-prompt.toml"),
+            Some(OnboardValueOrigin::CurrentSetup),
+        );
+
+        draft.use_native_prompt_pack(
+            mvp::prompt::PromptPersonality::FriendlyCollab,
+            Some("be concise".to_owned()),
+        );
+
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CLI_PROMPT_MODE_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CLI_PERSONALITY_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CLI_PROMPT_ADDENDUM_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CLI_SYSTEM_PROMPT_KEY),
             Some(OnboardValueOrigin::UserSelected)
         );
     }
