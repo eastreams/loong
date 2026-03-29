@@ -70,6 +70,34 @@ pub(super) fn apply_workspace_step_values(draft: &mut OnboardDraft, values: &Wor
     }
 }
 
+pub(super) fn selected_workspace_step_values(
+    displayed_values: &WorkspaceStepValues,
+    sqlite_path: PathBuf,
+    file_root: PathBuf,
+) -> WorkspaceStepValues {
+    WorkspaceStepValues {
+        sqlite_path,
+        sqlite_origin: displayed_values.sqlite_origin,
+        file_root,
+        file_root_origin: displayed_values.file_root_origin,
+    }
+}
+
+pub(super) fn commit_workspace_step_selection(
+    draft: &mut OnboardDraft,
+    displayed_values: &WorkspaceStepValues,
+    selected_values: &WorkspaceStepValues,
+) {
+    apply_workspace_step_values(draft, displayed_values);
+
+    if selected_values.sqlite_path != displayed_values.sqlite_path {
+        draft.set_workspace_sqlite_path(selected_values.sqlite_path.clone());
+    }
+    if selected_values.file_root != displayed_values.file_root {
+        draft.set_workspace_file_root(selected_values.file_root.clone());
+    }
+}
+
 pub(super) fn validate_workspace_step_values(values: &WorkspaceStepValues) -> CliResult<()> {
     validate_sqlite_path(values.sqlite_path.as_path())?;
     validate_directory_target("tool file root", values.file_root.as_path())

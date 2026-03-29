@@ -790,6 +790,18 @@ fn is_onboard_back_navigation_requested(error: &str) -> bool {
     error == ONBOARD_BACK_NAVIGATION_SIGNAL
 }
 
+fn prompt_with_default_allowing_back(
+    ui: &mut impl OnboardUi,
+    label: &str,
+    default: &str,
+) -> CliResult<String> {
+    let value = ui.prompt_with_default(label, default)?;
+    if value.trim().eq_ignore_ascii_case("back") {
+        return Err(ONBOARD_BACK_NAVIGATION_SIGNAL.to_owned());
+    }
+    Ok(value)
+}
+
 fn build_onboard_entry_screen_options(options: &[OnboardEntryOption]) -> Vec<OnboardScreenOption> {
     options
         .iter()
@@ -1046,10 +1058,8 @@ impl GuidedPromptPath {
                 GuidedPromptPath::NativePromptPack => 7,
                 GuidedPromptPath::InlineOverride => 6,
             },
-            (GuidedPromptPath::NativePromptPack, GuidedOnboardStep::Review) => 8,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::PromptCustomization) => 4,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::MemoryProfile) => 5,
-            (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Review) => 7,
             (GuidedPromptPath::InlineOverride, GuidedOnboardStep::Personality) => 4,
         }
     }
@@ -1066,7 +1076,6 @@ impl GuidedPromptPath {
             },
             GuidedOnboardStep::MemoryProfile => "memory profile",
             GuidedOnboardStep::WebSearchProvider => "web search",
-            GuidedOnboardStep::Review => "review",
         }
     }
 }
@@ -1080,7 +1089,6 @@ enum GuidedOnboardStep {
     PromptCustomization,
     MemoryProfile,
     WebSearchProvider,
-    Review,
 }
 
 impl GuidedOnboardStep {
@@ -1116,8 +1124,8 @@ impl ReviewFlowStyle {
 
     fn progress_line(self) -> String {
         match self {
-            ReviewFlowStyle::Guided(prompt_path) => {
-                GuidedOnboardStep::Review.progress_line(prompt_path)
+            ReviewFlowStyle::Guided(_) => {
+                guided_step_progress_line(OnboardWizardStep::ReviewAndWrite)
             }
             ReviewFlowStyle::QuickCurrentSetup | ReviewFlowStyle::QuickDetectedSetup => {
                 crate::onboard_presentation::review_flow_copy(self.review_kind())
@@ -1654,8 +1662,44 @@ where
                 true,
             ),
         )?;
-        onboard_workspace::validate_workspace_step_values(&workspace_values)?;
-        onboard_workspace::apply_workspace_step_values(draft, &workspace_values);
+
+        let default_sqlite_path = workspace_values.sqlite_path.display().to_string();
+        let selected_sqlite_path = match prompt_with_default_allowing_back(
+            self.ui,
+            "SQLite memory path",
+            &default_sqlite_path,
+        ) {
+            Ok(value) => value,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
+
+        let default_file_root = workspace_values.file_root.display().to_string();
+        let selected_file_root = match prompt_with_default_allowing_back(
+            self.ui,
+            "Tool file root",
+            &default_file_root,
+        ) {
+            Ok(value) => value,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
+
+        let selected_values = onboard_workspace::selected_workspace_step_values(
+            &workspace_values,
+            PathBuf::from(selected_sqlite_path),
+            PathBuf::from(selected_file_root),
+        );
+        onboard_workspace::validate_workspace_step_values(&selected_values)?;
+        onboard_workspace::commit_workspace_step_selection(
+            draft,
+            &workspace_values,
+            &selected_values,
+        );
         Ok(OnboardFlowStepAction::Next)
     }
 }
@@ -4656,7 +4700,10 @@ fn render_workspace_step_screen_lines_with_style(
             ],
         }],
         choices: Vec::new(),
-        footer_lines: Vec::new(),
+        footer_lines: append_escape_cancel_hint(vec![
+            "- press Enter to keep the displayed workspace path".to_owned(),
+            "- type 'back' to return to runtime defaults".to_owned(),
+        ]),
     };
 
     render_onboard_screen_spec(&spec, width, color_enabled)
@@ -4702,7 +4749,12 @@ fn build_write_confirmation_screen_spec(
         header_style: TuiHeaderStyle::Compact,
         subtitle: None,
         title: Some(crate::onboard_presentation::write_confirmation_title().to_owned()),
-        progress_line: Some(flow_style.progress_line()),
+        progress_line: Some(match flow_style {
+            ReviewFlowStyle::Guided(_) => guided_step_progress_line(OnboardWizardStep::Ready),
+            ReviewFlowStyle::QuickCurrentSetup | ReviewFlowStyle::QuickDetectedSetup => {
+                flow_style.progress_line()
+            }
+        }),
         intro_lines,
         sections: Vec::new(),
         choices,

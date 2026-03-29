@@ -2694,7 +2694,7 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
     let guided = loongclaw_daemon::onboard_presentation::review_flow_copy(
         loongclaw_daemon::onboard_presentation::ReviewFlowKind::Guided,
     );
-    assert_eq!(guided.progress_line, "step 8 of 8 · review");
+    assert_eq!(guided.progress_line, "step 7 of 8 · review and write");
     assert_eq!(guided.header_subtitle, "review setup");
 
     let quick_current = loongclaw_daemon::onboard_presentation::review_flow_copy(
@@ -5541,7 +5541,9 @@ fn onboard_preflight_screen_summarizes_status_counts_and_guidance() {
         "preflight screen should use a focused title: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 8 of 8 · review"),
+        lines
+            .iter()
+            .any(|line| line == "step 7 of 8 · review and write"),
         "preflight screen should stay anchored to the review step: {lines:#?}"
     );
     assert!(
@@ -5662,7 +5664,9 @@ fn current_setup_preflight_screen_uses_quick_review_progress_copy() {
         "current-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "current-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5688,7 +5692,9 @@ fn detected_setup_preflight_screen_uses_quick_review_progress_copy() {
         "detected-setup preflight should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "detected-setup preflight should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5705,6 +5711,10 @@ fn onboard_write_confirmation_screen_shows_target_path_and_write_choice() {
     assert!(
         lines.iter().any(|line| line == "ready to write config"),
         "write-confirm screen should use a focused title: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "step 8 of 8 · ready"),
+        "guided write-confirm screen should use the distinct ready-step boundary: {lines:#?}"
     );
     assert!(
         lines
@@ -5775,7 +5785,9 @@ fn current_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "current-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "current-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -5796,7 +5808,9 @@ fn detected_setup_write_confirmation_screen_uses_quick_review_progress_copy() {
         "detected-setup write-confirm should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "detected-setup write-confirm should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -6189,7 +6203,7 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
     .await
     .expect("run scripted current-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -6361,6 +6375,8 @@ async fn guided_onboard_renders_workspace_and_protocol_steps_before_review() {
             "guided wizard prompt".to_owned(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6432,6 +6448,8 @@ async fn workspace_step_prefills_existing_memory_and_file_root_paths() {
             "workspace defaults stay visible".to_owned(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6442,7 +6460,23 @@ async fn workspace_step_prefills_existing_memory_and_file_root_paths() {
     .await
     .expect("run scripted onboarding with existing workspace defaults");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    assert!(
+        transcript.iter().any(|line| {
+            line == &format!(
+                "PROMPT SQLite memory path (default: {})",
+                sqlite_path.display()
+            )
+        }),
+        "workspace step should prompt for the sqlite memory path with the current default: {transcript:#?}"
+    );
+    assert!(
+        transcript.iter().any(|line| {
+            line == &format!("PROMPT Tool file root (default: {})", file_root.display())
+        }),
+        "workspace step should prompt for the tool file root with the current default: {transcript:#?}"
+    );
+
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let review_text = review_lines.join("\n");
     assert!(
         review_text.contains("- sqlite memory path (current value):")
@@ -6455,6 +6489,84 @@ async fn workspace_step_prefills_existing_memory_and_file_root_paths() {
         review_text.contains("- tool file root (current value):")
             && review_lines.iter().any(|line| line.contains("tool-root")),
         "workspace review should keep the current tool file root visible as a current value: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn workspace_step_overrides_mark_user_selected_values() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("workspace-override-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("workspace-override-config.toml");
+    let sqlite_path = workspace_root.join("state").join("memory.sqlite3");
+    let file_root = workspace_root.join("tool-root");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    existing.memory.sqlite_path = sqlite_path.display().to_string();
+    existing.tools.file_root = Some(file_root.display().to_string());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let override_sqlite = workspace_root.join("override").join("memory.sqlite3");
+    let override_file_root = workspace_root.join("override-root");
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "workspace override review".to_owned(),
+            String::new(),
+            String::new(),
+            override_sqlite.display().to_string(),
+            override_file_root.display().to_string(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with workspace overrides");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
+    let review_text = review_lines.join("\n");
+    assert!(
+        review_text.contains("- sqlite memory path (user override):")
+            && review_lines
+                .iter()
+                .any(|line| line.contains("override/memory.sqlite3")),
+        "workspace overrides should mark sqlite path changes as user overrides: {review_lines:#?}"
+    );
+    assert!(
+        review_text.contains("- tool file root (user override):")
+            && review_lines
+                .iter()
+                .any(|line| line.contains("override-root")),
+        "workspace overrides should mark tool file root changes as user overrides: {review_lines:#?}"
     );
 }
 
@@ -6513,6 +6625,8 @@ async fn workspace_step_blocks_on_unwritable_paths() {
                 "OPENAI_API_KEY".to_owned(),
                 String::new(),
                 "workspace validation should stop unwritable roots".to_owned(),
+                String::new(),
+                String::new(),
                 String::new(),
                 String::new(),
             ],
@@ -6593,6 +6707,8 @@ async fn guided_onboard_review_labels_current_and_detected_values_differently() 
             "current-vs-detected review".to_owned(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6603,7 +6719,7 @@ async fn guided_onboard_review_labels_current_and_detected_values_differently() 
     .await
     .expect("run scripted onboarding with a review draft");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     assert!(
         review_lines
             .iter()
@@ -6660,6 +6776,8 @@ async fn guided_onboard_rerun_keeps_current_values_distinct_from_detected_values
             "rerun keeps draft values apart".to_owned(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6670,7 +6788,7 @@ async fn guided_onboard_rerun_keeps_current_values_distinct_from_detected_values
     .await
     .expect("run scripted onboarding rerun");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let current_value_lines = review_lines
         .iter()
         .filter(|line| line.contains("current value"))
@@ -6724,12 +6842,17 @@ async fn guided_onboard_back_navigation_preserves_draft_state() {
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "draft state should survive back navigation".to_owned(),
+            String::new(),
             "back".to_owned(),
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
             String::new(),
             "draft state should survive back navigation".to_owned(),
+            String::new(),
+            String::new(),
             String::new(),
             String::new(),
             "y".to_owned(),
@@ -6830,6 +6953,8 @@ async fn guided_onboard_skip_paths_preserve_prior_selections() {
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6840,7 +6965,7 @@ async fn guided_onboard_skip_paths_preserve_prior_selections() {
     .await
     .expect("run scripted onboarding with skipped optional selections");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     assert_transcript_steps_in_order(
         &transcript,
         &[
@@ -6890,6 +7015,8 @@ async fn guided_onboard_does_not_write_before_review_confirmation() {
             "OPENAI_API_KEY".to_owned(),
             String::new(),
             "write only after review".to_owned(),
+            String::new(),
+            String::new(),
             String::new(),
             String::new(),
             "y".to_owned(),
@@ -7044,7 +7171,7 @@ requires_openai_auth = true
     .await
     .expect("run scripted detected-setup onboarding with adjustments");
 
-    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let has_domain_action = |domain_label: &str, action_label: &str| {
         review_lines.iter().enumerate().any(|(index, line)| {
             line.contains(&format!("- {domain_label} ["))
@@ -7177,7 +7304,9 @@ fn onboard_review_lines_use_compact_header() {
         "review screen should retain a clear review heading under the brand block: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line == "step 8 of 8 · review"),
+        lines
+            .iter()
+            .any(|line| line == "step 7 of 8 · review and write"),
         "review screen should include guided progress context inside the screen: {lines:#?}"
     );
 }
@@ -7322,7 +7451,9 @@ fn current_setup_review_lines_use_quick_review_progress_copy() {
         "current-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "current-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
@@ -7343,7 +7474,9 @@ fn detected_setup_review_lines_use_quick_review_progress_copy() {
         "detected-setup review should use quick-review progress copy: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| line != "step 8 of 8 · review"),
+        lines
+            .iter()
+            .all(|line| line != "step 7 of 8 · review and write"),
         "detected-setup review should not reuse the guided step progress copy: {lines:#?}"
     );
 }
