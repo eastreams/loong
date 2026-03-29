@@ -659,3 +659,82 @@ fn secret_ref_has_inline_literal(secret_ref: Option<&SecretRef>) -> bool {
 
     secret_ref.inline_literal_value().is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn warn_only_checks() -> Vec<OnboardCheck> {
+        vec![
+            OnboardCheck {
+                name: "provider credentials",
+                level: OnboardCheckLevel::Pass,
+                detail: "provider is configured".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+            OnboardCheck {
+                name: "workspace guidance",
+                level: OnboardCheckLevel::Warn,
+                detail: "workspace guidance still needs review".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+        ]
+    }
+
+    fn blocked_checks() -> Vec<OnboardCheck> {
+        vec![OnboardCheck {
+            name: "post-write verification",
+            level: OnboardCheckLevel::Fail,
+            detail: "verification failed after the write completed".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        }]
+    }
+
+    #[test]
+    fn final_outcome_is_success_with_warnings_when_only_warn_checks_remain() {
+        let lines = render_preflight_summary_screen_lines_with_progress(
+            &warn_only_checks(),
+            80,
+            "step 7 of 8 · review and write",
+            true,
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("SuccessWithWarnings")),
+            "warn-only preflight should advertise a success-with-warnings outcome once the new final status model lands: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn final_outcome_is_blocked_before_write_when_checks_fail() {
+        let lines = render_preflight_summary_screen_lines_with_progress(
+            &blocked_checks(),
+            80,
+            "step 6 of 8 · environment check",
+            true,
+        );
+
+        assert!(
+            lines.iter().any(|line| line.contains("blocked")),
+            "pre-write blockers should stay blocked instead of being treated like a generic warning path: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn final_outcome_is_blocked_when_post_write_verification_fails() {
+        let lines = render_preflight_summary_screen_lines_with_progress(
+            &blocked_checks(),
+            80,
+            "step 8 of 8 · ready",
+            true,
+        );
+
+        assert!(
+            lines.iter().any(|line| line.contains("Blocked"))
+                && lines.iter().all(|line| !line.contains("Success")),
+            "post-write verification failures should be blocked without claiming success: {lines:#?}"
+        );
+    }
+}

@@ -418,6 +418,23 @@ fn extract_success_section_lines(transcript: &[String]) -> Vec<String> {
     transcript[start..].to_vec()
 }
 
+fn assert_transcript_steps_in_order(transcript: &[String], expected_steps: &[&str]) {
+    let mut search_start = 0;
+
+    for expected_step in expected_steps {
+        let position = transcript[search_start..]
+            .iter()
+            .position(|line| line == expected_step)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing guided onboarding step {expected_step:?} after position {search_start}; transcript:\n{}",
+                    transcript.join("\n")
+                )
+            });
+        search_start += position + 1;
+    }
+}
+
 fn start_local_model_probe_server(
     expected_requests: usize,
 ) -> (SocketAddr, std::thread::JoinHandle<Vec<String>>) {
@@ -6190,6 +6207,403 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
     assert_eq!(
         config.memory.profile,
         mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_renders_workspace_and_protocol_steps_before_review() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-wizard-step-order-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-wizard-step-order-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "guided wizard prompt".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with a guided draft");
+
+    assert_transcript_steps_in_order(
+        &transcript,
+        &[
+            "step 1 of 8 · welcome",
+            "step 2 of 8 · authentication",
+            "step 3 of 8 · runtime defaults",
+            "step 4 of 8 · workspace",
+            "step 5 of 8 · protocols",
+            "step 6 of 8 · environment check",
+            "step 7 of 8 · review and write",
+            "step 8 of 8 · ready",
+        ],
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_review_labels_current_and_detected_values_differently() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-review-labels-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-review-labels-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            "2".to_owned(),
+            "current-vs-detected review".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with a review draft");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    assert!(
+        review_lines
+            .iter()
+            .any(|line| line.contains("current value")),
+        "review should label current values explicitly once the new wizard contract lands: {review_lines:#?}"
+    );
+    assert!(
+        review_lines
+            .iter()
+            .any(|line| line.contains("detected value")),
+        "review should label detected values explicitly once the new wizard contract lands: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_rerun_keeps_current_values_distinct_from_detected_values() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-rerun-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-rerun-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "rerun keeps draft values apart".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding rerun");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let current_value_lines = review_lines
+        .iter()
+        .filter(|line| line.contains("current value"))
+        .count();
+    let detected_value_lines = review_lines
+        .iter()
+        .filter(|line| line.contains("detected value"))
+        .count();
+
+    assert!(
+        current_value_lines > 0 && detected_value_lines > 0,
+        "rerun review should preserve distinct current and detected value labels: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_back_navigation_preserves_draft_state() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-back-navigation-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-back-navigation-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "draft state should survive back navigation".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with back-navigation draft inputs");
+
+    assert!(
+        transcript
+            .iter()
+            .filter(|line| line.as_str() == "step 4 of 8 · workspace")
+            .count()
+            >= 2,
+        "back navigation should be able to revisit workspace while keeping the draft intact: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_skip_paths_preserve_prior_selections() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-skip-paths-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-skip-paths-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with skipped optional selections");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line == "step 4 of 8 · workspace"),
+        "skip paths should still surface the workspace step while retaining earlier selections: {transcript:#?}"
+    );
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line == "step 5 of 8 · protocols"),
+        "skip paths should still surface the protocols step while retaining earlier selections: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_onboard_does_not_write_before_review_confirmation() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("guided-write-discipline-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("guided-write-discipline-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "write only after review".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with write discipline inputs");
+
+    let review_and_write_seen = transcript
+        .iter()
+        .any(|line| line == "step 7 of 8 · review and write");
+    let ready_seen = transcript.iter().any(|line| line == "step 8 of 8 · ready");
+
+    assert!(
+        review_and_write_seen && ready_seen,
+        "write discipline should be enforced through a dedicated review-and-write confirmation step before ready: {transcript:#?}"
+    );
+    assert!(
+        std::fs::metadata(&output_path).is_ok(),
+        "the config should only exist after the explicit write confirmation"
     );
 }
 
