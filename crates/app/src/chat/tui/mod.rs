@@ -1,6 +1,9 @@
 pub(super) mod app_shell;
+pub(super) mod composer;
 pub(super) mod events;
 pub(super) mod execution_band;
+pub(super) mod execution_drawer;
+pub(super) mod focus;
 pub(super) mod layout;
 pub(super) mod reducer;
 pub(super) mod state;

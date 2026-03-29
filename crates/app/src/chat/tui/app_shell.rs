@@ -13,11 +13,13 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::CliResult;
 
+use super::composer::{render_composer_text, render_composer_title};
 use super::events::UiEvent;
 use super::execution_band::render_execution_band_summary;
+use super::execution_drawer::render_execution_drawer_lines;
 use super::layout::split_shell;
 use super::reducer::reduce;
-use super::state::{FocusTarget, UiState};
+use super::state::UiState;
 use super::transcript::{TranscriptRole, render_transcript_lines};
 
 pub(crate) fn build_shell_bootstrap_state(session_id: &str) -> UiState {
@@ -65,6 +67,8 @@ fn map_key_event(event: KeyEvent) -> Option<UiEvent> {
             Some(UiEvent::ExitRequested)
         }
         KeyCode::Backspace => Some(UiEvent::Backspace),
+        KeyCode::Tab => Some(UiEvent::FocusDrawer),
+        KeyCode::BackTab => Some(UiEvent::FocusComposer),
         KeyCode::Char(ch) if !event.modifiers.intersects(KeyModifiers::CONTROL) => {
             Some(UiEvent::ComposerInput(ch))
         }
@@ -77,8 +81,6 @@ fn map_key_event(event: KeyEvent) -> Option<UiEvent> {
         | KeyCode::End
         | KeyCode::PageUp
         | KeyCode::PageDown
-        | KeyCode::Tab
-        | KeyCode::BackTab
         | KeyCode::Delete
         | KeyCode::Insert
         | KeyCode::F(_)
@@ -146,17 +148,19 @@ impl Drop for TerminalGuard {
 }
 
 fn render_shell(frame: &mut Frame<'_>, state: &UiState) {
-    let layout = split_shell(frame.area());
-    let focus_label = match state.focus_target {
-        FocusTarget::Composer => "composer",
-    };
+    let layout = split_shell(frame.area(), state.drawer.is_some());
+    let focus_label = state.focus_target.label();
 
     let header = Paragraph::new(vec![
         Line::from("LoongClaw chat TUI"),
         Line::from(format!(
             "session={} focus={focus_label} drawer={}",
             state.session_id,
-            if state.drawer_open { "open" } else { "closed" }
+            if state.drawer.is_some() {
+                "open"
+            } else {
+                "closed"
+            }
         )),
     ])
     .block(Block::default().title("Header").borders(Borders::ALL))
@@ -173,8 +177,22 @@ fn render_shell(frame: &mut Frame<'_>, state: &UiState) {
         .wrap(Wrap { trim: false });
     frame.render_widget(execution_band, layout.execution_band);
 
-    let composer = Paragraph::new(format!("> {}", state.composer_text))
-        .block(Block::default().title("Composer").borders(Borders::ALL))
-        .wrap(Wrap { trim: false });
+    if let (Some(drawer_area), Some(drawer_payload)) = (layout.drawer, state.drawer.as_ref()) {
+        let drawer = Paragraph::new(render_execution_drawer_lines(drawer_payload))
+            .block(Block::default().title("Drawer").borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(drawer, drawer_area);
+    }
+
+    let composer = Paragraph::new(render_composer_text(
+        state.composer_text.as_str(),
+        state.focus_target,
+    ))
+    .block(
+        Block::default()
+            .title(render_composer_title(state.focus_target))
+            .borders(Borders::ALL),
+    )
+    .wrap(Wrap { trim: false });
     frame.render_widget(composer, layout.composer);
 }

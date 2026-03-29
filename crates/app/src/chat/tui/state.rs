@@ -1,15 +1,12 @@
 use super::execution_band::ExecutionBandSummary;
+use super::execution_drawer::DrawerPayload;
+use super::focus::FocusTarget;
 use super::transcript::TranscriptState;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FocusTarget {
-    Composer,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UiState {
     pub(crate) session_id: String,
-    pub(crate) drawer_open: bool,
+    pub(crate) drawer: Option<DrawerPayload>,
     pub(crate) focus_target: FocusTarget,
     pub(crate) composer_text: String,
     pub(crate) transcript: TranscriptState,
@@ -20,7 +17,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             session_id: String::new(),
-            drawer_open: false,
+            drawer: None,
             focus_target: FocusTarget::Composer,
             composer_text: String::new(),
             transcript: TranscriptState::default(),

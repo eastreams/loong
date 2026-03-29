@@ -4166,9 +4166,9 @@ mod tests {
         let bootstrap = tui::app_shell::build_shell_bootstrap_state("default");
 
         assert_eq!(bootstrap.session_id, "default");
-        assert_eq!(bootstrap.focus_target, tui::state::FocusTarget::Composer);
+        assert_eq!(bootstrap.focus_target, tui::focus::FocusTarget::Composer);
         assert!(
-            !bootstrap.drawer_open,
+            bootstrap.drawer.is_none(),
             "initial TUI shell bootstrap should start with the drawer collapsed"
         );
     }
@@ -4194,10 +4194,10 @@ mod tests {
         let state = tui::state::UiState::default();
 
         assert!(
-            !state.drawer_open,
+            state.drawer.is_none(),
             "default TUI state should start with the drawer collapsed"
         );
-        assert_eq!(state.focus_target, tui::state::FocusTarget::Composer);
+        assert_eq!(state.focus_target, tui::focus::FocusTarget::Composer);
     }
 
     #[test]
