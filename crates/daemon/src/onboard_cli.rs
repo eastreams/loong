@@ -1716,11 +1716,85 @@ where
             ),
         )?;
 
-        if protocol_values.acp_enabled {
-            Ok(OnboardFlowStepAction::Next)
-        } else {
-            Ok(OnboardFlowStepAction::Skip)
+        let acp_select_options = vec![
+            SelectOption {
+                label: "ACP enabled".to_owned(),
+                slug: "enabled".to_owned(),
+                description: "route conversation sessions through an ACP backend".to_owned(),
+                recommended: protocol_values.acp_enabled,
+            },
+            SelectOption {
+                label: "ACP disabled".to_owned(),
+                slug: "disabled".to_owned(),
+                description: "skip ACP routing and keep the current local-only path".to_owned(),
+                recommended: !protocol_values.acp_enabled,
+            },
+        ];
+        let default_acp_idx = Some(usize::from(!protocol_values.acp_enabled));
+        let selected_acp_idx = match select_one_selected_index(
+            self.ui,
+            "ACP",
+            &acp_select_options,
+            default_acp_idx,
+            SelectInteractionMode::List,
+        ) {
+            Ok(index) => index,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
+        let acp_enabled = selected_acp_idx == 0;
+        if draft.protocols.acp_enabled != acp_enabled {
+            draft.set_acp_enabled(acp_enabled);
         }
+
+        if !acp_enabled {
+            return Ok(OnboardFlowStepAction::Skip);
+        }
+
+        let available_backends = onboard_protocols::list_available_acp_backends()?;
+        let default_backend_id =
+            onboard_protocols::default_acp_backend_id(draft, &available_backends);
+        let backend_options = available_backends
+            .iter()
+            .map(|backend| SelectOption {
+                label: backend.id.clone(),
+                slug: backend.id.clone(),
+                description: backend.summary.clone(),
+                recommended: default_backend_id.as_deref() == Some(backend.id.as_str()),
+            })
+            .collect::<Vec<_>>();
+        let default_backend_idx = default_backend_id
+            .as_deref()
+            .and_then(|default_backend_id| {
+                available_backends
+                    .iter()
+                    .position(|backend| backend.id == default_backend_id)
+            });
+        let selected_backend_idx = match select_one_selected_index(
+            self.ui,
+            "ACP backend",
+            &backend_options,
+            default_backend_idx,
+            SelectInteractionMode::List,
+        ) {
+            Ok(index) => index,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
+        let selected_backend = available_backends
+            .get(selected_backend_idx)
+            .ok_or_else(|| {
+                format!("ACP backend selection index {selected_backend_idx} out of range")
+            })?;
+        if draft.protocols.acp_backend.as_deref() != Some(selected_backend.id.as_str()) {
+            draft.set_acp_backend(Some(selected_backend.id.clone()));
+        }
+
+        Ok(OnboardFlowStepAction::Next)
     }
 }
 
@@ -4743,17 +4817,20 @@ fn render_protocol_step_screen_lines_with_style(
     )];
 
     if let Some(acp_backend) = values.acp_backend.as_deref() {
-        lines.push(onboard_display_line(
-            "- selected ACP backend: ",
-            acp_backend,
-        ));
+        if values.acp_enabled {
+            lines.push(onboard_display_line(
+                "- selected ACP backend: ",
+                acp_backend,
+            ));
+        }
     } else if values.acp_enabled {
         lines.push("- selected ACP backend: not configured".to_owned());
     }
 
-    if let Some(summary) =
-        onboard_protocols::bootstrap_mcp_server_summary(&values.bootstrap_mcp_servers)
-    {
+    if let Some(summary) = onboard_protocols::bootstrap_mcp_server_summary(
+        values.acp_enabled,
+        &values.bootstrap_mcp_servers,
+    ) {
         lines.push(onboard_display_line("- bootstrap MCP servers: ", &summary));
     }
 
@@ -4768,7 +4845,17 @@ fn render_protocol_step_screen_lines_with_style(
             lines,
         }],
         choices: Vec::new(),
-        footer_lines: Vec::new(),
+        footer_lines: append_escape_cancel_hint(vec![
+            render_default_choice_footer_line(
+                "Enter",
+                if values.acp_enabled {
+                    "keep ACP enabled"
+                } else {
+                    "keep ACP disabled"
+                },
+            ),
+            "- type 'back' to return to workspace".to_owned(),
+        ]),
     };
 
     render_onboard_screen_spec(&spec, width, color_enabled)
@@ -5934,7 +6021,9 @@ fn build_onboard_review_digest_display_lines_for_draft(draft: &OnboardDraft) -> 
         ),
     ];
     lines.extend(build_onboard_protocol_review_digest_display_lines_for_draft(draft));
-    lines.extend(build_onboard_review_digest_display_lines(&draft.config));
+    lines.extend(build_onboard_review_digest_display_lines_without_protocols(
+        &draft.config,
+    ));
     lines
 }
 
@@ -5952,11 +6041,13 @@ fn build_onboard_protocol_review_digest_display_lines_for_draft(
     )];
 
     if let Some(acp_backend) = protocol_values.acp_backend.as_deref() {
-        lines.push(onboard_review_value_line(
-            "ACP backend",
-            acp_backend,
-            protocol_values.acp_backend_origin,
-        ));
+        if protocol_values.acp_enabled {
+            lines.push(onboard_review_value_line(
+                "ACP backend",
+                acp_backend,
+                protocol_values.acp_backend_origin,
+            ));
+        }
     } else if protocol_values.acp_enabled {
         lines.push(onboard_review_value_line(
             "ACP backend",
@@ -5965,9 +6056,10 @@ fn build_onboard_protocol_review_digest_display_lines_for_draft(
         ));
     }
 
-    if let Some(summary) =
-        onboard_protocols::bootstrap_mcp_server_summary(&protocol_values.bootstrap_mcp_servers)
-    {
+    if let Some(summary) = onboard_protocols::bootstrap_mcp_server_summary(
+        protocol_values.acp_enabled,
+        &protocol_values.bootstrap_mcp_servers,
+    ) {
         lines.push(onboard_review_value_line(
             "bootstrap MCP servers",
             &summary,
@@ -5979,6 +6071,14 @@ fn build_onboard_protocol_review_digest_display_lines_for_draft(
 }
 
 fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConfig) -> Vec<String> {
+    let mut lines = build_onboard_review_digest_display_lines_without_protocols(config);
+    lines.extend(build_onboard_protocol_review_digest_display_lines(config));
+    lines
+}
+
+fn build_onboard_review_digest_display_lines_without_protocols(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<String> {
     let mut lines = crate::provider_presentation::provider_profile_state_display_lines(
         config,
         Some("- provider: "),
@@ -6037,8 +6137,6 @@ fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConf
         ));
     }
 
-    lines.extend(build_onboard_protocol_review_digest_display_lines(config));
-
     let enabled_channels = enabled_channel_ids(config)
         .into_iter()
         .filter(|channel| channel != "cli")
@@ -6067,14 +6165,17 @@ fn build_onboard_protocol_review_digest_display_lines(
     )];
 
     if let Some(acp_backend) = protocols.acp_backend.as_deref() {
-        lines.push(onboard_display_line("- ACP backend: ", acp_backend));
+        if protocols.acp_enabled {
+            lines.push(onboard_display_line("- ACP backend: ", acp_backend));
+        }
     } else if protocols.acp_enabled {
         lines.push("- ACP backend: not configured".to_owned());
     }
 
-    if let Some(summary) =
-        onboard_protocols::bootstrap_mcp_server_summary(&protocols.bootstrap_mcp_servers)
-    {
+    if let Some(summary) = onboard_protocols::bootstrap_mcp_server_summary(
+        protocols.acp_enabled,
+        &protocols.bootstrap_mcp_servers,
+    ) {
         lines.push(onboard_display_line("- bootstrap MCP servers: ", &summary));
     }
 

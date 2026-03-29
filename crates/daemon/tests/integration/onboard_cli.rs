@@ -6126,7 +6126,7 @@ requires_openai_auth = true
     )
     .expect("write codex config");
 
-    let transcript = run_scripted_onboard_flow(
+    let (result, transcript) = run_scripted_onboard_flow_collecting_transcript(
         loongclaw_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
@@ -6146,8 +6146,8 @@ requires_openai_auth = true
         None,
         Some(codex_path),
     )
-    .await
-    .expect("run scripted onboarding with a single detected setup");
+    .await;
+    result.expect("run scripted onboarding with a single detected setup");
 
     let joined = transcript.join("\n");
     assert!(
@@ -6633,6 +6633,8 @@ async fn protocol_step_prefills_acp_state_and_backend() {
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6653,10 +6655,20 @@ async fn protocol_step_prefills_acp_state_and_backend() {
         "protocol step should surface the current ACP enablement state: {protocol_lines:#?}"
     );
     assert!(
+        protocol_lines.iter().any(|line| line == "SELECT ACP"),
+        "protocol step should offer an ACP enabled/disabled selection: {protocol_lines:#?}"
+    );
+    assert!(
         protocol_lines
             .iter()
             .any(|line| line == "- selected ACP backend: planning_stub"),
         "protocol step should surface the configured ACP backend: {protocol_lines:#?}"
+    );
+    assert!(
+        protocol_lines
+            .iter()
+            .any(|line| line == "SELECT ACP backend"),
+        "protocol step should offer a real ACP backend selection when ACP stays enabled: {protocol_lines:#?}"
     );
 
     let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
@@ -6669,6 +6681,18 @@ async fn protocol_step_prefills_acp_state_and_backend() {
             .iter()
             .any(|line| line == "- ACP backend (current value): planning_stub"),
         "review should preserve the current ACP backend label once protocol state is wired through: {review_lines:#?}"
+    );
+
+    let (_, written_config) =
+        mvp::config::load(output_path.to_str()).expect("load written protocol config");
+    assert!(
+        written_config.acp.enabled,
+        "ACP should remain enabled after keeping the default protocol selection"
+    );
+    assert_eq!(
+        written_config.acp.backend.as_deref(),
+        Some("planning_stub"),
+        "keeping the default backend through the interactive protocol step should preserve the configured backend"
     );
 }
 
@@ -6720,6 +6744,8 @@ async fn protocol_step_surfaces_bootstrap_mcp_server_summary_when_present() {
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -6748,6 +6774,246 @@ async fn protocol_step_surfaces_bootstrap_mcp_server_summary_when_present() {
             .iter()
             .any(|line| line == "- bootstrap MCP servers (current value): filesystem, search"),
         "review should keep bootstrap MCP server metadata visible once protocol state is surfaced: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn protocol_step_updates_acp_state_and_backend_from_selection() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("protocol-mutation-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("protocol-mutation-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    existing.acp.enabled = false;
+    existing.acp.backend = Some("planning_stub".to_owned());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "protocol mutation".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "enabled".to_owned(),
+            "acpx".to_owned(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with ACP protocol edits");
+
+    let (_, written_config) =
+        mvp::config::load(output_path.to_str()).expect("load protocol mutation config");
+    assert!(
+        written_config.acp.enabled,
+        "protocol step should let the user enable ACP from the guided flow"
+    );
+    assert_eq!(
+        written_config.acp.backend.as_deref(),
+        Some("acpx"),
+        "protocol step should write the user-selected ACP backend through the onboarding draft"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guided_review_renders_protocol_details_once() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("protocol-review-once-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("protocol-review-once-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    existing.acp.enabled = true;
+    existing.acp.backend = Some("planning_stub".to_owned());
+    existing.acp.dispatch.bootstrap_mcp_servers = vec!["filesystem".to_owned()];
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "protocol lines once".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding for protocol review dedupe");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
+    assert_eq!(
+        review_lines
+            .iter()
+            .filter(|line| line.as_str() == "- ACP: enabled")
+            .count(),
+        1,
+        "guided review should render ACP enabled state once: {review_lines:#?}"
+    );
+    assert_eq!(
+        review_lines
+            .iter()
+            .filter(|line| line.contains("ACP backend"))
+            .count(),
+        1,
+        "guided review should render ACP backend once: {review_lines:#?}"
+    );
+    assert_eq!(
+        review_lines
+            .iter()
+            .filter(|line| line.contains("bootstrap MCP servers"))
+            .count(),
+        1,
+        "guided review should render bootstrap MCP server detail once: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn protocol_step_hides_bootstrap_summary_when_acp_is_disabled() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("protocol-disabled-bootstrap-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("protocol-disabled-bootstrap-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    existing.acp.enabled = false;
+    existing.acp.backend = Some("planning_stub".to_owned());
+    existing.acp.dispatch.bootstrap_mcp_servers = vec!["filesystem".to_owned()];
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "protocol disabled bootstrap".to_owned(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with ACP disabled");
+
+    let protocol_lines = extract_step_section_lines(
+        &transcript,
+        "step 5 of 8 · protocols",
+        "step 6 of 8 · environment check",
+    );
+    assert!(
+        protocol_lines.iter().any(|line| line == "- ACP: disabled"),
+        "protocol step should keep ACP disabled visible: {protocol_lines:#?}"
+    );
+    assert!(
+        !protocol_lines
+            .iter()
+            .any(|line| line.starts_with("- bootstrap MCP servers:")),
+        "protocol step should not surface bootstrap MCP server detail when ACP is disabled: {protocol_lines:#?}"
+    );
+
+    let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
+    assert!(
+        !review_lines
+            .iter()
+            .any(|line| line.contains("bootstrap MCP servers")),
+        "guided review should not surface bootstrap MCP server detail when ACP is disabled: {review_lines:#?}"
     );
 }
 
@@ -7108,7 +7374,7 @@ async fn guided_onboard_skip_paths_preserve_prior_selections() {
     ));
     mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
 
-    let transcript = run_scripted_onboard_flow(
+    let (result, transcript) = run_scripted_onboard_flow_collecting_transcript(
         loongclaw_daemon::onboard_cli::OnboardCommandOptions {
             output: output_path.to_str().map(str::to_owned),
             force: false,
@@ -7136,6 +7402,7 @@ async fn guided_onboard_skip_paths_preserve_prior_selections() {
             String::new(),
             String::new(),
             String::new(),
+            String::new(),
             "y".to_owned(),
             "y".to_owned(),
             "o".to_owned(),
@@ -7143,8 +7410,13 @@ async fn guided_onboard_skip_paths_preserve_prior_selections() {
         Some(workspace_root),
         None,
     )
-    .await
-    .expect("run scripted onboarding with skipped optional selections");
+    .await;
+    result.unwrap_or_else(|error| {
+        panic!(
+            "run scripted onboarding with skipped optional selections: {error}\ntranscript:\n{}",
+            transcript.join("\n")
+        )
+    });
 
     let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     assert_transcript_steps_in_order(
