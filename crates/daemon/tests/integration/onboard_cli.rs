@@ -442,7 +442,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         {
             return Ok(loongclaw_daemon::onboard_cli::SelectAction::Selected(index));
         }
-        if trimmed.eq_ignore_ascii_case("b") || trimmed.eq_ignore_ascii_case("back") {
+        if trimmed.eq_ignore_ascii_case("back") {
             return Ok(loongclaw_daemon::onboard_cli::SelectAction::Back);
         }
         Err(format!("invalid scripted selection input: {trimmed}"))
@@ -6559,7 +6559,7 @@ async fn guided_onboard_back_navigation_preserves_draft_state() {
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
-            "b".to_owned(),
+            "back".to_owned(),
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
@@ -6575,42 +6575,52 @@ async fn guided_onboard_back_navigation_preserves_draft_state() {
         None,
     )
     .await;
-    result.expect("run scripted onboarding with a next/back round-trip");
-    let provider_step_count = transcript
-        .iter()
-        .filter(|line| line.as_str() == "step 1 of 8 · provider")
-        .count();
-    assert!(
-        provider_step_count >= 2,
-        "a real next/back round-trip should revisit the earlier provider step before returning forward: {transcript:#?}"
-    );
-    let model_step_count = transcript
-        .iter()
-        .filter(|line| line.as_str() == "step 2 of 8 · model")
-        .count();
-    assert!(
-        model_step_count >= 2,
-        "a real next/back round-trip should preserve the model draft while revisiting the earlier selection flow: {transcript:#?}"
-    );
-    let credential_step_count = transcript
-        .iter()
-        .filter(|line| line.as_str() == "step 3 of 8 · credential source")
-        .count();
-    assert!(
-        credential_step_count >= 2,
-        "a real next/back round-trip should preserve the credential draft while revisiting the earlier selection flow: {transcript:#?}"
-    );
-    let review_lines = transcript;
-    assert_line_present(
-        &review_lines,
-        "- provider: OpenAI",
-        "back-navigation review should preserve the drafted provider selection",
-    );
-    assert_line_present(
-        &review_lines,
-        "- model: gpt-4.1",
-        "back-navigation review should preserve the drafted model selection",
-    );
+    match result {
+        Ok(_) => {
+            let provider_step_count = transcript
+                .iter()
+                .filter(|line| line.as_str() == "step 1 of 8 · provider")
+                .count();
+            assert!(
+                provider_step_count >= 2,
+                "a real next/back round-trip should revisit the earlier provider step before returning forward: {transcript:#?}"
+            );
+            let model_step_count = transcript
+                .iter()
+                .filter(|line| line.as_str() == "step 2 of 8 · model")
+                .count();
+            assert!(
+                model_step_count >= 2,
+                "a real next/back round-trip should preserve the model draft while revisiting the earlier selection flow: {transcript:#?}"
+            );
+            let credential_step_count = transcript
+                .iter()
+                .filter(|line| line.as_str() == "step 3 of 8 · credential source")
+                .count();
+            assert!(
+                credential_step_count >= 2,
+                "a real next/back round-trip should preserve the credential draft while revisiting the earlier selection flow: {transcript:#?}"
+            );
+            let review_lines = transcript;
+            assert_line_present(
+                &review_lines,
+                "- provider: OpenAI",
+                "back-navigation review should preserve the drafted provider selection",
+            );
+            assert_line_present(
+                &review_lines,
+                "- model: gpt-4.1",
+                "back-navigation review should preserve the drafted model selection",
+            );
+        }
+        Err(error) => {
+            assert_eq!(
+                error, "onboarding back navigation is not implemented yet",
+                "the red failure should be the exact unimplemented back-navigation path"
+            );
+            panic!("next/back round-trip contract is not implemented yet: {error}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

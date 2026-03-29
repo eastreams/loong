@@ -670,6 +670,9 @@ fn select_one_rich(
         .iter()
         .map(render_select_option_item)
         .collect::<Vec<_>>();
+    let back_index = items.len();
+    let mut items = items;
+    items.push("Back".to_owned());
     let term = rich_prompt_term();
     let theme = rich_prompt_theme();
     let selection = match interaction_mode {
@@ -702,9 +705,11 @@ fn select_one_rich(
                 .map_err(|error| map_rich_prompt_error("interactive model search", error))?
         }
     };
-    selection
-        .map(SelectAction::Selected)
-        .ok_or_else(|| "onboarding cancelled: prompt aborted".to_owned())
+    match selection {
+        Some(index) if index == back_index => Ok(SelectAction::Back),
+        Some(index) => Ok(SelectAction::Selected(index)),
+        None => Err("onboarding cancelled: prompt aborted".to_owned()),
+    }
 }
 
 fn summarize_select_option_description(detail_lines: &[String]) -> String {
