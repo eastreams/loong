@@ -157,6 +157,7 @@ struct SkillEligibility {
     missing_env: Vec<String>,
     missing_bin: Vec<String>,
     missing_paths: Vec<String>,
+    missing_config: Vec<String>,
     issues: Vec<String>,
 }
 
@@ -958,27 +959,19 @@ pub(crate) fn execute_external_skills_operator_inspect_tool_with_config(
     )
 }
 
-pub(crate) fn execute_external_skills_operator_search_tool_with_config(
-    query: &str,
-    limit: usize,
+pub(super) fn execute_external_skills_search_tool_with_config(
+    request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_operator_discovery_tool_with_config(
-        query,
-        limit,
-        config,
-        SkillDiscoveryMode::Search,
-    )
+    execute_external_skills_discovery_tool_with_config(request, config, SkillDiscoveryMode::Search)
 }
 
-pub(crate) fn execute_external_skills_operator_recommend_tool_with_config(
-    query: &str,
-    limit: usize,
+pub(super) fn execute_external_skills_recommend_tool_with_config(
+    request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    execute_external_skills_operator_discovery_tool_with_config(
-        query,
-        limit,
+    execute_external_skills_discovery_tool_with_config(
+        request,
         config,
         SkillDiscoveryMode::Recommend,
     )
@@ -1081,44 +1074,34 @@ fn execute_external_skills_inspect_for_audience(
     })
 }
 
-fn execute_external_skills_operator_discovery_tool_with_config(
-    query: &str,
-    limit: usize,
+fn execute_external_skills_discovery_tool_with_config(
+    request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
     mode: SkillDiscoveryMode,
 ) -> Result<ToolCoreOutcome, String> {
-    let trimmed_query = query.trim();
-    if trimmed_query.is_empty() {
-        return Err("skills discovery requires a non-empty query".to_owned());
-    }
-    if limit == 0 {
-        return Err("skills discovery limit must be greater than zero".to_owned());
-    }
+    let (trimmed_query, limit) = parse_external_skills_discovery_request(&request)?;
+    let tool_name = discovery_tool_name(mode);
 
     let inventory = discover_skill_inventory(config)?;
     let visible_skill_count = inventory.skills.len();
     let shadowed_skill_count = inventory.shadowed_skills.len();
     let blocked_skill_count = inventory.blocked_skill_errors.len();
-    let tool_name = match mode {
-        SkillDiscoveryMode::Search => "skills.search",
-        SkillDiscoveryMode::Recommend => "skills.recommend",
-    };
 
     let results = build_ranked_skill_discovery_results(
         inventory.skills.as_slice(),
-        trimmed_query,
+        trimmed_query.as_str(),
         limit,
         SkillDiscoveryResolution::Active,
     );
     let shadowed_results = build_ranked_skill_discovery_results(
         inventory.shadowed_skills.as_slice(),
-        trimmed_query,
+        trimmed_query.as_str(),
         limit,
         SkillDiscoveryResolution::Shadowed,
     );
     let blocked_results = build_ranked_blocked_skill_discovery_results(
         &inventory.blocked_skill_errors,
-        trimmed_query,
+        trimmed_query.as_str(),
         limit,
     );
     let inventory_summary = SkillDiscoveryInventorySummary {
@@ -1140,6 +1123,44 @@ fn execute_external_skills_operator_discovery_tool_with_config(
             "blocked_results": blocked_results,
         }),
     })
+}
+
+fn parse_external_skills_discovery_request(
+    request: &ToolCoreRequest,
+) -> Result<(String, usize), String> {
+    let payload = request
+        .payload
+        .as_object()
+        .ok_or_else(|| format!("{} payload must be an object", request.tool_name))?;
+    let trimmed_query = payload
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{} requires payload.query", request.tool_name))?;
+    let raw_limit = payload
+        .get("limit")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{} requires payload.limit", request.tool_name))?;
+    if raw_limit == 0 {
+        return Err(format!(
+            "{} payload.limit must be greater than zero",
+            request.tool_name
+        ));
+    }
+    let limit = usize::try_from(raw_limit)
+        .map_err(|error| format!("invalid discovery limit `{raw_limit}`: {error}"))?;
+    Ok((trimmed_query.to_owned(), limit))
+}
+
+fn discovery_tool_name(mode: SkillDiscoveryMode) -> &'static str {
+    // Search and recommend currently share the same discovery pipeline.
+    // If mode-specific ranking or filtering lands later, update both this
+    // mapping and the downstream discovery behavior together.
+    match mode {
+        SkillDiscoveryMode::Search => "external_skills.search",
+        SkillDiscoveryMode::Recommend => "external_skills.recommend",
+    }
 }
 
 fn build_ranked_skill_discovery_results(
@@ -2299,11 +2320,19 @@ fn evaluate_skill_eligibility(
             .iter()
             .map(|path| format!("missing path `{path}`")),
     );
+    let mut missing_config = Vec::new();
     for selector in &frontmatter.required_config {
-        match runtime_config_selector_enabled(config, selector) {
+        let selector_enabled = runtime_config_selector_enabled(config, selector);
+        match selector_enabled {
             Some(true) => {}
-            Some(false) => issues.push(format!("config gate `{selector}` is disabled")),
-            None => issues.push(format!("unsupported config gate `{selector}`")),
+            Some(false) => {
+                missing_config.push(selector.clone());
+                issues.push(format!("config gate `{selector}` is disabled"));
+            }
+            None => {
+                missing_config.push(selector.clone());
+                issues.push(format!("unsupported config gate `{selector}`"));
+            }
         }
     }
     let available = issues.is_empty();
@@ -2313,6 +2342,7 @@ fn evaluate_skill_eligibility(
         missing_env,
         missing_bin,
         missing_paths,
+        missing_config,
         issues,
     }
 }
@@ -4312,6 +4342,106 @@ mod tests {
                     .expect("instructions should be text")
                     .contains("Project-only instructions"),
                 "invoke should load project-scope instructions"
+            );
+
+            fs::remove_dir_all(&root).ok();
+            fs::remove_dir_all(&home).ok();
+        });
+    }
+
+    #[test]
+    fn discovery_search_and_recommend_route_through_tool_core() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-discovery-search");
+            let home = unique_temp_dir("loongclaw-ext-skill-discovery-search-home");
+            fs::create_dir_all(&root).expect("create fixture root");
+            fs::create_dir_all(&home).expect("create home root");
+
+            write_file(
+                &root,
+                "source/release-guard/SKILL.md",
+                "---\nname: release-guard\ndescription: Guard release discipline.\ninvocation_policy: both\n---\n\n# Release Guard\n\nKeep release flows tight.\n",
+            );
+            write_file(
+                &root,
+                ".agents/skills/release-guard/SKILL.md",
+                "---\nname: release-guard\ndescription: Project-scoped release helper.\n---\n\nProject release fallback.\n",
+            );
+            write_file(
+                &root,
+                ".agents/skills/release-broken/SKILL.md",
+                "---\nname: release-broken\ndescription: Broken release helper.\n",
+            );
+
+            let config = managed_runtime_config(&root);
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.set("HOME", &home);
+
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "path": "source/release-guard"
+                    }),
+                },
+                &config,
+            )
+            .expect("install should succeed");
+
+            let search_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.search".to_owned(),
+                    payload: json!({
+                        "query": "release",
+                        "limit": 5,
+                    }),
+                },
+                &config,
+            )
+            .expect("search should succeed");
+            assert_eq!(
+                search_outcome.payload["tool_name"],
+                "external_skills.search"
+            );
+            assert_eq!(
+                search_outcome.payload["results"][0]["skill_id"],
+                "release-guard"
+            );
+            assert!(
+                search_outcome.payload["shadowed_results"]
+                    .as_array()
+                    .expect("shadowed_results should be an array")
+                    .iter()
+                    .any(|result| result["skill_id"] == "release-guard"),
+                "search should surface shadowed duplicates"
+            );
+            assert!(
+                search_outcome.payload["blocked_results"]
+                    .as_array()
+                    .expect("blocked_results should be an array")
+                    .iter()
+                    .any(|result| result["skill_id"] == "release-broken"),
+                "search should surface blocked candidates"
+            );
+
+            let recommend_outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.recommend".to_owned(),
+                    payload: json!({
+                        "query": "release helper",
+                        "limit": 3,
+                    }),
+                },
+                &config,
+            )
+            .expect("recommend should succeed");
+            assert_eq!(
+                recommend_outcome.payload["tool_name"],
+                "external_skills.recommend"
+            );
+            assert_eq!(
+                recommend_outcome.payload["results"][0]["skill_id"],
+                "release-guard"
             );
 
             fs::remove_dir_all(&root).ok();

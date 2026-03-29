@@ -180,20 +180,22 @@ fn execute_non_policy_skills_command(
         SkillsCommands::Search { query, limit } => {
             let normalized_query = normalize_skills_discovery_query(query, "skills search")?;
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            mvp::tools::external_skills_operator_search_with_config(
+            let request = build_skills_discovery_tool_request(
+                "external_skills.search",
                 normalized_query.as_str(),
                 limit,
-                &tool_runtime_config,
-            )
+            );
+            mvp::tools::execute_tool_core_with_config(request, &tool_runtime_config)
         }
         SkillsCommands::Recommend { query, limit } => {
             let normalized_query = normalize_skills_discovery_query(query, "skills recommend")?;
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            mvp::tools::external_skills_operator_recommend_with_config(
+            let request = build_skills_discovery_tool_request(
+                "external_skills.recommend",
                 normalized_query.as_str(),
                 limit,
-                &tool_runtime_config,
-            )
+            );
+            mvp::tools::execute_tool_core_with_config(request, &tool_runtime_config)
         }
         SkillsCommands::Info { skill_id } => {
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
@@ -380,12 +382,8 @@ fn build_skill_follow_up_guidance(
     let missing_env = string_array_from_value(eligibility.get("missing_env"));
     let missing_bin = string_array_from_value(eligibility.get("missing_bin"));
     let missing_paths = string_array_from_value(eligibility.get("missing_paths"));
-    let required_config = string_array_from_value(skill.get("required_config").or_else(|| {
-        skill
-            .get("metadata")
-            .and_then(Value::as_object)
-            .and_then(|metadata| metadata.get("required_config"))
-    }));
+    let missing_config = string_array_from_value(eligibility.get("missing_config"));
+    let active = skill.get("active").and_then(Value::as_bool).unwrap_or(true);
     let config_path = resolved_path.display().to_string();
     let mut next_steps = Vec::new();
     let mut recipes = Vec::new();
@@ -409,15 +407,15 @@ fn build_skill_follow_up_guidance(
         let path_step = format!("Create or point required paths: {path_fragment}");
         next_steps.push(path_step);
     }
-    if !required_config.is_empty() {
-        let config_fragment = required_config.join(", ");
+    if !missing_config.is_empty() {
+        let config_fragment = missing_config.join(", ");
         let config_step = format!("Enable required config gates: {config_fragment}");
         next_steps.push(config_step);
     }
 
     let hidden_from_model = visibility == "hidden";
     let manual_only = invocation_policy == "manual";
-    let can_use_in_ask = available && !hidden_from_model && !manual_only;
+    let can_use_in_ask = active && available && !hidden_from_model && !manual_only;
     if can_use_in_ask {
         let ask_message = format!("Use the {skill_id} skill to help with the current task.");
         let ask_command = crate::cli_handoff::format_ask_with_config(&config_path, &ask_message);
@@ -436,6 +434,11 @@ fn build_skill_follow_up_guidance(
     } else if manual_only {
         next_steps.push(
             "This skill is manual-only and cannot be invoked through `external_skills.invoke`."
+                .to_owned(),
+        );
+    } else if !active {
+        next_steps.push(
+            "This skill is inactive and cannot be used in a conversation until it is reactivated."
                 .to_owned(),
         );
     } else if !available {
@@ -465,6 +468,20 @@ fn string_array_from_value(value: Option<&Value>) -> Vec<String> {
     }
 
     strings
+}
+
+fn build_skills_discovery_tool_request(
+    tool_name: &str,
+    query: &str,
+    limit: usize,
+) -> ToolCoreRequest {
+    ToolCoreRequest {
+        tool_name: tool_name.to_owned(),
+        payload: json!({
+            "query": query,
+            "limit": limit,
+        }),
+    }
 }
 
 fn build_skills_tool_request(command: SkillsCommands) -> CliResult<ToolCoreRequest> {
@@ -932,7 +949,10 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 }
             }
         }
-        "skills.search" | "skills.recommend" => {
+        "skills.search"
+        | "skills.recommend"
+        | "external_skills.search"
+        | "external_skills.recommend" => {
             lines.push(format!(
                 "query={}",
                 payload.get("query").and_then(Value::as_str).unwrap_or("-")
@@ -964,7 +984,9 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
             ));
-            let results_heading = if tool_name == "skills.recommend" {
+            let is_recommendation =
+                matches!(tool_name, "skills.recommend" | "external_skills.recommend");
+            let results_heading = if is_recommendation {
                 "recommended skills:"
             } else {
                 "results:"
@@ -1157,6 +1179,10 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
             lines.push(format!(
                 "missing_paths={}",
                 render_string_list(eligibility.and_then(|value| value.get("missing_paths")))
+            ));
+            lines.push(format!(
+                "missing_config={}",
+                render_string_list(eligibility.and_then(|value| value.get("missing_config")))
             ));
             lines.push(format!(
                 "source_path={}",
@@ -1536,18 +1562,26 @@ fn render_skill_discovery_results_section(
             .get("resolution")
             .and_then(Value::as_str)
             .unwrap_or("active");
-        let inspect_subcommand = format!("skills info {skill_id}");
-        let inspect_command = crate::cli_handoff::format_subcommand_with_config(
-            &inspect_subcommand,
-            resolved_config_path,
-        );
         lines.push(format!(
             "- {} resolution={resolution}",
             render_skill_summary_line(result)
         ));
         render_optional_string_section(lines, "  match reasons:", result.get("match_reasons"))?;
         render_optional_string_section(lines, "  limitations:", result.get("limitations"))?;
-        lines.push(format!("  inspect={inspect_command}"));
+        if resolution == "active" {
+            let inspect_subcommand = format!("skills info {skill_id}");
+            let inspect_command = crate::cli_handoff::format_subcommand_with_config(
+                &inspect_subcommand,
+                resolved_config_path,
+            );
+            lines.push(format!("  inspect={inspect_command}"));
+        } else {
+            let skill_md_path = result
+                .get("skill_md_path")
+                .and_then(Value::as_str)
+                .unwrap_or("-");
+            lines.push(format!("  skill_md_path={skill_md_path}"));
+        }
     }
 
     Ok(())

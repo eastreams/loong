@@ -1480,6 +1480,10 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
     .expect("skills search should succeed");
 
     assert_eq!(
+        search.outcome.payload["tool_name"],
+        "external_skills.search"
+    );
+    assert_eq!(
         search.outcome.payload["results"][0]["skill_id"],
         "release-guard"
     );
@@ -1507,6 +1511,9 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
         "inspect=loongclaw skills info release-guard --config {}",
         shell_quote(&config_path.display().to_string())
     );
+    let inspect_occurrences = rendered.matches(expected_inspect.as_str()).count();
+    let shadowed_skill_md_path = root.join(".agents/skills/release-guard/SKILL.md");
+    let expected_shadowed_path = format!("  skill_md_path={}", shadowed_skill_md_path.display());
     assert!(
         rendered.contains("shadowed matches:"),
         "search text should render matching shadowed candidates: {rendered}"
@@ -1515,9 +1522,13 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
         rendered.contains("blocked matches:"),
         "search text should render matching blocked candidates: {rendered}"
     );
+    assert_eq!(
+        inspect_occurrences, 1,
+        "only active discovery results should surface skills info handoffs: {rendered}"
+    );
     assert!(
-        rendered.contains(expected_inspect.as_str()),
-        "search text should surface a concrete inspect handoff: {rendered}"
+        rendered.contains(expected_shadowed_path.as_str()),
+        "shadowed discovery results should point operators at the concrete skill file: {rendered}"
     );
 
     fs::remove_dir_all(&root).ok();
@@ -1584,7 +1595,7 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
     write_file(
         &root,
         "source/demo-skill/SKILL.md",
-        "---\nname: demo-skill\ndescription: Demo release helper.\ninvocation_policy: both\n---\n\n# Demo Skill\n\nHelp with release preparation.\n",
+        "---\nname: demo-skill\ndescription: Demo release helper.\ninvocation_policy: both\nrequired_config:\n- external_skills.enabled\n---\n\n# Demo Skill\n\nHelp with release preparation.\n",
     );
     let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
 
@@ -1613,6 +1624,13 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
             .iter()
             .any(|step| step.as_str() == Some(expected_inspect_step.as_str())),
         "install should surface a concrete inspect handoff: {install_next_steps:#?}"
+    );
+    assert!(
+        !install_next_steps.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|value| value.contains("Enable required config gates"))
+        }),
+        "install guidance should not claim config gates are missing when they are already enabled: {install_next_steps:#?}"
     );
     let install_recipes = install.outcome.payload["recipes"]
         .as_array()
@@ -1646,6 +1664,13 @@ fn execute_skills_command_install_and_info_surface_first_use_guidance() {
             .iter()
             .any(|step| step.as_str() == Some(expected_ask_step.as_str())),
         "info should surface a concrete ask handoff: {info_next_steps:#?}"
+    );
+    assert!(
+        !info_next_steps.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|value| value.contains("Enable required config gates"))
+        }),
+        "info guidance should not claim config gates are missing when they are already enabled: {info_next_steps:#?}"
     );
 
     let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(&info)
@@ -1705,6 +1730,80 @@ fn execute_skills_command_info_guidance_avoids_false_success_for_manual_or_hidde
     assert!(
         recipes.is_empty(),
         "manual-hidden guidance should not advertise ask recipes: {recipes:#?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_info_guidance_avoids_false_success_for_inactive_skill() {
+    let root = unique_temp_dir("loongclaw-skills-cli-inactive-guidance");
+    let home = unique_temp_dir("loongclaw-skills-cli-inactive-guidance-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        "source/demo-skill/SKILL.md",
+        "# Managed Demo Skill\n\nInactive winners should not advertise ask flows.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
+                path: "source/demo-skill".to_owned(),
+                skill_id: None,
+                replace: false,
+            },
+        },
+    )
+    .expect("skills install should succeed");
+
+    let index_path = root.join("managed-skills").join("index.json");
+    let index_raw = fs::read_to_string(&index_path).expect("read index");
+    let mut index: serde_json::Value = serde_json::from_str(&index_raw).expect("parse index");
+    let managed_entry = index["skills"]
+        .as_array_mut()
+        .expect("index skills should be an array")
+        .iter_mut()
+        .find(|skill| skill["skill_id"] == "demo-skill")
+        .expect("managed demo-skill entry should exist");
+    managed_entry["active"] = serde_json::json!(false);
+    let encoded_index = serde_json::to_string_pretty(&index).expect("encode index");
+    fs::write(&index_path, encoded_index).expect("write index");
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "demo-skill".to_owned(),
+            },
+        },
+    )
+    .expect("skills info should succeed for inactive skills");
+
+    let next_steps = info.outcome.payload["next_steps"]
+        .as_array()
+        .expect("inactive info should surface next steps");
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str()
+                == Some(
+                    "This skill is inactive and cannot be used in a conversation until it is reactivated.",
+                )
+        }),
+        "inactive guidance should explain why ask handoffs are unavailable: {next_steps:#?}"
+    );
+    let recipes = info.outcome.payload["recipes"]
+        .as_array()
+        .expect("inactive info should surface recipes");
+    assert!(
+        recipes.is_empty(),
+        "inactive guidance should not advertise ask recipes: {recipes:#?}"
     );
 
     fs::remove_dir_all(&root).ok();

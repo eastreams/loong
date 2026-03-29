@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-29T03:42:23Z
+- Generated at: 2026-03-29T03:57:20Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -23,7 +23,7 @@
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6821 | 7300 | 479 | 145 | 160 | 15 | 93.4% | WATCH |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 6396 | 6400 | 4 | 104 | 110 | 6 | 99.9% | TIGHT |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10028 | 11200 | 1172 | 95 | 120 | 25 | 89.5% | WATCH |
-| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14206 | 15000 | 794 | 54 | 70 | 16 | 94.7% | WATCH |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14212 | 15000 | 788 | 54 | 70 | 16 | 94.7% | WATCH |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 5014 | 6000 | 986 | 172 | 190 | 18 | 90.5% | WATCH |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9256 | 9800 | 544 | 227 | 250 | 23 | 94.4% | WATCH |
 
@@ -68,7 +68,7 @@
 <!-- arch-hotspot key=chat_runtime lines=6821 functions=145 -->
 <!-- arch-hotspot key=channel_mod lines=6396 functions=104 -->
 <!-- arch-hotspot key=turn_coordinator lines=10028 functions=95 -->
-<!-- arch-hotspot key=tools_mod lines=14206 functions=54 -->
+<!-- arch-hotspot key=tools_mod lines=14212 functions=54 -->
 <!-- arch-hotspot key=daemon_lib lines=5014 functions=172 -->
 <!-- arch-hotspot key=onboard_cli lines=9256 functions=227 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
