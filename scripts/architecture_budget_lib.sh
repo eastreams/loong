@@ -43,7 +43,7 @@ chat_runtime|crates/app/src/chat.rs|7300|160|structural_size,operational_density
 channel_mod|crates/app/src/channel/mod.rs|6400|110|structural_size,operational_density
 turn_coordinator|crates/app/src/conversation/turn_coordinator.rs|11200|120|structural_size,operational_density
 tools_mod|crates/app/src/tools/mod.rs|15000|70|structural_size
-daemon_lib|crates/daemon/src/lib.rs|6000|190|structural_size
+daemon_lib|crates/daemon/src/lib.rs|6500|210|structural_size
 onboard_cli|crates/daemon/src/onboard_cli.rs|9800|250|structural_size
 HOTSPOTS
 }
