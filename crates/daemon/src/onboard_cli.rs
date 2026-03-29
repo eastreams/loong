@@ -20,7 +20,10 @@ use crate::onboard_finalize::{
 use crate::onboard_finalize::{
     OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
 };
-use crate::onboard_flow::OnboardFlowController;
+use crate::onboard_flow::{
+    GuidedOnboardFlowStepRunner, OnboardFlowController, OnboardFlowStepAction,
+    run_guided_onboard_flow,
+};
 pub use crate::onboard_preflight::{
     OnboardCheck, OnboardCheckLevel, OnboardNonInteractiveWarningPolicy,
     collect_channel_preflight_checks, directory_preflight_check, provider_credential_check,
@@ -1278,113 +1281,16 @@ pub async fn run_onboard_cli_with_ui(
     };
 
     if !skip_detailed_setup {
-        debug_assert_eq!(flow.current_step(), OnboardWizardStep::Welcome);
-        let _ = flow.advance();
-        let guided_prompt_path = resolve_guided_prompt_path(&options, &flow.draft().config);
-        let selected_provider = resolve_provider_selection(
-            &options,
-            &flow.draft().config,
-            &starting_selection.provider_selection,
-            guided_prompt_path,
+        let mut runner = GuidedOnboardUiRunner {
+            options: &options,
             ui,
             context,
-        )?;
-        flow.draft_mut().config.provider = selected_provider;
-
-        let available_models = load_onboarding_model_catalog(&options, &flow.draft().config).await;
-        let selected_model = resolve_model_selection(
-            &options,
-            &flow.draft().config,
-            guided_prompt_path,
-            &available_models,
-            ui,
-            context,
-        )?;
-        flow.draft_mut().config.provider.model = selected_model;
-
-        let default_api_key_env = preferred_api_key_env_default(&flow.draft().config);
-        let selected_api_key_env = resolve_api_key_env_selection(
-            &options,
-            &flow.draft().config,
-            default_api_key_env,
-            guided_prompt_path,
-            ui,
-            context,
-        )?;
-        apply_selected_api_key_env(&mut flow.draft_mut().config.provider, selected_api_key_env);
-        let _ = flow.advance();
-
-        match guided_prompt_path {
-            GuidedPromptPath::NativePromptPack => {
-                let personality =
-                    resolve_personality_selection(&options, &flow.draft().config, ui, context)?;
-                flow.draft_mut().config.cli.prompt_pack_id =
-                    Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                flow.draft_mut().config.cli.personality = Some(personality);
-                flow.draft_mut().config.cli.system_prompt_addendum =
-                    resolve_prompt_addendum_selection(&options, &flow.draft().config, ui, context)?;
-                flow.draft_mut().config.cli.refresh_native_system_prompt();
-            }
-            GuidedPromptPath::InlineOverride => {
-                let system_prompt_selection =
-                    resolve_system_prompt_selection(&options, &flow.draft().config, ui, context)?;
-                match system_prompt_selection {
-                    SystemPromptSelection::KeepCurrent => {}
-                    SystemPromptSelection::RestoreBuiltIn => {
-                        flow.draft_mut().config.cli.prompt_pack_id =
-                            Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                        flow.draft_mut().config.cli.personality =
-                            Some(mvp::prompt::PromptPersonality::default());
-                        flow.draft_mut().config.cli.system_prompt_addendum = None;
-                        flow.draft_mut().config.cli.refresh_native_system_prompt();
-                    }
-                    SystemPromptSelection::Set(system_prompt) => {
-                        flow.draft_mut().config.cli.prompt_pack_id = Some(String::new());
-                        flow.draft_mut().config.cli.personality = None;
-                        flow.draft_mut().config.cli.system_prompt_addendum = None;
-                        flow.draft_mut().config.cli.system_prompt = system_prompt;
-                    }
-                }
-            }
-        }
-
-        flow.draft_mut().config.memory.profile = resolve_memory_profile_selection(
-            &options,
-            &flow.draft().config,
-            guided_prompt_path,
-            ui,
-            context,
-        )?;
-
-        let selected_web_search_provider = resolve_web_search_provider_selection(
-            &options,
-            &flow.draft().config,
-            guided_prompt_path,
-            ui,
-            context,
-        )
-        .await?;
-        flow.draft_mut().config.tools.web_search.default_provider =
-            selected_web_search_provider.clone();
-        let web_search_credential_selection = resolve_web_search_credential_selection(
-            &options,
-            &flow.draft().config,
-            selected_web_search_provider.as_str(),
-            guided_prompt_path,
-            options.non_interactive,
-            ui,
-            context,
-        )?;
-        apply_selected_web_search_credential(
-            &mut flow.draft_mut().config,
-            selected_web_search_provider.as_str(),
-            web_search_credential_selection,
-        );
+            starting_selection: &starting_selection,
+        };
+        flow = run_guided_onboard_flow(flow, &mut runner).await?;
     }
 
-    while flow.current_step() != OnboardWizardStep::ReviewAndWrite {
-        let _ = flow.skip();
-    }
+    print_guided_step_boundary(ui, OnboardWizardStep::ReviewAndWrite)?;
 
     let workspace_guidance = context
         .workspace_root
@@ -1560,7 +1466,7 @@ pub async fn run_onboard_cli_with_ui(
     if let Some(write_recovery) = write_recovery.as_ref() {
         write_recovery.finish_success();
     }
-    let _ = flow.advance();
+    print_guided_step_boundary(ui, OnboardWizardStep::Ready)?;
 
     let success_summary = build_onboarding_success_summary_with_memory(
         &path,
@@ -1582,6 +1488,179 @@ fn initial_draft_origin(entry_choice: OnboardEntryChoice) -> Option<OnboardValue
         OnboardEntryChoice::ImportDetectedSetup => Some(OnboardValueOrigin::DetectedStartingPoint),
         OnboardEntryChoice::StartFresh => None,
     }
+}
+
+struct GuidedOnboardUiRunner<'a, UI> {
+    options: &'a OnboardCommandOptions,
+    ui: &'a mut UI,
+    context: &'a OnboardRuntimeContext,
+    starting_selection: &'a StartingConfigSelection,
+}
+
+impl<UI> GuidedOnboardUiRunner<'_, UI>
+where
+    UI: OnboardUi,
+{
+    async fn run_authentication_step(&mut self, draft: &mut OnboardDraft) -> CliResult<()> {
+        let guided_prompt_path = resolve_guided_prompt_path(self.options, &draft.config);
+        let selected_provider = resolve_provider_selection(
+            self.options,
+            &draft.config,
+            &self.starting_selection.provider_selection,
+            guided_prompt_path,
+            self.ui,
+            self.context,
+        )?;
+        draft.set_provider_config(selected_provider);
+
+        let available_models = load_onboarding_model_catalog(self.options, &draft.config).await;
+        let selected_model = resolve_model_selection(
+            self.options,
+            &draft.config,
+            guided_prompt_path,
+            &available_models,
+            self.ui,
+            self.context,
+        )?;
+        draft.set_provider_model(selected_model);
+
+        let default_api_key_env = preferred_api_key_env_default(&draft.config);
+        let selected_api_key_env = resolve_api_key_env_selection(
+            self.options,
+            &draft.config,
+            default_api_key_env,
+            guided_prompt_path,
+            self.ui,
+            self.context,
+        )?;
+        draft.set_provider_credential_env(selected_api_key_env);
+        Ok(())
+    }
+
+    async fn run_runtime_defaults_step(&mut self, draft: &mut OnboardDraft) -> CliResult<()> {
+        let guided_prompt_path = resolve_guided_prompt_path(self.options, &draft.config);
+        match guided_prompt_path {
+            GuidedPromptPath::NativePromptPack => {
+                let personality = resolve_personality_selection(
+                    self.options,
+                    &draft.config,
+                    self.ui,
+                    self.context,
+                )?;
+                let prompt_addendum = resolve_prompt_addendum_selection(
+                    self.options,
+                    &draft.config,
+                    self.ui,
+                    self.context,
+                )?;
+                draft.use_native_prompt_pack(personality, prompt_addendum);
+            }
+            GuidedPromptPath::InlineOverride => {
+                let system_prompt_selection = resolve_system_prompt_selection(
+                    self.options,
+                    &draft.config,
+                    self.ui,
+                    self.context,
+                )?;
+                match system_prompt_selection {
+                    SystemPromptSelection::KeepCurrent => {}
+                    SystemPromptSelection::RestoreBuiltIn => {
+                        draft.restore_built_in_prompt();
+                    }
+                    SystemPromptSelection::Set(system_prompt) => {
+                        draft.set_inline_system_prompt(system_prompt);
+                    }
+                }
+            }
+        }
+
+        let memory_profile = resolve_memory_profile_selection(
+            self.options,
+            &draft.config,
+            guided_prompt_path,
+            self.ui,
+            self.context,
+        )?;
+        draft.set_memory_profile(memory_profile);
+
+        let selected_web_search_provider = resolve_web_search_provider_selection(
+            self.options,
+            &draft.config,
+            guided_prompt_path,
+            self.ui,
+            self.context,
+        )
+        .await?;
+        draft.set_web_search_default_provider(selected_web_search_provider.clone());
+        let web_search_credential_selection = resolve_web_search_credential_selection(
+            self.options,
+            &draft.config,
+            selected_web_search_provider.as_str(),
+            guided_prompt_path,
+            self.options.non_interactive,
+            self.ui,
+            self.context,
+        )?;
+        match web_search_credential_selection {
+            WebSearchCredentialSelection::KeepCurrent => {}
+            WebSearchCredentialSelection::ClearConfigured => {
+                draft.clear_web_search_credential(selected_web_search_provider.as_str());
+            }
+            WebSearchCredentialSelection::UseEnv(env_name) => {
+                draft
+                    .set_web_search_credential_env(selected_web_search_provider.as_str(), env_name);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl<UI> GuidedOnboardFlowStepRunner for GuidedOnboardUiRunner<'_, UI>
+where
+    UI: OnboardUi,
+{
+    async fn run_step(
+        &mut self,
+        step: OnboardWizardStep,
+        draft: &mut OnboardDraft,
+    ) -> CliResult<OnboardFlowStepAction> {
+        print_guided_step_boundary(self.ui, step)?;
+        match step {
+            OnboardWizardStep::Welcome => Ok(OnboardFlowStepAction::Next),
+            OnboardWizardStep::Authentication => {
+                self.run_authentication_step(draft).await?;
+                Ok(OnboardFlowStepAction::Next)
+            }
+            OnboardWizardStep::RuntimeDefaults => {
+                self.run_runtime_defaults_step(draft).await?;
+                Ok(OnboardFlowStepAction::Next)
+            }
+            OnboardWizardStep::Workspace
+            | OnboardWizardStep::Protocols
+            | OnboardWizardStep::EnvironmentCheck => Ok(OnboardFlowStepAction::Skip),
+            OnboardWizardStep::ReviewAndWrite | OnboardWizardStep::Ready => {
+                Ok(OnboardFlowStepAction::Next)
+            }
+        }
+    }
+}
+
+fn print_guided_step_boundary(ui: &mut impl OnboardUi, step: OnboardWizardStep) -> CliResult<()> {
+    ui.print_line(guided_step_progress_line(step).as_str())
+}
+
+fn guided_step_progress_line(step: OnboardWizardStep) -> String {
+    let (index, label) = match step {
+        OnboardWizardStep::Welcome => (1, "welcome"),
+        OnboardWizardStep::Authentication => (2, "authentication"),
+        OnboardWizardStep::RuntimeDefaults => (3, "runtime defaults"),
+        OnboardWizardStep::Workspace => (4, "workspace"),
+        OnboardWizardStep::Protocols => (5, "protocols"),
+        OnboardWizardStep::EnvironmentCheck => (6, "environment check"),
+        OnboardWizardStep::ReviewAndWrite => (7, "review and write"),
+        OnboardWizardStep::Ready => (8, "ready"),
+    };
+    format!("step {index} of 8 · {label}")
 }
 
 fn resolve_guided_prompt_path(
@@ -2740,6 +2819,7 @@ fn validate_selected_web_search_credential_env(
     ))
 }
 
+#[cfg(test)]
 fn apply_selected_web_search_credential(
     config: &mut mvp::config::LoongClawConfig,
     provider: &str,

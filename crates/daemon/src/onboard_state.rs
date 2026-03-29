@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use loongclaw_app as mvp;
 
+use crate::provider_credential_policy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OnboardValueOrigin {
     CurrentSetup,
@@ -52,6 +54,16 @@ pub struct OnboardDraft {
 }
 
 impl OnboardDraft {
+    pub const PROVIDER_CONFIG_KEY: &'static str = "provider.config";
+    pub const PROVIDER_MODEL_KEY: &'static str = "provider.model";
+    pub const PROVIDER_CREDENTIAL_KEY: &'static str = "provider.credential";
+    pub const CLI_PROMPT_MODE_KEY: &'static str = "cli.prompt_mode";
+    pub const CLI_PERSONALITY_KEY: &'static str = "cli.personality";
+    pub const CLI_PROMPT_ADDENDUM_KEY: &'static str = "cli.prompt_addendum";
+    pub const CLI_SYSTEM_PROMPT_KEY: &'static str = "cli.system_prompt";
+    pub const MEMORY_PROFILE_KEY: &'static str = "memory.profile";
+    pub const WEB_SEARCH_PROVIDER_KEY: &'static str = "tools.web_search.default_provider";
+    pub const WEB_SEARCH_CREDENTIAL_KEY: &'static str = "tools.web_search.credential";
     pub const WORKSPACE_SQLITE_PATH_KEY: &'static str = "memory.sqlite_path";
     pub const WORKSPACE_FILE_ROOT_KEY: &'static str = "tools.file_root";
     pub const ACP_ENABLED_KEY: &'static str = "acp.enabled";
@@ -85,12 +97,117 @@ impl OnboardDraft {
             draft.seed_origin(Self::ACP_ENABLED_KEY, origin);
             draft.seed_origin(Self::ACP_BACKEND_KEY, origin);
             draft.seed_origin(Self::ACP_BOOTSTRAP_MCP_SERVERS_KEY, origin);
+            draft.seed_origin(Self::PROVIDER_CONFIG_KEY, origin);
+            draft.seed_origin(Self::PROVIDER_MODEL_KEY, origin);
+            draft.seed_origin(Self::PROVIDER_CREDENTIAL_KEY, origin);
+            draft.seed_origin(Self::CLI_PROMPT_MODE_KEY, origin);
+            draft.seed_origin(Self::CLI_PERSONALITY_KEY, origin);
+            draft.seed_origin(Self::CLI_PROMPT_ADDENDUM_KEY, origin);
+            draft.seed_origin(Self::CLI_SYSTEM_PROMPT_KEY, origin);
+            draft.seed_origin(Self::MEMORY_PROFILE_KEY, origin);
+            draft.seed_origin(Self::WEB_SEARCH_PROVIDER_KEY, origin);
+            draft.seed_origin(Self::WEB_SEARCH_CREDENTIAL_KEY, origin);
         }
         draft
     }
 
     pub fn origin_for(&self, key: &'static str) -> Option<OnboardValueOrigin> {
         self.origins.get(key).copied()
+    }
+
+    pub fn set_provider_config(&mut self, provider: mvp::config::ProviderConfig) {
+        self.config.provider = provider;
+        self.mark_user_selected(Self::PROVIDER_CONFIG_KEY);
+    }
+
+    pub fn set_provider_model(&mut self, model: String) {
+        self.config.provider.model = model;
+        self.mark_user_selected(Self::PROVIDER_MODEL_KEY);
+    }
+
+    pub fn set_provider_credential_env(&mut self, selected_api_key_env: String) {
+        let selected_api_key_env = selected_api_key_env.trim();
+        if selected_api_key_env.is_empty() {
+            self.config.provider.clear_api_key_env_binding();
+            self.config.provider.clear_oauth_access_token_env_binding();
+        } else {
+            self.config.provider.api_key = None;
+            self.config.provider.oauth_access_token = None;
+            match provider_credential_policy::selected_provider_credential_env_field(
+                &self.config.provider,
+                selected_api_key_env,
+            ) {
+                provider_credential_policy::ProviderCredentialEnvField::ApiKey => {
+                    self.config.provider.clear_oauth_access_token_env_binding();
+                    self.config
+                        .provider
+                        .set_api_key_env_binding(Some(selected_api_key_env.to_owned()));
+                }
+                provider_credential_policy::ProviderCredentialEnvField::OAuthAccessToken => {
+                    self.config.provider.clear_api_key_env_binding();
+                    self.config
+                        .provider
+                        .set_oauth_access_token_env_binding(Some(selected_api_key_env.to_owned()));
+                }
+            }
+        }
+        self.mark_user_selected(Self::PROVIDER_CREDENTIAL_KEY);
+    }
+
+    pub fn use_native_prompt_pack(
+        &mut self,
+        personality: mvp::prompt::PromptPersonality,
+        prompt_addendum: Option<String>,
+    ) {
+        self.config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+        self.config.cli.personality = Some(personality);
+        self.config.cli.system_prompt_addendum = prompt_addendum;
+        self.config.cli.refresh_native_system_prompt();
+        self.mark_user_selected(Self::CLI_PROMPT_MODE_KEY);
+        self.mark_user_selected(Self::CLI_PERSONALITY_KEY);
+        self.mark_user_selected(Self::CLI_PROMPT_ADDENDUM_KEY);
+    }
+
+    pub fn restore_built_in_prompt(&mut self) {
+        self.config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+        self.config.cli.personality = Some(mvp::prompt::PromptPersonality::default());
+        self.config.cli.system_prompt_addendum = None;
+        self.config.cli.refresh_native_system_prompt();
+        self.mark_user_selected(Self::CLI_PROMPT_MODE_KEY);
+        self.mark_user_selected(Self::CLI_PERSONALITY_KEY);
+        self.mark_user_selected(Self::CLI_PROMPT_ADDENDUM_KEY);
+        self.mark_user_selected(Self::CLI_SYSTEM_PROMPT_KEY);
+    }
+
+    pub fn set_inline_system_prompt(&mut self, system_prompt: String) {
+        self.config.cli.prompt_pack_id = Some(String::new());
+        self.config.cli.personality = None;
+        self.config.cli.system_prompt_addendum = None;
+        self.config.cli.system_prompt = system_prompt;
+        self.mark_user_selected(Self::CLI_PROMPT_MODE_KEY);
+        self.mark_user_selected(Self::CLI_PERSONALITY_KEY);
+        self.mark_user_selected(Self::CLI_PROMPT_ADDENDUM_KEY);
+        self.mark_user_selected(Self::CLI_SYSTEM_PROMPT_KEY);
+    }
+
+    pub fn set_memory_profile(&mut self, profile: mvp::config::MemoryProfile) {
+        self.config.memory.profile = profile;
+        self.mark_user_selected(Self::MEMORY_PROFILE_KEY);
+    }
+
+    pub fn set_web_search_default_provider(&mut self, provider: String) {
+        self.config.tools.web_search.default_provider = provider;
+        self.mark_user_selected(Self::WEB_SEARCH_PROVIDER_KEY);
+    }
+
+    pub fn clear_web_search_credential(&mut self, provider: &str) {
+        self.set_web_search_credential_value(provider, None);
+        self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
+    }
+
+    pub fn set_web_search_credential_env(&mut self, provider: &str, env_name: String) {
+        self.set_web_search_credential_value(provider, Some(format!("${{{}}}", env_name.trim())));
+        self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
     }
 
     pub fn set_workspace_sqlite_path(&mut self, sqlite_path: PathBuf) {
@@ -129,6 +246,27 @@ impl OnboardDraft {
 
     fn mark_user_selected(&mut self, key: &'static str) {
         self.seed_origin(key, OnboardValueOrigin::UserSelected);
+    }
+
+    fn set_web_search_credential_value(&mut self, provider: &str, value: Option<String>) {
+        match provider {
+            mvp::config::WEB_SEARCH_PROVIDER_BRAVE => {
+                self.config.tools.web_search.brave_api_key = value;
+            }
+            mvp::config::WEB_SEARCH_PROVIDER_TAVILY => {
+                self.config.tools.web_search.tavily_api_key = value;
+            }
+            mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
+                self.config.tools.web_search.perplexity_api_key = value;
+            }
+            mvp::config::WEB_SEARCH_PROVIDER_EXA => {
+                self.config.tools.web_search.exa_api_key = value;
+            }
+            mvp::config::WEB_SEARCH_PROVIDER_JINA => {
+                self.config.tools.web_search.jina_api_key = value;
+            }
+            _ => {}
+        }
     }
 }
 

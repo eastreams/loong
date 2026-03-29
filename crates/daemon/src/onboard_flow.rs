@@ -1,9 +1,27 @@
+use crate::CliResult;
 use crate::onboard_state::{OnboardDraft, OnboardWizardStep};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct OnboardFlowController {
     draft: OnboardDraft,
     cursor: usize,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OnboardFlowStepAction {
+    Next,
+    Back,
+    Skip,
+}
+
+#[allow(async_fn_in_trait)]
+pub(crate) trait GuidedOnboardFlowStepRunner {
+    async fn run_step(
+        &mut self,
+        step: OnboardWizardStep,
+        draft: &mut OnboardDraft,
+    ) -> CliResult<OnboardFlowStepAction>;
 }
 
 impl OnboardFlowController {
@@ -56,6 +74,32 @@ impl OnboardFlowController {
     pub fn skip(&mut self) -> OnboardWizardStep {
         self.advance()
     }
+}
+
+pub(crate) async fn run_guided_onboard_flow<R>(
+    mut controller: OnboardFlowController,
+    runner: &mut R,
+) -> CliResult<OnboardFlowController>
+where
+    R: GuidedOnboardFlowStepRunner,
+{
+    while controller.current_step() != OnboardWizardStep::ReviewAndWrite {
+        let step = controller.current_step();
+        let action = runner.run_step(step, controller.draft_mut()).await?;
+        match action {
+            OnboardFlowStepAction::Next => {
+                controller.advance();
+            }
+            OnboardFlowStepAction::Back => {
+                controller.back();
+            }
+            OnboardFlowStepAction::Skip => {
+                controller.skip();
+            }
+        }
+    }
+
+    Ok(controller)
 }
 
 #[cfg(test)]
@@ -130,5 +174,75 @@ mod tests {
         );
         assert_eq!(controller.skip(), OnboardWizardStep::EnvironmentCheck);
         assert_eq!(controller.advance(), OnboardWizardStep::ReviewAndWrite);
+    }
+
+    struct RecordingRunner {
+        visited: Vec<OnboardWizardStep>,
+    }
+
+    impl RecordingRunner {
+        fn new() -> Self {
+            Self {
+                visited: Vec::new(),
+            }
+        }
+    }
+
+    impl GuidedOnboardFlowStepRunner for RecordingRunner {
+        async fn run_step(
+            &mut self,
+            step: OnboardWizardStep,
+            draft: &mut OnboardDraft,
+        ) -> CliResult<OnboardFlowStepAction> {
+            self.visited.push(step);
+            match step {
+                OnboardWizardStep::Workspace => {
+                    draft.set_workspace_file_root(PathBuf::from("/guided/workspace"));
+                    Ok(OnboardFlowStepAction::Skip)
+                }
+                OnboardWizardStep::Protocols => {
+                    draft.set_acp_backend(Some("jsonrpc".to_owned()));
+                    Ok(OnboardFlowStepAction::Skip)
+                }
+                OnboardWizardStep::Welcome
+                | OnboardWizardStep::Authentication
+                | OnboardWizardStep::RuntimeDefaults
+                | OnboardWizardStep::EnvironmentCheck => Ok(OnboardFlowStepAction::Next),
+                OnboardWizardStep::ReviewAndWrite | OnboardWizardStep::Ready => {
+                    Err("runner should stop before review".to_owned())
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guided_flow_runner_owns_step_order_until_review_boundary() {
+        let controller = OnboardFlowController::new(sample_draft());
+        let mut runner = RecordingRunner::new();
+
+        let controller = run_guided_onboard_flow(controller, &mut runner)
+            .await
+            .expect("run guided onboard flow");
+
+        assert_eq!(
+            runner.visited,
+            vec![
+                OnboardWizardStep::Welcome,
+                OnboardWizardStep::Authentication,
+                OnboardWizardStep::RuntimeDefaults,
+                OnboardWizardStep::Workspace,
+                OnboardWizardStep::Protocols,
+                OnboardWizardStep::EnvironmentCheck,
+            ]
+        );
+        assert_eq!(controller.current_step(), OnboardWizardStep::ReviewAndWrite);
+        assert_eq!(
+            controller.draft().workspace.file_root,
+            PathBuf::from("/guided/workspace")
+        );
+        assert_eq!(
+            controller.draft().protocols.acp_backend.as_deref(),
+            Some("jsonrpc")
+        );
     }
 }
