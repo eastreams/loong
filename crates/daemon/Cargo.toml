@@ -72,6 +72,7 @@ chrono.workspace = true
 base64.workspace = true
 rand.workspace = true
 sha2.workspace = true
+semver.workspace = true
 ed25519-dalek.workspace = true
 dunce = "1"
 

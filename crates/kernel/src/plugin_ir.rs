@@ -56,6 +56,14 @@ pub struct PluginRuntimeProfile {
     pub entrypoint_hint: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRuntimeScaffoldDefaults {
+    pub source_language: Option<String>,
+    pub bridge_kind: PluginBridgeKind,
+    pub adapter_family: String,
+    pub entrypoint_hint: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PluginIR {
     pub manifest_api_version: Option<String>,
@@ -1146,7 +1154,11 @@ fn infer_runtime_profile_from_parts(
     metadata: &BTreeMap<String, String>,
     endpoint: Option<&str>,
 ) -> PluginRuntimeProfile {
-    let source_language = normalize_language(language);
+    let source_language = metadata
+        .get("source_language")
+        .map(|value| normalize_language(value))
+        .filter(|value| value != "unknown")
+        .unwrap_or_else(|| normalize_language(language));
 
     let bridge_kind = metadata
         .get("bridge_kind")
@@ -1176,6 +1188,43 @@ fn infer_runtime_profile_from_parts(
         adapter_family,
         entrypoint_hint,
     }
+}
+
+pub fn plugin_runtime_scaffold_defaults(
+    bridge_kind: PluginBridgeKind,
+    source_language: Option<&str>,
+) -> Result<PluginRuntimeScaffoldDefaults, String> {
+    if matches!(bridge_kind, PluginBridgeKind::Unknown) {
+        return Err("plugin scaffold does not support bridge_kind `unknown`".to_owned());
+    }
+
+    let normalized_source_language = source_language
+        .map(normalize_language)
+        .filter(|value| value != "unknown" && value != "manifest");
+
+    let source_language_is_required = matches!(
+        bridge_kind,
+        PluginBridgeKind::ProcessStdio | PluginBridgeKind::NativeFfi
+    );
+
+    if source_language_is_required && normalized_source_language.is_none() {
+        return Err(format!(
+            "plugin scaffold requires an explicit source language for bridge_kind `{}`",
+            bridge_kind.as_str()
+        ));
+    }
+
+    let adapter_language = normalized_source_language.as_deref().unwrap_or("unknown");
+    let adapter_family = default_adapter_family(adapter_language, bridge_kind);
+    let entrypoint_hint =
+        default_entrypoint_hint(bridge_kind, None).unwrap_or_else(|| "invoke".to_owned());
+
+    Ok(PluginRuntimeScaffoldDefaults {
+        source_language: normalized_source_language,
+        bridge_kind,
+        adapter_family,
+        entrypoint_hint,
+    })
 }
 
 fn legacy_plugin_ir_dialect(source_kind: PluginSourceKind) -> PluginContractDialect {
@@ -1470,6 +1519,25 @@ mod tests {
     }
 
     #[test]
+    fn translator_honors_metadata_source_language_for_package_manifests() {
+        let descriptor = descriptor(
+            "manifest",
+            BTreeMap::from([
+                ("bridge_kind".to_owned(), "process_stdio".to_owned()),
+                ("source_language".to_owned(), "py".to_owned()),
+            ]),
+        );
+
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+
+        assert_eq!(ir.runtime.source_language, "python");
+        assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::ProcessStdio);
+        assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
+        assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    #[test]
     fn translator_defaults_manifest_descriptor_with_endpoint_to_http_json() {
         let descriptor = descriptor("manifest", BTreeMap::new());
 
@@ -1490,6 +1558,35 @@ mod tests {
             ir.package_manifest_path,
             Some("/tmp/loongclaw.plugin.json".to_owned())
         );
+    }
+
+    #[test]
+    fn plugin_runtime_scaffold_defaults_require_source_language_for_process_stdio() {
+        let error = plugin_runtime_scaffold_defaults(PluginBridgeKind::ProcessStdio, None)
+            .expect_err("process bridge scaffold should require source language");
+
+        assert!(error.contains("source language"));
+        assert!(error.contains("process_stdio"));
+    }
+
+    #[test]
+    fn plugin_runtime_scaffold_defaults_require_source_language_for_native_ffi() {
+        let error = plugin_runtime_scaffold_defaults(PluginBridgeKind::NativeFfi, None)
+            .expect_err("native ffi scaffold should require source language");
+
+        assert!(error.contains("source language"));
+        assert!(error.contains("native_ffi"));
+    }
+
+    #[test]
+    fn plugin_runtime_scaffold_defaults_normalize_python_process_bridge() {
+        let defaults = plugin_runtime_scaffold_defaults(PluginBridgeKind::ProcessStdio, Some("py"))
+            .expect("python process bridge scaffold defaults should resolve");
+
+        assert_eq!(defaults.source_language.as_deref(), Some("python"));
+        assert_eq!(defaults.bridge_kind, PluginBridgeKind::ProcessStdio);
+        assert_eq!(defaults.adapter_family, "python-stdio-adapter");
+        assert_eq!(defaults.entrypoint_hint, "stdin/stdout::invoke");
     }
 
     #[test]
