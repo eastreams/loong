@@ -13,7 +13,8 @@ experiment should be crystallized into a reusable lower-layer capability.
 - [ ] `runtime-capability propose` creates a persisted capability-candidate
       artifact from one finished `runtime-experiment` run.
 - [ ] The candidate artifact records one explicit target type:
-      `managed_skill`, `programmatic_flow`, or `profile_note_addendum`.
+      `managed_skill`, `programmatic_flow`, `profile_note_addendum`, or
+      `memory_stage_profile`.
 - [ ] The candidate artifact records one bounded scope, normalized tags, and
       normalized required capabilities without mutating live runtime state.
 - [ ] When the source run still points at recorded baseline and result snapshot
@@ -33,6 +34,10 @@ experiment should be crystallized into a reusable lower-layer capability.
       names across that family.
 - [ ] Each capability family reports readiness as `ready`, `not_ready`, or
       `blocked` from explicit evidence checks rather than opaque heuristics.
+- [ ] `memory_stage_profile` families stay `not_ready` unless accepted
+      candidates include snapshot-delta evidence with at least one allowlisted
+      changed surface: `memory_selected`, `memory_policy`,
+      `context_engine_selected`, or `context_engine_compaction`.
 - [ ] `runtime-capability plan` resolves one indexed family into a dry-run
       promotion plan that describes the target lower-layer artifact, stable
       artifact id, blockers, approval checklist, rollback hints, provenance

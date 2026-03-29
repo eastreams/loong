@@ -46,8 +46,13 @@ async fn main() {
             invoke_connector_cli(&operation, &payload).await
         }
         Commands::AuditDemo => run_audit_demo().await,
-        Commands::InitSpec { output } => init_spec_cli(&output),
-        Commands::RunSpec { spec, print_audit } => run_spec_cli(&spec, print_audit).await,
+        Commands::InitSpec { output, preset } => init_spec_cli(&output, preset),
+        Commands::RunSpec {
+            spec,
+            print_audit,
+            render_summary,
+            bridge_support,
+        } => run_spec_cli(&spec, print_audit, render_summary, &bridge_support).await,
         Commands::BenchmarkProgrammaticPressure {
             matrix,
             baseline,
@@ -248,6 +253,9 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Plugins { json, command } => {
+            plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
+        }
         Commands::Channels { config, json } => run_channels_cli(config.as_deref(), json),
         Commands::ListModels { config, json } => run_list_models_cli(config.as_deref(), json).await,
         Commands::RuntimeSnapshot {
@@ -733,6 +741,26 @@ async fn main() {
             )
             .await
         }
+        Commands::TlonSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TLON_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
         Commands::SignalSend {
             config,
             account,
@@ -742,6 +770,26 @@ async fn main() {
         } => {
             run_channel_send_cli(
                 SIGNAL_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::TwitchSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                TWITCH_SEND_CLI_SPEC,
                 ChannelSendCliArgs {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
@@ -846,6 +894,26 @@ async fn main() {
                     config_path: config.as_deref(),
                     account: account.as_deref(),
                     target: Some(target.as_str()),
+                    target_kind,
+                    text: &text,
+                    as_card: false,
+                },
+            )
+            .await
+        }
+        Commands::NostrSend {
+            config,
+            account,
+            target,
+            target_kind,
+            text,
+        } => {
+            run_channel_send_cli(
+                NOSTR_SEND_CLI_SPEC,
+                ChannelSendCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    target: target.as_deref(),
                     target_kind,
                     text: &text,
                     as_card: false,

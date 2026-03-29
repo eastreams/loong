@@ -2,13 +2,17 @@ use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedWhatsappChannelConfig};
 
-use super::ChannelOutboundTargetKind;
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 pub(super) async fn run_whatsapp_send(
     resolved: &ResolvedWhatsappChannelConfig,
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Address {
         return Err(format!(
@@ -34,6 +38,8 @@ pub(super) async fn run_whatsapp_send(
         api_base_url.trim_end_matches('/'),
         phone_number_id.trim()
     );
+    let request_url =
+        validate_outbound_http_target("whatsapp api_base_url", request_url.as_str(), policy)?;
     let request_body = json!({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -45,9 +51,9 @@ pub(super) async fn run_whatsapp_send(
         },
     });
 
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("whatsapp send", policy)?;
     let request = client
-        .post(request_url.as_str())
+        .post(request_url)
         .bearer_auth(access_token)
         .json(&request_body);
     let response = request

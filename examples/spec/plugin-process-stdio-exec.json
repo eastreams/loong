@@ -46,6 +46,7 @@
     "allow_native_ffi_auto_apply": false,
     "allow_wasm_component_auto_apply": false,
     "allow_mcp_server_auto_apply": false,
+    "block_unverified_high_risk_auto_apply": false,
     "enforce_ready_execution": true,
     "max_tasks": 8
   },

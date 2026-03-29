@@ -102,6 +102,8 @@ pub enum RuntimeCapabilityTarget {
     ManagedSkill,
     ProgrammaticFlow,
     ProfileNoteAddendum,
+    #[value(alias = "memory_stage_profile")]
+    MemoryStageProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,14 +215,14 @@ pub struct RuntimeCapabilityMetricRange {
     pub max: f64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimeCapabilitySourceDecisionRollup {
     pub promoted: usize,
     pub rejected: usize,
     pub undecided: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct RuntimeCapabilityEvidenceDigest {
     pub total_candidates: usize,
     pub reviewed_candidates: usize,
@@ -901,12 +903,13 @@ fn evaluate_family_readiness(
     let stability = evaluate_stability(evidence);
     let accepted_source_integrity = evaluate_accepted_source_integrity(artifacts, evidence);
     let warning_pressure = evaluate_warning_pressure(evidence);
-    let checks = vec![
+    let mut checks = vec![
         review_consensus,
         stability,
         accepted_source_integrity,
         warning_pressure,
     ];
+    checks.extend(evaluate_target_specific_readiness(artifacts));
     let status = if checks
         .iter()
         .any(|check| check.status == RuntimeCapabilityFamilyReadinessCheckStatus::Blocked)
@@ -921,6 +924,73 @@ fn evaluate_family_readiness(
         RuntimeCapabilityFamilyReadinessStatus::NotReady
     };
     RuntimeCapabilityFamilyReadiness { status, checks }
+}
+
+fn evaluate_target_specific_readiness(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> Vec<RuntimeCapabilityFamilyReadinessCheck> {
+    let Some(target) = artifacts.first().map(|artifact| artifact.proposal.target) else {
+        return Vec::new();
+    };
+
+    match target {
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            let accepted_artifacts = artifacts
+                .iter()
+                .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+                .cloned()
+                .collect::<Vec<_>>();
+            let accepted_evidence = if accepted_artifacts.is_empty() {
+                RuntimeCapabilityEvidenceDigest::default()
+            } else {
+                build_family_evidence_digest(&accepted_artifacts)
+            };
+            vec![evaluate_memory_stage_profile_delta_evidence(
+                &accepted_evidence,
+            )]
+        }
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => Vec::new(),
+    }
+}
+
+fn evaluate_memory_stage_profile_delta_evidence(
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    let has_memory_surface = evidence.changed_surfaces.iter().any(|surface| {
+        matches!(
+            surface.as_str(),
+            "memory_selected"
+                | "memory_policy"
+                | "context_engine_selected"
+                | "context_engine_compaction"
+        )
+    });
+
+    let (status, summary) = if evidence.delta_candidate_count == 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "memory-stage-profile families need snapshot-delta evidence from finished experiments"
+                .to_owned(),
+        )
+    } else if !has_memory_surface {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "snapshot-delta evidence must include memory or context-engine surfaces".to_owned(),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            "snapshot-delta evidence includes memory/context-engine surface changes".to_owned(),
+        )
+    };
+
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "memory_delta_evidence".to_owned(),
+        status,
+        summary,
+    }
 }
 
 fn evaluate_review_consensus(
@@ -1356,6 +1426,7 @@ fn render_target(target: RuntimeCapabilityTarget) -> &'static str {
         RuntimeCapabilityTarget::ManagedSkill => "managed_skill",
         RuntimeCapabilityTarget::ProgrammaticFlow => "programmatic_flow",
         RuntimeCapabilityTarget::ProfileNoteAddendum => "profile_note_addendum",
+        RuntimeCapabilityTarget::MemoryStageProfile => "memory_stage_profile",
     }
 }
 
@@ -1447,6 +1518,11 @@ fn runtime_capability_promotion_target_contract(
         RuntimeCapabilityTarget::ProfileNoteAddendum => {
             ("profile_note_addendum", "profile_note", "profile-note")
         }
+        RuntimeCapabilityTarget::MemoryStageProfile => (
+            "memory_stage_profile",
+            "memory_stage_profiles",
+            "memory-stage-profile",
+        ),
     }
 }
 
@@ -1494,6 +1570,10 @@ fn build_runtime_capability_approval_checklist(
             "confirm the behavior belongs in advisory profile guidance rather than executable logic"
                 .to_owned()
         }
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            "confirm the behavior belongs in a governed memory stage profile rather than live runtime mutation"
+                .to_owned()
+        }
     });
     checklist
 }
@@ -1501,11 +1581,20 @@ fn build_runtime_capability_approval_checklist(
 fn build_runtime_capability_rollback_hints(
     planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
 ) -> Vec<String> {
-    vec![
-        format!(
+    let capture_hint = match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::MemoryStageProfile => format!(
+            "capture the current `{}` state before applying this memory stage profile",
+            planned_artifact.delivery_surface
+        ),
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => format!(
             "capture the current `{}` state before applying artifact `{}`",
             planned_artifact.delivery_surface, planned_artifact.artifact_id
         ),
+    };
+    vec![
+        capture_hint,
         format!(
             "remove or revert `{}` from `{}` if downstream validation fails",
             planned_artifact.artifact_id, planned_artifact.delivery_surface

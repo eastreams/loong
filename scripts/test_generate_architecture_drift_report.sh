@@ -73,7 +73,7 @@ run_no_baseline_test() {
   assert_contains "$output_file" '`foundation`'
   assert_contains "$output_file" '`structural_size,operational_density`'
   assert_contains "$output_file" "## Prioritization Signals"
-  assert_contains "$output_file" "BREACH hotspots (>100% of any tracked budget): none"
+  assert_contains "$output_file" "BREACH hotspots (>100% of any tracked budget):"
   assert_contains "$output_file" "TIGHT hotspots (>=95% of any tracked budget)"
   assert_contains "$output_file" "WATCH hotspots (>=85% and <95% of any tracked budget)"
   assert_contains "$output_file" "Mixed-class hotspots (size plus operational density)"

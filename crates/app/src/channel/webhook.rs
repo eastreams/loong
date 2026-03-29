@@ -8,7 +8,10 @@ use crate::{
 
 use super::{
     ChannelOutboundTargetKind,
-    http::{build_outbound_http_client, response_body_detail},
+    http::{
+        ChannelOutboundHttpPolicy, build_outbound_http_client, response_body_detail,
+        validate_outbound_http_target,
+    },
     webhook_auth::build_webhook_auth_header_from_parts,
 };
 
@@ -25,14 +28,15 @@ pub(super) async fn run_webhook_send(
     target_kind: ChannelOutboundTargetKind,
     endpoint_url: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     ensure_webhook_target_kind(target_kind)?;
 
-    let request_url = parse_webhook_endpoint_url(endpoint_url)?;
+    let request_url = parse_webhook_endpoint_url(endpoint_url, policy)?;
     let request_body = build_webhook_request_body(resolved, text)?;
     let auth_header = build_webhook_auth_header(resolved)?;
 
-    let client = build_outbound_http_client("webhook send")?;
+    let client = build_outbound_http_client("webhook send", policy)?;
     let mut request = client
         .post(request_url)
         .header(CONTENT_TYPE, request_body.content_type)
@@ -61,24 +65,11 @@ fn ensure_webhook_target_kind(target_kind: ChannelOutboundTargetKind) -> CliResu
     ))
 }
 
-fn parse_webhook_endpoint_url(endpoint_url: &str) -> CliResult<reqwest::Url> {
-    let trimmed_endpoint_url = endpoint_url.trim();
-    if trimmed_endpoint_url.is_empty() {
-        return Err("webhook outbound target endpoint is empty".to_owned());
-    }
-
-    let request_url = reqwest::Url::parse(trimmed_endpoint_url)
-        .map_err(|error| format!("webhook outbound target endpoint is invalid: {error}"))?;
-    let scheme = request_url.scheme();
-    let is_http = scheme == "http";
-    let is_https = scheme == "https";
-    if is_http || is_https {
-        return Ok(request_url);
-    }
-
-    Err(format!(
-        "webhook outbound target endpoint must use http or https, got {scheme}"
-    ))
+fn parse_webhook_endpoint_url(
+    endpoint_url: &str,
+    policy: ChannelOutboundHttpPolicy,
+) -> CliResult<reqwest::Url> {
+    validate_outbound_http_target("webhook outbound target endpoint", endpoint_url, policy)
 }
 
 fn build_webhook_request_body(

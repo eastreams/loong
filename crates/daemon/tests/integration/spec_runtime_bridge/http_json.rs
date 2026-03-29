@@ -1,4 +1,5 @@
 use super::*;
+use loongclaw_daemon::kernel::PluginCompatibilityMode;
 
 #[tokio::test]
 async fn execute_spec_http_json_bridge_executes_against_local_server() {
@@ -83,6 +84,9 @@ async fn execute_spec_http_json_bridge_executes_against_local_server() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -195,6 +199,9 @@ async fn execute_spec_http_json_bridge_blocks_when_protocol_authorization_fails(
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -334,6 +341,9 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_method_mismatch(
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -459,6 +469,9 @@ async fn execute_spec_http_json_bridge_strict_contract_fails_on_id_mismatch() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -588,6 +601,9 @@ async fn execute_spec_http_json_bridge_strict_contract_executes_on_matching_fram
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,

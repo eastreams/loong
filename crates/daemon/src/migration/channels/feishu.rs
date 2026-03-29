@@ -168,7 +168,12 @@ pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConf
         "set feishu.app_secret_env",
         &mut fixes,
     );
-    if config.feishu.mode.unwrap_or_default() != mvp::config::FeishuChannelServeMode::Websocket {
+    if config
+        .feishu
+        .mode
+        .unwrap_or(mvp::config::FeishuChannelServeMode::Websocket)
+        != mvp::config::FeishuChannelServeMode::Websocket
+    {
         ensure_default_env_binding(
             &mut config.feishu.verification_token_env,
             default.verification_token_env.as_deref(),
@@ -278,7 +283,12 @@ fn descriptor() -> &'static mvp::config::ChannelDescriptor {
 }
 
 fn inbound_transport_check(config: &mvp::config::LoongClawConfig) -> (ChannelCheckLevel, String) {
-    if config.feishu.mode.unwrap_or_default() == mvp::config::FeishuChannelServeMode::Websocket {
+    if config
+        .feishu
+        .mode
+        .unwrap_or(mvp::config::FeishuChannelServeMode::Websocket)
+        == mvp::config::FeishuChannelServeMode::Websocket
+    {
         return (
             ChannelCheckLevel::Pass,
             "websocket mode configured; webhook secrets are not required".to_owned(),
@@ -377,6 +387,42 @@ mod tests {
                 .iter()
                 .all(|fix| !fix.starts_with("set feishu.encrypt_key_env=")),
             "websocket mode must not auto-fill webhook encrypt secrets"
+        );
+        assert!(config.feishu.verification_token_env.is_none());
+        assert!(config.feishu.encrypt_key_env.is_none());
+    }
+
+    #[test]
+    fn absent_mode_env_fix_skips_webhook_secrets() {
+        let mut config = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+        // Deserialized config with [feishu] present but no mode key gives mode = None.
+        assert!(
+            config.feishu.mode.is_none(),
+            "deserialized config with absent mode field must be None"
+        );
+        config.feishu.app_id_env = None;
+        config.feishu.app_secret_env = None;
+        config.feishu.verification_token_env = None;
+        config.feishu.encrypt_key_env = None;
+
+        let fixes = apply_default_env_bindings(&mut config);
+
+        assert!(
+            fixes
+                .iter()
+                .all(|fix| !fix.starts_with("set feishu.verification_token_env=")),
+            "absent mode (defaulting to websocket) must not auto-fill webhook verification secrets"
+        );
+        assert!(
+            fixes
+                .iter()
+                .all(|fix| !fix.starts_with("set feishu.encrypt_key_env=")),
+            "absent mode (defaulting to websocket) must not auto-fill webhook encrypt secrets"
         );
         assert!(config.feishu.verification_token_env.is_none());
         assert!(config.feishu.encrypt_key_env.is_none());

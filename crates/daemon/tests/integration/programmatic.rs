@@ -1,4 +1,5 @@
 use super::*;
+use loongclaw_daemon::kernel::PluginCompatibilityMode;
 
 #[tokio::test]
 async fn execute_spec_programmatic_tool_call_supports_templates_and_steps() {
@@ -226,6 +227,9 @@ async fn execute_spec_programmatic_tool_call_blocks_when_caller_not_allowlisted(
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -931,6 +935,7 @@ async fn execute_spec_programmatic_tool_call_circuit_breaker_blocks_followup_bat
             connector_circuit_breakers: BTreeMap::from([(
                 "webhook".to_owned(),
                 ProgrammaticCircuitBreakerPolicy {
+                    enabled: true,
                     failure_threshold: 1,
                     cooldown_ms: 60_000,
                     half_open_max_calls: 1,
@@ -1038,6 +1043,7 @@ async fn execute_spec_programmatic_tool_call_rejects_invalid_circuit_policy() {
             connector_circuit_breakers: BTreeMap::from([(
                 "webhook".to_owned(),
                 ProgrammaticCircuitBreakerPolicy {
+                    enabled: true,
                     failure_threshold: 0,
                     cooldown_ms: 10,
                     half_open_max_calls: 1,
@@ -1941,6 +1947,7 @@ async fn programmatic_circuit_runtime_transitions_open_half_open_and_closes_on_s
     let policies = BTreeMap::from([(
         "webhook".to_owned(),
         ProgrammaticCircuitBreakerPolicy {
+            enabled: true,
             failure_threshold: 1,
             cooldown_ms: 15,
             half_open_max_calls: 1,

@@ -174,7 +174,24 @@ fn operation_approval_key(operation: &OperationSpec) -> String {
         } => {
             format!("memory_extension:{extension}:{operation}")
         }
-        OperationSpec::ToolSearch { query, .. } => format!("tool_search:{query}"),
+        OperationSpec::ToolSearch {
+            query, trust_tiers, ..
+        } => {
+            if trust_tiers.is_empty() {
+                format!("tool_search:{query}")
+            } else {
+                let trust_scope = trust_tiers
+                    .iter()
+                    .map(|tier| tier.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("tool_search:{query}:trust:{trust_scope}")
+            }
+        }
+        OperationSpec::PluginInventory { query, .. } => format!("plugin_inventory:{query}"),
+        OperationSpec::PluginPreflight { query, profile, .. } => {
+            format!("plugin_preflight:{}:{query}", profile.as_str())
+        }
         OperationSpec::ProgrammaticToolCall { caller, .. } => {
             format!("programmatic_tool_call:{caller}")
         }
@@ -194,6 +211,8 @@ fn operation_approval_kind(operation: &OperationSpec) -> &'static str {
         OperationSpec::MemoryCore { .. } => "memory_core",
         OperationSpec::MemoryExtension { .. } => "memory_extension",
         OperationSpec::ToolSearch { .. } => "tool_search",
+        OperationSpec::PluginInventory { .. } => "plugin_inventory",
+        OperationSpec::PluginPreflight { .. } => "plugin_preflight",
         OperationSpec::ProgrammaticToolCall { .. } => "programmatic_tool_call",
     }
 }
@@ -367,10 +386,67 @@ fn operation_payload_keys(operation: &OperationSpec) -> Vec<String> {
         OperationSpec::ToolSearch { .. } => {
             let mut keys = Vec::new();
             keys.extend(
-                ["query", "limit", "include_deferred", "include_examples"]
-                    .iter()
-                    .map(|value| (*value).to_owned()),
+                [
+                    "query",
+                    "limit",
+                    "trust_tiers",
+                    "include_deferred",
+                    "include_examples",
+                ]
+                .iter()
+                .map(|value| (*value).to_owned()),
             );
+            keys
+        }
+        OperationSpec::PluginInventory { .. } => {
+            let mut keys = Vec::new();
+            keys.extend(
+                [
+                    "query",
+                    "limit",
+                    "include_ready",
+                    "include_blocked",
+                    "include_deferred",
+                    "include_examples",
+                ]
+                .iter()
+                .map(|value| (*value).to_owned()),
+            );
+            keys
+        }
+        OperationSpec::PluginPreflight {
+            policy_path,
+            policy_sha256,
+            policy_signature,
+            ..
+        } => {
+            let mut keys = Vec::new();
+            keys.extend(
+                [
+                    "query",
+                    "limit",
+                    "profile",
+                    "include_passed",
+                    "include_warned",
+                    "include_blocked",
+                    "include_deferred",
+                    "include_examples",
+                ]
+                .iter()
+                .map(|value| (*value).to_owned()),
+            );
+            if policy_path.is_some() {
+                keys.push("policy_path".to_owned());
+            }
+            if policy_sha256.is_some() {
+                keys.push("policy_sha256".to_owned());
+            }
+            if policy_signature.is_some() {
+                keys.push("policy_signature".to_owned());
+                keys.push("policy_signature.algorithm".to_owned());
+                keys.push("policy_signature.public_key_base64".to_owned());
+                keys.push("policy_signature.signature_base64".to_owned());
+            }
             keys
         }
         OperationSpec::ProgrammaticToolCall {
@@ -599,12 +675,62 @@ fn operation_payload_strings(operation: &OperationSpec) -> Vec<String> {
         OperationSpec::ToolSearch {
             query,
             limit,
+            trust_tiers,
+            include_deferred,
+            include_examples,
+        } => {
+            let mut values = vec![
+                query.clone(),
+                limit.to_string(),
+                include_deferred.to_string(),
+                include_examples.to_string(),
+            ];
+            values.extend(trust_tiers.iter().map(|tier| tier.as_str().to_owned()));
+            values
+        }
+        OperationSpec::PluginInventory {
+            query,
+            limit,
+            include_ready,
+            include_blocked,
             include_deferred,
             include_examples,
         } => {
             vec![
                 query.clone(),
                 limit.to_string(),
+                include_ready.to_string(),
+                include_blocked.to_string(),
+                include_deferred.to_string(),
+                include_examples.to_string(),
+            ]
+        }
+        OperationSpec::PluginPreflight {
+            query,
+            limit,
+            profile,
+            policy_path,
+            policy_sha256,
+            policy_signature,
+            include_passed,
+            include_warned,
+            include_blocked,
+            include_deferred,
+            include_examples,
+        } => {
+            vec![
+                query.clone(),
+                limit.to_string(),
+                profile.as_str().to_owned(),
+                policy_path.clone().unwrap_or_default(),
+                policy_sha256.clone().unwrap_or_default(),
+                policy_signature
+                    .as_ref()
+                    .map(|signature| signature.algorithm.clone())
+                    .unwrap_or_default(),
+                include_passed.to_string(),
+                include_warned.to_string(),
+                include_blocked.to_string(),
                 include_deferred.to_string(),
                 include_examples.to_string(),
             ]
@@ -779,4 +905,93 @@ fn is_operation_preapproved(operation_key: &str, approvals: &[String]) -> bool {
         }
         normalized == operation_key_lower
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_preflight_payload_keys_only_include_present_optional_fields() {
+        let operation = OperationSpec::PluginPreflight {
+            query: "search".to_owned(),
+            limit: 5,
+            profile: PluginPreflightProfile::RuntimeActivation,
+            policy_path: None,
+            policy_sha256: None,
+            policy_signature: None,
+            include_passed: true,
+            include_warned: true,
+            include_blocked: true,
+            include_deferred: false,
+            include_examples: false,
+        };
+
+        let keys = operation_payload_keys(&operation);
+
+        assert!(!keys.iter().any(|key| key == "policy_path"));
+        assert!(!keys.iter().any(|key| key == "policy_sha256"));
+        assert!(!keys.iter().any(|key| key == "policy_signature"));
+    }
+
+    #[test]
+    fn plugin_preflight_payload_keys_include_nested_signature_fields() {
+        let operation = OperationSpec::PluginPreflight {
+            query: "search".to_owned(),
+            limit: 5,
+            profile: PluginPreflightProfile::RuntimeActivation,
+            policy_path: Some("/tmp/policy.json".to_owned()),
+            policy_sha256: Some("abc123".to_owned()),
+            policy_signature: Some(SecurityProfileSignatureSpec {
+                algorithm: "ed25519".to_owned(),
+                public_key_base64: "cHVibGljLWtleQ==".to_owned(),
+                signature_base64: "c2lnbmF0dXJl".to_owned(),
+            }),
+            include_passed: true,
+            include_warned: true,
+            include_blocked: true,
+            include_deferred: false,
+            include_examples: false,
+        };
+
+        let keys = operation_payload_keys(&operation);
+
+        assert!(keys.iter().any(|key| key == "policy_path"));
+        assert!(keys.iter().any(|key| key == "policy_sha256"));
+        assert!(keys.iter().any(|key| key == "policy_signature"));
+        assert!(keys.iter().any(|key| key == "policy_signature.algorithm"));
+        assert!(
+            keys.iter()
+                .any(|key| key == "policy_signature.public_key_base64")
+        );
+        assert!(
+            keys.iter()
+                .any(|key| key == "policy_signature.signature_base64")
+        );
+    }
+
+    #[test]
+    fn plugin_preflight_payload_keys_keep_algorithm_field_when_signature_is_present() {
+        let operation = OperationSpec::PluginPreflight {
+            query: "search".to_owned(),
+            limit: 5,
+            profile: PluginPreflightProfile::RuntimeActivation,
+            policy_path: None,
+            policy_sha256: None,
+            policy_signature: Some(SecurityProfileSignatureSpec {
+                algorithm: String::new(),
+                public_key_base64: "cHVibGljLWtleQ==".to_owned(),
+                signature_base64: "c2lnbmF0dXJl".to_owned(),
+            }),
+            include_passed: true,
+            include_warned: true,
+            include_blocked: true,
+            include_deferred: false,
+            include_examples: false,
+        };
+
+        let keys = operation_payload_keys(&operation);
+
+        assert!(keys.iter().any(|key| key == "policy_signature.algorithm"));
+    }
 }

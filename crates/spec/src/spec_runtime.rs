@@ -1,33 +1,37 @@
-#[cfg(any(test, feature = "test-hooks"))]
-use std::time::Duration;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use kernel::{
-    ArchitectureGuardReport, AuditEvent, BootstrapReport, Capability, CodebaseAwarenessSnapshot,
-    ConnectorCommand, ConnectorError, ConnectorOutcome, CoreConnectorAdapter, CoreMemoryAdapter,
-    CoreRuntimeAdapter, CoreToolAdapter, ExecutionRoute, HarnessAdapter, HarnessError, HarnessKind,
-    HarnessOutcome, HarnessRequest, IntegrationCatalog, IntegrationHotfix, MemoryCoreOutcome,
-    MemoryCoreRequest, MemoryExtensionAdapter, MemoryExtensionOutcome, MemoryExtensionRequest,
-    PluginAbsorbReport, PluginActivationPlan, PluginBridgeKind, PluginScanReport,
-    PluginTranslationReport, ProvisionPlan, RuntimeCoreOutcome, RuntimeCoreRequest,
-    RuntimeExtensionAdapter, RuntimeExtensionOutcome, RuntimeExtensionRequest, ToolCoreOutcome,
-    ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest,
-    VerticalPackManifest,
+    ArchitectureGuardReport, AuditEvent, BootstrapReport, BootstrapTaskStatus, BridgeSupportMatrix,
+    CURRENT_PLUGIN_HOST_API, Capability, CodebaseAwarenessSnapshot, ConnectorCommand,
+    ConnectorError, ConnectorOutcome, CoreConnectorAdapter, CoreMemoryAdapter, CoreRuntimeAdapter,
+    CoreToolAdapter, ExecutionRoute, HarnessAdapter, HarnessError, HarnessKind, HarnessOutcome,
+    HarnessRequest, IntegrationCatalog, IntegrationHotfix, MemoryCoreOutcome, MemoryCoreRequest,
+    MemoryExtensionAdapter, MemoryExtensionOutcome, MemoryExtensionRequest, PluginAbsorbReport,
+    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginCompatibility,
+    PluginCompatibilityMode, PluginCompatibilityShim, PluginCompatibilityShimSupport,
+    PluginContractDialect, PluginDiagnosticFinding, PluginIR, PluginRuntimeProfile,
+    PluginScanReport, PluginSlotClaim, PluginSourceKind, PluginTranslationReport, PluginTrustTier,
+    ProvisionPlan, RuntimeCoreOutcome, RuntimeCoreRequest, RuntimeExtensionAdapter,
+    RuntimeExtensionOutcome, RuntimeExtensionRequest, ToolCoreOutcome, ToolCoreRequest,
+    ToolExtensionAdapter, ToolExtensionOutcome, ToolExtensionRequest, VerticalPackManifest,
 };
 use loongclaw_contracts::ExecutionSecurityTier;
 use loongclaw_protocol::{
     OutboundFrame, PROTOCOL_VERSION, ProtocolRouter, RouteAuthorizationRequest,
 };
+use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
+use tokio::sync::Mutex as TokioMutex;
 use tokio::time::Instant as TokioInstant;
 #[cfg(any(test, feature = "test-hooks"))]
 use tokio::time::sleep;
@@ -40,11 +44,23 @@ use wasmtime::{
 use crate::WEBHOOK_TEST_RETRY_STATE;
 use crate::spec_execution::{normalize_path_for_policy, resolve_plugin_relative_path};
 
+#[cfg(test)]
+mod bridge_kind_tests;
+mod dynamic_catalog;
 mod http_json_bridge;
+mod plugin_contract_types;
 mod process_stdio_bridge;
+#[cfg(test)]
+mod tests;
 mod wasm_cache;
 mod wasm_runtime_policy;
+pub use dynamic_catalog::{DynamicCatalogConnector, bridge_execution_payload};
+pub(crate) use dynamic_catalog::{
+    default_runtime_adapter_family, normalize_runtime_source_language,
+    provider_activation_runtime_contract_state, provider_is_plugin_backed,
+};
 pub use http_json_bridge::execute_http_json_bridge;
+pub use plugin_contract_types::*;
 pub use process_stdio_bridge::{
     ProcessStdioExchangeOutcome, execute_process_stdio_bridge, run_process_stdio_json_line_exchange,
 };
@@ -139,6 +155,46 @@ pub enum OperationSpec {
         #[serde(default = "default_tool_search_limit")]
         limit: usize,
         #[serde(default)]
+        trust_tiers: Vec<PluginTrustTier>,
+        #[serde(default)]
+        include_deferred: bool,
+        #[serde(default)]
+        include_examples: bool,
+    },
+    PluginInventory {
+        #[serde(default)]
+        query: String,
+        #[serde(default = "default_plugin_inventory_limit")]
+        limit: usize,
+        #[serde(default = "default_true")]
+        include_ready: bool,
+        #[serde(default = "default_true")]
+        include_blocked: bool,
+        #[serde(default = "default_true")]
+        include_deferred: bool,
+        #[serde(default)]
+        include_examples: bool,
+    },
+    PluginPreflight {
+        #[serde(default)]
+        query: String,
+        #[serde(default = "default_plugin_preflight_limit")]
+        limit: usize,
+        #[serde(default = "default_plugin_preflight_profile")]
+        profile: PluginPreflightProfile,
+        #[serde(default)]
+        policy_path: Option<String>,
+        #[serde(default)]
+        policy_sha256: Option<String>,
+        #[serde(default)]
+        policy_signature: Option<SecurityProfileSignatureSpec>,
+        #[serde(default = "default_true")]
+        include_passed: bool,
+        #[serde(default = "default_true")]
+        include_warned: bool,
+        #[serde(default = "default_true")]
+        include_blocked: bool,
+        #[serde(default = "default_true")]
         include_deferred: bool,
         #[serde(default)]
         include_examples: bool,
@@ -332,7 +388,9 @@ pub struct ProgrammaticConcurrencyPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgrammaticCircuitBreakerPolicy {
+pub struct ConnectorCircuitBreakerPolicy {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
     #[serde(default = "default_programmatic_circuit_failure_threshold")]
     pub failure_threshold: usize,
     #[serde(default = "default_programmatic_circuit_cooldown_ms")]
@@ -342,6 +400,20 @@ pub struct ProgrammaticCircuitBreakerPolicy {
     #[serde(default = "default_programmatic_circuit_success_threshold")]
     pub success_threshold: usize,
 }
+
+impl Default for ConnectorCircuitBreakerPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            failure_threshold: default_programmatic_circuit_failure_threshold(),
+            cooldown_ms: default_programmatic_circuit_cooldown_ms(),
+            half_open_max_calls: default_programmatic_circuit_half_open_max_calls(),
+            success_threshold: default_programmatic_circuit_success_threshold(),
+        }
+    }
+}
+
+pub type ProgrammaticCircuitBreakerPolicy = ConnectorCircuitBreakerPolicy;
 
 #[derive(Debug, Clone)]
 pub struct PreparedProgrammaticBatchCall {
@@ -385,25 +457,25 @@ pub struct ProgrammaticBatchExecutionSummary {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgrammaticCircuitPhase {
+pub enum ConnectorCircuitPhase {
     Closed,
     Open,
     HalfOpen,
 }
 
 #[derive(Debug, Clone)]
-pub struct ProgrammaticCircuitRuntimeState {
-    pub phase: ProgrammaticCircuitPhase,
+pub struct ConnectorCircuitRuntimeState {
+    pub phase: ConnectorCircuitPhase,
     pub consecutive_failures: usize,
     pub open_until: Option<TokioInstant>,
     pub half_open_remaining_calls: usize,
     pub half_open_successes: usize,
 }
 
-impl Default for ProgrammaticCircuitRuntimeState {
+impl Default for ConnectorCircuitRuntimeState {
     fn default() -> Self {
         Self {
-            phase: ProgrammaticCircuitPhase::Closed,
+            phase: ConnectorCircuitPhase::Closed,
             consecutive_failures: 0,
             open_until: None,
             half_open_remaining_calls: 0,
@@ -412,8 +484,180 @@ impl Default for ProgrammaticCircuitRuntimeState {
     }
 }
 
+pub type ProgrammaticCircuitPhase = ConnectorCircuitPhase;
+pub type ProgrammaticCircuitRuntimeState = ConnectorCircuitRuntimeState;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectorCircuitAcquireError {
+    Open { remaining_cooldown_ms: u64 },
+    HalfOpenReopened,
+}
+
+pub fn validate_connector_circuit_breaker_policy(
+    policy: &ConnectorCircuitBreakerPolicy,
+    context: &str,
+) -> Result<(), String> {
+    if !policy.enabled {
+        return Ok(());
+    }
+    if policy.failure_threshold == 0 {
+        return Err(format!(
+            "{context} failure_threshold must be greater than 0"
+        ));
+    }
+    if policy.cooldown_ms == 0 {
+        return Err(format!("{context} cooldown_ms must be greater than 0"));
+    }
+    if policy.half_open_max_calls == 0 {
+        return Err(format!(
+            "{context} half_open_max_calls must be greater than 0"
+        ));
+    }
+    if policy.success_threshold == 0 {
+        return Err(format!(
+            "{context} success_threshold must be greater than 0"
+        ));
+    }
+    if policy.success_threshold > policy.half_open_max_calls {
+        return Err(format!(
+            "{context} success_threshold must be <= half_open_max_calls"
+        ));
+    }
+    Ok(())
+}
+
+pub const fn connector_circuit_phase_label(phase: ConnectorCircuitPhase) -> &'static str {
+    match phase {
+        ConnectorCircuitPhase::Closed => "closed",
+        ConnectorCircuitPhase::Open => "open",
+        ConnectorCircuitPhase::HalfOpen => "half_open",
+    }
+}
+
+pub fn connector_circuit_remaining_cooldown_ms(
+    state: &ConnectorCircuitRuntimeState,
+    now: TokioInstant,
+) -> Option<u64> {
+    let open_until = state.open_until?;
+    if open_until <= now {
+        return Some(0);
+    }
+
+    let remaining_duration = open_until.duration_since(now);
+    let remaining_ms = remaining_duration.as_millis();
+    let clamped_ms = remaining_ms.min(u128::from(u64::MAX));
+
+    Some(clamped_ms as u64)
+}
+
+pub fn acquire_connector_circuit_slot_for_state(
+    policy: &ConnectorCircuitBreakerPolicy,
+    state: &mut ConnectorCircuitRuntimeState,
+    now: TokioInstant,
+) -> Result<&'static str, ConnectorCircuitAcquireError> {
+    if !policy.enabled {
+        return Ok("disabled");
+    }
+
+    if state.phase == ConnectorCircuitPhase::Open {
+        let remaining_cooldown_ms = connector_circuit_remaining_cooldown_ms(state, now);
+        if let Some(remaining_cooldown_ms) = remaining_cooldown_ms
+            && remaining_cooldown_ms > 0
+        {
+            return Err(ConnectorCircuitAcquireError::Open {
+                remaining_cooldown_ms,
+            });
+        }
+
+        state.phase = ConnectorCircuitPhase::HalfOpen;
+        state.open_until = None;
+        state.half_open_remaining_calls = policy.half_open_max_calls;
+        state.half_open_successes = 0;
+    }
+
+    if state.phase == ConnectorCircuitPhase::HalfOpen {
+        if state.half_open_remaining_calls == 0 {
+            let reopen_deadline = now + Duration::from_millis(policy.cooldown_ms);
+
+            state.phase = ConnectorCircuitPhase::Open;
+            state.open_until = Some(reopen_deadline);
+            return Err(ConnectorCircuitAcquireError::HalfOpenReopened);
+        }
+
+        state.half_open_remaining_calls = state.half_open_remaining_calls.saturating_sub(1);
+        return Ok("half_open");
+    }
+
+    Ok("closed")
+}
+
+pub fn record_connector_circuit_outcome_for_state(
+    policy: &ConnectorCircuitBreakerPolicy,
+    state: &mut ConnectorCircuitRuntimeState,
+    success: bool,
+    now: TokioInstant,
+) -> &'static str {
+    if !policy.enabled {
+        return "disabled";
+    }
+
+    match state.phase {
+        ConnectorCircuitPhase::Closed => {
+            if success {
+                state.consecutive_failures = 0;
+            } else {
+                state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                if state.consecutive_failures >= policy.failure_threshold {
+                    let reopen_deadline = now + Duration::from_millis(policy.cooldown_ms);
+
+                    state.phase = ConnectorCircuitPhase::Open;
+                    state.open_until = Some(reopen_deadline);
+                    state.half_open_remaining_calls = 0;
+                    state.half_open_successes = 0;
+                }
+            }
+        }
+        ConnectorCircuitPhase::HalfOpen => {
+            if success {
+                state.half_open_successes = state.half_open_successes.saturating_add(1);
+                if state.half_open_successes >= policy.success_threshold {
+                    state.phase = ConnectorCircuitPhase::Closed;
+                    state.consecutive_failures = 0;
+                    state.open_until = None;
+                    state.half_open_remaining_calls = 0;
+                    state.half_open_successes = 0;
+                } else if state.half_open_remaining_calls == 0 {
+                    let reopen_deadline = now + Duration::from_millis(policy.cooldown_ms);
+
+                    state.phase = ConnectorCircuitPhase::Open;
+                    state.open_until = Some(reopen_deadline);
+                    state.half_open_successes = 0;
+                }
+            } else {
+                let reopen_deadline = now + Duration::from_millis(policy.cooldown_ms);
+
+                state.phase = ConnectorCircuitPhase::Open;
+                state.open_until = Some(reopen_deadline);
+                state.half_open_remaining_calls = 0;
+                state.half_open_successes = 0;
+            }
+        }
+        ConnectorCircuitPhase::Open => {}
+    }
+
+    connector_circuit_phase_label(state.phase)
+}
+
 pub fn default_tool_search_limit() -> usize {
     8
+}
+
+pub fn default_plugin_inventory_limit() -> usize {
+    24
+}
+
+pub fn default_plugin_preflight_limit() -> usize {
+    100
 }
 
 pub fn default_programmatic_max_calls() -> usize {
@@ -711,12 +955,19 @@ impl Default for PluginSetupReadinessSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BridgeSupportSpec {
     pub enabled: bool,
     #[serde(default)]
     pub supported_bridges: Vec<PluginBridgeKind>,
     #[serde(default)]
     pub supported_adapter_families: Vec<String>,
+    #[serde(default)]
+    pub supported_compatibility_modes: Vec<PluginCompatibilityMode>,
+    #[serde(default)]
+    pub supported_compatibility_shims: Vec<PluginCompatibilityShim>,
+    #[serde(default)]
+    pub supported_compatibility_shim_profiles: Vec<PluginCompatibilityShimSupport>,
     #[serde(default)]
     pub enforce_supported: bool,
     #[serde(default)]
@@ -742,13 +993,448 @@ pub struct BridgeRuntimePolicy {
     pub execute_process_stdio: bool,
     pub execute_http_json: bool,
     pub execute_wasm_component: bool,
+    pub compatibility_matrix: BridgeSupportMatrix,
     pub allowed_process_commands: BTreeSet<String>,
+    pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
     pub wasm_allowed_path_prefixes: Vec<PathBuf>,
     pub wasm_max_component_bytes: Option<usize>,
     pub wasm_fuel_limit: Option<u64>,
     pub wasm_require_hash_pin: bool,
     pub wasm_required_sha256_by_plugin: BTreeMap<String, String>,
     pub enforce_execution_success: bool,
+}
+
+pub(crate) const PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY: &str =
+    "plugin_activation_contract_json";
+pub(crate) const PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY: &str =
+    "plugin_activation_contract_checksum";
+pub(crate) const PLUGIN_RUNTIME_HEALTH_METADATA_KEY: &str = "plugin_runtime_health_json";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginActivationRuntimeContract {
+    pub plugin_id: String,
+    pub source_path: String,
+    pub source_kind: PluginSourceKind,
+    pub dialect: PluginContractDialect,
+    pub dialect_version: Option<String>,
+    pub compatibility_mode: PluginCompatibilityMode,
+    pub compatibility_shim: Option<PluginCompatibilityShim>,
+    pub bridge_kind: PluginBridgeKind,
+    pub adapter_family: String,
+    pub entrypoint_hint: String,
+    pub source_language: String,
+    pub compatibility: Option<PluginCompatibility>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginActivationAttestationResult {
+    pub attested: bool,
+    pub verified: bool,
+    pub integrity: String,
+    #[serde(default)]
+    pub checksum: Option<String>,
+    #[serde(default)]
+    pub computed_checksum: Option<String>,
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginRuntimeHealthResult {
+    pub status: String,
+    pub circuit_enabled: bool,
+    pub circuit_phase: String,
+    pub consecutive_failures: usize,
+    pub half_open_remaining_calls: usize,
+    pub half_open_successes: usize,
+    #[serde(default)]
+    pub last_failure_reason: Option<String>,
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+fn invalid_plugin_runtime_health_result(reason: String) -> PluginRuntimeHealthResult {
+    PluginRuntimeHealthResult {
+        status: "unknown".to_owned(),
+        circuit_enabled: false,
+        circuit_phase: "unknown".to_owned(),
+        consecutive_failures: 0,
+        half_open_remaining_calls: 0,
+        half_open_successes: 0,
+        last_failure_reason: None,
+        issue: Some(reason),
+    }
+}
+
+fn plugin_runtime_health_status(
+    circuit_enabled: bool,
+    circuit_phase: &str,
+    consecutive_failures: usize,
+) -> String {
+    if !circuit_enabled || circuit_phase == "disabled" {
+        return "disabled".to_owned();
+    }
+
+    if circuit_phase == "open" {
+        return "quarantined".to_owned();
+    }
+
+    if circuit_phase == "half_open" {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" && consecutive_failures > 0 {
+        return "degraded".to_owned();
+    }
+
+    if circuit_phase == "closed" {
+        return "healthy".to_owned();
+    }
+
+    "unknown".to_owned()
+}
+
+fn build_plugin_runtime_health_result(
+    policy: &ConnectorCircuitBreakerPolicy,
+    circuit_phase: String,
+    consecutive_failures: usize,
+    half_open_remaining_calls: usize,
+    half_open_successes: usize,
+    last_failure_reason: Option<String>,
+) -> PluginRuntimeHealthResult {
+    let circuit_enabled = policy.enabled;
+    let status = plugin_runtime_health_status(
+        circuit_enabled,
+        circuit_phase.as_str(),
+        consecutive_failures,
+    );
+
+    PluginRuntimeHealthResult {
+        status,
+        circuit_enabled,
+        circuit_phase,
+        consecutive_failures,
+        half_open_remaining_calls,
+        half_open_successes,
+        last_failure_reason,
+        issue: None,
+    }
+}
+
+fn encode_plugin_runtime_health_result(
+    health: &PluginRuntimeHealthResult,
+) -> Result<String, String> {
+    serde_json::to_string(health)
+        .map_err(|error| format!("serialize plugin runtime health failed: {error}"))
+}
+
+pub(crate) fn activation_runtime_contract_checksum_hex(bytes: &[u8]) -> String {
+    const OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const PRIME: u64 = 0x100000001b3;
+
+    let mut hash = OFFSET_BASIS;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    format!("{hash:016x}")
+}
+
+pub(crate) fn plugin_activation_runtime_contract_value(
+    contract: &PluginActivationRuntimeContract,
+) -> Value {
+    let mut value = Map::new();
+    let plugin_id = contract.plugin_id.clone();
+    let source_path = contract.source_path.clone();
+    let source_kind = contract.source_kind.as_str().to_owned();
+    let dialect = contract.dialect.as_str().to_owned();
+    let compatibility_mode = contract.compatibility_mode.as_str().to_owned();
+    let bridge_kind = contract.bridge_kind.as_str().to_owned();
+    let adapter_family = contract.adapter_family.clone();
+    let entrypoint_hint = contract.entrypoint_hint.clone();
+    let source_language = contract.source_language.clone();
+
+    value.insert("plugin_id".to_owned(), Value::String(plugin_id));
+    value.insert("source_path".to_owned(), Value::String(source_path));
+    value.insert("source_kind".to_owned(), Value::String(source_kind));
+    value.insert("dialect".to_owned(), Value::String(dialect));
+    value.insert(
+        "compatibility_mode".to_owned(),
+        Value::String(compatibility_mode),
+    );
+    value.insert("bridge_kind".to_owned(), Value::String(bridge_kind));
+    value.insert("adapter_family".to_owned(), Value::String(adapter_family));
+    value.insert("entrypoint_hint".to_owned(), Value::String(entrypoint_hint));
+    value.insert("source_language".to_owned(), Value::String(source_language));
+
+    if let Some(dialect_version) = &contract.dialect_version {
+        let dialect_version = dialect_version.clone();
+
+        value.insert("dialect_version".to_owned(), Value::String(dialect_version));
+    }
+    if let Some(compatibility_shim) = &contract.compatibility_shim {
+        let mut compatibility_shim_value = Map::new();
+        let shim_id = compatibility_shim.shim_id.clone();
+        let family = compatibility_shim.family.clone();
+
+        compatibility_shim_value.insert("shim_id".to_owned(), Value::String(shim_id));
+        compatibility_shim_value.insert("family".to_owned(), Value::String(family));
+        value.insert(
+            "compatibility_shim".to_owned(),
+            Value::Object(compatibility_shim_value),
+        );
+    }
+    if let Some(compatibility) = &contract.compatibility {
+        let mut compatibility_value = Map::new();
+
+        if let Some(host_api) = &compatibility.host_api {
+            let host_api = host_api.clone();
+
+            compatibility_value.insert("host_api".to_owned(), Value::String(host_api));
+        }
+        if let Some(host_version_req) = &compatibility.host_version_req {
+            let host_version_req = host_version_req.clone();
+
+            compatibility_value.insert(
+                "host_version_req".to_owned(),
+                Value::String(host_version_req),
+            );
+        }
+
+        value.insert(
+            "compatibility".to_owned(),
+            Value::Object(compatibility_value),
+        );
+    }
+
+    Value::Object(value)
+}
+
+pub(crate) fn plugin_activation_runtime_contract_json(
+    contract: &PluginActivationRuntimeContract,
+) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&plugin_activation_runtime_contract_value(contract))
+}
+
+fn parse_plugin_activation_runtime_source_kind(raw: &str) -> Option<PluginSourceKind> {
+    match raw {
+        "package_manifest" => Some(PluginSourceKind::PackageManifest),
+        "embedded_source" => Some(PluginSourceKind::EmbeddedSource),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_plugin_activation_runtime_dialect(raw: &str) -> Option<PluginContractDialect> {
+    match raw {
+        "loongclaw_package_manifest" | "loong_claw_package_manifest" => {
+            Some(PluginContractDialect::LoongClawPackageManifest)
+        }
+        "loongclaw_embedded_source" | "loong_claw_embedded_source" => {
+            Some(PluginContractDialect::LoongClawEmbeddedSource)
+        }
+        "openclaw_modern_manifest" | "open_claw_modern_manifest" => {
+            Some(PluginContractDialect::OpenClawModernManifest)
+        }
+        "openclaw_legacy_package" | "open_claw_legacy_package" => {
+            Some(PluginContractDialect::OpenClawLegacyPackage)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_plugin_activation_runtime_mode(raw: &str) -> Option<PluginCompatibilityMode> {
+    match raw {
+        "native" => Some(PluginCompatibilityMode::Native),
+        "openclaw_modern" | "open_claw_modern" => Some(PluginCompatibilityMode::OpenClawModern),
+        "openclaw_legacy" | "open_claw_legacy" => Some(PluginCompatibilityMode::OpenClawLegacy),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_plugin_activation_runtime_bridge_kind(raw: &str) -> Option<PluginBridgeKind> {
+    match raw {
+        "http_json" => Some(PluginBridgeKind::HttpJson),
+        "process_stdio" => Some(PluginBridgeKind::ProcessStdio),
+        "native_ffi" => Some(PluginBridgeKind::NativeFfi),
+        "wasm_component" => Some(PluginBridgeKind::WasmComponent),
+        "mcp_server" => Some(PluginBridgeKind::McpServer),
+        "acp_bridge" => Some(PluginBridgeKind::AcpBridge),
+        "acp_runtime" => Some(PluginBridgeKind::AcpRuntime),
+        "unknown" => Some(PluginBridgeKind::Unknown),
+        _ => None,
+    }
+}
+
+fn optional_contract_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, String> {
+    match object.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(format!(
+            "plugin activation contract field `{key}` must be a string"
+        )),
+    }
+}
+
+fn required_contract_string_field(
+    object: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<String, String> {
+    optional_contract_string_field(object, key)?
+        .ok_or_else(|| format!("plugin activation contract field `{key}` is required"))
+}
+
+pub(crate) fn parse_plugin_activation_runtime_contract(
+    raw: &str,
+) -> Result<PluginActivationRuntimeContract, String> {
+    let value: Value = serde_json::from_str(raw).map_err(|error| {
+        format!("plugin activation contract payload must be valid JSON: {error}")
+    })?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| "plugin activation contract payload must be a JSON object".to_owned())?;
+
+    let compatibility_shim = match object.get("compatibility_shim") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(shim)) => Some(PluginCompatibilityShim {
+            shim_id: required_contract_string_field(shim, "shim_id")?,
+            family: required_contract_string_field(shim, "family")?,
+        }),
+        Some(_) => {
+            return Err(
+                "plugin activation contract field `compatibility_shim` must be an object"
+                    .to_owned(),
+            );
+        }
+    };
+
+    let compatibility = match object.get("compatibility") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(compatibility)) => Some(PluginCompatibility {
+            host_api: optional_contract_string_field(compatibility, "host_api")?,
+            host_version_req: optional_contract_string_field(compatibility, "host_version_req")?,
+        }),
+        Some(_) => {
+            return Err(
+                "plugin activation contract field `compatibility` must be an object".to_owned(),
+            );
+        }
+    };
+
+    let source_kind_raw = required_contract_string_field(object, "source_kind")?;
+    let dialect_raw = required_contract_string_field(object, "dialect")?;
+    let compatibility_mode_raw = required_contract_string_field(object, "compatibility_mode")?;
+    let bridge_kind_raw = required_contract_string_field(object, "bridge_kind")?;
+
+    Ok(PluginActivationRuntimeContract {
+        plugin_id: required_contract_string_field(object, "plugin_id")?,
+        source_path: required_contract_string_field(object, "source_path")?,
+        source_kind: parse_plugin_activation_runtime_source_kind(&source_kind_raw).ok_or_else(
+            || format!("plugin activation contract field `source_kind` has unsupported value `{source_kind_raw}`"),
+        )?,
+        dialect: parse_plugin_activation_runtime_dialect(&dialect_raw).ok_or_else(|| {
+            format!("plugin activation contract field `dialect` has unsupported value `{dialect_raw}`")
+        })?,
+        dialect_version: optional_contract_string_field(object, "dialect_version")?,
+        compatibility_mode: parse_plugin_activation_runtime_mode(&compatibility_mode_raw)
+            .ok_or_else(|| {
+                format!(
+                    "plugin activation contract field `compatibility_mode` has unsupported value `{compatibility_mode_raw}`"
+                )
+            })?,
+        compatibility_shim,
+        bridge_kind: parse_plugin_activation_runtime_bridge_kind(&bridge_kind_raw).ok_or_else(
+            || format!("plugin activation contract field `bridge_kind` has unsupported value `{bridge_kind_raw}`"),
+        )?,
+        adapter_family: required_contract_string_field(object, "adapter_family")?,
+        entrypoint_hint: required_contract_string_field(object, "entrypoint_hint")?,
+        source_language: required_contract_string_field(object, "source_language")?,
+        compatibility,
+    })
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ProviderActivationRuntimeContractState {
+    metadata_present: bool,
+    contract: Option<PluginActivationRuntimeContract>,
+    checksum: Option<String>,
+    computed_checksum: Option<String>,
+    integrity_issue: Option<String>,
+}
+
+pub(crate) fn provider_plugin_activation_attestation_result(
+    metadata: &BTreeMap<String, String>,
+) -> Option<PluginActivationAttestationResult> {
+    let is_plugin_backed = provider_is_plugin_backed(metadata);
+    let state = provider_activation_runtime_contract_state(metadata);
+
+    if !is_plugin_backed && !state.metadata_present {
+        return None;
+    }
+
+    let issue = if !state.metadata_present {
+        Some(
+            "plugin-backed provider metadata is missing activation attestation metadata".to_owned(),
+        )
+    } else {
+        state.integrity_issue.clone()
+    };
+
+    Some(PluginActivationAttestationResult {
+        attested: state.metadata_present,
+        verified: state.contract.is_some() && state.integrity_issue.is_none(),
+        integrity: if !state.metadata_present {
+            "missing".to_owned()
+        } else if state.integrity_issue.is_some() {
+            "invalid".to_owned()
+        } else {
+            "verified".to_owned()
+        },
+        checksum: state.checksum,
+        computed_checksum: state.computed_checksum,
+        issue,
+    })
+}
+
+pub(crate) fn provider_plugin_runtime_health_result(
+    metadata: &BTreeMap<String, String>,
+) -> Option<PluginRuntimeHealthResult> {
+    let raw = metadata.get(PLUGIN_RUNTIME_HEALTH_METADATA_KEY)?;
+    let parsed = serde_json::from_str::<PluginRuntimeHealthResult>(raw);
+
+    match parsed {
+        Ok(health) => {
+            let status = health.status.trim().to_owned();
+            let circuit_phase = health.circuit_phase.trim().to_owned();
+            if status.is_empty() {
+                let reason =
+                    "plugin runtime health metadata is invalid: `status` must not be empty";
+                return Some(invalid_plugin_runtime_health_result(reason.to_owned()));
+            }
+            if circuit_phase.is_empty() {
+                let reason =
+                    "plugin runtime health metadata is invalid: `circuit_phase` must not be empty";
+                return Some(invalid_plugin_runtime_health_result(reason.to_owned()));
+            }
+
+            Some(PluginRuntimeHealthResult {
+                status,
+                circuit_enabled: health.circuit_enabled,
+                circuit_phase,
+                consecutive_failures: health.consecutive_failures,
+                half_open_remaining_calls: health.half_open_remaining_calls,
+                half_open_successes: health.half_open_successes,
+                last_failure_reason: health.last_failure_reason,
+                issue: None,
+            })
+        }
+        Err(error) => {
+            let reason = format!("plugin runtime health metadata is invalid: {error}");
+            Some(invalid_plugin_runtime_health_result(reason))
+        }
+    }
 }
 
 impl BridgeRuntimePolicy {
@@ -850,6 +1536,8 @@ pub struct SecurityRuntimeExecutionSpec {
     pub max_component_bytes: Option<usize>,
     #[serde(default)]
     pub fuel_limit: Option<u64>,
+    #[serde(default)]
+    pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -944,248 +1632,6 @@ impl Default for SecurityScanReport {
 
 pub fn default_true() -> bool {
     true
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapSpec {
-    pub enabled: bool,
-    #[serde(default)]
-    pub allow_http_json_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_process_stdio_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_native_ffi_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_wasm_component_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_mcp_server_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_acp_bridge_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_acp_runtime_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub enforce_ready_execution: Option<bool>,
-    #[serde(default)]
-    pub max_tasks: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutoProvisionSpec {
-    pub enabled: bool,
-    pub provider_id: String,
-    pub channel_id: String,
-    pub connector_name: Option<String>,
-    pub endpoint: Option<String>,
-    pub required_capabilities: BTreeSet<Capability>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum HotfixSpec {
-    ProviderVersion {
-        provider_id: String,
-        new_version: String,
-    },
-    ProviderConnector {
-        provider_id: String,
-        new_connector_name: String,
-    },
-    ChannelEndpoint {
-        channel_id: String,
-        new_endpoint: String,
-    },
-    ChannelEnabled {
-        channel_id: String,
-        enabled: bool,
-    },
-}
-
-impl HotfixSpec {
-    pub fn to_kernel_hotfix(&self) -> IntegrationHotfix {
-        match self {
-            Self::ProviderVersion {
-                provider_id,
-                new_version,
-            } => IntegrationHotfix::ProviderVersion {
-                provider_id: provider_id.clone(),
-                new_version: new_version.clone(),
-            },
-            Self::ProviderConnector {
-                provider_id,
-                new_connector_name,
-            } => IntegrationHotfix::ProviderConnector {
-                provider_id: provider_id.clone(),
-                new_connector_name: new_connector_name.clone(),
-            },
-            Self::ChannelEndpoint {
-                channel_id,
-                new_endpoint,
-            } => IntegrationHotfix::ChannelEndpoint {
-                channel_id: channel_id.clone(),
-                new_endpoint: new_endpoint.clone(),
-            },
-            Self::ChannelEnabled {
-                channel_id,
-                enabled,
-            } => IntegrationHotfix::ChannelEnabled {
-                channel_id: channel_id.clone(),
-                enabled: *enabled,
-            },
-        }
-    }
-}
-
-impl RunnerSpec {
-    pub fn template() -> Self {
-        Self {
-            pack: VerticalPackManifest {
-                pack_id: "sales-intel-local".to_owned(),
-                domain: "sales".to_owned(),
-                version: "0.1.0".to_owned(),
-                default_route: ExecutionRoute {
-                    harness_kind: HarnessKind::EmbeddedPi,
-                    adapter: Some("pi-local".to_owned()),
-                },
-                allowed_connectors: BTreeSet::from(["webhook".to_owned(), "crm".to_owned()]),
-                granted_capabilities: BTreeSet::from([
-                    Capability::InvokeTool,
-                    Capability::InvokeConnector,
-                    Capability::MemoryRead,
-                    Capability::MemoryWrite,
-                    Capability::ObserveTelemetry,
-                ]),
-                metadata: BTreeMap::from([
-                    ("owner".to_owned(), "platform-team".to_owned()),
-                    ("stage".to_owned(), "prototype".to_owned()),
-                ]),
-            },
-            agent_id: "agent-spec-01".to_owned(),
-            ttl_s: 300,
-            approval: Some(HumanApprovalSpec::default()),
-            defaults: Some(DefaultCoreSelection {
-                connector: Some("http-core".to_owned()),
-                runtime: Some("native-core".to_owned()),
-                tool: Some("core-tools".to_owned()),
-                memory: Some("kv-core".to_owned()),
-            }),
-            self_awareness: None,
-            plugin_scan: None,
-            plugin_setup_readiness: Some(PluginSetupReadinessSpec {
-                inherit_process_env: true,
-                verified_env_vars: Vec::new(),
-                verified_config_keys: Vec::new(),
-            }),
-            bridge_support: None,
-            bootstrap: None,
-            auto_provision: Some(AutoProvisionSpec {
-                enabled: true,
-                provider_id: "openrouter".to_owned(),
-                channel_id: "primary".to_owned(),
-                connector_name: Some("openrouter".to_owned()),
-                endpoint: Some("https://openrouter.ai/api/v1/chat/completions".to_owned()),
-                required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
-            }),
-            hotfixes: Vec::new(),
-            operation: OperationSpec::RuntimeExtension {
-                action: "start-session".to_owned(),
-                required_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
-                payload: json!({"session_id": "s-42"}),
-                extension: "acp-bridge".to_owned(),
-                core: None,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SpecRunReport {
-    pub pack_id: String,
-    pub agent_id: String,
-    pub operation_kind: &'static str,
-    pub blocked_reason: Option<String>,
-    pub approval_guard: ApprovalDecisionReport,
-    pub bridge_support_checksum: Option<String>,
-    pub bridge_support_sha256: Option<String>,
-    pub self_awareness: Option<CodebaseAwarenessSnapshot>,
-    pub architecture_guard: Option<ArchitectureGuardReport>,
-    pub plugin_scan_reports: Vec<PluginScanReport>,
-    pub plugin_translation_reports: Vec<PluginTranslationReport>,
-    pub plugin_activation_plans: Vec<PluginActivationPlan>,
-    pub plugin_bootstrap_reports: Vec<BootstrapReport>,
-    pub plugin_bootstrap_queue: Vec<String>,
-    pub plugin_absorb_reports: Vec<PluginAbsorbReport>,
-    pub security_scan_report: Option<SecurityScanReport>,
-    pub auto_provision_plan: Option<ProvisionPlan>,
-    pub outcome: Value,
-    pub integration_catalog: IntegrationCatalog,
-    pub audit_events: Option<Vec<AuditEvent>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolSearchEntry {
-    pub tool_id: String,
-    pub plugin_id: Option<String>,
-    pub connector_name: String,
-    pub provider_id: String,
-    pub source_path: Option<String>,
-    pub source_kind: Option<String>,
-    pub package_root: Option<String>,
-    pub package_manifest_path: Option<String>,
-    pub bridge_kind: PluginBridgeKind,
-    pub adapter_family: Option<String>,
-    pub entrypoint_hint: Option<String>,
-    pub source_language: Option<String>,
-    pub setup_mode: Option<String>,
-    pub setup_surface: Option<String>,
-    pub setup_required_env_vars: Vec<String>,
-    pub setup_recommended_env_vars: Vec<String>,
-    pub setup_required_config_keys: Vec<String>,
-    pub setup_default_env_var: Option<String>,
-    pub setup_docs_urls: Vec<String>,
-    pub setup_remediation: Option<String>,
-    pub setup_ready: bool,
-    pub missing_required_env_vars: Vec<String>,
-    pub missing_required_config_keys: Vec<String>,
-    pub summary: Option<String>,
-    pub tags: Vec<String>,
-    pub input_examples: Vec<Value>,
-    pub output_examples: Vec<Value>,
-    pub deferred: bool,
-    pub loaded: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolSearchResult {
-    pub tool_id: String,
-    pub plugin_id: Option<String>,
-    pub connector_name: String,
-    pub provider_id: String,
-    pub source_path: Option<String>,
-    pub source_kind: Option<String>,
-    pub package_root: Option<String>,
-    pub package_manifest_path: Option<String>,
-    pub bridge_kind: String,
-    pub adapter_family: Option<String>,
-    pub entrypoint_hint: Option<String>,
-    pub source_language: Option<String>,
-    pub setup_mode: Option<String>,
-    pub setup_surface: Option<String>,
-    pub setup_required_env_vars: Vec<String>,
-    pub setup_recommended_env_vars: Vec<String>,
-    pub setup_required_config_keys: Vec<String>,
-    pub setup_default_env_var: Option<String>,
-    pub setup_docs_urls: Vec<String>,
-    pub setup_remediation: Option<String>,
-    pub setup_ready: bool,
-    pub missing_required_env_vars: Vec<String>,
-    pub missing_required_config_keys: Vec<String>,
-    pub score: u32,
-    pub deferred: bool,
-    pub loaded: bool,
-    pub summary: Option<String>,
-    pub tags: Vec<String>,
-    pub input_examples: Vec<Value>,
-    pub output_examples: Vec<Value>,
 }
 
 pub struct EmbeddedPiHarness {
@@ -1287,298 +1733,6 @@ impl CoreConnectorAdapter for WebhookConnector {
             }),
         })
     }
-}
-
-pub struct DynamicCatalogConnector {
-    pub connector_name: String,
-    pub provider_id: String,
-    pub catalog: Arc<Mutex<IntegrationCatalog>>,
-    pub bridge_runtime_policy: BridgeRuntimePolicy,
-}
-
-#[async_trait]
-impl CoreConnectorAdapter for DynamicCatalogConnector {
-    fn name(&self) -> &str {
-        &self.connector_name
-    }
-
-    async fn invoke_core(
-        &self,
-        command: ConnectorCommand,
-    ) -> Result<ConnectorOutcome, ConnectorError> {
-        let requested_channel = command
-            .payload
-            .get("channel_id")
-            .and_then(Value::as_str)
-            .map(std::string::ToString::to_string);
-
-        let (provider, chosen_channel) = {
-            let catalog = self.catalog.lock().map_err(|_err| {
-                ConnectorError::Execution("integration catalog mutex poisoned".to_owned())
-            })?;
-
-            let provider = catalog.provider(&self.provider_id).ok_or_else(|| {
-                ConnectorError::Execution(format!(
-                    "provider {} is not registered in integration catalog",
-                    self.provider_id
-                ))
-            })?;
-
-            let allowed_callers = provider_allowed_callers(provider);
-            if !allowed_callers.is_empty() {
-                let caller = caller_from_payload(&command.payload);
-                if !caller_is_allowed(caller.as_deref(), &allowed_callers) {
-                    let caller_label = caller.unwrap_or_else(|| "unknown".to_owned());
-                    return Err(ConnectorError::Execution(format!(
-                        "caller {caller_label} is not allowed for connector {} (allowed_callers={})",
-                        self.connector_name,
-                        allowed_callers
-                            .iter()
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )));
-                }
-            }
-
-            let chosen_channel = if let Some(channel_id) = requested_channel.as_ref() {
-                let channel = catalog.channel(channel_id).ok_or_else(|| {
-                    ConnectorError::Execution(format!("channel {channel_id} not found"))
-                })?;
-                if !channel.enabled {
-                    return Err(ConnectorError::Execution(format!(
-                        "channel {channel_id} is disabled"
-                    )));
-                }
-                if channel.provider_id != provider.provider_id {
-                    return Err(ConnectorError::Execution(format!(
-                        "channel {} does not belong to provider {}",
-                        channel.channel_id, provider.provider_id
-                    )));
-                }
-                channel.clone()
-            } else {
-                catalog
-                    .channels_for_provider(&provider.provider_id)
-                    .into_iter()
-                    .find(|channel| channel.enabled)
-                    .ok_or_else(|| {
-                        ConnectorError::Execution(format!(
-                            "no enabled channel for provider {}",
-                            provider.provider_id
-                        ))
-                    })?
-            };
-
-            (provider.clone(), chosen_channel)
-        };
-
-        let operation = command.operation.clone();
-        let payload = command.payload.clone();
-        let bridge_execution = bridge_execution_payload(
-            &provider,
-            &chosen_channel,
-            &command,
-            &self.bridge_runtime_policy,
-        )
-        .await;
-
-        if self.bridge_runtime_policy.enforce_execution_success
-            && bridge_execution
-                .get("status")
-                .and_then(Value::as_str)
-                .is_some_and(|status| matches!(status, "blocked" | "failed"))
-        {
-            let reason = bridge_execution
-                .get("reason")
-                .and_then(Value::as_str)
-                .unwrap_or("bridge execution failed under strict runtime policy");
-            return Err(ConnectorError::Execution(reason.to_owned()));
-        }
-
-        Ok(ConnectorOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "connector": self.connector_name,
-                "provider_id": provider.provider_id,
-                "provider_version": provider.version,
-                "channel_id": chosen_channel.channel_id,
-                "endpoint": chosen_channel.endpoint,
-                "operation": operation,
-                "payload": payload,
-                "bridge_execution": bridge_execution,
-            }),
-        })
-    }
-}
-
-pub async fn bridge_execution_payload(
-    provider: &kernel::ProviderConfig,
-    channel: &kernel::ChannelConfig,
-    command: &ConnectorCommand,
-    runtime_policy: &BridgeRuntimePolicy,
-) -> Value {
-    let bridge_kind = detect_provider_bridge_kind(provider, &channel.endpoint);
-    let adapter_family = provider
-        .metadata
-        .get("adapter_family")
-        .cloned()
-        .unwrap_or_else(|| default_bridge_adapter_family(bridge_kind));
-    let entrypoint = provider
-        .metadata
-        .get("entrypoint")
-        .or_else(|| provider.metadata.get("entrypoint_hint"))
-        .cloned()
-        .unwrap_or_else(|| default_bridge_entrypoint(bridge_kind, &channel.endpoint));
-
-    let plan = match bridge_kind {
-        PluginBridgeKind::HttpJson => {
-            let method = provider
-                .metadata
-                .get("http_method")
-                .map(|value| value.to_ascii_uppercase())
-                .unwrap_or_else(|| "POST".to_owned());
-            json!({
-                "status": "planned",
-                "bridge_kind": bridge_kind.as_str(),
-                "adapter_family": adapter_family,
-                "entrypoint": entrypoint,
-                "request": {
-                    "method": method,
-                    "url": channel.endpoint,
-                    "operation": command.operation,
-                    "payload": command.payload.clone(),
-                }
-            })
-        }
-        PluginBridgeKind::ProcessStdio => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "stdio": {
-                "stdin_envelope": {
-                    "operation": command.operation,
-                    "payload": command.payload.clone(),
-                },
-                "stdout_contract": "json",
-            }
-        }),
-        PluginBridgeKind::NativeFfi => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "ffi": {
-                "library": provider
-                    .metadata
-                    .get("library")
-                    .cloned()
-                    .unwrap_or_else(|| format!("lib{}.so", provider.provider_id)),
-                "symbol": entrypoint,
-            }
-        }),
-        PluginBridgeKind::WasmComponent => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "wasm": {
-                "component": provider
-                    .metadata
-                    .get("component")
-                    .cloned()
-                    .unwrap_or_else(|| format!("{}.wasm", provider.provider_id)),
-                "function": entrypoint,
-            }
-        }),
-        PluginBridgeKind::McpServer => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "mcp": {
-                "transport": provider
-                    .metadata
-                    .get("transport")
-                    .cloned()
-                    .unwrap_or_else(|| "stdio".to_owned()),
-                "handshake": "capability_schema_exchange",
-            }
-        }),
-        PluginBridgeKind::AcpBridge => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "acp": {
-                "surface": "bridge",
-                "gateway_contract": "external_bridge_runtime",
-                "turn_contract": "bridge_forwarded_prompt_response",
-            }
-        }),
-        PluginBridgeKind::AcpRuntime => json!({
-            "status": "planned",
-            "bridge_kind": bridge_kind.as_str(),
-            "adapter_family": adapter_family,
-            "entrypoint": entrypoint,
-            "acp": {
-                "surface": "runtime",
-                "session_bootstrap": "required",
-                "control_plane": "external_runtime",
-                "turn_contract": "session_scoped_prompt_response",
-            }
-        }),
-        PluginBridgeKind::Unknown => json!({
-            "status": "deferred",
-            "bridge_kind": bridge_kind.as_str(),
-            "reason": "provider metadata does not declare a resolvable bridge_kind",
-            "next_action": "set metadata.bridge_kind and rerun bootstrap",
-        }),
-    };
-
-    maybe_execute_bridge(
-        plan,
-        bridge_kind,
-        provider,
-        channel,
-        command,
-        runtime_policy,
-    )
-    .await
-}
-
-pub async fn maybe_execute_bridge(
-    execution: Value,
-    bridge_kind: PluginBridgeKind,
-    provider: &kernel::ProviderConfig,
-    channel: &kernel::ChannelConfig,
-    command: &ConnectorCommand,
-    runtime_policy: &BridgeRuntimePolicy,
-) -> Value {
-    if runtime_policy.execute_http_json && matches!(bridge_kind, PluginBridgeKind::HttpJson) {
-        return execute_http_json_bridge(execution, provider, channel, command);
-    }
-
-    if runtime_policy.execute_process_stdio && matches!(bridge_kind, PluginBridgeKind::ProcessStdio)
-    {
-        return execute_process_stdio_bridge(execution, provider, channel, command, runtime_policy)
-            .await;
-    }
-
-    if runtime_policy.execute_wasm_component
-        && matches!(bridge_kind, PluginBridgeKind::WasmComponent)
-    {
-        return execute_wasm_component_bridge(
-            execution,
-            provider,
-            channel,
-            command,
-            runtime_policy,
-        );
-    }
-
-    execution
 }
 
 include!("spec_bridge_protocol.inc.rs");
@@ -2399,51 +2553,6 @@ pub fn default_bridge_entrypoint(bridge_kind: PluginBridgeKind, endpoint: &str) 
     }
 }
 
-#[cfg(test)]
-mod bridge_kind_tests {
-    use super::*;
-
-    #[test]
-    fn parse_bridge_kind_label_distinguishes_acp_bridge_and_runtime() {
-        assert_eq!(
-            parse_bridge_kind_label("acp"),
-            Some(PluginBridgeKind::AcpBridge)
-        );
-        assert_eq!(
-            parse_bridge_kind_label("acp_bridge"),
-            Some(PluginBridgeKind::AcpBridge)
-        );
-        assert_eq!(
-            parse_bridge_kind_label("acpx"),
-            Some(PluginBridgeKind::AcpRuntime)
-        );
-        assert_eq!(
-            parse_bridge_kind_label("acp_runtime"),
-            Some(PluginBridgeKind::AcpRuntime)
-        );
-    }
-
-    #[test]
-    fn default_bridge_defaults_keep_acp_surfaces_distinct() {
-        assert_eq!(
-            default_bridge_adapter_family(PluginBridgeKind::AcpBridge),
-            "acp-bridge-adapter"
-        );
-        assert_eq!(
-            default_bridge_adapter_family(PluginBridgeKind::AcpRuntime),
-            "acp-runtime-adapter"
-        );
-        assert_eq!(
-            default_bridge_entrypoint(PluginBridgeKind::AcpBridge, "https://example.test"),
-            "acp::bridge"
-        );
-        assert_eq!(
-            default_bridge_entrypoint(PluginBridgeKind::AcpRuntime, "https://example.test"),
-            "acp::turn"
-        );
-    }
-}
-
 pub struct CrmCoreConnector;
 
 #[async_trait]
@@ -2796,494 +2905,5 @@ impl MemoryExtensionAdapter for VectorIndexMemoryExtension {
                 "payload": request.payload,
             }),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        collections::{BTreeMap, BTreeSet},
-        path::Path,
-        sync::Arc,
-    };
-    #[cfg(unix)]
-    use std::{
-        fs,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    #[cfg(unix)]
-    use super::wasm_artifact_file_identity;
-    use super::wasm_runtime_policy::{
-        DEFAULT_WASM_MODULE_CACHE_CAPACITY, DEFAULT_WASM_MODULE_CACHE_MAX_BYTES,
-        MAX_WASM_MODULE_CACHE_CAPACITY, MAX_WASM_MODULE_CACHE_MAX_BYTES,
-        MIN_WASM_MODULE_CACHE_MAX_BYTES, default_wasm_signals_based_traps,
-        parse_wasm_module_cache_capacity, parse_wasm_module_cache_max_bytes,
-        parse_wasm_signals_based_traps,
-    };
-    use super::{
-        BridgeRuntimePolicy, ConnectorProtocolContext, CoreToolRuntime, WasmModuleCache,
-        build_wasm_module_cache_key, compile_wasm_module, normalize_sha256_pin,
-        process_stdio_runtime_evidence, resolve_expected_wasm_sha256,
-    };
-    use kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
-    use serde_json::json;
-
-    const EMPTY_WASM_MODULE: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
-
-    #[test]
-    fn parse_wasm_module_cache_capacity_defaults_for_missing_or_invalid_values() {
-        assert_eq!(
-            parse_wasm_module_cache_capacity(None),
-            DEFAULT_WASM_MODULE_CACHE_CAPACITY
-        );
-        assert_eq!(
-            parse_wasm_module_cache_capacity(Some("")),
-            DEFAULT_WASM_MODULE_CACHE_CAPACITY
-        );
-        assert_eq!(
-            parse_wasm_module_cache_capacity(Some("invalid")),
-            DEFAULT_WASM_MODULE_CACHE_CAPACITY
-        );
-        assert_eq!(
-            parse_wasm_module_cache_capacity(Some("0")),
-            DEFAULT_WASM_MODULE_CACHE_CAPACITY
-        );
-    }
-
-    #[test]
-    fn parse_wasm_module_cache_capacity_respects_positive_values_and_upper_bound() {
-        assert_eq!(parse_wasm_module_cache_capacity(Some("1")), 1);
-        assert_eq!(parse_wasm_module_cache_capacity(Some("128")), 128);
-
-        let over_limit = format!("{}", MAX_WASM_MODULE_CACHE_CAPACITY + 1);
-        assert_eq!(
-            parse_wasm_module_cache_capacity(Some(over_limit.as_str())),
-            MAX_WASM_MODULE_CACHE_CAPACITY
-        );
-    }
-
-    #[test]
-    fn parse_wasm_module_cache_max_bytes_defaults_for_missing_or_invalid_values() {
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(None),
-            DEFAULT_WASM_MODULE_CACHE_MAX_BYTES
-        );
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some("")),
-            DEFAULT_WASM_MODULE_CACHE_MAX_BYTES
-        );
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some("invalid")),
-            DEFAULT_WASM_MODULE_CACHE_MAX_BYTES
-        );
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some("0")),
-            DEFAULT_WASM_MODULE_CACHE_MAX_BYTES
-        );
-    }
-
-    #[test]
-    fn parse_wasm_module_cache_max_bytes_respects_bounds() {
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some("1")),
-            MIN_WASM_MODULE_CACHE_MAX_BYTES
-        );
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some("1048576")),
-            1_048_576
-        );
-
-        let over_limit = format!("{}", MAX_WASM_MODULE_CACHE_MAX_BYTES + 1);
-        assert_eq!(
-            parse_wasm_module_cache_max_bytes(Some(over_limit.as_str())),
-            MAX_WASM_MODULE_CACHE_MAX_BYTES
-        );
-    }
-
-    #[test]
-    fn parse_wasm_signals_based_traps_defaults_to_platform_policy() {
-        assert_eq!(
-            parse_wasm_signals_based_traps(None),
-            default_wasm_signals_based_traps()
-        );
-        assert_eq!(
-            parse_wasm_signals_based_traps(Some("")),
-            default_wasm_signals_based_traps()
-        );
-        assert_eq!(
-            parse_wasm_signals_based_traps(Some("invalid-value")),
-            default_wasm_signals_based_traps()
-        );
-    }
-
-    #[test]
-    fn parse_wasm_signals_based_traps_accepts_boolean_aliases() {
-        for raw in ["1", "true", "yes", "on", "enabled", "TRUE", " On "] {
-            assert!(
-                parse_wasm_signals_based_traps(Some(raw)),
-                "expected true for {raw}"
-            );
-        }
-        for raw in ["0", "false", "no", "off", "disabled", "FALSE", " Off "] {
-            assert!(
-                !parse_wasm_signals_based_traps(Some(raw)),
-                "expected false for {raw}"
-            );
-        }
-    }
-
-    #[test]
-    fn normalize_sha256_pin_accepts_plain_or_prefixed_hex() {
-        let expected = "ab".repeat(32);
-        assert_eq!(
-            normalize_sha256_pin(expected.as_str()).expect("plain digest should parse"),
-            expected
-        );
-        assert_eq!(
-            normalize_sha256_pin(format!("sha256:{expected}").as_str())
-                .expect("prefixed digest should parse"),
-            expected
-        );
-        assert_eq!(
-            normalize_sha256_pin(format!("  SHA256:{expected}  ").as_str())
-                .expect("prefix should be case-insensitive"),
-            expected
-        );
-    }
-
-    #[test]
-    fn normalize_sha256_pin_rejects_invalid_values() {
-        assert!(normalize_sha256_pin("").is_err());
-        assert!(normalize_sha256_pin("sha256:").is_err());
-        assert!(normalize_sha256_pin("deadbeef").is_err());
-        assert!(normalize_sha256_pin(&"z".repeat(64)).is_err());
-    }
-
-    fn provider_with_metadata(metadata: BTreeMap<String, String>) -> kernel::ProviderConfig {
-        kernel::ProviderConfig {
-            provider_id: "provider-x".to_owned(),
-            connector_name: "connector-x".to_owned(),
-            version: "1.0.0".to_owned(),
-            metadata,
-        }
-    }
-
-    #[test]
-    fn resolve_expected_wasm_sha256_rejects_conflicting_metadata_pins() {
-        let provider = provider_with_metadata(BTreeMap::from([
-            ("plugin_id".to_owned(), "plugin-a".to_owned()),
-            ("component_sha256".to_owned(), "aa".repeat(32)),
-            ("component_sha256_pin".to_owned(), "bb".repeat(32)),
-        ]));
-        let policy = BridgeRuntimePolicy::default();
-        let error = resolve_expected_wasm_sha256(&provider, &policy)
-            .expect_err("conflicting metadata pins should be rejected");
-        assert!(error.contains("conflicting wasm sha256 pins"));
-    }
-
-    #[test]
-    fn resolve_expected_wasm_sha256_rejects_metadata_and_policy_conflict() {
-        let provider = provider_with_metadata(BTreeMap::from([
-            ("plugin_id".to_owned(), "plugin-a".to_owned()),
-            ("component_sha256".to_owned(), "aa".repeat(32)),
-        ]));
-        let mut policy = BridgeRuntimePolicy::default();
-        policy
-            .wasm_required_sha256_by_plugin
-            .insert("plugin-a".to_owned(), "bb".repeat(32));
-
-        let error = resolve_expected_wasm_sha256(&provider, &policy)
-            .expect_err("metadata/policy conflict should be rejected");
-        assert!(error.contains("between provider metadata"));
-    }
-
-    #[test]
-    fn process_stdio_runtime_evidence_reports_balanced_execution_tier() {
-        let provider = provider_with_metadata(BTreeMap::new());
-        let channel = kernel::ChannelConfig {
-            channel_id: "channel-x".to_owned(),
-            endpoint: "stdio://connector".to_owned(),
-            provider_id: provider.provider_id.clone(),
-            enabled: true,
-            metadata: BTreeMap::new(),
-        };
-        let command = kernel::ConnectorCommand {
-            connector_name: "connector-x".to_owned(),
-            operation: "call".to_owned(),
-            required_capabilities: BTreeSet::new(),
-            payload: json!({}),
-        };
-        let mut context =
-            ConnectorProtocolContext::from_connector_command(&provider, &channel, &command);
-        super::authorize_connector_protocol_context(&mut context)
-            .expect("protocol context should authorize");
-
-        let runtime = process_stdio_runtime_evidence(
-            &context,
-            BridgeRuntimePolicy {
-                execute_process_stdio: true,
-                allowed_process_commands: BTreeSet::from(["demo-connector".to_owned()]),
-                ..BridgeRuntimePolicy::default()
-            }
-            .process_stdio_execution_security_tier(),
-            "demo-connector",
-            &["--serve".to_owned()],
-            5_000,
-            super::ProcessStdioRuntimeEvidenceKind::BaseOnly,
-        );
-
-        assert_eq!(runtime["execution_tier"], json!("balanced"));
-    }
-
-    #[test]
-    fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
-        let unique = format!(
-            "loongclaw-wasm-tier-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time")
-                .as_nanos()
-        );
-        let root = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&root).expect("create temp wasm root");
-        let wasm_path = root.join("fixture.wasm");
-        std::fs::write(&wasm_path, EMPTY_WASM_MODULE).expect("write wasm fixture");
-
-        let provider = provider_with_metadata(BTreeMap::from([
-            ("component".to_owned(), wasm_path.display().to_string()),
-            ("plugin_id".to_owned(), "plugin-a".to_owned()),
-        ]));
-        let channel = kernel::ChannelConfig {
-            channel_id: "channel-wasm".to_owned(),
-            endpoint: "local://fixture".to_owned(),
-            provider_id: provider.provider_id.clone(),
-            enabled: true,
-            metadata: BTreeMap::new(),
-        };
-        let command = kernel::ConnectorCommand {
-            connector_name: "connector-x".to_owned(),
-            operation: "call".to_owned(),
-            required_capabilities: BTreeSet::new(),
-            payload: json!({}),
-        };
-        let runtime_policy = BridgeRuntimePolicy {
-            execute_wasm_component: true,
-            wasm_allowed_path_prefixes: vec![root.clone()],
-            ..BridgeRuntimePolicy::default()
-        };
-
-        let execution = super::execute_wasm_component_bridge(
-            json!({"status": "planned"}),
-            &provider,
-            &channel,
-            &command,
-            &runtime_policy,
-        );
-
-        assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
-        let _ = std::fs::remove_file(&wasm_path);
-        let _ = std::fs::remove_dir(&root);
-    }
-
-    #[test]
-    fn execute_wasm_component_bridge_reports_runtime_on_artifact_resolution_failure() {
-        let provider = provider_with_metadata(BTreeMap::new());
-        let channel = kernel::ChannelConfig {
-            channel_id: "channel-wasm".to_owned(),
-            endpoint: "local://fixture".to_owned(),
-            provider_id: provider.provider_id.clone(),
-            enabled: true,
-            metadata: BTreeMap::new(),
-        };
-        let command = kernel::ConnectorCommand {
-            connector_name: "connector-x".to_owned(),
-            operation: "call".to_owned(),
-            required_capabilities: BTreeSet::new(),
-            payload: json!({}),
-        };
-        let runtime_policy = BridgeRuntimePolicy {
-            execute_wasm_component: true,
-            ..BridgeRuntimePolicy::default()
-        };
-
-        let execution = super::execute_wasm_component_bridge(
-            json!({"status": "planned"}),
-            &provider,
-            &channel,
-            &command,
-            &runtime_policy,
-        );
-
-        assert_eq!(execution["status"], json!("blocked"));
-        assert_eq!(
-            execution["reason"],
-            json!("wasm_component execution requires component artifact path")
-        );
-        assert_eq!(execution["runtime"]["executor"], json!("wasmtime_module"));
-        assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
-    }
-
-    #[test]
-    fn wasm_module_cache_key_distinguishes_expected_sha256_pin() {
-        let path = Path::new("/tmp/pin-test.wasm");
-        let pin_a = "aa".repeat(32);
-        let pin_b = "bb".repeat(32);
-        let key_a = build_wasm_module_cache_key(path, 8, Some(1), None, Some(pin_a), false);
-        let key_b = build_wasm_module_cache_key(path, 8, Some(1), None, Some(pin_b), false);
-        assert_ne!(key_a, key_b);
-    }
-
-    #[test]
-    fn wasm_module_cache_evicts_lru_entries_when_byte_budget_exceeded() {
-        let compiled = Arc::new(
-            compile_wasm_module(&EMPTY_WASM_MODULE, false, None)
-                .expect("empty wasm module should compile"),
-        );
-        let mut cache = WasmModuleCache::default();
-        let key_a =
-            build_wasm_module_cache_key(Path::new("/tmp/a.wasm"), 6, Some(1), None, None, false);
-        let key_b =
-            build_wasm_module_cache_key(Path::new("/tmp/b.wasm"), 6, Some(2), None, None, false);
-
-        let first = cache.insert(key_a.clone(), compiled.clone(), 6, 8, 10);
-        assert!(first.inserted);
-        assert_eq!(first.evicted_entries, 0);
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.total_module_bytes(), 6);
-
-        let second = cache.insert(key_b.clone(), compiled, 6, 8, 10);
-        assert!(second.inserted);
-        assert_eq!(second.evicted_entries, 1);
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.total_module_bytes(), 6);
-        assert!(cache.get(&key_a).is_none());
-        assert!(cache.get(&key_b).is_some());
-    }
-
-    #[test]
-    fn wasm_module_cache_skips_single_module_larger_than_byte_budget() {
-        let compiled = Arc::new(
-            compile_wasm_module(&EMPTY_WASM_MODULE, false, None)
-                .expect("empty wasm module should compile"),
-        );
-        let mut cache = WasmModuleCache::default();
-        let baseline =
-            build_wasm_module_cache_key(Path::new("/tmp/base.wasm"), 4, Some(1), None, None, false);
-        let oversized = build_wasm_module_cache_key(
-            Path::new("/tmp/oversized.wasm"),
-            11,
-            Some(2),
-            None,
-            None,
-            false,
-        );
-
-        let baseline_insert = cache.insert(baseline.clone(), compiled.clone(), 4, 8, 10);
-        assert!(baseline_insert.inserted);
-
-        let oversized_insert = cache.insert(oversized.clone(), compiled, 11, 8, 10);
-        assert!(!oversized_insert.inserted);
-        assert_eq!(oversized_insert.evicted_entries, 0);
-        assert_eq!(cache.len(), 1);
-        assert_eq!(cache.total_module_bytes(), 4);
-        assert!(cache.get(&baseline).is_some());
-        assert!(cache.get(&oversized).is_none());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn wasm_artifact_file_identity_distinguishes_different_files() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock should be monotonic")
-            .as_nanos();
-        let base = std::env::temp_dir().join(format!("loongclaw-wasm-file-identity-{unique}"));
-        fs::create_dir_all(&base).expect("create temp dir");
-        let file_a = base.join("a.wasm");
-        let file_b = base.join("b.wasm");
-        fs::write(&file_a, b"(module)").expect("write file a");
-        fs::write(&file_b, b"(module)").expect("write file b");
-
-        let metadata_a = fs::metadata(&file_a).expect("metadata file a");
-        let metadata_b = fs::metadata(&file_b).expect("metadata file b");
-        let identity_a =
-            wasm_artifact_file_identity(&metadata_a).expect("file identity for file a exists");
-        let identity_b =
-            wasm_artifact_file_identity(&metadata_b).expect("file identity for file b exists");
-
-        assert_ne!(identity_a, identity_b);
-        let _ = fs::remove_dir_all(base);
-    }
-
-    #[tokio::test]
-    async fn core_tool_runtime_claw_migrate_without_native_executor_fails_closed() {
-        let error = CoreToolRuntime::default()
-            .execute_core_tool(ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
-                payload: json!({"mode": "plan"}),
-            })
-            .await
-            .expect_err("native-only tool execution should fail without an injected executor");
-
-        assert!(error.to_string().contains("native tool executor"));
-    }
-
-    fn test_native_tool_executor(
-        request: ToolCoreRequest,
-    ) -> Option<Result<ToolCoreOutcome, String>> {
-        if request.tool_name != "claw.migrate" {
-            return None;
-        }
-        Some(Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "native-tools",
-                "tool": request.tool_name,
-            }),
-        }))
-    }
-
-    #[tokio::test]
-    async fn core_tool_runtime_uses_explicit_native_executor_when_present() {
-        let outcome = CoreToolRuntime::new(Some(test_native_tool_executor))
-            .execute_core_tool(ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
-                payload: json!({"mode": "plan"}),
-            })
-            .await
-            .expect("native tool execution should succeed");
-
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["adapter"], "native-tools");
-        assert_eq!(outcome.payload["tool"], "claw.migrate");
-    }
-
-    fn declining_native_tool_executor(
-        request: ToolCoreRequest,
-    ) -> Option<Result<ToolCoreOutcome, String>> {
-        if request.tool_name == "claw.migrate" {
-            return None;
-        }
-        Some(Ok(ToolCoreOutcome {
-            status: "ok".to_owned(),
-            payload: json!({
-                "adapter": "native-tools",
-                "tool": request.tool_name,
-            }),
-        }))
-    }
-
-    #[tokio::test]
-    async fn core_tool_runtime_claw_migrate_fails_closed_when_executor_declines_request() {
-        let error = CoreToolRuntime::new(Some(declining_native_tool_executor))
-            .execute_core_tool(ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
-                payload: json!({"mode": "plan"}),
-            })
-            .await
-            .expect_err("native-only tool execution should fail closed when executor declines");
-
-        assert!(error.to_string().contains("native tool executor"));
     }
 }

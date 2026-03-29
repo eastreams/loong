@@ -1,0 +1,79 @@
+{
+  "enabled": true,
+  "supported_bridges": [
+    "process_stdio",
+    "http_json",
+    "mcp_server"
+  ],
+  "supported_adapter_families": [],
+  "supported_compatibility_modes": [
+    "native",
+    "open_claw_modern",
+    "open_claw_legacy"
+  ],
+  "supported_compatibility_shims": [
+    {
+      "shim_id": "openclaw-modern-compat",
+      "family": "openclaw-modern-compat"
+    },
+    {
+      "shim_id": "openclaw-legacy-compat",
+      "family": "openclaw-legacy-compat"
+    }
+  ],
+  "supported_compatibility_shim_profiles": [
+    {
+      "shim": {
+        "shim_id": "openclaw-modern-compat",
+        "family": "openclaw-modern-compat"
+      },
+      "version": "openclaw-modern@1",
+      "supported_dialects": [
+        "open_claw_modern_manifest"
+      ],
+      "supported_bridges": [
+        "process_stdio",
+        "http_json",
+        "mcp_server"
+      ],
+      "supported_adapter_families": [
+        "openclaw-modern-compat"
+      ],
+      "supported_source_languages": [
+        "javascript",
+        "typescript"
+      ]
+    },
+    {
+      "shim": {
+        "shim_id": "openclaw-legacy-compat",
+        "family": "openclaw-legacy-compat"
+      },
+      "version": "openclaw-legacy@1",
+      "supported_dialects": [
+        "open_claw_legacy_package"
+      ],
+      "supported_bridges": [
+        "process_stdio",
+        "http_json",
+        "mcp_server"
+      ],
+      "supported_adapter_families": [
+        "openclaw-legacy-compat"
+      ],
+      "supported_source_languages": [
+        "javascript",
+        "typescript"
+      ]
+    }
+  ],
+  "enforce_supported": true,
+  "policy_version": "openclaw-ecosystem-balanced@1",
+  "expected_checksum": null,
+  "expected_sha256": null,
+  "execute_process_stdio": false,
+  "execute_http_json": false,
+  "allowed_process_commands": [],
+  "enforce_execution_success": false,
+  "security_scan": null
+}

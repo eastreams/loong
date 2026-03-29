@@ -15,13 +15,14 @@ use super::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
         FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
         LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
-        NextcloudTalkChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, WebhookChannelConfig,
-        WecomChannelConfig, WhatsappChannelConfig,
+        NextcloudTalkChannelConfig, NostrChannelConfig, SignalChannelConfig, SlackChannelConfig,
+        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TlonChannelConfig,
+        TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
     memory::MemoryConfig,
+    outbound_http::OutboundHttpConfig,
     provider::{ProviderConfig, ProviderKind, ProviderProfileConfig},
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
@@ -118,9 +119,15 @@ pub struct LoongClawConfig {
     #[serde(default)]
     pub signal: SignalChannelConfig,
     #[serde(default)]
+    pub twitch: TwitchChannelConfig,
+    #[serde(default)]
     pub teams: TeamsChannelConfig,
     #[serde(default)]
+    pub tlon: TlonChannelConfig,
+    #[serde(default)]
     pub imessage: ImessageChannelConfig,
+    #[serde(default)]
+    pub nostr: NostrChannelConfig,
     #[serde(default)]
     pub whatsapp: WhatsappChannelConfig,
     #[serde(default)]
@@ -129,6 +136,8 @@ pub struct LoongClawConfig {
     pub feishu_integration: FeishuIntegrationConfig,
     #[serde(default)]
     pub conversation: ConversationConfig,
+    #[serde(default, skip_serializing_if = "OutboundHttpConfig::is_default")]
+    pub outbound_http: OutboundHttpConfig,
     #[serde(default)]
     pub tools: ToolConfig,
     #[serde(default)]
@@ -1035,12 +1044,15 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_slack_channel_for_encoding(&mut config.slack);
     canonicalize_google_chat_channel_for_encoding(&mut config.google_chat);
     canonicalize_teams_channel_for_encoding(&mut config.teams);
+    canonicalize_tlon_channel_for_encoding(&mut config.tlon);
     canonicalize_imessage_channel_for_encoding(&mut config.imessage);
+    canonicalize_nostr_channel_for_encoding(&mut config.nostr);
     canonicalize_whatsapp_channel_for_encoding(&mut config.whatsapp);
     canonicalize_mattermost_channel_for_encoding(&mut config.mattermost);
     canonicalize_nextcloud_talk_channel_for_encoding(&mut config.nextcloud_talk);
     canonicalize_synology_chat_channel_for_encoding(&mut config.synology_chat);
     canonicalize_irc_channel_for_encoding(&mut config.irc);
+    canonicalize_twitch_channel_for_encoding(&mut config.twitch);
 }
 
 fn canonicalize_telegram_channel_for_encoding(config: &mut TelegramChannelConfig) {
@@ -1193,11 +1205,33 @@ fn canonicalize_teams_channel_for_encoding(config: &mut TeamsChannelConfig) {
     }
 }
 
+fn canonicalize_tlon_channel_for_encoding(config: &mut TlonChannelConfig) {
+    canonicalize_optional_env_name(&mut config.ship_env);
+    canonicalize_optional_env_name(&mut config.url_env);
+    canonicalize_env_secret_reference(&mut config.code, &mut config.code_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_optional_env_name(&mut account.ship_env);
+        canonicalize_optional_env_name(&mut account.url_env);
+        canonicalize_env_secret_reference(&mut account.code, &mut account.code_env);
+    }
+}
+
 fn canonicalize_imessage_channel_for_encoding(config: &mut ImessageChannelConfig) {
     canonicalize_env_secret_reference(&mut config.bridge_token, &mut config.bridge_token_env);
 
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bridge_token, &mut account.bridge_token_env);
+    }
+}
+
+fn canonicalize_nostr_channel_for_encoding(config: &mut NostrChannelConfig) {
+    canonicalize_optional_env_name(&mut config.relay_urls_env);
+    canonicalize_env_secret_reference(&mut config.private_key, &mut config.private_key_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_optional_env_name(&mut account.relay_urls_env);
+        canonicalize_env_secret_reference(&mut account.private_key, &mut account.private_key_env);
     }
 }
 
@@ -1251,6 +1285,13 @@ fn canonicalize_irc_channel_for_encoding(config: &mut IrcChannelConfig) {
         canonicalize_optional_env_name(&mut account.server_env);
         canonicalize_optional_env_name(&mut account.nickname_env);
         canonicalize_env_secret_reference(&mut account.password, &mut account.password_env);
+    }
+}
+
+fn canonicalize_twitch_channel_for_encoding(config: &mut TwitchChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
     }
 }
 
@@ -2910,12 +2951,26 @@ model = "gpt-5"
         let path = unique_config_path("loongclaw-config-runtime-trimmed-config-backed-env");
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
+        let mut ops_nostr_account = crate::config::NostrAccountConfig::default();
 
         config.discord.bot_token = Some(SecretRef::Inline("${DISCORD_BOT_TOKEN}".to_owned()));
         config.discord.bot_token_env = Some(" DISCORD_BOT_TOKEN ".to_owned());
 
         config.slack.bot_token = Some(SecretRef::Inline("${SLACK_BOT_TOKEN}".to_owned()));
         config.slack.bot_token_env = Some(" SLACK_BOT_TOKEN ".to_owned());
+
+        config.nostr.relay_urls_env = Some(" NOSTR_RELAY_URLS ".to_owned());
+        config.nostr.private_key = Some(SecretRef::Inline("${NOSTR_PRIVATE_KEY}".to_owned()));
+        config.nostr.private_key_env = Some(" NOSTR_PRIVATE_KEY ".to_owned());
+
+        ops_nostr_account.relay_urls_env = Some(" OPS_NOSTR_RELAY_URLS ".to_owned());
+        ops_nostr_account.private_key =
+            Some(SecretRef::Inline("${OPS_NOSTR_PRIVATE_KEY}".to_owned()));
+        ops_nostr_account.private_key_env = Some(" OPS_NOSTR_PRIVATE_KEY ".to_owned());
+        config
+            .nostr
+            .accounts
+            .insert("ops".to_owned(), ops_nostr_account);
 
         config.whatsapp.access_token =
             Some(SecretRef::Inline("${WHATSAPP_ACCESS_TOKEN}".to_owned()));
@@ -2932,12 +2987,19 @@ model = "gpt-5"
 
         assert!(raw.contains("bot_token_env = \"DISCORD_BOT_TOKEN\""));
         assert!(raw.contains("bot_token_env = \"SLACK_BOT_TOKEN\""));
+        assert!(raw.contains("relay_urls_env = \"NOSTR_RELAY_URLS\""));
+        assert!(raw.contains("private_key_env = \"NOSTR_PRIVATE_KEY\""));
+        assert!(raw.contains("relay_urls_env = \"OPS_NOSTR_RELAY_URLS\""));
+        assert!(raw.contains("private_key_env = \"OPS_NOSTR_PRIVATE_KEY\""));
         assert!(raw.contains("access_token_env = \"WHATSAPP_ACCESS_TOKEN\""));
         assert!(raw.contains("verify_token_env = \"WHATSAPP_VERIFY_TOKEN\""));
         assert!(raw.contains("app_secret_env = \"WHATSAPP_APP_SECRET\""));
 
         assert!(!raw.contains("bot_token = \"${DISCORD_BOT_TOKEN}\""));
         assert!(!raw.contains("bot_token = \"${SLACK_BOT_TOKEN}\""));
+        assert!(!raw.contains("relay_urls_env = \" NOSTR_RELAY_URLS \""));
+        assert!(!raw.contains("private_key = \"${NOSTR_PRIVATE_KEY}\""));
+        assert!(!raw.contains("private_key = \"${OPS_NOSTR_PRIVATE_KEY}\""));
         assert!(!raw.contains("access_token = \"${WHATSAPP_ACCESS_TOKEN}\""));
         assert!(!raw.contains("verify_token = \"${WHATSAPP_VERIFY_TOKEN}\""));
         assert!(!raw.contains("app_secret = \"${WHATSAPP_APP_SECRET}\""));
@@ -2971,6 +3033,39 @@ model = "gpt-5"
         assert!(!raw.contains("nickname_env = \" IRC_NICKNAME \""));
         assert!(!raw.contains("server_env = \" OPS_IRC_SERVER \""));
         assert!(!raw.contains("nickname_env = \" OPS_IRC_NICKNAME \""));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_twitch_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-twitch-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        let mut backup_account = crate::config::channels::TwitchAccountConfig::default();
+
+        config.twitch.access_token = Some(SecretRef::Inline("${TWITCH_ACCESS_TOKEN}".to_owned()));
+        config.twitch.access_token_env = Some(" TWITCH_ACCESS_TOKEN ".to_owned());
+        backup_account.access_token = Some(SecretRef::Inline(
+            "${BACKUP_TWITCH_ACCESS_TOKEN}".to_owned(),
+        ));
+        backup_account.access_token_env = Some(" BACKUP_TWITCH_ACCESS_TOKEN ".to_owned());
+        config
+            .twitch
+            .accounts
+            .insert("backup".to_owned(), backup_account);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+
+        assert!(raw.contains("access_token_env = \"TWITCH_ACCESS_TOKEN\""));
+        assert!(raw.contains("access_token_env = \"BACKUP_TWITCH_ACCESS_TOKEN\""));
+        assert!(!raw.contains("access_token_env = \" TWITCH_ACCESS_TOKEN \""));
+        assert!(!raw.contains("access_token_env = \" BACKUP_TWITCH_ACCESS_TOKEN \""));
+        assert!(!raw.contains("access_token = \"${TWITCH_ACCESS_TOKEN}\""));
+        assert!(!raw.contains("access_token = \"${BACKUP_TWITCH_ACCESS_TOKEN}\""));
 
         let _ = fs::remove_file(path);
     }
@@ -3394,5 +3489,17 @@ model = "gpt-5"
         let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
 
         assert_eq!(parsed.audit, config.audit);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn outbound_http_config_round_trips_private_host_override() {
+        let mut config = LoongClawConfig::default();
+        config.outbound_http.allow_private_hosts = true;
+
+        let encoded = encode_toml_config(&config).expect("encode config");
+        let parsed = toml::from_str::<LoongClawConfig>(&encoded).expect("parse encoded config");
+
+        assert!(parsed.outbound_http.allow_private_hosts);
     }
 }

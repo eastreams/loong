@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
@@ -283,11 +283,16 @@ fn execute_browser_click(
 fn build_browser_client(
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<Client, String> {
+    let resolver = super::web_http::SsrfSafeResolver {
+        allow_private_hosts: config.web_fetch.allow_private_hosts,
+    };
     Client::builder()
         .cookie_store(true)
+        .dns_resolver(Arc::new(resolver))
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(config.web_fetch.timeout_seconds))
         .user_agent("LoongClaw-Browser/0.1")
+        .no_proxy()
         .build()
         .map_err(|error| format!("failed to build HTTP client for browser tools: {error}"))
 }
@@ -674,6 +679,7 @@ fn collapse_whitespace(input: &str) -> String {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
     use std::io;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -889,6 +895,29 @@ mod tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0]["id"], json!(1));
         assert_eq!(links[0]["text"], json!("Continue"));
+        handle.join().expect("server thread");
+    }
+
+    #[test]
+    fn browser_open_ignores_proxy_environment_for_allowed_targets() {
+        let (base_url, handle) = spawn_browser_fixture_server(1);
+        let config = local_browser_config();
+        let mut env = ScopedEnv::new();
+        env.set("HTTP_PROXY", "http://127.0.0.1:1");
+        env.set("http_proxy", "http://127.0.0.1:1");
+
+        let outcome = execute_browser_tool_with_config(
+            scoped_request(
+                "browser.open",
+                json!({"url": base_url}),
+                "test-open-no-proxy",
+            ),
+            &config,
+        )
+        .expect("browser.open should bypass ambient proxy configuration");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["title"], json!("Fixture Home"));
         handle.join().expect("server thread");
     }
 

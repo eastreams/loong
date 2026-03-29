@@ -1,4 +1,12 @@
 use super::*;
+use loongclaw_daemon::kernel::{
+    PluginActivationStatus, PluginBridgeKind, PluginCompatibilityMode, PluginCompatibilityShim,
+    PluginCompatibilityShimSupport, PluginContractDialect,
+};
+
+fn render_cli_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
 
 #[test]
 fn template_spec_is_json_roundtrip_stable() {
@@ -26,6 +34,804 @@ fn runtime_extension_fixture_uses_backward_compatible_spec_defaults() {
         .expect("runtime-extension fixture should parse when hotfixes is omitted");
     assert!(parsed.hotfixes.is_empty());
     assert!(parsed.plugin_setup_readiness.is_none());
+}
+
+#[test]
+fn tool_search_trusted_fixture_parses_structured_trust_tiers() {
+    let raw = include_str!("../../../../examples/spec/tool-search-trusted.json");
+    let parsed: RunnerSpec =
+        serde_json::from_str(raw).expect("tool-search-trusted fixture should parse");
+
+    let OperationSpec::ToolSearch { trust_tiers, .. } = parsed.operation else {
+        panic!("tool-search-trusted fixture should use tool_search operation");
+    };
+    assert_eq!(trust_tiers.len(), 1);
+    assert_eq!(trust_tiers[0].as_str(), "official");
+}
+
+#[test]
+fn init_spec_cli_plugin_trust_guard_preset_writes_expected_bootstrap_defaults() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("loongclaw-plugin-trust-guard-{unique}.json"));
+
+    init_spec_cli(
+        path.to_str().expect("temp path should be utf8"),
+        InitSpecPreset::PluginTrustGuard,
+    )
+    .expect("init-spec should write trust guard preset");
+
+    let raw = fs::read_to_string(&path).expect("read generated spec");
+    let parsed: RunnerSpec = serde_json::from_str(&raw).expect("generated spec should parse");
+    let plugin_scan = parsed
+        .plugin_scan
+        .as_ref()
+        .expect("trust guard preset should enable plugin scan");
+    let bridge_support = parsed
+        .bridge_support
+        .as_ref()
+        .expect("trust guard preset should enable bridge support");
+    let bootstrap = parsed
+        .bootstrap
+        .as_ref()
+        .expect("trust guard preset should enable bootstrap");
+
+    assert_eq!(parsed.pack.pack_id, "community-plugin-intake");
+    assert_eq!(plugin_scan.roots, vec!["plugins"]);
+    assert!(bridge_support.enabled);
+    assert!(bridge_support.enforce_supported);
+    assert!(
+        bridge_support
+            .supported_bridges
+            .contains(&PluginBridgeKind::ProcessStdio)
+    );
+    assert_eq!(bootstrap.allow_process_stdio_auto_apply, Some(true));
+    assert_eq!(bootstrap.block_unverified_high_risk_auto_apply, Some(true));
+    assert_eq!(bootstrap.enforce_ready_execution, Some(true));
+
+    fs::remove_file(path).expect("remove generated spec");
+}
+
+#[test]
+fn example_spec_fixtures_parse_as_runner_specs() {
+    let examples_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/spec");
+    let mut parsed_specs = 0usize;
+
+    for entry in fs::read_dir(&examples_dir).expect("read example spec directory") {
+        let entry = entry.expect("read example spec entry");
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+
+        let raw = fs::read_to_string(&path).expect("read example spec file");
+        serde_json::from_str::<RunnerSpec>(&raw).unwrap_or_else(|error| {
+            panic!(
+                "example spec fixture should parse: {}: {error}",
+                path.display()
+            )
+        });
+        parsed_specs = parsed_specs.saturating_add(1);
+    }
+
+    assert!(
+        parsed_specs >= 1,
+        "expected at least one example spec fixture under {}",
+        examples_dir.display()
+    );
+}
+
+#[test]
+fn run_spec_cli_render_summary_preserves_stdout_json_and_writes_trust_search_summary() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let spec_path = workspace_root.join("examples/spec/tool-search-trusted.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .arg("run-spec")
+        .arg("--spec")
+        .arg(&spec_path)
+        .arg("--render-summary")
+        .current_dir(&workspace_root)
+        .output()
+        .expect("spawn run-spec with render-summary");
+    let stdout = render_cli_output(&output.stdout);
+    let stderr = render_cli_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "run-spec should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should remain machine-readable JSON");
+    assert_eq!(payload["pack_id"], "tool-search-trusted-pack");
+    assert_eq!(
+        payload["tool_search_summary"]["headline"],
+        "query=\"echo\"; returned 1 result; trust_scope=official; filtered_out=2 candidates; top_match=wasm-secure-echo"
+    );
+    assert!(
+        !stdout.contains("run-spec summary"),
+        "stdout should not include human summary lines: {stdout:?}"
+    );
+    assert!(
+        stderr.contains(
+            "run-spec summary pack=tool-search-trusted-pack agent=agent-tool-search-trusted status=ok operation=tool_search"
+        ),
+        "stderr should include top-level run summary: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "plugin_trust scanned=3 official=1 verified_community=1 unverified=1 high_risk=3 high_risk_unverified=1 blocked_auto_apply=0 review_required=1"
+        ),
+        "stderr should include plugin trust rollup: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search query=\"echo\"; returned 1 result; trust_scope=official; filtered_out=2 candidates; top_match=wasm-secure-echo"
+        ),
+        "stderr should include the trust-aware tool-search headline: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search_filters query_requested=- structured_requested=official effective=official conflicting=false filtered_out_by_tier=unverified:1,verified-community:1"
+        ),
+        "stderr should include the resolved trust filter breakdown: {stderr:?}"
+    );
+    assert!(
+        stderr.contains(
+            "tool_search_top[1] provider=wasm-secure-echo connector=wasm-secure-echo tool_id=wasm-secure-echo::wasm-secure-echo trust=official bridge=wasm_component"
+        ),
+        "stderr should include a compact top-result card: {stderr:?}"
+    );
+}
+
+#[test]
+fn run_spec_cli_render_summary_surfaces_blocked_plugin_trust_review() {
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let spec_path = workspace_root.join("examples/spec/plugin-bootstrap-trust-policy.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .arg("run-spec")
+        .arg("--spec")
+        .arg(&spec_path)
+        .arg("--render-summary")
+        .current_dir(&workspace_root)
+        .output()
+        .expect("spawn blocked run-spec with render-summary");
+    let stdout = render_cli_output(&output.stdout);
+    let stderr = render_cli_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "blocked run-spec should still serialize a report, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("stdout should remain machine-readable JSON");
+    assert_eq!(payload["operation_kind"], "blocked");
+    assert_eq!(payload["outcome"]["status"], "blocked");
+    assert!(
+        stderr.contains(
+            "run-spec summary pack=plugin-bootstrap-trust-policy-pack agent=agent-plugin-bootstrap-trust-policy status=blocked operation=blocked"
+        ),
+        "stderr should mark the blocked run clearly: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("blocked_reason=bootstrap policy blocked"),
+        "stderr should include the blocked reason: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("plugin_trust scanned=1 official=0 verified_community=0 unverified=1 high_risk=1 high_risk_unverified=1 blocked_auto_apply=1 review_required=1"),
+        "stderr should include the trust-policy rollup: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("plugin_review plugin=stdio-echo-py tier=unverified bridge=process_stdio activation=ready bootstrap=deferred_unsupported_auto_apply"),
+        "stderr should include the review-required plugin entry: {stderr:?}"
+    );
+}
+
+#[tokio::test]
+async fn plugin_bootstrap_trust_policy_fixture_blocks_unverified_process_plugin() {
+    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/spec/plugin-bootstrap-trust-policy.json");
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let raw = fs::read_to_string(&fixture_path).expect("read trust policy fixture");
+    let mut spec: RunnerSpec =
+        serde_json::from_str(&raw).expect("trust policy fixture should parse");
+
+    let plugin_scan = spec
+        .plugin_scan
+        .as_mut()
+        .expect("trust policy fixture should define plugin scan");
+    for root in &mut plugin_scan.roots {
+        *root = workspace_root.join(root.as_str()).display().to_string();
+    }
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "blocked");
+    assert_eq!(report.outcome["status"], "blocked");
+    assert!(
+        report
+            .blocked_reason
+            .as_deref()
+            .expect("blocked reason should exist")
+            .contains("bootstrap policy blocked")
+    );
+    assert_eq!(report.plugin_bootstrap_reports.len(), 1);
+    assert_eq!(report.plugin_bootstrap_reports[0].applied_tasks, 0);
+    assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
+    assert_eq!(
+        report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
+        loongclaw_daemon::kernel::PluginTrustTier::Unverified
+    );
+    assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.blocked_auto_apply_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.review_required_plugins.len(), 1);
+    assert_eq!(
+        report.plugin_trust_summary.review_required_plugins[0]
+            .bootstrap_status
+            .expect("bootstrap status should exist"),
+        loongclaw_daemon::kernel::BootstrapTaskStatus::DeferredUnsupportedAutoApply
+    );
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::PluginTrustEvaluated {
+                scanned_plugins,
+                high_risk_unverified_plugins,
+                blocked_auto_apply_plugins,
+                review_required_plugin_ids,
+                review_required_bridges,
+                ..
+            } if *scanned_plugins == 1
+                && *high_risk_unverified_plugins == 1
+                && *blocked_auto_apply_plugins == 1
+                && review_required_plugin_ids == &vec!["stdio-echo-py".to_owned()]
+                && review_required_bridges == &vec!["process_stdio".to_owned()]
+        )
+    }));
+}
+
+#[test]
+fn read_spec_file_materializes_relative_bridge_support_delta_selection() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-delta-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let delta_path = root.join("bridge-support.delta.json");
+    let spec_path = root.join("runner.spec.json");
+
+    let delta_artifact = materialize_bridge_support_delta_artifact(
+        "openclaw-ecosystem-balanced",
+        Some(&PluginPreflightBridgeProfileDelta {
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: Vec::new(),
+            supported_compatibility_shims: Vec::new(),
+            shim_profile_additions: vec![PluginPreflightBridgeShimProfileDelta {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                shim_family: "openclaw-modern-compat".to_owned(),
+                supported_dialects: vec!["openclaw_modern_manifest".to_owned()],
+                supported_bridges: vec!["process_stdio".to_owned()],
+                supported_adapter_families: vec!["openclaw-modern-compat".to_owned()],
+                supported_source_languages: vec!["python".to_owned()],
+            }],
+            unresolved_blocking_reasons: Vec::new(),
+        }),
+    )
+    .expect("delta artifact should materialize");
+    let materialized = materialize_bridge_support_template(
+        "openclaw-ecosystem-balanced",
+        Some(&delta_artifact.delta),
+    )
+    .expect("delta template should materialize");
+
+    fs::write(
+        &delta_path,
+        serde_json::to_string_pretty(&delta_artifact).expect("serialize delta artifact"),
+    )
+    .expect("write delta artifact");
+
+    let mut spec_value = serde_json::to_value(RunnerSpec::template()).expect("encode template");
+    spec_value["bridge_support_selection"] = json!({
+        "delta_artifact": "bridge-support.delta.json",
+        "expected_delta_sha256": delta_artifact.sha256,
+        "expected_sha256": materialized.sha256
+    });
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&spec_value).expect("serialize spec file"),
+    )
+    .expect("write spec file");
+
+    let resolved = read_spec_file_with_bridge_support_resolution(
+        spec_path.to_str().expect("spec path should be utf-8"),
+        None,
+    )
+    .expect("spec file should parse");
+    let expected_bridge_support_source = format!("delta:{}", delta_path.display());
+    let expected_delta_source = delta_path.display().to_string();
+    assert_eq!(
+        resolved.bridge_support_source.as_deref(),
+        Some(expected_bridge_support_source.as_str())
+    );
+    assert_eq!(
+        resolved.bridge_support_delta_source.as_deref(),
+        Some(expected_delta_source.as_str())
+    );
+    assert_eq!(
+        resolved.bridge_support_delta_sha256.as_deref(),
+        Some(delta_artifact.sha256.as_str())
+    );
+    let bridge_support = resolved
+        .spec
+        .bridge_support
+        .expect("bridge support should materialize from delta selection");
+    assert_eq!(
+        bridge_support.policy_version.as_deref(),
+        Some("custom-derived-from-openclaw-ecosystem-balanced")
+    );
+    assert!(
+        bridge_support
+            .supported_compatibility_shim_profiles
+            .iter()
+            .any(|profile| {
+                profile.shim.shim_id == "openclaw-modern-compat"
+                    && profile.supported_source_languages.contains("python")
+            })
+    );
+}
+
+#[test]
+fn read_spec_file_rejects_inline_bridge_support_and_selection_mix() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-bridge-mix-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let spec_path = root.join("runner.spec.json");
+
+    let mut spec_value = serde_json::to_value(RunnerSpec::template()).expect("encode template");
+    spec_value["bridge_support"] = json!({
+        "enabled": true,
+        "supported_bridges": ["process_stdio"],
+        "supported_adapter_families": [],
+        "supported_compatibility_modes": ["native"],
+        "supported_compatibility_shims": [],
+        "supported_compatibility_shim_profiles": [],
+        "enforce_supported": true,
+        "policy_version": "inline-test",
+        "expected_checksum": null,
+        "expected_sha256": null,
+        "execute_process_stdio": true,
+        "execute_http_json": false,
+        "allowed_process_commands": ["node"],
+        "enforce_execution_success": false,
+        "security_scan": null
+    });
+    spec_value["bridge_support_selection"] = json!({
+        "bundled_profile": "native-balanced"
+    });
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&spec_value).expect("serialize spec file"),
+    )
+    .expect("write spec file");
+
+    let error = read_spec_file(spec_path.to_str().expect("spec path should be utf-8"))
+        .expect_err("mixed inline bridge support and selection should fail");
+    assert!(error.contains("bridge_support_selection"));
+    assert!(error.contains("not both"));
+}
+
+#[test]
+fn read_spec_file_accepts_cli_bridge_support_selection_override_when_file_has_none() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-cli-delta-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let delta_path = root.join("bridge-support.delta.json");
+    let spec_path = root.join("runner.spec.json");
+
+    let delta_artifact = materialize_bridge_support_delta_artifact(
+        "openclaw-ecosystem-balanced",
+        Some(&PluginPreflightBridgeProfileDelta {
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: Vec::new(),
+            supported_compatibility_shims: Vec::new(),
+            shim_profile_additions: vec![PluginPreflightBridgeShimProfileDelta {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                shim_family: "openclaw-modern-compat".to_owned(),
+                supported_dialects: vec!["openclaw_modern_manifest".to_owned()],
+                supported_bridges: vec!["process_stdio".to_owned()],
+                supported_adapter_families: vec!["openclaw-modern-compat".to_owned()],
+                supported_source_languages: vec!["python".to_owned()],
+            }],
+            unresolved_blocking_reasons: Vec::new(),
+        }),
+    )
+    .expect("delta artifact should materialize");
+    fs::write(
+        &delta_path,
+        serde_json::to_string_pretty(&delta_artifact).expect("serialize delta artifact"),
+    )
+    .expect("write delta artifact");
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&RunnerSpec::template()).expect("serialize spec"),
+    )
+    .expect("write spec");
+
+    let resolved = read_spec_file_with_bridge_support_resolution(
+        spec_path.to_str().expect("spec path should be utf-8"),
+        Some(&BridgeSupportSelectionInput {
+            path: None,
+            bundled_profile: None,
+            delta_artifact: Some(delta_path.display().to_string()),
+            expected_sha256: None,
+            expected_delta_sha256: Some(delta_artifact.sha256.clone()),
+        }),
+    )
+    .expect("spec file should accept CLI bridge support selection override");
+    let expected_bridge_support_source = format!("delta:{}", delta_path.display());
+    let expected_delta_source = delta_path.display().to_string();
+    assert_eq!(
+        resolved.bridge_support_source.as_deref(),
+        Some(expected_bridge_support_source.as_str())
+    );
+    assert_eq!(
+        resolved.bridge_support_delta_source.as_deref(),
+        Some(expected_delta_source.as_str())
+    );
+    assert_eq!(
+        resolved.bridge_support_delta_sha256.as_deref(),
+        Some(delta_artifact.sha256.as_str())
+    );
+
+    let bridge_support = resolved
+        .spec
+        .bridge_support
+        .expect("bridge support should materialize from CLI override");
+    assert_eq!(
+        bridge_support.policy_version.as_deref(),
+        Some("custom-derived-from-openclaw-ecosystem-balanced")
+    );
+    assert!(
+        bridge_support
+            .supported_compatibility_shim_profiles
+            .iter()
+            .any(|profile| {
+                profile.shim.shim_id == "openclaw-modern-compat"
+                    && profile.supported_source_languages.contains("python")
+            })
+    );
+}
+
+#[test]
+fn read_spec_file_surfaces_inline_bridge_support_provenance() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-inline-bridge-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let spec_path = root.join("runner.spec.json");
+
+    let mut spec_value = serde_json::to_value(RunnerSpec::template()).expect("encode template");
+    spec_value["bridge_support"] = json!({
+        "enabled": true,
+        "supported_bridges": ["process_stdio"],
+        "supported_adapter_families": [],
+        "supported_compatibility_modes": ["native"],
+        "supported_compatibility_shims": [],
+        "supported_compatibility_shim_profiles": [],
+        "enforce_supported": true,
+        "policy_version": "inline-test",
+        "expected_checksum": null,
+        "expected_sha256": null,
+        "execute_process_stdio": true,
+        "execute_http_json": false,
+        "allowed_process_commands": ["node"],
+        "enforce_execution_success": false,
+        "security_scan": null
+    });
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&spec_value).expect("serialize spec file"),
+    )
+    .expect("write spec file");
+
+    let resolved = read_spec_file_with_bridge_support_resolution(
+        spec_path.to_str().expect("spec path should be utf-8"),
+        None,
+    )
+    .expect("inline bridge support should parse");
+    let expected_source = format!("inline:{}", spec_path.display());
+
+    assert_eq!(
+        resolved.bridge_support_source.as_deref(),
+        Some(expected_source.as_str())
+    );
+    assert!(resolved.bridge_support_delta_source.is_none());
+    assert!(resolved.bridge_support_delta_sha256.is_none());
+}
+
+#[test]
+fn run_spec_cli_emits_bridge_support_provenance_in_final_report() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-report-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let delta_path = root.join("bridge-support.delta.json");
+    let spec_path = root.join("runner.spec.json");
+
+    let delta_artifact = materialize_bridge_support_delta_artifact(
+        "openclaw-ecosystem-balanced",
+        Some(&PluginPreflightBridgeProfileDelta {
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: Vec::new(),
+            supported_compatibility_shims: Vec::new(),
+            shim_profile_additions: vec![PluginPreflightBridgeShimProfileDelta {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                shim_family: "openclaw-modern-compat".to_owned(),
+                supported_dialects: vec!["openclaw_modern_manifest".to_owned()],
+                supported_bridges: vec!["process_stdio".to_owned()],
+                supported_adapter_families: vec!["openclaw-modern-compat".to_owned()],
+                supported_source_languages: vec!["python".to_owned()],
+            }],
+            unresolved_blocking_reasons: Vec::new(),
+        }),
+    )
+    .expect("delta artifact should materialize");
+    let materialized = materialize_bridge_support_template(
+        "openclaw-ecosystem-balanced",
+        Some(&delta_artifact.delta),
+    )
+    .expect("delta template should materialize");
+    fs::write(
+        &delta_path,
+        serde_json::to_string_pretty(&delta_artifact).expect("serialize delta artifact"),
+    )
+    .expect("write delta artifact");
+
+    let mut spec = RunnerSpec::template();
+    spec.auto_provision = None;
+    spec.operation = OperationSpec::ConnectorLegacy {
+        connector_name: "non-existent".to_owned(),
+        operation: "notify".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({}),
+    };
+    let mut spec_value = serde_json::to_value(spec).expect("encode spec");
+    spec_value["bridge_support_selection"] = json!({
+        "delta_artifact": "bridge-support.delta.json",
+        "expected_delta_sha256": delta_artifact.sha256,
+        "expected_sha256": materialized.sha256
+    });
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&spec_value).expect("serialize spec file"),
+    )
+    .expect("write spec file");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args(["run-spec", "--spec"])
+        .arg(&spec_path)
+        .current_dir(&root)
+        .output()
+        .expect("run-spec cli should execute");
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(
+        output.status.success(),
+        "run-spec should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+
+    let report: Value =
+        serde_json::from_str(&stdout).expect("run-spec stdout should be a json report");
+    assert_eq!(
+        report["schema_version"].as_u64(),
+        Some(SPEC_RUN_REPORT_SCHEMA_VERSION as u64)
+    );
+    assert_eq!(
+        report["schema"]["version"].as_u64(),
+        Some(SPEC_RUN_REPORT_SCHEMA_VERSION as u64)
+    );
+    assert_eq!(
+        report["schema"]["surface"].as_str(),
+        Some("spec_run_report")
+    );
+    assert_eq!(
+        report["schema"]["purpose"].as_str(),
+        Some("runtime_execution")
+    );
+    let expected_bridge_support_source = format!("delta:{}", delta_path.display());
+    let expected_delta_source = delta_path.display().to_string();
+    assert_eq!(
+        report["bridge_support_source"].as_str(),
+        Some(expected_bridge_support_source.as_str())
+    );
+    assert_eq!(
+        report["bridge_support_delta_source"].as_str(),
+        Some(expected_delta_source.as_str())
+    );
+    assert_eq!(
+        report["bridge_support_delta_sha256"].as_str(),
+        Some(delta_artifact.sha256.as_str())
+    );
+    assert_eq!(
+        report["bridge_support_checksum"].as_str(),
+        Some(materialized.checksum.as_str())
+    );
+    assert_eq!(
+        report["bridge_support_sha256"].as_str(),
+        Some(materialized.sha256.as_str())
+    );
+}
+
+#[test]
+fn run_spec_cli_resolves_bridge_support_delta_override_relative_to_process_cwd() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("loongclaw-run-spec-cli-relative-bridge-{unique}"));
+    let spec_dir = root.join("configs");
+    fs::create_dir_all(&spec_dir).expect("create spec dir");
+    let delta_path = root.join("bridge-support.delta.json");
+    let spec_path = spec_dir.join("runner.spec.json");
+
+    let delta_artifact = materialize_bridge_support_delta_artifact(
+        "openclaw-ecosystem-balanced",
+        Some(&PluginPreflightBridgeProfileDelta {
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: Vec::new(),
+            supported_compatibility_shims: Vec::new(),
+            shim_profile_additions: vec![PluginPreflightBridgeShimProfileDelta {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                shim_family: "openclaw-modern-compat".to_owned(),
+                supported_dialects: vec!["openclaw_modern_manifest".to_owned()],
+                supported_bridges: vec!["process_stdio".to_owned()],
+                supported_adapter_families: vec!["openclaw-modern-compat".to_owned()],
+                supported_source_languages: vec!["python".to_owned()],
+            }],
+            unresolved_blocking_reasons: Vec::new(),
+        }),
+    )
+    .expect("delta artifact should materialize");
+    fs::write(
+        &delta_path,
+        serde_json::to_string_pretty(&delta_artifact).expect("serialize delta artifact"),
+    )
+    .expect("write delta artifact");
+
+    let mut spec = RunnerSpec::template();
+    spec.auto_provision = None;
+    spec.operation = OperationSpec::ConnectorLegacy {
+        connector_name: "non-existent".to_owned(),
+        operation: "notify".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({}),
+    };
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&spec).expect("serialize spec"),
+    )
+    .expect("write spec");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args([
+            "run-spec",
+            "--spec",
+            "configs/runner.spec.json",
+            "--bridge-support-delta",
+            "bridge-support.delta.json",
+            "--bridge-support-delta-sha256",
+            delta_artifact.sha256.as_str(),
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("run-spec cli should execute");
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+    assert!(
+        output.status.success(),
+        "run-spec should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+
+    let report: Value =
+        serde_json::from_str(&stdout).expect("run-spec stdout should be a json report");
+    fn canonicalized_path_text(path: &std::path::Path) -> String {
+        let canonical_path = dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        canonical_path.display().to_string()
+    }
+
+    let expected_delta_source = canonicalized_path_text(&delta_path);
+    let actual_delta_source = report["bridge_support_delta_source"]
+        .as_str()
+        .expect("report should expose bridge support delta source");
+    let actual_bridge_support_source = report["bridge_support_source"]
+        .as_str()
+        .expect("report should expose bridge support source");
+    let actual_bridge_support_delta = actual_bridge_support_source
+        .strip_prefix("delta:")
+        .expect("bridge support source should encode delta provenance");
+    let normalized_actual_delta_source =
+        canonicalized_path_text(std::path::Path::new(actual_delta_source));
+    let normalized_actual_bridge_support_delta =
+        canonicalized_path_text(std::path::Path::new(actual_bridge_support_delta));
+
+    assert_eq!(normalized_actual_delta_source, expected_delta_source);
+    assert_eq!(
+        normalized_actual_bridge_support_delta,
+        expected_delta_source
+    );
+}
+
+#[test]
+fn run_spec_cli_rejects_bridge_support_sha256_pins_without_policy_source() {
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("loongclaw-run-spec-sha-only-{unique}"));
+    fs::create_dir_all(&root).expect("create temp root");
+    let spec_path = root.join("runner.spec.json");
+
+    fs::write(
+        &spec_path,
+        serde_json::to_string_pretty(&RunnerSpec::template()).expect("serialize spec"),
+    )
+    .expect("write spec");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .args([
+            "run-spec",
+            "--spec",
+            spec_path.to_str().expect("spec path should be utf-8"),
+            "--bridge-support-sha256",
+            "abc123",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("run-spec cli should execute");
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+
+    assert!(!output.status.success(), "run-spec should fail");
+    assert!(stderr.contains("bridge support sha256 pins require"));
 }
 
 #[tokio::test]
@@ -213,6 +1019,9 @@ fn security_scan_profile_path_overrides_bundled_defaults() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -322,6 +1131,9 @@ fn security_scan_profile_sha256_pin_accepts_matching_profile() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -423,6 +1235,9 @@ async fn execute_spec_blocks_when_security_scan_profile_sha256_mismatches() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -528,6 +1343,9 @@ fn security_scan_profile_signature_accepts_matching_signature() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -642,6 +1460,9 @@ async fn execute_spec_blocks_when_security_scan_profile_signature_mismatches() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -994,6 +1815,9 @@ async fn execute_spec_blocks_when_bridge_matrix_does_not_support_plugin() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1106,6 +1930,9 @@ async fn execute_spec_skips_blocked_plugins_when_bridge_enforcement_is_disabled(
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: false,
             policy_version: None,
             expected_checksum: None,
@@ -1214,6 +2041,9 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1231,6 +2061,7 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
         operation: OperationSpec::ToolSearch {
             query: "tavily".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -1238,7 +2069,12 @@ async fn execute_spec_surfaces_setup_incomplete_plugins_without_marking_them_rea
 
     let report = execute_spec(&spec, true).await;
 
-    assert_eq!(report.operation_kind, "tool_search");
+    if report.operation_kind != "tool_search" {
+        panic!(
+            "unexpected operation_kind={} blocked_reason={:?} outcome={}",
+            report.operation_kind, report.blocked_reason, report.outcome
+        );
+    }
     assert_eq!(report.plugin_activation_plans.len(), 1);
     assert_eq!(report.plugin_activation_plans[0].ready_plugins, 0);
     assert_eq!(
@@ -1340,6 +2176,9 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson, PluginBridgeKind::NativeFfi],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1363,6 +2202,7 @@ async fn execute_spec_bootstrap_applies_only_bridges_allowed_by_bootstrap_policy
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -1457,6 +2297,9 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::NativeFfi],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1480,6 +2323,7 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1516,6 +2360,151 @@ async fn execute_spec_bootstrap_enforcement_blocks_when_ready_plugins_are_deferr
 }
 
 #[tokio::test]
+async fn execute_spec_bootstrap_trust_policy_blocks_unverified_high_risk_auto_apply() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-bootstrap-trust-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("ffi_plugin.rs"),
+        r#"
+// LOONGCLAW_PLUGIN_START
+// {
+//   "plugin_id": "ffi-plugin",
+//   "provider_id": "ffi-provider",
+//   "connector_name": "ffi-provider",
+//   "channel_id": "primary",
+//   "endpoint": "https://ffi.invalid/invoke",
+//   "capabilities": ["InvokeConnector"],
+//   "metadata": {"bridge_kind":"native_ffi","version":"1.0.0"}
+// }
+// LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write ffi plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-bootstrap-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-bootstrap-trust".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::NativeFfi],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(true),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: Some(true),
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(10),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::Task {
+            task_id: "t-bootstrap-trust".to_owned(),
+            objective: "must be blocked by bootstrap trust policy".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "blocked");
+    assert_eq!(report.outcome["status"], "blocked");
+    assert!(
+        report
+            .blocked_reason
+            .expect("blocked reason must exist")
+            .contains("bootstrap policy blocked")
+    );
+    assert_eq!(report.plugin_bootstrap_reports.len(), 1);
+    assert_eq!(report.plugin_bootstrap_reports[0].applied_tasks, 0);
+    assert_eq!(report.plugin_bootstrap_reports[0].deferred_tasks, 1);
+    assert_eq!(
+        report.plugin_bootstrap_reports[0].tasks[0].trust_tier,
+        loongclaw_daemon::kernel::PluginTrustTier::Unverified
+    );
+    assert_eq!(report.plugin_trust_summary.scanned_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.high_risk_unverified_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.blocked_auto_apply_plugins, 1);
+    assert_eq!(report.plugin_trust_summary.review_required_plugins.len(), 1);
+    assert_eq!(
+        report.plugin_trust_summary.review_required_plugins[0].bridge_kind,
+        PluginBridgeKind::NativeFfi
+    );
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::PluginTrustEvaluated {
+                scanned_plugins,
+                high_risk_unverified_plugins,
+                blocked_auto_apply_plugins,
+                review_required_plugin_ids,
+                review_required_bridges,
+                ..
+            } if *scanned_plugins == 1
+                && *high_risk_unverified_plugins == 1
+                && *blocked_auto_apply_plugins == 1
+                && review_required_plugin_ids == &vec!["ffi-plugin".to_owned()]
+                && review_required_bridges == &vec!["native_ffi".to_owned()]
+        )
+    }));
+    assert!(
+        report.plugin_bootstrap_reports[0].tasks[0]
+            .reason
+            .contains("bootstrap trust policy for unverified high-risk plugins")
+    );
+    assert!(report.plugin_absorb_reports.is_empty());
+}
+
+#[tokio::test]
 async fn execute_spec_blocks_on_bridge_support_checksum_mismatch() {
     let spec = RunnerSpec {
         pack: VerticalPackManifest {
@@ -1540,6 +2529,9 @@ async fn execute_spec_blocks_on_bridge_support_checksum_mismatch() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: vec!["http-adapter".to_owned()],
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: Some("v1".to_owned()),
             expected_checksum: Some("deadbeef".to_owned()),
@@ -1603,6 +2595,9 @@ async fn execute_spec_blocks_on_bridge_support_sha256_mismatch() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: vec!["http-adapter".to_owned()],
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: Some("v2".to_owned()),
             expected_checksum: None,
@@ -1647,6 +2642,9 @@ async fn execute_spec_allows_execution_when_bridge_support_sha256_matches() {
         enabled: true,
         supported_bridges: vec![PluginBridgeKind::HttpJson, PluginBridgeKind::ProcessStdio],
         supported_adapter_families: vec!["http-adapter".to_owned()],
+        supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+        supported_compatibility_shims: Vec::new(),
+        supported_compatibility_shim_profiles: Vec::new(),
         enforce_supported: false,
         policy_version: Some("v2".to_owned()),
         expected_checksum: None,
@@ -1753,6 +2751,9 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::NativeFfi],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1776,6 +2777,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -1802,6 +2804,10 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
         "lib::invoke"
     );
     assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["circuit_breaker"]["phase_after"],
+        "closed"
+    );
+    assert_eq!(
         report
             .integration_catalog
             .provider("ffi-provider")
@@ -1811,6 +2817,19 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
             .cloned(),
         Some("native_ffi".to_owned())
     );
+    let runtime_health_json = report
+        .integration_catalog
+        .provider("ffi-provider")
+        .expect("provider should exist")
+        .metadata
+        .get("plugin_runtime_health_json")
+        .cloned()
+        .expect("provider metadata should carry runtime health");
+    let runtime_health: Value =
+        serde_json::from_str(runtime_health_json.as_str()).expect("runtime health should decode");
+    assert_eq!(runtime_health["status"], "healthy");
+    assert_eq!(runtime_health["circuit_phase"], "closed");
+    assert_eq!(runtime_health["consecutive_failures"], 0);
 }
 
 #[tokio::test]
@@ -1878,6 +2897,9 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -1898,6 +2920,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(200_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -1920,6 +2943,7 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2109,6 +3133,9 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2129,6 +3156,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(200_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2151,6 +3179,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2245,6 +3274,9 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2265,6 +3297,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(200_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2290,6 +3323,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2383,6 +3417,9 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2403,6 +3440,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(200_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2425,6 +3463,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2523,6 +3562,9 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2543,6 +3585,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
                     allowed_path_prefixes: vec![disallowed_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(100_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2565,6 +3608,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2667,6 +3711,9 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2687,6 +3734,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(100_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2709,6 +3757,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2802,6 +3851,9 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2822,6 +3874,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
                     fuel_limit: Some(100_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2844,6 +3897,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -2938,6 +3992,9 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -2958,6 +4015,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(8),
                     fuel_limit: Some(100_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2980,6 +4038,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(5),
         }),
@@ -3042,6 +4101,9 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3062,6 +4124,7 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
                     allowed_path_prefixes: Vec::new(),
                     max_component_bytes: Some(1024),
                     fuel_limit: Some(10_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3165,6 +4228,9 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3202,6 +4268,7 @@ async fn execute_spec_security_scan_blocks_wasm_plugin_with_wasi_import() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3312,6 +4379,9 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3352,6 +4422,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_hash_pin() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3447,6 +4518,9 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3484,6 +4558,7 @@ async fn execute_spec_security_scan_allows_clean_wasm_with_metadata_hash_pin() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3584,6 +4659,9 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3621,6 +4699,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_hash_pin_is_invalid() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3715,6 +4794,9 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::WasmComponent],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3755,6 +4837,7 @@ async fn execute_spec_security_scan_blocks_when_metadata_pin_conflicts_with_poli
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(10),
         }),
@@ -3843,6 +4926,9 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::ProcessStdio],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -3880,6 +4966,7 @@ async fn execute_spec_security_scan_emits_audit_summary_when_not_blocking() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -3995,6 +5082,9 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::ProcessStdio],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -4038,6 +5128,7 @@ async fn execute_spec_security_scan_exports_siem_record_with_truncation() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -4139,6 +5230,9 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::ProcessStdio],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -4182,6 +5276,7 @@ async fn execute_spec_security_scan_siem_fail_closed_blocks_execution() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(5),
         }),
@@ -4296,6 +5391,9 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::ProcessStdio],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -4333,6 +5431,7 @@ async fn execute_spec_security_scan_covers_deferred_plugins_not_only_applied_sub
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5319,6 +6418,9 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -5342,6 +6444,7 @@ async fn execute_spec_bootstrap_max_tasks_limits_applied_plugins() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5442,6 +6545,9 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -5465,6 +6571,7 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(true),
             max_tasks: Some(8),
         }),
@@ -5491,6 +6598,131 @@ async fn execute_spec_scans_multiple_roots_and_absorbs_per_root() {
     assert_eq!(absorbed_total, 2);
     assert!(report.integration_catalog.provider("root-a").is_some());
     assert!(report.integration_catalog.provider("root-b").is_some());
+}
+
+#[tokio::test]
+async fn execute_spec_blocks_cross_root_slot_claim_conflicts_during_planning() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+
+    let root_a = std::env::temp_dir().join(format!("loongclaw-plugin-slot-a-{unique}"));
+    let root_b = std::env::temp_dir().join(format!("loongclaw-plugin-slot-b-{unique}"));
+    fs::create_dir_all(&root_a).expect("create root a");
+    fs::create_dir_all(&root_b).expect("create root b");
+
+    fs::write(
+        root_a.join("a.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-a",
+#   "provider_id": "search-a",
+#   "connector_name": "search-a",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-a",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write root a plugin");
+
+    fs::write(
+        root_b.join("b.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-b",
+#   "provider_id": "search-b",
+#   "connector_name": "search-b",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-b",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write root b plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-cross-root-slot-claims".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-cross-root-slot-claims".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![root_a.display().to_string(), root_b.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::Task {
+            task_id: "t-cross-root-slot-claims".to_owned(),
+            objective: "detect cross-root slot conflicts during planning".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    let blocked_reason = report.blocked_reason.as_deref().unwrap_or_default();
+    let second_plan = &report.plugin_activation_plans[1];
+    let second_candidate = &second_plan.candidates[0];
+
+    assert_eq!(report.operation_kind, "blocked");
+    assert!(blocked_reason.contains("blocked_slot_claim_conflict"));
+    assert_eq!(report.plugin_activation_plans.len(), 2);
+    assert_eq!(second_plan.blocked_plugins, 1);
+    assert_eq!(
+        second_candidate.status,
+        PluginActivationStatus::BlockedSlotClaimConflict
+    );
+    assert!(report.plugin_absorb_reports.is_empty());
+    assert!(report.integration_catalog.provider("search-a").is_none());
+    assert!(report.integration_catalog.provider("search-b").is_none());
 }
 
 #[tokio::test]
@@ -5569,6 +6801,9 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -5597,12 +6832,10 @@ async fn execute_spec_plugin_scan_is_transactional_when_blocked() {
 
     let report = execute_spec(&spec, true).await;
     assert_eq!(report.operation_kind, "blocked");
-    assert!(
-        report
-            .blocked_reason
-            .expect("blocked reason")
-            .contains("bridge support enforcement blocked")
-    );
+    let blocked_reason = report.blocked_reason.expect("blocked reason");
+    assert!(blocked_reason.contains("bridge support enforcement blocked"));
+    assert!(blocked_reason.contains("rollback-b"));
+    assert!(blocked_reason.contains("blocked_unsupported_bridge"));
     assert_eq!(report.plugin_scan_reports.len(), 2);
     assert!(report.plugin_absorb_reports.is_empty());
     assert!(report.integration_catalog.provider("rollback-a").is_none());
@@ -5625,6 +6858,8 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
         plugin_root.join("loongclaw.plugin.json"),
         r#"
 {
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
   "plugin_id": "conflict-plugin",
   "provider_id": "package-provider",
   "connector_name": "conflict-connector",
@@ -5632,8 +6867,7 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
   "endpoint": "https://package.example.com/invoke",
   "capabilities": ["InvokeConnector"],
   "metadata": {
-    "bridge_kind": "http_json",
-    "version": "1.0.0"
+    "bridge_kind": "http_json"
   }
 }
 "#,
@@ -5719,6 +6953,89 @@ async fn execute_spec_blocks_when_package_manifest_conflicts_with_source_manifes
 }
 
 #[tokio::test]
+async fn execute_spec_blocks_when_package_manifest_uses_legacy_version_metadata() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-legacy-version-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("loongclaw.plugin.json"),
+        r#"
+{
+  "api_version": "v1alpha1",
+  "version": "1.0.0",
+  "plugin_id": "legacy-version-package",
+  "provider_id": "legacy-version-package",
+  "connector_name": "legacy-version-package",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "version": "1.0.0"
+  }
+}
+"#,
+    )
+    .expect("write package manifest");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-package-legacy-version".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-package-legacy-version".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::Task {
+            task_id: "t-plugin-package-legacy-version".to_owned(),
+            objective: "package manifest should reject legacy metadata.version".to_owned(),
+            required_capabilities: BTreeSet::new(),
+            payload: json!({}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "blocked");
+    let blocked_reason = report.blocked_reason.expect("blocked reason should exist");
+    assert!(blocked_reason.contains("metadata.version"));
+    assert!(blocked_reason.contains("top-level `version`"));
+    assert!(report.plugin_scan_reports.is_empty());
+    assert!(report.plugin_absorb_reports.is_empty());
+    assert!(
+        report
+            .integration_catalog
+            .provider("legacy-version-package")
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -5794,6 +7111,9 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -5817,6 +7137,7 @@ async fn execute_spec_bootstrap_budget_is_global_across_multiple_roots() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(1),
         }),
@@ -5943,6 +7264,9 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -5962,6 +7286,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(10),
         }),
@@ -5971,6 +7296,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
         operation: OperationSpec::ToolSearch {
             query: "web search".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: false,
             include_examples: false,
         },
@@ -5988,6 +7314,7 @@ async fn execute_spec_tool_search_honors_deferred_filter_and_examples() {
     visible_spec.operation = OperationSpec::ToolSearch {
         query: "web search".to_owned(),
         limit: 5,
+        trust_tiers: Vec::new(),
         include_deferred: true,
         include_examples: true,
     };
@@ -6026,9 +7353,11 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
         &plugin_manifest_path,
         r#"
 {
+  "api_version": "v1alpha1",
   "plugin_id": "tavily-search",
   "provider_id": "tavily",
   "connector_name": "tavily-http",
+  "version": "1.0.0",
   "endpoint": "https://api.tavily.com/search",
   "capabilities": ["InvokeConnector"],
   "metadata": {
@@ -6080,6 +7409,9 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::HttpJson],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -6099,6 +7431,7 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(8),
         }),
@@ -6112,6 +7445,7 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
         operation: OperationSpec::ToolSearch {
             query: "tavily".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -6119,7 +7453,12 @@ async fn execute_spec_tool_search_uses_explicit_plugin_setup_readiness_context()
 
     let report = execute_spec(&spec, true).await;
 
-    assert_eq!(report.operation_kind, "tool_search");
+    if report.operation_kind != "tool_search" {
+        panic!(
+            "unexpected operation_kind={} blocked_reason={:?} outcome={}",
+            report.operation_kind, report.blocked_reason, report.outcome
+        );
+    }
     assert_eq!(report.plugin_activation_plans.len(), 1);
     assert_eq!(report.plugin_activation_plans[0].ready_plugins, 1);
     assert_eq!(
@@ -6203,6 +7542,9 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
             enabled: true,
             supported_bridges: vec![PluginBridgeKind::NativeFfi],
             supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
             enforce_supported: true,
             policy_version: None,
             expected_checksum: None,
@@ -6222,6 +7564,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
             allow_mcp_server_auto_apply: Some(false),
             allow_acp_bridge_auto_apply: Some(false),
             allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
             enforce_ready_execution: Some(false),
             max_tasks: Some(8),
         }),
@@ -6231,6 +7574,7 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
         operation: OperationSpec::ToolSearch {
             query: "rusty".to_owned(),
             limit: 5,
+            trust_tiers: Vec::new(),
             include_deferred: true,
             include_examples: false,
         },
@@ -6244,5 +7588,2154 @@ async fn execute_spec_tool_search_uses_translation_bridge_kind_for_unabsorbed_pl
     assert_eq!(
         report.outcome["results"][0]["adapter_family"],
         "rust-ffi-adapter"
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_filters_by_trust_tier_query_prefix() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-trust-filter-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("unverified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "unverified-search",
+#   "provider_id": "unverified-search",
+#   "connector_name": "unverified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/unverified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search unreviewed docs",
+#   "trust_tier": "unverified"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write unverified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-trust-filter".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-trust-filter".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "trust:official search".to_owned(),
+            limit: 5,
+            trust_tiers: Vec::new(),
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"trust:official search\"; returned 1 result; trust_scope=official; filtered_out=1 candidate; top_match=official-search"
+    );
+    assert_eq!(search_summary.query, "trust:official search");
+    assert_eq!(search_summary.returned, 1);
+    assert_eq!(
+        search_summary.trust_filter_summary.query_requested_tiers,
+        vec!["official".to_owned()]
+    );
+    assert!(
+        !search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["query_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        false
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["unverified"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(
+        report.outcome["results"][0]["provider_id"],
+        "official-search"
+    );
+    assert_eq!(report.outcome["results"][0]["trust_tier"], "official");
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_filters_by_structured_trust_tiers() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-structured-trust-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("verified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "verified-search",
+#   "provider_id": "verified-search",
+#   "connector_name": "verified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/verified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted community docs",
+#   "trust_tier": "verified-community"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write verified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-structured-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-structured-trust".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "search".to_owned(),
+            limit: 5,
+            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::Official],
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"search\"; returned 1 result; trust_scope=official; filtered_out=1 candidate; top_match=official-search"
+    );
+    assert_eq!(search_summary.query, "search");
+    assert_eq!(search_summary.returned, 1);
+    assert_eq!(search_summary.trust_tiers, vec!["official".to_owned()]);
+    assert!(
+        !search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_tiers"], json!(["official"]));
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["structured_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        false
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["verified-community"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(
+        report.outcome["results"][0]["provider_id"],
+        "official-search"
+    );
+    assert_eq!(report.outcome["results"][0]["trust_tier"], "official");
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_conflicting_trust_filters_fail_closed() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-conflicting-trust-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("official_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "official-search",
+#   "provider_id": "official-search",
+#   "connector_name": "official-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/official-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted official docs",
+#   "trust_tier": "official"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write official plugin");
+
+    fs::write(
+        plugin_root.join("verified_search.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "verified-search",
+#   "provider_id": "verified-search",
+#   "connector_name": "verified-search",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/verified-search",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "summary": "Search trusted community docs",
+#   "trust_tier": "verified-community"
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write verified plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-conflicting-trust".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-conflicting-trust".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::HttpJson],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(false),
+            max_tasks: Some(8),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "trust:official search".to_owned(),
+            limit: 5,
+            trust_tiers: vec![loongclaw_daemon::kernel::PluginTrustTier::VerifiedCommunity],
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    let search_summary = report
+        .tool_search_summary
+        .as_ref()
+        .expect("tool_search report should expose top-level summary");
+    assert_eq!(
+        search_summary.headline,
+        "query=\"trust:official search\"; returned 0 results; trust_scope=none; filtered_out=2 candidates; conflicting_trust_filters=true"
+    );
+    assert_eq!(search_summary.query, "trust:official search");
+    assert_eq!(search_summary.returned, 0);
+    assert!(search_summary.top_results.is_empty());
+    assert_eq!(
+        search_summary.trust_tiers,
+        vec!["verified-community".to_owned()]
+    );
+    assert!(
+        search_summary
+            .trust_filter_summary
+            .effective_tiers
+            .is_empty()
+    );
+    assert!(
+        search_summary
+            .trust_filter_summary
+            .conflicting_requested_tiers
+    );
+    assert_eq!(report.outcome["trust_tiers"], json!(["verified-community"]));
+    assert_eq!(report.outcome["trust_filter_summary"]["applied"], true);
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["query_requested_tiers"],
+        json!(["official"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["structured_requested_tiers"],
+        json!(["verified-community"])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["effective_tiers"],
+        json!([])
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["conflicting_requested_tiers"],
+        true
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_candidates"],
+        2
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["official"],
+        1
+    );
+    assert_eq!(
+        report.outcome["trust_filter_summary"]["filtered_out_tier_counts"]["verified-community"],
+        1
+    );
+    assert_eq!(report.outcome["returned"], 0);
+    assert_eq!(report.outcome["results"], json!([]));
+    let audit = report.audit_events.expect("audit events should exist");
+    assert!(audit.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id,
+                query,
+                returned,
+                trust_filter_applied,
+                query_requested_tiers,
+                structured_requested_tiers,
+                effective_tiers,
+                conflicting_requested_tiers,
+                filtered_out_candidates,
+                filtered_out_tier_counts,
+                top_provider_ids,
+            } if pack_id == "spec-tool-search-conflicting-trust"
+                && query == "trust:official search"
+                && *returned == 0
+                && *trust_filter_applied
+                && query_requested_tiers == &vec!["official".to_owned()]
+                && structured_requested_tiers == &vec!["verified-community".to_owned()]
+                && effective_tiers.is_empty()
+                && *conflicting_requested_tiers
+                && *filtered_out_candidates == 2
+                && filtered_out_tier_counts.get("official") == Some(&1)
+                && filtered_out_tier_counts.get("verified-community") == Some(&1)
+                && top_provider_ids.is_empty()
+        )
+    }));
+}
+
+#[tokio::test]
+async fn execute_spec_tool_search_surfaces_slot_claim_activation_conflicts() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-tool-search-slot-conflict-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_a.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-a",
+#   "provider_id": "search-a",
+#   "connector_name": "search-a",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-a",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-a plugin");
+
+    fs::write(
+        plugin_root.join("search_b.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-b",
+#   "provider_id": "search-b",
+#   "connector_name": "search-b",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-b",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-b plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-tool-search-slot-conflict".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-tool-search-slot-conflict".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ToolSearch {
+            query: "blocked_slot_claim_conflict".to_owned(),
+            limit: 10,
+            trust_tiers: Vec::new(),
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "tool_search");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.plugin_activation_plans[0].blocked_plugins, 2);
+    assert_eq!(report.outcome["returned"], 2);
+    assert_eq!(
+        report.outcome["results"][0]["activation_status"],
+        "blocked_slot_claim_conflict"
+    );
+    assert!(
+        report.outcome["results"][0]["activation_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("provider:web_search"))
+    );
+    assert!(
+        report.outcome["results"][0]["diagnostic_findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["code"] == "slot_claim_conflict"
+                    && finding["severity"] == "error"
+                    && finding["phase"] == "activation"
+                    && finding["blocking"] == true
+            }))
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_inventory_surfaces_activation_setup_and_ownership_truth() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-slot-conflict-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_a.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-a",
+#   "provider_id": "search-a",
+#   "connector_name": "search-a",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-a",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "setup": {
+#     "mode": "metadata_only",
+#     "surface": "web_search",
+#     "required_env_vars": ["SEARCH_A_KEY"],
+#     "required_config_keys": ["tools.web_search.default_provider"],
+#     "default_env_var": "SEARCH_A_KEY",
+#     "docs_urls": ["https://docs.example.com/search-a"],
+#     "remediation": "configure search-a before enabling it"
+#   },
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-a plugin");
+
+    fs::write(
+        plugin_root.join("search_b.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-b",
+#   "provider_id": "search-b",
+#   "connector_name": "search-b",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-b",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"tavily","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-b plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-slot-conflict".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-slot-conflict".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginInventory {
+            query: "SEARCH_A_KEY".to_owned(),
+            limit: 10,
+            include_ready: false,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_inventory");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.plugin_activation_plans[0].blocked_plugins, 2);
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(report.outcome["results"][0]["plugin_id"], "search-a");
+    assert_eq!(
+        report.outcome["results"][0]["activation_status"],
+        "blocked_slot_claim_conflict"
+    );
+    assert_eq!(report.outcome["results"][0]["setup_surface"], "web_search");
+    assert_eq!(
+        report.outcome["results"][0]["setup_default_env_var"],
+        "SEARCH_A_KEY"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["slot_claims"][0]["slot"],
+        "provider:web_search"
+    );
+    assert!(
+        report.outcome["results"][0]["bootstrap_hint"]
+            .as_str()
+            .is_some_and(|hint| hint.contains("register http connector adapter"))
+    );
+    assert!(
+        report.outcome["results"][0]["diagnostic_findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["code"] == "slot_claim_conflict"
+                    && finding["severity"] == "error"
+                    && finding["phase"] == "activation"
+                    && finding["blocking"] == true
+            }))
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_inventory_surfaces_host_compatibility_blockers() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-host-compat-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("incompatible_host.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "incompatible-host",
+#   "provider_id": "incompatible-host",
+#   "connector_name": "incompatible-host",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/incompatible-host",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json","version":"1.0.0"},
+#   "compatibility": {
+#     "host_api": "loongclaw-plugin/v999",
+#     "host_version_req": ">=0.1.0-alpha.1"
+#   }
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write incompatible-host plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-host-compat".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-host-compat".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginInventory {
+            query: "blocked_incompatible_host".to_owned(),
+            limit: 10,
+            include_ready: false,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_inventory");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.plugin_activation_plans[0].blocked_plugins, 1);
+    assert!(
+        report
+            .plugin_absorb_reports
+            .iter()
+            .all(|absorb| absorb.absorbed_plugins == 0)
+    );
+    assert!(
+        report
+            .integration_catalog
+            .provider("incompatible-host")
+            .is_none()
+    );
+    assert_eq!(report.outcome["returned"], 1);
+    assert_eq!(
+        report.outcome["results"][0]["plugin_id"],
+        "incompatible-host"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["activation_status"],
+        "blocked_incompatible_host"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["compatibility"]["host_api"],
+        "loongclaw-plugin/v999"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["compatibility"]["host_version_req"],
+        ">=0.1.0-alpha.1"
+    );
+    assert!(
+        report.outcome["results"][0]["activation_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("loongclaw-plugin/v1"))
+    );
+    assert!(
+        report.outcome["results"][0]["diagnostic_findings"]
+            .as_array()
+            .is_some_and(|findings| findings.iter().any(|finding| {
+                finding["code"] == "incompatible_host"
+                    && finding["severity"] == "error"
+                    && finding["phase"] == "activation"
+                    && finding["blocking"] == true
+            }))
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_inventory_requires_explicit_openclaw_shim_enablement() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-inventory-openclaw-shim-{unique}"));
+    let package_root = plugin_root.join("weather-sdk");
+    fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
+
+    fs::write(
+        package_root.join("openclaw.plugin.json"),
+        r#"
+{
+  "id": "weather-sdk",
+  "name": "Weather SDK",
+  "description": "OpenClaw weather integration",
+  "version": "1.2.3",
+  "kind": "provider",
+  "providers": ["weather"],
+  "channels": ["weather"],
+  "skills": ["forecast"],
+  "configSchema": {}
+}
+"#,
+    )
+    .expect("write openclaw manifest");
+    fs::write(
+        package_root.join("package.json"),
+        r#"
+{
+  "name": "@acme/weather-sdk",
+  "version": "1.2.3",
+  "description": "Weather provider package",
+  "openclaw": {
+    "extensions": ["dist/index.js"],
+    "setupEntry": "dist/setup.js",
+    "channel": {
+      "id": "weather",
+      "label": "Weather",
+      "aliases": ["forecast"]
+    }
+  }
+}
+"#,
+    )
+    .expect("write package.json");
+    fs::write(package_root.join("dist/index.js"), "export {};\n").expect("write entry");
+    fs::write(package_root.join("dist/setup.js"), "export {};\n").expect("write setup");
+
+    let bridge_support = BridgeSupportSpec {
+        enabled: true,
+        supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+        supported_adapter_families: Vec::new(),
+        supported_compatibility_modes: vec![
+            PluginCompatibilityMode::Native,
+            PluginCompatibilityMode::OpenClawModern,
+        ],
+        supported_compatibility_shims: Vec::new(),
+        supported_compatibility_shim_profiles: Vec::new(),
+        enforce_supported: false,
+        policy_version: None,
+        expected_checksum: None,
+        expected_sha256: None,
+        execute_process_stdio: false,
+        execute_http_json: false,
+        allowed_process_commands: Vec::new(),
+        enforce_execution_success: false,
+        security_scan: None,
+    };
+
+    let blocked_spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-openclaw-shim-blocked".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-openclaw-shim-blocked".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(bridge_support.clone()),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginInventory {
+            query: "weather-sdk".to_owned(),
+            limit: 10,
+            include_ready: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let blocked_report = execute_spec(&blocked_spec, true).await;
+    assert_eq!(blocked_report.operation_kind, "plugin_inventory");
+    assert!(blocked_report.blocked_reason.is_none());
+    assert_eq!(blocked_report.outcome["returned"], 1);
+    assert_eq!(
+        blocked_report.outcome["results"][0]["activation_status"],
+        "blocked_compatibility_mode"
+    );
+    assert_eq!(
+        blocked_report.outcome["results"][0]["compatibility_mode"],
+        "openclaw_modern"
+    );
+    assert_eq!(
+        blocked_report.outcome["results"][0]["compatibility_shim"]["shim_id"],
+        "openclaw-modern-compat"
+    );
+    assert!(
+        blocked_report.outcome["results"][0]["activation_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("openclaw-modern-compat"))
+    );
+
+    let mut enabled_bridge_support = bridge_support.clone();
+    enabled_bridge_support.supported_compatibility_shims =
+        vec![loongclaw_daemon::kernel::PluginCompatibilityShim {
+            shim_id: "openclaw-modern-compat".to_owned(),
+            family: "openclaw-modern-compat".to_owned(),
+        }];
+
+    let enabled_spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-openclaw-shim-enabled".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-openclaw-shim-enabled".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(enabled_bridge_support),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: Some(PluginSetupReadinessSpec {
+            inherit_process_env: false,
+            verified_env_vars: Vec::new(),
+            verified_config_keys: vec!["plugins.entries.weather-sdk".to_owned()],
+        }),
+        operation: OperationSpec::PluginInventory {
+            query: "weather-sdk".to_owned(),
+            limit: 10,
+            include_ready: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let enabled_report = execute_spec(&enabled_spec, true).await;
+    assert_eq!(enabled_report.operation_kind, "plugin_inventory");
+    assert!(enabled_report.blocked_reason.is_none());
+    assert_eq!(enabled_report.outcome["returned"], 1);
+    assert_eq!(
+        enabled_report.outcome["results"][0]["activation_status"],
+        "ready"
+    );
+    assert_eq!(enabled_report.outcome["results"][0]["loaded"], json!(true));
+    assert_eq!(
+        enabled_report.outcome["results"][0]["compatibility_shim"]["shim_id"],
+        "openclaw-modern-compat"
+    );
+    assert_eq!(
+        enabled_report.outcome["results"][0]["activation_attestation"]["attested"],
+        json!(true)
+    );
+    assert_eq!(
+        enabled_report.outcome["results"][0]["activation_attestation"]["verified"],
+        json!(true)
+    );
+    assert_eq!(
+        enabled_report.outcome["results"][0]["activation_attestation"]["integrity"],
+        json!("verified")
+    );
+    assert!(
+        enabled_report.outcome["results"][0]["activation_attestation"]["checksum"]
+            .as_str()
+            .is_some_and(|checksum| !checksum.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_inventory_blocks_openclaw_shim_profile_mismatch() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root = std::env::temp_dir().join(format!(
+        "loongclaw-plugin-inventory-openclaw-profile-{unique}"
+    ));
+    let package_root = plugin_root.join("weather-sdk");
+    fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
+
+    fs::write(
+        package_root.join("openclaw.plugin.json"),
+        r#"
+{
+  "id": "weather-sdk",
+  "name": "Weather SDK",
+  "description": "OpenClaw weather integration",
+  "version": "1.2.3",
+  "kind": "provider",
+  "providers": ["weather"],
+  "channels": ["weather"],
+  "skills": ["forecast"],
+  "configSchema": {}
+}
+"#,
+    )
+    .expect("write openclaw manifest");
+    fs::write(
+        package_root.join("package.json"),
+        r#"
+{
+  "name": "@acme/weather-sdk",
+  "version": "1.2.3",
+  "description": "Weather provider package",
+  "openclaw": {
+    "extensions": ["dist/index.js"],
+    "setupEntry": "dist/setup.js",
+    "channel": {
+      "id": "weather",
+      "label": "Weather",
+      "aliases": ["forecast"]
+    }
+  }
+}
+"#,
+    )
+    .expect("write package.json");
+    fs::write(package_root.join("dist/index.js"), "export {};\n").expect("write entry");
+    fs::write(package_root.join("dist/setup.js"), "export {};\n").expect("write setup");
+
+    let bridge_support = BridgeSupportSpec {
+        enabled: true,
+        supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+        supported_adapter_families: Vec::new(),
+        supported_compatibility_modes: vec![
+            PluginCompatibilityMode::Native,
+            PluginCompatibilityMode::OpenClawModern,
+        ],
+        supported_compatibility_shims: Vec::new(),
+        supported_compatibility_shim_profiles: vec![PluginCompatibilityShimSupport {
+            shim: PluginCompatibilityShim {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                family: "openclaw-modern-compat".to_owned(),
+            },
+            version: Some("openclaw-modern@1".to_owned()),
+            supported_dialects: BTreeSet::from([PluginContractDialect::OpenClawModernManifest]),
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_source_languages: BTreeSet::from(["python".to_owned()]),
+        }],
+        enforce_supported: false,
+        policy_version: None,
+        expected_checksum: None,
+        expected_sha256: None,
+        execute_process_stdio: false,
+        execute_http_json: false,
+        allowed_process_commands: Vec::new(),
+        enforce_execution_success: false,
+        security_scan: None,
+    };
+
+    let blocked_spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-openclaw-profile-blocked".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-openclaw-profile-blocked".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(bridge_support.clone()),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginInventory {
+            query: "weather-sdk".to_owned(),
+            limit: 10,
+            include_ready: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let blocked_report = execute_spec(&blocked_spec, true).await;
+    assert_eq!(blocked_report.operation_kind, "plugin_inventory");
+    assert!(blocked_report.blocked_reason.is_none());
+    assert_eq!(blocked_report.outcome["returned"], 1);
+    assert_eq!(
+        blocked_report.outcome["results"][0]["activation_status"],
+        "blocked_compatibility_mode"
+    );
+    assert!(
+        blocked_report.outcome["results"][0]["activation_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("source language `javascript`"))
+    );
+    assert!(
+        blocked_report.outcome["results"][0]["activation_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("openclaw-modern@1"))
+    );
+
+    let mut enabled_bridge_support = bridge_support.clone();
+    enabled_bridge_support.supported_compatibility_shim_profiles[0].supported_source_languages =
+        BTreeSet::from(["javascript".to_owned()]);
+
+    let enabled_spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-inventory-openclaw-profile-enabled".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-inventory-openclaw-profile-enabled".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(enabled_bridge_support),
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: Some(PluginSetupReadinessSpec {
+            inherit_process_env: false,
+            verified_env_vars: Vec::new(),
+            verified_config_keys: vec!["plugins.entries.weather-sdk".to_owned()],
+        }),
+        operation: OperationSpec::PluginInventory {
+            query: "weather-sdk".to_owned(),
+            limit: 10,
+            include_ready: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let enabled_report = execute_spec(&enabled_spec, true).await;
+    assert_eq!(enabled_report.operation_kind, "plugin_inventory");
+    assert!(enabled_report.blocked_reason.is_none());
+    assert_eq!(enabled_report.outcome["returned"], 1);
+    assert_eq!(
+        enabled_report.outcome["results"][0]["activation_status"],
+        "ready"
+    );
+    assert_eq!(
+        enabled_report.outcome["results"][0]["compatibility_shim"]["shim_id"],
+        "openclaw-modern-compat"
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_openclaw_connector_runtime_surfaces_attested_activation_contract() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-openclaw-runtime-attested-{unique}"));
+    let package_root = plugin_root.join("weather-sdk");
+    fs::create_dir_all(package_root.join("dist")).expect("create plugin root");
+
+    fs::write(
+        package_root.join("openclaw.plugin.json"),
+        r#"
+{
+  "id": "weather-sdk",
+  "name": "Weather SDK",
+  "description": "OpenClaw weather integration",
+  "version": "1.2.3",
+  "kind": "provider",
+  "providers": ["weather"],
+  "channels": ["weather"],
+  "skills": ["forecast"],
+  "configSchema": {}
+}
+"#,
+    )
+    .expect("write openclaw manifest");
+    fs::write(
+        package_root.join("package.json"),
+        r#"
+{
+  "name": "@acme/weather-sdk",
+  "version": "1.2.3",
+  "description": "Weather provider package",
+  "openclaw": {
+    "extensions": ["dist/index.js"],
+    "channel": {
+      "id": "weather",
+      "label": "Weather",
+      "aliases": ["forecast"]
+    }
+  }
+}
+"#,
+    )
+    .expect("write package.json");
+    fs::write(package_root.join("dist/index.js"), "export {};\n").expect("write entry");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-openclaw-runtime-attested".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-openclaw-runtime-attested".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::ProcessStdio],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: vec![PluginCompatibilityShimSupport {
+                shim: PluginCompatibilityShim {
+                    shim_id: "openclaw-modern-compat".to_owned(),
+                    family: "openclaw-modern-compat".to_owned(),
+                },
+                version: Some("openclaw-modern@1".to_owned()),
+                supported_dialects: BTreeSet::from([PluginContractDialect::OpenClawModernManifest]),
+                supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+                supported_adapter_families: BTreeSet::new(),
+                supported_source_languages: BTreeSet::from(["javascript".to_owned()]),
+            }],
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: None,
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(true),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(false),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(5),
+        }),
+        auto_provision: Some(AutoProvisionSpec {
+            enabled: true,
+            provider_id: "weather-sdk".to_owned(),
+            channel_id: "primary".to_owned(),
+            connector_name: Some("weather-sdk".to_owned()),
+            endpoint: Some("stdio://weather-sdk".to_owned()),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        }),
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: Some(PluginSetupReadinessSpec {
+            inherit_process_env: false,
+            verified_env_vars: Vec::new(),
+            verified_config_keys: vec!["plugins.entries.weather-sdk".to_owned()],
+        }),
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "weather-sdk".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            payload: json!({"city":"shanghai"}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "planned"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["runtime_guard"]
+            ["activation_contract_attested"],
+        json!(true)
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["runtime_guard"]
+            ["activation_contract_verified"],
+        json!(true)
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["runtime_guard"]
+            ["activation_contract_integrity"],
+        json!("verified")
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["shim_support"]
+            ["version"],
+        json!("openclaw-modern@1")
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["activation_contract"]
+            ["plugin_id"],
+        json!("weather-sdk")
+    );
+
+    let provider = report
+        .integration_catalog
+        .provider("weather-sdk")
+        .expect("provider should be absorbed");
+    let raw_contract = provider
+        .metadata
+        .get("plugin_activation_contract_json")
+        .expect("provider metadata should carry activation contract");
+    let metadata_checksum = provider
+        .metadata
+        .get("plugin_activation_contract_checksum")
+        .cloned()
+        .expect("provider metadata should carry activation contract checksum");
+    let contract_value: serde_json::Value =
+        serde_json::from_str(raw_contract).expect("activation contract should decode");
+    assert_eq!(
+        contract_value["compatibility_mode"],
+        json!("openclaw_modern")
+    );
+    assert_eq!(
+        contract_value["compatibility_shim"]["shim_id"],
+        json!("openclaw-modern-compat")
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["plugin_compatibility"]["activation_contract_checksum"],
+        json!(metadata_checksum)
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_preflight_summarizes_runtime_activation_blockers() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-runtime-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_a.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-a",
+#   "provider_id": "search-a",
+#   "connector_name": "search-a",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-a",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"default","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-a plugin");
+
+    fs::write(
+        plugin_root.join("search_b.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-b",
+#   "provider_id": "search-b",
+#   "connector_name": "search-b",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-b",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"},
+#   "slot_claims": [
+#     {"slot":"provider:web_search","key":"default","mode":"exclusive"}
+#   ]
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-b plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-preflight-runtime".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-preflight-runtime".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginPreflight {
+            query: String::new(),
+            limit: 10,
+            profile: PluginPreflightProfile::RuntimeActivation,
+            policy_path: None,
+            policy_sha256: None,
+            policy_signature: None,
+            include_passed: false,
+            include_warned: false,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_preflight");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.outcome["summary"]["profile"], "runtime_activation");
+    assert_eq!(
+        report.outcome["summary"]["policy_source"],
+        "bundled:plugin-preflight-medium-balanced.json"
+    );
+    assert_eq!(report.outcome["summary"]["matched_plugins"], 2);
+    assert_eq!(report.outcome["summary"]["baseline_blocked_plugins"], 2);
+    assert_eq!(report.outcome["summary"]["blocked_plugins"], 2);
+    assert_eq!(
+        report.outcome["summary"]["findings_by_code"]["slot_claim_conflict"],
+        2
+    );
+    assert_eq!(
+        report.outcome["summary"]["remediation_counts"]["resolve_slot_ownership_conflict"],
+        2
+    );
+    assert_eq!(
+        report.outcome["summary"]["operator_action_counts_by_surface"]["plugin_package"],
+        4
+    );
+    assert_eq!(
+        report.outcome["summary"]["operator_action_counts_by_kind"]["resolve_slot_ownership"],
+        2
+    );
+    assert_eq!(
+        report.outcome["summary"]["operator_action_counts_by_kind"]["update_plugin_package"],
+        2
+    );
+    assert_eq!(
+        report.outcome["summary"]["operator_actions_requiring_reload"],
+        4
+    );
+    assert_eq!(
+        report.outcome["summary"]["operator_actions_without_reload"],
+        0
+    );
+    assert!(
+        report.outcome["summary"]["operator_action_plan"]
+            .as_array()
+            .is_some_and(|plan| {
+                plan.len() == 4
+                    && plan.iter().all(|item| {
+                        item["action"]["action_id"]
+                            .as_str()
+                            .is_some_and(|action_id| action_id.len() == 64)
+                            && item["supporting_results"] == 1
+                            && item["blocked_results"] == 1
+                            && item["warned_results"] == 0
+                            && item["passed_results"] == 0
+                            && item["supporting_remediations"]
+                                .as_array()
+                                .is_some_and(|supports| !supports.is_empty())
+                    })
+                    && plan
+                        .iter()
+                        .filter(|item| {
+                            item["action"]["kind"] == "resolve_slot_ownership"
+                                && item["supporting_remediations"]
+                                    .as_array()
+                                    .is_some_and(|supports| supports.len() == 1)
+                        })
+                        .count()
+                        == 2
+                    && plan
+                        .iter()
+                        .filter(|item| {
+                            item["action"]["kind"] == "update_plugin_package"
+                                && item["supporting_remediations"]
+                                    .as_array()
+                                    .is_some_and(|supports| supports.len() == 2)
+                        })
+                        .count()
+                        == 2
+            })
+    );
+    assert_eq!(report.outcome["returned"], 2);
+    assert_eq!(report.outcome["results"][0]["baseline_verdict"], "block");
+    assert_eq!(report.outcome["results"][0]["verdict"], "block");
+    assert!(
+        report.outcome["results"][0]["policy_flags"]
+            .as_array()
+            .is_some_and(|flags| flags.iter().any(|flag| flag == "activation_blocked"))
+    );
+    assert!(
+        report.outcome["results"][0]["blocking_diagnostic_codes"]
+            .as_array()
+            .is_some_and(|codes| codes.iter().any(|code| code == "slot_claim_conflict"))
+    );
+    assert!(
+        report.outcome["results"][0]["recommended_actions"]
+            .as_array()
+            .is_some_and(|actions| actions.iter().any(|action| {
+                action["remediation_class"] == "resolve_slot_ownership_conflict"
+                    && action["operator_action"]["surface"] == "plugin_package"
+                    && action["operator_action"]["kind"] == "resolve_slot_ownership"
+                    && action["operator_action"]["action_id"]
+                        .as_str()
+                        .is_some_and(|action_id| action_id.len() == 64)
+                    && action["operator_action"]["follow_up_profile"] == "runtime_activation"
+                    && action["operator_action"]["requires_reload"] == true
+            }))
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_preflight_blocks_embedded_source_sdk_release_contracts() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-sdk-release-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_sdk.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-sdk",
+#   "version": "0.1.0",
+#   "provider_id": "search-sdk",
+#   "connector_name": "search-sdk",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-sdk",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-sdk plugin");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-preflight-sdk-release".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-preflight-sdk-release".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginPreflight {
+            query: String::new(),
+            limit: 10,
+            profile: PluginPreflightProfile::SdkRelease,
+            policy_path: None,
+            policy_sha256: None,
+            policy_signature: None,
+            include_passed: false,
+            include_warned: false,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_preflight");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(report.outcome["summary"]["profile"], "sdk_release");
+    assert_eq!(
+        report.outcome["summary"]["policy_source"],
+        "bundled:plugin-preflight-medium-balanced.json"
+    );
+    assert_eq!(report.outcome["summary"]["matched_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["baseline_blocked_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["blocked_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["blocking_diagnostics"], 0);
+    assert_eq!(
+        report.outcome["summary"]["findings_by_code"]["embedded_source_legacy_contract"],
+        1
+    );
+    assert_eq!(
+        report.outcome["summary"]["remediation_counts"]["migrate_to_package_manifest"],
+        1
+    );
+    assert_eq!(report.outcome["results"][0]["baseline_verdict"], "block");
+    assert_eq!(report.outcome["results"][0]["verdict"], "block");
+    assert_eq!(report.outcome["results"][0]["activation_ready"], true);
+    assert_eq!(
+        report.outcome["results"][0]["plugin"]["source_kind"],
+        "embedded_source"
+    );
+    assert!(
+        report.outcome["results"][0]["policy_flags"]
+            .as_array()
+            .is_some_and(|flags| flags.iter().any(|flag| flag == "embedded_source_contract"))
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_preflight_honors_custom_policy_path_and_sha() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-custom-policy-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_sdk.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-sdk",
+#   "provider_id": "search-sdk",
+#   "connector_name": "search-sdk",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-sdk",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-sdk plugin");
+
+    let policy = PluginPreflightPolicyProfile {
+        policy_version: Some("custom-runtime-gate".to_owned()),
+        runtime_activation: PluginPreflightRuleProfile {
+            block_on_embedded_source_contract: true,
+            ..PluginPreflightRuleProfile::default()
+        },
+        ..PluginPreflightPolicyProfile::default()
+    };
+    let policy_path =
+        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-policy-{unique}.json"));
+    fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).expect("encode policy"),
+    )
+    .expect("write custom policy");
+    let policy_sha256 = plugin_preflight_policy_sha256(&policy);
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-preflight-custom-policy".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-preflight-custom-policy".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginPreflight {
+            query: String::new(),
+            limit: 10,
+            profile: PluginPreflightProfile::RuntimeActivation,
+            policy_path: Some(policy_path.display().to_string()),
+            policy_sha256: Some(policy_sha256.clone()),
+            policy_signature: None,
+            include_passed: false,
+            include_warned: false,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_preflight");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(
+        report.outcome["summary"]["policy_source"],
+        policy_path.display().to_string()
+    );
+    assert_eq!(
+        report.outcome["summary"]["policy_version"],
+        "custom-runtime-gate"
+    );
+    assert_eq!(report.outcome["summary"]["policy_sha256"], policy_sha256);
+    assert_eq!(report.outcome["summary"]["blocked_plugins"], 1);
+    assert_eq!(report.outcome["results"][0]["baseline_verdict"], "block");
+    assert_eq!(report.outcome["results"][0]["verdict"], "block");
+    assert_eq!(
+        report.outcome["results"][0]["plugin"]["source_kind"],
+        "embedded_source"
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_plugin_preflight_applies_contract_drift_exception_lane() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-plugin-preflight-waiver-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    fs::write(
+        plugin_root.join("search_sdk.py"),
+        r#"
+# LOONGCLAW_PLUGIN_START
+# {
+#   "plugin_id": "search-sdk",
+#   "provider_id": "search-sdk",
+#   "connector_name": "search-sdk",
+#   "channel_id": "primary",
+#   "endpoint": "https://example.com/search-sdk",
+#   "capabilities": ["InvokeConnector"],
+#   "metadata": {"bridge_kind":"http_json"}
+# }
+# LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write search-sdk plugin");
+
+    let policy = PluginPreflightPolicyProfile {
+        policy_version: Some("private-sdk-exception-lane".to_owned()),
+        exceptions: vec![PluginPreflightPolicyException {
+            exception_id: "grandfather-search-sdk".to_owned(),
+            plugin_id: "search-sdk".to_owned(),
+            plugin_version_req: None,
+            profiles: vec![PluginPreflightProfile::SdkRelease],
+            waive_policy_flags: vec!["embedded_source_contract".to_owned()],
+            waive_diagnostic_codes: vec!["embedded_source_legacy_contract".to_owned()],
+            reason: "private registry migration window".to_owned(),
+            ticket_ref: "SEC-1001".to_owned(),
+            approved_by: "platform-security".to_owned(),
+            expires_at: Some("2026-06-30".to_owned()),
+        }],
+        ..PluginPreflightPolicyProfile::default()
+    };
+    let policy_path = std::env::temp_dir().join(format!(
+        "loongclaw-plugin-preflight-waiver-policy-{unique}.json"
+    ));
+    fs::write(
+        &policy_path,
+        serde_json::to_string_pretty(&policy).expect("encode policy"),
+    )
+    .expect("write custom policy");
+    let policy_sha256 = plugin_preflight_policy_sha256(&policy);
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-plugin-preflight-waiver".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-plugin-preflight-waiver".to_owned(),
+        ttl_s: 120,
+        approval: Some(HumanApprovalSpec {
+            mode: HumanApprovalMode::Disabled,
+            ..HumanApprovalSpec::default()
+        }),
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: None,
+        bootstrap: None,
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::PluginPreflight {
+            query: String::new(),
+            limit: 10,
+            profile: PluginPreflightProfile::SdkRelease,
+            policy_path: Some(policy_path.display().to_string()),
+            policy_sha256: Some(policy_sha256.clone()),
+            policy_signature: None,
+            include_passed: true,
+            include_warned: true,
+            include_blocked: true,
+            include_deferred: true,
+            include_examples: false,
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "plugin_preflight");
+    assert!(report.blocked_reason.is_none());
+    assert_eq!(
+        report.outcome["summary"]["policy_source"],
+        policy_path.display().to_string()
+    );
+    assert_eq!(
+        report.outcome["summary"]["policy_version"],
+        "private-sdk-exception-lane"
+    );
+    assert_eq!(report.outcome["summary"]["policy_sha256"], policy_sha256);
+    assert_eq!(report.outcome["summary"]["baseline_blocked_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["clean_passed_plugins"], 0);
+    assert_eq!(report.outcome["summary"]["waived_passed_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["passed_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["waived_plugins"], 1);
+    assert_eq!(report.outcome["summary"]["applied_exception_count"], 1);
+    assert_eq!(
+        report.outcome["summary"]["exception_counts_by_ticket"]["SEC-1001"],
+        1
+    );
+    assert_eq!(
+        report.outcome["summary"]["exception_counts_by_approver"]["platform-security"],
+        1
+    );
+    assert_eq!(
+        report.outcome["summary"]["waived_policy_flags"]["embedded_source_contract"],
+        1
+    );
+    assert_eq!(
+        report.outcome["summary"]["waived_diagnostic_codes"]["embedded_source_legacy_contract"],
+        1
+    );
+    assert_eq!(
+        report.outcome["summary"]["remediation_counts"]["migrate_to_package_manifest"],
+        1
+    );
+    assert_eq!(report.outcome["results"][0]["baseline_verdict"], "block");
+    assert_eq!(report.outcome["results"][0]["verdict"], "pass");
+    assert_eq!(report.outcome["results"][0]["exception_applied"], true);
+    assert!(
+        report.outcome["results"][0]["policy_flags"]
+            .as_array()
+            .is_some_and(|flags| flags.iter().any(|flag| flag == "embedded_source_contract"))
+    );
+    assert!(
+        report.outcome["results"][0]["effective_policy_flags"]
+            .as_array()
+            .is_some_and(|flags| flags.iter().all(|flag| flag != "embedded_source_contract"))
+    );
+    assert_eq!(
+        report.outcome["results"][0]["applied_exceptions"][0]["exception_id"],
+        "grandfather-search-sdk"
+    );
+    assert_eq!(
+        report.outcome["results"][0]["applied_exceptions"][0]["ticket_ref"],
+        "SEC-1001"
     );
 }

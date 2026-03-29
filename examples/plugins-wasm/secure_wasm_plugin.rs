@@ -6,6 +6,7 @@
 //   "channel_id": "primary",
 //   "endpoint": "local://wasm-secure-echo/invoke",
 //   "capabilities": ["InvokeConnector"],
+//   "trust_tier": "official",
 //   "metadata": {
 //     "bridge_kind": "wasm_component",
 //     "component": "secure_echo.wasm",
@@ -15,4 +16,3 @@
 //   }
 // }
 // LOONGCLAW_PLUGIN_END
-

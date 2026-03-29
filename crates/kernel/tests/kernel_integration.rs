@@ -303,6 +303,179 @@ async fn layered_connector_default_core_adapter_can_be_overridden() {
     assert_eq!(dispatch.outcome.payload["adapter"], "grpc-core");
 }
 
+#[tokio::test]
+async fn layered_connector_core_panic_isolated_to_connector_error() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockPanickingCoreConnector);
+    kernel.register_core_connector_adapter(MockCoreConnector);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "sync_contacts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"batch": 2}),
+    };
+
+    let error = kernel
+        .execute_connector_core("sales-intel", &token, None, failing_command)
+        .await
+        .expect_err("panicking core adapter should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message == "connector core adapter `panic-core` panicked: simulated connector core panic"
+    ));
+
+    kernel
+        .set_default_core_connector_adapter("http-core")
+        .expect("fallback adapter should be selected");
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "sync_contacts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"batch": 1}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .await
+        .expect("kernel should continue serving connector work");
+
+    assert_eq!(dispatch.outcome.payload["adapter"], "http-core");
+}
+
+#[tokio::test]
+async fn layered_connector_extension_panic_isolated_to_connector_error() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockCoreConnector);
+    kernel.register_connector_extension_adapter(MockPanickingConnectorExtension);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "erp"}),
+    };
+
+    let error = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "panic-extension",
+            None,
+            failing_command,
+        )
+        .await
+        .expect_err("panicking extension adapter should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message
+            == "connector extension adapter `panic-extension` panicked: simulated connector extension panic"
+    ));
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "probe".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"mode": "recovery"}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_core("sales-intel", &token, None, recovery_command)
+        .await
+        .expect("kernel should continue after extension panic");
+
+    assert_eq!(dispatch.outcome.payload["adapter"], "http-core");
+}
+
+#[tokio::test]
+async fn layered_connector_extension_isolates_nested_core_panic() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(sample_pack())
+        .expect("pack should register");
+    kernel.register_core_connector_adapter(MockPanickingCoreConnector);
+    kernel.register_core_connector_adapter(MockCoreConnector);
+    kernel.register_connector_extension_adapter(MockConnectorExtension);
+
+    let token = kernel
+        .issue_token("sales-intel", "agent-alpha", 120)
+        .expect("token should issue");
+
+    let failing_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "erp"}),
+    };
+
+    let error = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            failing_command,
+        )
+        .await
+        .expect_err("nested core panic should be isolated");
+
+    assert!(matches!(
+        error,
+        KernelError::Connector(ConnectorError::Execution(message))
+        if message == "connector core adapter `panic-core` panicked: simulated connector core panic"
+    ));
+
+    kernel
+        .set_default_core_connector_adapter("http-core")
+        .expect("fallback adapter should be selected");
+
+    let recovery_command = ConnectorCommand {
+        connector_name: "crm".to_owned(),
+        operation: "upsert_accounts".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+        payload: json!({"source": "crm"}),
+    };
+
+    let dispatch = kernel
+        .execute_connector_extension(
+            "sales-intel",
+            &token,
+            "shielded-bridge",
+            None,
+            recovery_command,
+        )
+        .await
+        .expect("extension path should recover after nested core panic");
+
+    assert_eq!(dispatch.outcome.payload["extension"], "shielded-bridge");
+    assert_eq!(
+        dispatch.outcome.payload["core_probe"]["adapter"],
+        "http-core"
+    );
+}
+
 #[test]
 fn layered_connector_rejects_unknown_default_adapter_override() {
     let (mut kernel, _audit) =
@@ -576,6 +749,123 @@ fn record_audit_event_supports_provider_failover_summary() {
             && *auto_model_mode
             && *candidate_index == 1
             && *candidate_count == 4
+    ));
+}
+
+#[test]
+fn record_audit_event_supports_plugin_trust_summary() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_124));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+
+    kernel
+        .record_audit_event(
+            Some("agent-plugin-trust"),
+            AuditEventKind::PluginTrustEvaluated {
+                pack_id: "pack-plugin-trust".to_owned(),
+                scanned_plugins: 3,
+                official_plugins: 1,
+                verified_community_plugins: 1,
+                unverified_plugins: 1,
+                high_risk_plugins: 2,
+                high_risk_unverified_plugins: 1,
+                blocked_auto_apply_plugins: 1,
+                review_required_plugin_ids: vec!["stdio-review".to_owned()],
+                review_required_bridges: vec!["process_stdio".to_owned()],
+            },
+        )
+        .expect("plugin trust audit event should record");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "evt-0000000000000001");
+    assert_eq!(events[0].timestamp_epoch_s, 1_700_000_124);
+    assert_eq!(events[0].agent_id.as_deref(), Some("agent-plugin-trust"));
+    assert!(matches!(
+        &events[0].kind,
+        AuditEventKind::PluginTrustEvaluated {
+            pack_id,
+            scanned_plugins,
+            official_plugins,
+            verified_community_plugins,
+            unverified_plugins,
+            high_risk_plugins,
+            high_risk_unverified_plugins,
+            blocked_auto_apply_plugins,
+            review_required_plugin_ids,
+            review_required_bridges,
+        } if pack_id == "pack-plugin-trust"
+            && *scanned_plugins == 3
+            && *official_plugins == 1
+            && *verified_community_plugins == 1
+            && *unverified_plugins == 1
+            && *high_risk_plugins == 2
+            && *high_risk_unverified_plugins == 1
+            && *blocked_auto_apply_plugins == 1
+            && review_required_plugin_ids == &vec!["stdio-review".to_owned()]
+            && review_required_bridges == &vec!["process_stdio".to_owned()]
+    ));
+}
+
+#[test]
+fn record_audit_event_supports_tool_search_summary() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_125));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+
+    kernel
+        .record_audit_event(
+            Some("agent-tool-search"),
+            AuditEventKind::ToolSearchEvaluated {
+                pack_id: "pack-tool-search".to_owned(),
+                query: "trust:official search".to_owned(),
+                returned: 0,
+                trust_filter_applied: true,
+                query_requested_tiers: vec!["official".to_owned()],
+                structured_requested_tiers: vec!["verified-community".to_owned()],
+                effective_tiers: Vec::new(),
+                conflicting_requested_tiers: true,
+                filtered_out_candidates: 2,
+                filtered_out_tier_counts: BTreeMap::from([
+                    ("official".to_owned(), 1_usize),
+                    ("verified-community".to_owned(), 1_usize),
+                ]),
+                top_provider_ids: Vec::new(),
+            },
+        )
+        .expect("tool search audit event should record");
+
+    let events = audit.snapshot();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event_id, "evt-0000000000000001");
+    assert_eq!(events[0].timestamp_epoch_s, 1_700_000_125);
+    assert_eq!(events[0].agent_id.as_deref(), Some("agent-tool-search"));
+    assert!(matches!(
+        &events[0].kind,
+        AuditEventKind::ToolSearchEvaluated {
+            pack_id,
+            query,
+            returned,
+            trust_filter_applied,
+            query_requested_tiers,
+            structured_requested_tiers,
+            effective_tiers,
+            conflicting_requested_tiers,
+            filtered_out_candidates,
+            filtered_out_tier_counts,
+            top_provider_ids,
+        } if pack_id == "pack-tool-search"
+            && query == "trust:official search"
+            && *returned == 0
+            && *trust_filter_applied
+            && query_requested_tiers == &vec!["official".to_owned()]
+            && structured_requested_tiers == &vec!["verified-community".to_owned()]
+            && effective_tiers.is_empty()
+            && *conflicting_requested_tiers
+            && *filtered_out_candidates == 2
+            && filtered_out_tier_counts.get("official") == Some(&1)
+            && filtered_out_tier_counts.get("verified-community") == Some(&1)
+            && top_provider_ids.is_empty()
     ));
 }
 

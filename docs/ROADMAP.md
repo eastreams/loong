@@ -167,9 +167,66 @@ Delivered in current baseline:
 - `tool_search` operation for runtime tool discovery over:
   - loaded providers in integration catalog
   - scanned-but-not-absorbed plugin descriptors
+  - explicit trust-aware filtering via query prefixes (`trust:official`, `tier:verified-community`)
+    and structured `trust_tiers` spec fields for deterministic operator workflows
+  - operator-visible `trust_filter_summary` output so filtered scope and fail-closed
+    conflicts are auditable in `run-spec` reports
+  - top-level `tool_search_summary` on spec run reports so operators can review
+    trust scope and top matches without digging through raw `outcome.results`
+  - `run-spec --render-summary` stderr rendering for operator-facing trust review
+    and discovery summaries without breaking stdout JSON consumers
+  - typed audit emission for trust-aware discovery (`ToolSearchEvaluated`) so
+    audit triage can flag conflicting trust filters and trust-filtered empty
+    result sets
+  - operator-facing audit summary hints (`last_triage_label`,
+    `last_triage_summary`, `last_triage_hint`) so trust-aware discovery failures
+    remain actionable after the original `run-spec` output is gone
+  - audit browser filters (`audit recent/summary --kind`, `--triage-label`) so
+    operators can inspect trust-sensitive discovery failures without manually
+    scanning unrelated audit history
+  - dedicated `audit discovery` operator view so trust-aware tool search
+    failures can be triaged by query substring, requested/effective trust tier,
+    and last filtered discovery context without hand-composing event-kind
+    filters
+  - inclusive audit time-window filters (`--since-epoch-s`,
+    `--until-epoch-s`) across recent/summary/discovery so retained operator
+    review can isolate a single rollout or incident window
+  - pack/agent scoped audit filters (`--pack-id`, `--agent-id`) so retained
+    review can collapse to one workload or one operator session without raw
+    journal post-processing
+  - event/token scoped audit drill-down (`--event-id`, `--token-id`) across
+    recent/summary/discovery so operators can isolate one retained event or
+    follow a token across `TokenIssued`, `TokenRevoked`, and
+    `AuthorizationDenied` without journal post-processing
+  - grouped `audit summary --group-by pack|agent|token` rollups so retained
+    audit windows can be collapsed into per-identity event/triage summaries
+    before operators jump into one incident trail
+  - grouped `audit discovery --group-by pack|agent` rollups so trust-aware
+    tool-search history can be collapsed into per-workload trust/triage
+    summaries before operators inspect one filtered event slice
+  - grouped discovery `drill_down_command` handoff plus `audit recent`
+    trust-aware filters (`--query-contains`, `--trust-tier`) so grouped
+    hotspots can be replayed directly as exact retained event windows
+  - grouped discovery `correlated_summary_command` handoff so the same hotspot
+    can be widened into workload-scoped `audit summary` review without
+    discovery-only filters masking adjacent audit failures
+  - grouped discovery correlated summary preview so widened audit triage is
+    visible inline before operators leave the discovery surface
+  - grouped discovery focus signals (`additional_events`,
+    `non_discovery_*_counts`, `attention_hint`) so adjacent audit degradation
+    is highlighted instead of being hidden inside the full correlated preview
+  - grouped discovery `remediation_hint` so adjacent audit signals can point to
+    the next operator action instead of only surfacing more widened evidence
+  - grouped discovery `correlated_remediation_command` so the strongest
+    adjacent signal can jump straight into the next retained-audit command
+  - dedicated `audit token-trail` lifecycle view so one retained token can be
+    reconstructed with issued/denied/revoked summary fields, full matching
+    timeline entries, and explicit truncation reporting when the selected
+    window is too small
 - translation-aligned retrieval payloads:
   - runtime profile hints (`bridge_kind`, `adapter_family`, `entrypoint_hint`, `source_language`)
   - plugin semantic fields (`summary`, `tags`, `input_examples`, `output_examples`, `defer_loading`)
+  - plugin provenance/trust fields (`provenance_summary`, `trust_tier`)
 - `programmatic_tool_call` operation for server-side tool orchestration:
   - step model (`set_literal`, `json_pointer`, `connector_call`, `connector_batch`, `conditional`)
   - connector allowlist and call-budget enforcement

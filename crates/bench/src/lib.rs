@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant as StdInstant, SystemTime, UNIX_EPOCH},
 };
 
-use kernel::{ChannelConfig, ConnectorCommand, ProviderConfig};
+use kernel::{BridgeSupportMatrix, ChannelConfig, ConnectorCommand, ProviderConfig};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -22,9 +22,10 @@ use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 use loongclaw_spec::{
-    BridgeRuntimePolicy, CliResult, NativeToolExecutor, ProgrammaticCircuitBreakerPolicy,
-    ProgrammaticCircuitRuntimeState, RunnerSpec, execute_spec_with_native_tool_executor,
-    execute_wasm_component_bridge, spec_requires_native_tool_executor,
+    BridgeRuntimePolicy, CliResult, ConnectorCircuitBreakerPolicy, NativeToolExecutor,
+    ProgrammaticCircuitBreakerPolicy, ProgrammaticCircuitRuntimeState, RunnerSpec,
+    execute_spec_with_native_tool_executor, execute_wasm_component_bridge,
+    spec_requires_native_tool_executor,
 };
 
 const DEFAULT_PRESSURE_ITERATIONS: usize = 12;
@@ -3218,7 +3219,9 @@ fn run_wasm_bridge_sample(wasm_artifact: &Path) -> CliResult<WasmBridgeSample> {
         execute_process_stdio: false,
         execute_http_json: false,
         execute_wasm_component: true,
+        compatibility_matrix: BridgeSupportMatrix::default(),
         allowed_process_commands: BTreeSet::new(),
+        bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
         wasm_allowed_path_prefixes: vec![artifact_parent.to_path_buf()],
         wasm_max_component_bytes: Some(8 * 1024 * 1024),
         wasm_fuel_limit: Some(2_000_000),

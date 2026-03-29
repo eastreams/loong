@@ -161,10 +161,26 @@ const SIGNAL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: None,
 };
 
+const TWITCH_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "twitch",
+    label: "twitch",
+    surface_label: "twitch channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const TEAMS_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "teams",
     label: "teams",
     surface_label: "teams channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const TLON_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "tlon",
+    label: "tlon",
+    surface_label: "tlon channel",
     runtime_kind: ChannelRuntimeKind::Service,
     serve_subcommand: None,
 };
@@ -205,6 +221,14 @@ const IMESSAGE_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "imessage",
     label: "imessage",
     surface_label: "imessage channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const NOSTR_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "nostr",
+    label: "nostr",
+    surface_label: "nostr channel",
     runtime_kind: ChannelRuntimeKind::Service,
     serve_subcommand: None,
 };
@@ -350,6 +374,14 @@ const SIGNAL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrat
     background_surface_is_enabled: None,
 };
 
+const TWITCH_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &TWITCH_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: twitch_channel_is_enabled,
+    collect_validation_issues: collect_twitch_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const TEAMS_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &TEAMS_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -400,6 +432,22 @@ const IMESSAGE_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+const TLON_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &TLON_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: tlon_channel_is_enabled,
+    collect_validation_issues: collect_tlon_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const NOSTR_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &NOSTR_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: nostr_channel_is_enabled,
+    collect_validation_issues: collect_nostr_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     CLI_CHANNEL_INTEGRATION,
     TELEGRAM_CHANNEL_INTEGRATION,
@@ -415,12 +463,15 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     WEBHOOK_CHANNEL_INTEGRATION,
     GOOGLE_CHAT_CHANNEL_INTEGRATION,
     SIGNAL_CHANNEL_INTEGRATION,
+    TWITCH_CHANNEL_INTEGRATION,
     TEAMS_CHANNEL_INTEGRATION,
+    TLON_CHANNEL_INTEGRATION,
     MATTERMOST_CHANNEL_INTEGRATION,
     NEXTCLOUD_TALK_CHANNEL_INTEGRATION,
     SYNOLOGY_CHAT_CHANNEL_INTEGRATION,
     IRC_CHANNEL_INTEGRATION,
     IMESSAGE_CHANNEL_INTEGRATION,
+    NOSTR_CHANNEL_INTEGRATION,
 ];
 
 pub(crate) fn channel_descriptor(id: &str) -> Option<&'static ChannelDescriptor> {
@@ -571,8 +622,16 @@ fn signal_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.signal.enabled
 }
 
+fn twitch_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.twitch.enabled
+}
+
 fn teams_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.teams.enabled
+}
+
+fn tlon_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.tlon.enabled
 }
 
 fn mattermost_channel_is_enabled(config: &LoongClawConfig) -> bool {
@@ -593,6 +652,10 @@ fn irc_channel_is_enabled(config: &LoongClawConfig) -> bool {
 
 fn imessage_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.imessage.enabled
+}
+
+fn nostr_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.nostr.enabled
 }
 
 fn collect_cli_channel_validation_issues(_config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
@@ -669,8 +732,18 @@ fn collect_signal_channel_validation_issues(
     config.signal.validate()
 }
 
+fn collect_twitch_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.twitch.validate()
+}
+
 fn collect_teams_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     config.teams.validate()
+}
+
+fn collect_tlon_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.tlon.validate()
 }
 
 fn collect_mattermost_channel_validation_issues(
@@ -699,6 +772,10 @@ fn collect_imessage_channel_validation_issues(
     config: &LoongClawConfig,
 ) -> Vec<ConfigValidationIssue> {
     config.imessage.validate()
+}
+
+fn collect_nostr_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.nostr.validate()
 }
 
 fn telegram_background_surface_is_enabled(

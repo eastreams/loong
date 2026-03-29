@@ -53,12 +53,7 @@ mod tool_search;
 // public web.fetch tool is compiled out.
 #[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
 mod web_fetch;
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
-mod web_http;
+pub(crate) mod web_http;
 mod web_search;
 
 pub use catalog::{

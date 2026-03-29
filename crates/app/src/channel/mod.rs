@@ -8,11 +8,13 @@ use std::time::Duration;
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
+    feature = "channel-nostr",
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -76,6 +78,7 @@ use crate::CliResult;
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -98,6 +101,7 @@ use crate::KernelContext;
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -120,6 +124,7 @@ use crate::acp::{AcpConversationTurnOptions, AcpTurnProvenance};
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
@@ -155,8 +160,8 @@ use super::config::ResolvedMatrixChannelConfig;
 use super::config::ResolvedMattermostChannelConfig;
 #[cfg(feature = "channel-nextcloud-talk")]
 use super::config::ResolvedNextcloudTalkChannelConfig;
-#[cfg(feature = "channel-signal")]
-use super::config::ResolvedSignalChannelConfig;
+#[cfg(feature = "channel-nostr")]
+use super::config::ResolvedNostrChannelConfig;
 #[cfg(feature = "channel-slack")]
 use super::config::ResolvedSlackChannelConfig;
 #[cfg(feature = "channel-synology-chat")]
@@ -184,13 +189,15 @@ use super::config::ResolvedWhatsappChannelConfig;
     feature = "channel-mattermost",
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
+    feature = "channel-twitch",
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 use super::config::{ChannelResolvedAccountRoute, normalize_channel_account_id};
 #[cfg(any(
@@ -236,11 +243,15 @@ mod matrix;
 mod mattermost;
 #[cfg(feature = "channel-nextcloud-talk")]
 mod nextcloud_talk;
+#[cfg(feature = "channel-nostr")]
+mod nostr;
 mod registry;
 mod runtime_state;
 pub(crate) mod sdk;
 #[cfg(feature = "channel-signal")]
 mod signal;
+#[cfg(feature = "channel-signal")]
+mod signal_command;
 #[cfg(feature = "channel-slack")]
 mod slack;
 #[cfg(feature = "channel-synology-chat")]
@@ -249,6 +260,9 @@ mod synology_chat;
 mod teams;
 #[cfg(feature = "channel-telegram")]
 mod telegram;
+#[cfg(feature = "channel-tlon")]
+mod tlon;
+mod tlon_command;
 /// Channel API traits for platform-agnostic abstraction
 pub mod traits;
 #[cfg(any(
@@ -258,6 +272,10 @@ pub mod traits;
     feature = "channel-wecom"
 ))]
 mod turn_feedback;
+#[cfg(feature = "channel-twitch")]
+mod twitch;
+#[cfg(feature = "channel-twitch")]
+mod twitch_command;
 #[cfg(feature = "channel-webhook")]
 mod webhook;
 mod webhook_auth;
@@ -266,6 +284,8 @@ mod wecom;
 #[cfg(feature = "channel-whatsapp")]
 mod whatsapp;
 
+#[cfg(feature = "channel-twitch")]
+pub use self::twitch_command::run_twitch_send;
 pub use registry::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
     ChannelCatalogCommandFamilyDescriptor, ChannelCatalogEntry, ChannelCatalogImplementationStatus,
@@ -282,22 +302,25 @@ pub use registry::{
     LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR, MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_COMMAND_FAMILY_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
     MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR, NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_COMMAND_FAMILY_DESCRIPTOR,
-    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_RUNTIME_COMMAND_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    catalog_only_channel_entries, channel_inventory, channel_status_snapshots,
-    list_channel_catalog, normalize_channel_catalog_id, normalize_channel_platform,
-    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
-    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
-    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+    NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    SLACK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    TELEGRAM_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR,
+    TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
+    normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
+    resolve_channel_catalog_entry, resolve_channel_catalog_operation,
+    resolve_channel_command_family_descriptor, resolve_channel_doctor_operation_spec,
+    resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
+    resolve_channel_runtime_command_descriptor,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;
 pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
+pub use tlon_command::run_tlon_send;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -788,6 +811,7 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-feishu",
     feature = "channel-google-chat",
     feature = "channel-webhook",
+    feature = "channel-nostr",
     feature = "channel-line",
     feature = "channel-matrix",
     feature = "channel-mattermost",
@@ -796,6 +820,7 @@ type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Sen
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
+    feature = "channel-twitch",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
@@ -1180,10 +1205,12 @@ where
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
+    feature = "channel-twitch",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 #[derive(Debug, Clone)]
 struct ChannelCommandContext<R> {
@@ -1209,10 +1236,12 @@ struct ChannelCommandContext<R> {
     feature = "channel-slack",
     feature = "channel-synology-chat",
     feature = "channel-irc",
+    feature = "channel-twitch",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 impl<R> ChannelCommandContext<R> {
     fn emit_route_notice(&self, channel_id: &str) {
@@ -1222,6 +1251,10 @@ impl<R> ChannelCommandContext<R> {
                 eprintln!("warning: {notice}");
             }
         }
+    }
+
+    fn outbound_http_policy(&self) -> http::ChannelOutboundHttpPolicy {
+        http::outbound_http_policy_from_config(&self.config)
     }
 }
 
@@ -1294,12 +1327,14 @@ impl ChannelResolvedRuntimeAccount for ResolvedWecomChannelConfig {
     feature = "channel-nextcloud-talk",
     feature = "channel-signal",
     feature = "channel-slack",
+    feature = "channel-twitch",
     feature = "channel-irc",
     feature = "channel-synology-chat",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 async fn run_channel_send_command<R, F, G>(
     context: ChannelCommandContext<R>,
@@ -1580,39 +1615,6 @@ fn build_wecom_command_context(
     if !resolved.enabled {
         return Err(format!(
             "wecom account `{}` is disabled by configuration",
-            resolved.configured_account_id
-        ));
-    }
-    Ok(ChannelCommandContext {
-        resolved_path,
-        config,
-        resolved,
-        route,
-    })
-}
-
-#[cfg(feature = "channel-signal")]
-fn load_signal_command_context(
-    config_path: Option<&str>,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedSignalChannelConfig>> {
-    let (resolved_path, config) = super::config::load(config_path)?;
-    build_signal_command_context(resolved_path, config, account_id)
-}
-
-#[cfg(feature = "channel-signal")]
-fn build_signal_command_context(
-    resolved_path: PathBuf,
-    config: LoongClawConfig,
-    account_id: Option<&str>,
-) -> CliResult<ChannelCommandContext<ResolvedSignalChannelConfig>> {
-    let resolved = config.signal.resolve_account(account_id)?;
-    let route = config
-        .signal
-        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
-    if !resolved.enabled {
-        return Err(format!(
-            "signal account `{}` is disabled by configuration",
             resolved.configured_account_id
         ));
     }
@@ -2020,6 +2022,39 @@ fn build_imessage_command_context(
     })
 }
 
+#[cfg(feature = "channel-nostr")]
+fn load_nostr_command_context(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedNostrChannelConfig>> {
+    let (resolved_path, config) = super::config::load(config_path)?;
+    build_nostr_command_context(resolved_path, config, account_id)
+}
+
+#[cfg(feature = "channel-nostr")]
+fn build_nostr_command_context(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<ChannelCommandContext<ResolvedNostrChannelConfig>> {
+    let resolved = config.nostr.resolve_account(account_id)?;
+    let route = config
+        .nostr
+        .resolved_account_route(account_id, resolved.configured_account_id.as_str());
+    if !resolved.enabled {
+        return Err(format!(
+            "nostr account `{}` is disabled by configuration",
+            resolved.configured_account_id
+        ));
+    }
+    Ok(ChannelCommandContext {
+        resolved_path,
+        config,
+        resolved,
+        route,
+    })
+}
+
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-discord",
@@ -2036,10 +2071,12 @@ fn build_imessage_command_context(
     feature = "channel-slack",
     feature = "channel-irc",
     feature = "channel-synology-chat",
+    feature = "channel-twitch",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
     feature = "channel-teams",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 #[derive(Debug, Clone, Copy)]
 struct ChannelSendCommandSpec {
@@ -2462,7 +2499,6 @@ pub async fn run_discord_send(
     if !cfg!(feature = "channel-discord") {
         return Err("discord channel is disabled (enable feature `channel-discord`)".to_owned());
     }
-
     #[cfg(not(feature = "channel-discord"))]
     {
         let _ = (config_path, account_id, target, target_kind, text);
@@ -2486,6 +2522,7 @@ pub async fn run_discord_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2517,7 +2554,6 @@ pub async fn run_signal_send(
     if !cfg!(feature = "channel-signal") {
         return Err("signal channel is disabled (enable feature `channel-signal`)".to_owned());
     }
-
     #[cfg(not(feature = "channel-signal"))]
     {
         let _ = (config_path, account_id, target, target_kind, text);
@@ -2526,7 +2562,7 @@ pub async fn run_signal_send(
 
     #[cfg(feature = "channel-signal")]
     {
-        let context = load_signal_command_context(config_path, account_id)?;
+        let context = signal_command::load_signal_command_context(config_path, account_id)?;
         let target = target.to_owned();
         let text = text.to_owned();
         run_channel_send_command(
@@ -2541,6 +2577,7 @@ pub async fn run_signal_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2548,6 +2585,61 @@ pub async fn run_signal_send(
             |context| {
                 format!(
                     "signal message sent (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
+                    context.resolved_path.display(),
+                    context.resolved.configured_account_id,
+                    context.resolved.account.label,
+                    context.route.selected_by_default(),
+                    context.route.default_account_source.as_str(),
+                    target_kind
+                )
+            },
+        )
+        .await
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
+pub async fn run_nostr_send(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    target: Option<&str>,
+    target_kind: ChannelOutboundTargetKind,
+    text: &str,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-nostr") {
+        return Err("nostr channel is disabled (enable feature `channel-nostr`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-nostr"))]
+    {
+        let _ = (config_path, account_id, target, target_kind, text);
+        return Err("nostr channel is disabled (enable feature `channel-nostr`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-nostr")]
+    {
+        let context = load_nostr_command_context(config_path, account_id)?;
+        let target = target.map(str::to_owned);
+        let text = text.to_owned();
+        run_channel_send_command(
+            context,
+            ChannelSendCommandSpec {
+                channel_id: "nostr",
+            },
+            |context| {
+                Box::pin(async move {
+                    nostr::run_nostr_send(
+                        &context.resolved,
+                        target_kind,
+                        target.as_deref(),
+                        text.as_str(),
+                    )
+                    .await
+                })
+            },
+            |context| {
+                format!(
+                    "nostr event published (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, target_kind={})",
                     context.resolved_path.display(),
                     context.resolved.configured_account_id,
                     context.resolved.account.label,
@@ -2572,7 +2664,6 @@ pub async fn run_slack_send(
     if !cfg!(feature = "channel-slack") {
         return Err("slack channel is disabled (enable feature `channel-slack`)".to_owned());
     }
-
     #[cfg(not(feature = "channel-slack"))]
     {
         let _ = (config_path, account_id, target, target_kind, text);
@@ -2596,6 +2687,7 @@ pub async fn run_slack_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2627,7 +2719,6 @@ pub async fn run_line_send(
     if !cfg!(feature = "channel-line") {
         return Err("line channel is disabled (enable feature `channel-line`)".to_owned());
     }
-
     #[cfg(not(feature = "channel-line"))]
     {
         let _ = (config_path, account_id, target, target_kind, text);
@@ -2649,6 +2740,7 @@ pub async fn run_line_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2680,7 +2772,6 @@ pub async fn run_dingtalk_send(
     if !cfg!(feature = "channel-dingtalk") {
         return Err("dingtalk channel is disabled (enable feature `channel-dingtalk`)".to_owned());
     }
-
     #[cfg(not(feature = "channel-dingtalk"))]
     {
         let _ = (config_path, account_id, target, target_kind, text);
@@ -2714,6 +2805,7 @@ pub async fn run_dingtalk_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2770,6 +2862,7 @@ pub async fn run_whatsapp_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2888,6 +2981,7 @@ pub async fn run_webhook_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -2958,6 +3052,7 @@ pub async fn run_google_chat_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3024,6 +3119,7 @@ pub async fn run_teams_send(
                         target_kind,
                         endpoint_url.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3084,6 +3180,7 @@ pub async fn run_mattermost_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3145,6 +3242,7 @@ pub async fn run_nextcloud_talk_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3208,6 +3306,7 @@ pub async fn run_synology_chat_send(
                         target_kind,
                         target.as_deref(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -3317,6 +3416,7 @@ pub async fn run_imessage_send(
                         target_kind,
                         target.as_str(),
                         text.as_str(),
+                        context.outbound_http_policy(),
                     )
                     .await
                 })
@@ -4552,10 +4652,12 @@ fn normalized_feishu_callback_context(
     feature = "channel-signal",
     feature = "channel-slack",
     feature = "channel-synology-chat",
+    feature = "channel-twitch",
     feature = "channel-teams",
     feature = "channel-wecom",
     feature = "channel-whatsapp",
-    feature = "channel-imessage"
+    feature = "channel-imessage",
+    feature = "channel-nostr"
 ))]
 fn render_channel_route_notice(
     channel_id: &str,

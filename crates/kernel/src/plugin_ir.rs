@@ -1,13 +1,23 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::{
     contracts::Capability,
-    plugin::{PluginDescriptor, PluginManifest, PluginScanReport, PluginSetup, PluginSourceKind},
+    integration::IntegrationCatalog,
+    plugin::{
+        PLUGIN_SLOT_CLAIMS_METADATA_KEY, PluginCompatibility, PluginCompatibilityMode,
+        PluginCompatibilityShim, PluginContractDialect, PluginDescriptor, PluginDiagnosticCode,
+        PluginDiagnosticFinding, PluginDiagnosticPhase, PluginDiagnosticSeverity, PluginManifest,
+        PluginScanReport, PluginSetup, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
+        PluginTrustTier, plugin_host_compatibility_issue, slot_modes_conflict,
+    },
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginBridgeKind {
     HttpJson,
@@ -17,6 +27,7 @@ pub enum PluginBridgeKind {
     McpServer,
     AcpBridge,
     AcpRuntime,
+    #[default]
     Unknown,
 }
 
@@ -36,7 +47,8 @@ impl PluginBridgeKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct PluginRuntimeProfile {
     pub source_language: String,
     pub bridge_kind: PluginBridgeKind,
@@ -44,21 +56,111 @@ pub struct PluginRuntimeProfile {
     pub entrypoint_hint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PluginIR {
+    pub manifest_api_version: Option<String>,
+    pub plugin_version: Option<String>,
+    #[serde(default)]
+    pub dialect: PluginContractDialect,
+    pub dialect_version: Option<String>,
+    #[serde(default)]
+    pub compatibility_mode: PluginCompatibilityMode,
     pub plugin_id: String,
     pub provider_id: String,
     pub connector_name: String,
     pub channel_id: Option<String>,
     pub endpoint: Option<String>,
     pub capabilities: BTreeSet<Capability>,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
     pub metadata: BTreeMap<String, String>,
     pub source_path: String,
     pub source_kind: PluginSourceKind,
     pub package_root: String,
     pub package_manifest_path: Option<String>,
+    #[serde(default)]
+    pub diagnostic_findings: Vec<PluginDiagnosticFinding>,
     pub setup: Option<PluginSetup>,
+    #[serde(default)]
+    pub slot_claims: Vec<PluginSlotClaim>,
+    pub compatibility: Option<PluginCompatibility>,
+    #[serde(default)]
     pub runtime: PluginRuntimeProfile,
+}
+
+#[derive(Debug, Deserialize)]
+struct PluginIRSerde {
+    manifest_api_version: Option<String>,
+    plugin_version: Option<String>,
+    dialect: Option<PluginContractDialect>,
+    dialect_version: Option<String>,
+    compatibility_mode: Option<PluginCompatibilityMode>,
+    plugin_id: String,
+    provider_id: String,
+    connector_name: String,
+    channel_id: Option<String>,
+    endpoint: Option<String>,
+    capabilities: BTreeSet<Capability>,
+    #[serde(default)]
+    trust_tier: PluginTrustTier,
+    metadata: BTreeMap<String, String>,
+    source_path: String,
+    source_kind: PluginSourceKind,
+    package_root: String,
+    package_manifest_path: Option<String>,
+    #[serde(default)]
+    diagnostic_findings: Vec<PluginDiagnosticFinding>,
+    setup: Option<PluginSetup>,
+    #[serde(default)]
+    slot_claims: Vec<PluginSlotClaim>,
+    compatibility: Option<PluginCompatibility>,
+    runtime: Option<PluginRuntimeProfile>,
+}
+
+impl<'de> Deserialize<'de> for PluginIR {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = PluginIRSerde::deserialize(deserializer)?;
+        let dialect = raw
+            .dialect
+            .unwrap_or_else(|| legacy_plugin_ir_dialect(raw.source_kind));
+        let compatibility_mode = raw.compatibility_mode.unwrap_or_default();
+        let runtime = raw.runtime.unwrap_or_else(|| {
+            legacy_plugin_ir_runtime_profile(
+                &raw.source_path,
+                raw.source_kind,
+                &raw.metadata,
+                raw.endpoint.as_deref(),
+            )
+        });
+
+        Ok(Self {
+            manifest_api_version: raw.manifest_api_version,
+            plugin_version: raw.plugin_version,
+            dialect,
+            dialect_version: raw.dialect_version,
+            compatibility_mode,
+            plugin_id: raw.plugin_id,
+            provider_id: raw.provider_id,
+            connector_name: raw.connector_name,
+            channel_id: raw.channel_id,
+            endpoint: raw.endpoint,
+            capabilities: raw.capabilities,
+            trust_tier: raw.trust_tier,
+            metadata: raw.metadata,
+            source_path: raw.source_path,
+            source_kind: raw.source_kind,
+            package_root: raw.package_root,
+            package_manifest_path: raw.package_manifest_path,
+            diagnostic_findings: raw.diagnostic_findings,
+            setup: raw.setup,
+            slot_claims: raw.slot_claims,
+            compatibility: raw.compatibility,
+            runtime,
+        })
+    }
 }
 
 /// Declares which setup requirements are already verified for a plugin.
@@ -155,8 +257,29 @@ pub enum PluginActivationStatus {
     Ready,
     /// The runtime surface is supported, but declared setup requirements are not.
     SetupIncomplete,
+    BlockedCompatibilityMode,
+    BlockedIncompatibleHost,
     BlockedUnsupportedBridge,
     BlockedUnsupportedAdapterFamily,
+    BlockedSlotClaimConflict,
+    #[serde(other)]
+    Unknown,
+}
+
+impl PluginActivationStatus {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::SetupIncomplete => "setup_incomplete",
+            Self::BlockedCompatibilityMode => "blocked_compatibility_mode",
+            Self::BlockedIncompatibleHost => "blocked_incompatible_host",
+            Self::BlockedUnsupportedBridge => "blocked_unsupported_bridge",
+            Self::BlockedUnsupportedAdapterFamily => "blocked_unsupported_adapter_family",
+            Self::BlockedSlotClaimConflict => "blocked_slot_claim_conflict",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 /// Captures activation planning details for a single plugin candidate.
@@ -167,8 +290,22 @@ pub struct PluginActivationCandidate {
     pub source_kind: PluginSourceKind,
     pub package_root: String,
     pub package_manifest_path: Option<String>,
+    #[serde(default)]
+    pub trust_tier: PluginTrustTier,
+    #[serde(default)]
+    pub compatibility_mode: PluginCompatibilityMode,
+    #[serde(default)]
+    pub compatibility_shim: Option<PluginCompatibilityShim>,
+    #[serde(default)]
+    pub compatibility_shim_support: Option<PluginCompatibilityShimSupport>,
+    #[serde(default)]
+    pub compatibility_shim_support_mismatch_reasons: Vec<String>,
     pub bridge_kind: PluginBridgeKind,
     pub adapter_family: String,
+    #[serde(default)]
+    pub slot_claims: Vec<PluginSlotClaim>,
+    #[serde(default)]
+    pub diagnostic_findings: Vec<PluginDiagnosticFinding>,
     pub status: PluginActivationStatus,
     pub reason: String,
     #[serde(default)]
@@ -189,10 +326,144 @@ pub struct PluginActivationPlan {
     pub candidates: Vec<PluginActivationCandidate>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginActivationInventoryEntry {
+    pub manifest_api_version: Option<String>,
+    pub plugin_version: Option<String>,
+    pub dialect: PluginContractDialect,
+    pub dialect_version: Option<String>,
+    pub compatibility_mode: PluginCompatibilityMode,
+    pub compatibility_shim: Option<PluginCompatibilityShim>,
+    pub compatibility_shim_support: Option<PluginCompatibilityShimSupport>,
+    pub compatibility_shim_support_mismatch_reasons: Vec<String>,
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub connector_name: String,
+    pub source_path: String,
+    pub source_kind: PluginSourceKind,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
+    pub bridge_kind: PluginBridgeKind,
+    pub adapter_family: String,
+    pub entrypoint_hint: String,
+    pub source_language: String,
+    pub slot_claims: Vec<PluginSlotClaim>,
+    pub diagnostic_findings: Vec<PluginDiagnosticFinding>,
+    pub compatibility: Option<PluginCompatibility>,
+    pub activation_status: Option<PluginActivationStatus>,
+    pub activation_reason: Option<String>,
+    pub bootstrap_hint: Option<String>,
+}
+
 impl PluginActivationPlan {
     #[must_use]
     pub fn has_blockers(&self) -> bool {
         self.blocked_plugins > 0
+    }
+
+    #[must_use]
+    pub fn candidate_for(
+        &self,
+        source_path: &str,
+        plugin_id: &str,
+    ) -> Option<&PluginActivationCandidate> {
+        self.candidates.iter().find(|candidate| {
+            candidate.source_path == source_path && candidate.plugin_id == plugin_id
+        })
+    }
+
+    #[must_use]
+    pub fn inventory_entries(
+        &self,
+        translation: &PluginTranslationReport,
+    ) -> Vec<PluginActivationInventoryEntry> {
+        translation
+            .entries
+            .iter()
+            .map(|entry| {
+                let candidate = self.candidate_for(&entry.source_path, &entry.plugin_id);
+                PluginActivationInventoryEntry {
+                    manifest_api_version: entry.manifest_api_version.clone(),
+                    plugin_version: entry.plugin_version.clone(),
+                    dialect: entry.dialect,
+                    dialect_version: entry.dialect_version.clone(),
+                    compatibility_mode: entry.compatibility_mode,
+                    compatibility_shim: candidate
+                        .and_then(|candidate| candidate.compatibility_shim.clone())
+                        .or_else(|| PluginCompatibilityShim::for_mode(entry.compatibility_mode)),
+                    compatibility_shim_support: candidate
+                        .and_then(|candidate| candidate.compatibility_shim_support.clone()),
+                    compatibility_shim_support_mismatch_reasons: candidate
+                        .map(|candidate| {
+                            candidate
+                                .compatibility_shim_support_mismatch_reasons
+                                .clone()
+                        })
+                        .unwrap_or_default(),
+                    plugin_id: entry.plugin_id.clone(),
+                    provider_id: entry.provider_id.clone(),
+                    connector_name: entry.connector_name.clone(),
+                    source_path: entry.source_path.clone(),
+                    source_kind: entry.source_kind,
+                    package_root: entry.package_root.clone(),
+                    package_manifest_path: entry.package_manifest_path.clone(),
+                    bridge_kind: entry.runtime.bridge_kind,
+                    adapter_family: entry.runtime.adapter_family.clone(),
+                    entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
+                    source_language: entry.runtime.source_language.clone(),
+                    slot_claims: entry.slot_claims.clone(),
+                    diagnostic_findings: candidate
+                        .map(|candidate| candidate.diagnostic_findings.clone())
+                        .unwrap_or_else(|| entry.diagnostic_findings.clone()),
+                    compatibility: entry.compatibility.clone(),
+                    activation_status: candidate.map(|candidate| candidate.status),
+                    activation_reason: candidate.map(|candidate| candidate.reason.clone()),
+                    bootstrap_hint: candidate.map(|candidate| candidate.bootstrap_hint.clone()),
+                }
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn blocker_summary(&self, limit: usize) -> String {
+        if self.blocked_plugins == 0 {
+            return "no blocked plugins".to_owned();
+        }
+
+        let capped_limit = limit.clamp(1, 16);
+        let mut details = self
+            .candidates
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    candidate.status,
+                    PluginActivationStatus::BlockedCompatibilityMode
+                        | PluginActivationStatus::BlockedUnsupportedBridge
+                        | PluginActivationStatus::BlockedIncompatibleHost
+                        | PluginActivationStatus::BlockedUnsupportedAdapterFamily
+                        | PluginActivationStatus::BlockedSlotClaimConflict
+                        | PluginActivationStatus::Unknown
+                )
+            })
+            .take(capped_limit)
+            .map(|candidate| {
+                format!(
+                    "{} [{}]: {}",
+                    candidate.plugin_id,
+                    candidate.status.as_str(),
+                    candidate.reason
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if self.blocked_plugins > capped_limit {
+            details.push(format!(
+                "+{} more blocked plugin(s)",
+                self.blocked_plugins - capped_limit
+            ));
+        }
+
+        details.join("; ")
     }
 }
 
@@ -200,6 +471,88 @@ impl PluginActivationPlan {
 pub struct BridgeSupportMatrix {
     pub supported_bridges: BTreeSet<PluginBridgeKind>,
     pub supported_adapter_families: BTreeSet<String>,
+    pub supported_compatibility_modes: BTreeSet<PluginCompatibilityMode>,
+    pub supported_compatibility_shims: BTreeSet<PluginCompatibilityShim>,
+    pub supported_compatibility_shim_profiles:
+        BTreeMap<PluginCompatibilityShim, PluginCompatibilityShimSupport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCompatibilityShimSupport {
+    pub shim: PluginCompatibilityShim,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub supported_dialects: BTreeSet<PluginContractDialect>,
+    #[serde(default)]
+    pub supported_bridges: BTreeSet<PluginBridgeKind>,
+    #[serde(default)]
+    pub supported_adapter_families: BTreeSet<String>,
+    #[serde(default)]
+    pub supported_source_languages: BTreeSet<String>,
+}
+
+impl PluginCompatibilityShimSupport {
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        Self {
+            shim: PluginCompatibilityShim {
+                shim_id: self.shim.shim_id.trim().to_owned(),
+                family: self.shim.family.trim().to_owned(),
+            },
+            version: self
+                .version
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
+            supported_dialects: self.supported_dialects,
+            supported_bridges: self.supported_bridges,
+            supported_adapter_families: self
+                .supported_adapter_families
+                .into_iter()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .filter(|value| !value.is_empty())
+                .collect(),
+            supported_source_languages: self
+                .supported_source_languages
+                .into_iter()
+                .map(|value| normalize_language(&value))
+                .filter(|value| value != "unknown")
+                .collect(),
+        }
+    }
+
+    fn mismatch_reasons(&self, ir: &PluginIR) -> Vec<String> {
+        let mut reasons = Vec::new();
+
+        if !self.supported_dialects.is_empty() && !self.supported_dialects.contains(&ir.dialect) {
+            reasons.push(format!("dialect `{}`", ir.dialect.as_str()));
+        }
+
+        if !self.supported_bridges.is_empty()
+            && !self.supported_bridges.contains(&ir.runtime.bridge_kind)
+        {
+            reasons.push(format!("bridge kind `{}`", ir.runtime.bridge_kind.as_str()));
+        }
+
+        if !self.supported_adapter_families.is_empty()
+            && !self
+                .supported_adapter_families
+                .contains(&ir.runtime.adapter_family.trim().to_ascii_lowercase())
+        {
+            reasons.push(format!("adapter family `{}`", ir.runtime.adapter_family));
+        }
+
+        let normalized_source_language = normalize_language(&ir.runtime.source_language);
+        if !self.supported_source_languages.is_empty()
+            && !self
+                .supported_source_languages
+                .contains(&normalized_source_language)
+        {
+            reasons.push(format!("source language `{}`", ir.runtime.source_language));
+        }
+
+        reasons
+    }
 }
 
 impl Default for BridgeSupportMatrix {
@@ -215,6 +568,9 @@ impl Default for BridgeSupportMatrix {
                 PluginBridgeKind::AcpRuntime,
             ]),
             supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
         }
     }
 }
@@ -230,6 +586,72 @@ impl BridgeSupportMatrix {
         self.supported_adapter_families.is_empty()
             || self.supported_adapter_families.contains(adapter_family)
     }
+
+    #[must_use]
+    pub fn is_compatibility_mode_supported(
+        &self,
+        compatibility_mode: PluginCompatibilityMode,
+    ) -> bool {
+        self.supported_compatibility_modes
+            .contains(&compatibility_mode)
+    }
+
+    #[must_use]
+    pub fn is_compatibility_shim_supported(
+        &self,
+        compatibility_shim: Option<&PluginCompatibilityShim>,
+    ) -> bool {
+        compatibility_shim.is_none_or(|shim| {
+            self.supported_compatibility_shims.contains(shim)
+                || self
+                    .supported_compatibility_shim_profiles
+                    .contains_key(shim)
+        })
+    }
+
+    #[must_use]
+    pub fn compatibility_shim_support_issue(
+        &self,
+        ir: &PluginIR,
+        compatibility_shim: Option<&PluginCompatibilityShim>,
+    ) -> Option<String> {
+        let shim = compatibility_shim?;
+        let profile = self.supported_compatibility_shim_profiles.get(shim)?;
+        let mismatches = profile.mismatch_reasons(ir);
+        compatibility_shim_support_issue(shim, profile, &mismatches)
+    }
+
+    #[must_use]
+    pub fn compatibility_shim_support_profile(
+        &self,
+        compatibility_shim: Option<&PluginCompatibilityShim>,
+    ) -> Option<&PluginCompatibilityShimSupport> {
+        compatibility_shim.and_then(|shim| self.supported_compatibility_shim_profiles.get(shim))
+    }
+}
+
+fn compatibility_shim_support_issue(
+    shim: &PluginCompatibilityShim,
+    profile: &PluginCompatibilityShimSupport,
+    mismatches: &[String],
+) -> Option<String> {
+    if mismatches.is_empty() {
+        return None;
+    }
+
+    let version_clause = profile
+        .version
+        .as_deref()
+        .map(|version| format!(" version `{version}`"))
+        .unwrap_or_default();
+
+    Some(format!(
+        "compatibility shim `{}` ({}) is enabled but its support profile{} does not support {}",
+        shim.shim_id,
+        shim.family,
+        version_clause,
+        mismatches.join(", ")
+    ))
 }
 
 #[derive(Debug, Default)]
@@ -244,9 +666,30 @@ impl PluginTranslator {
     #[must_use]
     pub fn translate_scan_report(&self, report: &PluginScanReport) -> PluginTranslationReport {
         let mut translated = PluginTranslationReport::default();
+        let mut diagnostics_by_key: BTreeMap<(String, String), Vec<PluginDiagnosticFinding>> =
+            BTreeMap::new();
+
+        for finding in &report.diagnostic_findings {
+            let (Some(source_path), Some(plugin_id)) =
+                (finding.source_path.clone(), finding.plugin_id.clone())
+            else {
+                continue;
+            };
+
+            diagnostics_by_key
+                .entry((source_path, plugin_id))
+                .or_default()
+                .push(finding.clone());
+        }
 
         for descriptor in &report.descriptors {
-            let ir = self.translate_descriptor(descriptor);
+            let mut ir = self.translate_descriptor(descriptor);
+            ir.diagnostic_findings = diagnostics_by_key
+                .remove(&(
+                    descriptor.path.clone(),
+                    descriptor.manifest.plugin_id.clone(),
+                ))
+                .unwrap_or_default();
             let bridge = ir.runtime.bridge_kind.as_str().to_owned();
             *translated.bridge_distribution.entry(bridge).or_insert(0) += 1;
             translated.translated_plugins = translated.translated_plugins.saturating_add(1);
@@ -261,18 +704,27 @@ impl PluginTranslator {
         let runtime = infer_runtime_profile(&descriptor.language, &descriptor.manifest);
 
         PluginIR {
+            manifest_api_version: descriptor.manifest.api_version.clone(),
+            plugin_version: descriptor.manifest.version.clone(),
+            dialect: descriptor.dialect,
+            dialect_version: descriptor.dialect_version.clone(),
+            compatibility_mode: descriptor.compatibility_mode,
             plugin_id: descriptor.manifest.plugin_id.clone(),
             provider_id: descriptor.manifest.provider_id.clone(),
             connector_name: descriptor.manifest.connector_name.clone(),
             channel_id: descriptor.manifest.channel_id.clone(),
             endpoint: descriptor.manifest.endpoint.clone(),
             capabilities: descriptor.manifest.capabilities.clone(),
+            trust_tier: descriptor.manifest.trust_tier,
             metadata: descriptor.manifest.metadata.clone(),
             source_path: descriptor.path.clone(),
             source_kind: descriptor.source_kind,
             package_root: descriptor.package_root.clone(),
             package_manifest_path: descriptor.package_manifest_path.clone(),
+            diagnostic_findings: Vec::new(),
             setup: descriptor.manifest.setup.clone(),
+            slot_claims: descriptor.manifest.slot_claims.clone(),
+            compatibility: descriptor.manifest.compatibility.clone(),
             runtime,
         }
     }
@@ -284,16 +736,92 @@ impl PluginTranslator {
         matrix: &BridgeSupportMatrix,
         setup_readiness_context: &PluginSetupReadinessContext,
     ) -> PluginActivationPlan {
+        self.plan_activation_with_catalog(translation, matrix, setup_readiness_context, None)
+    }
+
+    #[must_use]
+    pub fn plan_activation_with_catalog(
+        &self,
+        translation: &PluginTranslationReport,
+        matrix: &BridgeSupportMatrix,
+        setup_readiness_context: &PluginSetupReadinessContext,
+        catalog: Option<&IntegrationCatalog>,
+    ) -> PluginActivationPlan {
         let mut plan = PluginActivationPlan::default();
+        let slot_conflicts = collect_slot_claim_conflicts(&translation.entries, catalog);
 
         for ir in &translation.entries {
             plan.total_plugins = plan.total_plugins.saturating_add(1);
+            let compatibility_shim = PluginCompatibilityShim::for_mode(ir.compatibility_mode);
+            let compatibility_shim_support = matrix
+                .compatibility_shim_support_profile(compatibility_shim.as_ref())
+                .cloned();
+            let compatibility_shim_support_mismatch_reasons = compatibility_shim_support
+                .as_ref()
+                .map(|profile| profile.mismatch_reasons(ir))
+                .unwrap_or_default();
 
             let setup_readiness =
                 evaluate_plugin_setup_readiness(ir.setup.as_ref(), setup_readiness_context);
             let setup_is_incomplete = !setup_readiness.ready;
+            let slot_conflict_key = (ir.source_path.clone(), ir.plugin_id.clone());
+            let (status, reason) = if !matrix.is_compatibility_mode_supported(ir.compatibility_mode)
+            {
+                let shim_clause = compatibility_shim
+                    .as_ref()
+                    .map(|shim| format!(" via shim `{}` ({})", shim.shim_id, shim.family))
+                    .unwrap_or_default();
+                (
+                    PluginActivationStatus::BlockedCompatibilityMode,
+                    format!(
+                        "compatibility mode {} requires a host shim that is not enabled in the current runtime matrix{}",
+                        ir.compatibility_mode.as_str(),
+                        shim_clause
+                    ),
+                )
+            } else if !matrix.is_compatibility_shim_supported(compatibility_shim.as_ref()) {
+                let maybe_shim = compatibility_shim.as_ref();
+                let missing_shim_reason = format!(
+                    "compatibility mode {} did not resolve a canonical shim before runtime-matrix evaluation",
+                    ir.compatibility_mode.as_str()
+                );
+                let reason = match maybe_shim {
+                    Some(shim) => {
+                        let shim_id = shim.shim_id.as_str();
+                        let shim_family = shim.family.as_str();
 
-            let (status, reason) = if !matrix.is_bridge_supported(ir.runtime.bridge_kind) {
+                        format!(
+                            "compatibility mode {} requires compatibility shim `{}` ({}) that is not enabled in the current runtime matrix",
+                            ir.compatibility_mode.as_str(),
+                            shim_id,
+                            shim_family
+                        )
+                    }
+                    None => missing_shim_reason,
+                };
+
+                (PluginActivationStatus::BlockedCompatibilityMode, reason)
+            } else if let Some(reason) = plugin_host_compatibility_issue(ir.compatibility.as_ref())
+            {
+                (PluginActivationStatus::BlockedIncompatibleHost, reason)
+            } else if let Some(reason) = compatibility_shim
+                .as_ref()
+                .zip(compatibility_shim_support.as_ref())
+                .and_then(|(shim, profile)| {
+                    compatibility_shim_support_issue(
+                        shim,
+                        profile,
+                        &compatibility_shim_support_mismatch_reasons,
+                    )
+                })
+            {
+                (PluginActivationStatus::BlockedCompatibilityMode, reason)
+            } else if let Some(reason) = slot_conflicts.get(&slot_conflict_key) {
+                (
+                    PluginActivationStatus::BlockedSlotClaimConflict,
+                    reason.clone(),
+                )
+            } else if !matrix.is_bridge_supported(ir.runtime.bridge_kind) {
                 (
                     PluginActivationStatus::BlockedUnsupportedBridge,
                     format!(
@@ -321,6 +849,11 @@ impl PluginTranslator {
                 )
             };
 
+            let mut diagnostic_findings = ir.diagnostic_findings.clone();
+            if let Some(finding) = activation_diagnostic_finding(ir, status, &reason) {
+                diagnostic_findings.push(finding);
+            }
+
             match status {
                 PluginActivationStatus::Ready => {
                     plan.ready_plugins = plan.ready_plugins.saturating_add(1)
@@ -328,8 +861,12 @@ impl PluginTranslator {
                 PluginActivationStatus::SetupIncomplete => {
                     plan.setup_incomplete_plugins = plan.setup_incomplete_plugins.saturating_add(1)
                 }
-                PluginActivationStatus::BlockedUnsupportedBridge
-                | PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
+                PluginActivationStatus::BlockedCompatibilityMode
+                | PluginActivationStatus::BlockedUnsupportedBridge
+                | PluginActivationStatus::BlockedIncompatibleHost
+                | PluginActivationStatus::BlockedUnsupportedAdapterFamily
+                | PluginActivationStatus::BlockedSlotClaimConflict
+                | PluginActivationStatus::Unknown => {
                     plan.blocked_plugins = plan.blocked_plugins.saturating_add(1)
                 }
             }
@@ -340,8 +877,15 @@ impl PluginTranslator {
                 source_kind: ir.source_kind,
                 package_root: ir.package_root.clone(),
                 package_manifest_path: ir.package_manifest_path.clone(),
+                trust_tier: ir.trust_tier,
+                compatibility_mode: ir.compatibility_mode,
+                compatibility_shim,
+                compatibility_shim_support,
+                compatibility_shim_support_mismatch_reasons,
                 bridge_kind: ir.runtime.bridge_kind,
                 adapter_family: ir.runtime.adapter_family.clone(),
+                slot_claims: ir.slot_claims.clone(),
+                diagnostic_findings,
                 status,
                 reason,
                 missing_required_env_vars: setup_readiness.missing_required_env_vars,
@@ -388,33 +932,242 @@ fn format_plugin_setup_incomplete_reason(readiness: &PluginSetupReadiness) -> St
     format!("plugin setup is incomplete: {combined_reasons}")
 }
 
+fn activation_diagnostic_finding(
+    ir: &PluginIR,
+    status: PluginActivationStatus,
+    reason: &str,
+) -> Option<PluginDiagnosticFinding> {
+    let (code, field_path, remediation) = match status {
+        PluginActivationStatus::Ready => return None,
+        PluginActivationStatus::SetupIncomplete => return None,
+        PluginActivationStatus::BlockedCompatibilityMode => (
+            PluginDiagnosticCode::CompatibilityShimRequired,
+            Some("compatibility_mode".to_owned()),
+            Some(
+                "enable or widen the required compatibility shim support policy in the runtime bridge matrix, or migrate the plugin to the native LoongClaw contract before activation"
+                    .to_owned(),
+            ),
+        ),
+        PluginActivationStatus::BlockedIncompatibleHost => (
+            PluginDiagnosticCode::IncompatibleHost,
+            Some("compatibility".to_owned()),
+            Some(
+                "align `compatibility.host_api` / `compatibility.host_version_req` with the current host, or upgrade LoongClaw before activation"
+                    .to_owned(),
+            ),
+        ),
+        PluginActivationStatus::BlockedUnsupportedBridge => (
+            PluginDiagnosticCode::UnsupportedBridge,
+            Some("metadata.bridge_kind".to_owned()),
+            Some(
+                "switch the plugin to a supported bridge kind or widen the runtime bridge support policy before activation"
+                    .to_owned(),
+            ),
+        ),
+        PluginActivationStatus::BlockedUnsupportedAdapterFamily => (
+            PluginDiagnosticCode::UnsupportedAdapterFamily,
+            Some("metadata.adapter_family".to_owned()),
+            Some(
+                "switch the plugin adapter family to one supported by the current runtime matrix"
+                    .to_owned(),
+            ),
+        ),
+        PluginActivationStatus::BlockedSlotClaimConflict => (
+            PluginDiagnosticCode::SlotClaimConflict,
+            Some("slot_claims".to_owned()),
+            Some(
+                "choose a different slot/key pair or relax ownership to shared/advisory only when the surface is intentionally multi-owner"
+                    .to_owned(),
+            ),
+        ),
+        PluginActivationStatus::Unknown => return None,
+    };
+
+    Some(PluginDiagnosticFinding {
+        code,
+        severity: PluginDiagnosticSeverity::Error,
+        phase: PluginDiagnosticPhase::Activation,
+        blocking: true,
+        plugin_id: Some(ir.plugin_id.clone()),
+        source_path: Some(ir.source_path.clone()),
+        source_kind: Some(ir.source_kind),
+        field_path,
+        message: reason.to_owned(),
+        remediation,
+    })
+}
+
+#[derive(Debug, Clone)]
+struct SlotClaimOwner {
+    plugin_id: String,
+    provider_id: String,
+    mode: PluginSlotMode,
+    source_path: Option<String>,
+}
+
+fn collect_slot_claim_conflicts(
+    entries: &[PluginIR],
+    catalog: Option<&IntegrationCatalog>,
+) -> BTreeMap<(String, String), String> {
+    let mut conflicts: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
+
+    if let Some(catalog) = catalog {
+        let existing_claims = existing_slot_claims_from_catalog(catalog);
+
+        for entry in entries {
+            for claim in &entry.slot_claims {
+                let key = (claim.slot.clone(), claim.key.clone());
+                let Some(existing_owners) = existing_claims.get(&key) else {
+                    continue;
+                };
+
+                for owner in existing_owners {
+                    if owner.plugin_id == entry.plugin_id
+                        || !slot_modes_conflict(owner.mode, claim.mode)
+                    {
+                        continue;
+                    }
+
+                    conflicts
+                        .entry((entry.source_path.clone(), entry.plugin_id.clone()))
+                        .or_default()
+                        .insert(format!(
+                            "slot claim `{}`:`{}` ({}) conflicts with existing plugin `{}` (provider `{}`{})",
+                            claim.slot,
+                            claim.key,
+                            claim.mode.as_str(),
+                            owner.plugin_id,
+                            owner.provider_id,
+                            owner
+                                .source_path
+                                .as_deref()
+                                .map(|path| format!(", source `{path}`"))
+                                .unwrap_or_default()
+                        ));
+                }
+            }
+        }
+    }
+
+    for (index, entry) in entries.iter().enumerate() {
+        for other in entries.iter().skip(index + 1) {
+            for claim in &entry.slot_claims {
+                let Some(other_claim) = other
+                    .slot_claims
+                    .iter()
+                    .find(|candidate| candidate.slot == claim.slot && candidate.key == claim.key)
+                else {
+                    continue;
+                };
+
+                if !slot_modes_conflict(claim.mode, other_claim.mode) {
+                    continue;
+                }
+
+                conflicts
+                    .entry((entry.source_path.clone(), entry.plugin_id.clone()))
+                    .or_default()
+                    .insert(format!(
+                        "slot claim `{}`:`{}` ({}) conflicts with plugin `{}` (provider `{}`, source `{}`) as `{}`",
+                        claim.slot,
+                        claim.key,
+                        claim.mode.as_str(),
+                        other.plugin_id,
+                        other.provider_id,
+                        other.source_path,
+                        other_claim.mode.as_str()
+                    ));
+                conflicts
+                    .entry((other.source_path.clone(), other.plugin_id.clone()))
+                    .or_default()
+                    .insert(format!(
+                        "slot claim `{}`:`{}` ({}) conflicts with plugin `{}` (provider `{}`, source `{}`) as `{}`",
+                        other_claim.slot,
+                        other_claim.key,
+                        other_claim.mode.as_str(),
+                        entry.plugin_id,
+                        entry.provider_id,
+                        entry.source_path,
+                        claim.mode.as_str()
+                    ));
+            }
+        }
+    }
+
+    conflicts
+        .into_iter()
+        .map(|(key, reasons)| (key, reasons.into_iter().collect::<Vec<_>>().join("; ")))
+        .collect()
+}
+
+fn existing_slot_claims_from_catalog(
+    catalog: &IntegrationCatalog,
+) -> BTreeMap<(String, String), Vec<SlotClaimOwner>> {
+    let mut registry: BTreeMap<(String, String), Vec<SlotClaimOwner>> = BTreeMap::new();
+
+    for provider in catalog.providers() {
+        let Some(raw_json) = provider.metadata.get(PLUGIN_SLOT_CLAIMS_METADATA_KEY) else {
+            continue;
+        };
+        let Ok(claims) = serde_json::from_str::<Vec<PluginSlotClaim>>(raw_json) else {
+            continue;
+        };
+
+        let plugin_id = provider
+            .metadata
+            .get("plugin_id")
+            .cloned()
+            .unwrap_or_else(|| format!("provider:{}", provider.provider_id));
+        let source_path = provider.metadata.get("plugin_source_path").cloned();
+
+        for claim in claims {
+            registry
+                .entry((claim.slot, claim.key))
+                .or_default()
+                .push(SlotClaimOwner {
+                    plugin_id: plugin_id.clone(),
+                    provider_id: provider.provider_id.clone(),
+                    mode: claim.mode,
+                    source_path: source_path.clone(),
+                });
+        }
+    }
+
+    registry
+}
+
 fn infer_runtime_profile(language: &str, manifest: &PluginManifest) -> PluginRuntimeProfile {
+    let endpoint = manifest.endpoint.as_deref();
+    infer_runtime_profile_from_parts(language, &manifest.metadata, endpoint)
+}
+
+fn infer_runtime_profile_from_parts(
+    language: &str,
+    metadata: &BTreeMap<String, String>,
+    endpoint: Option<&str>,
+) -> PluginRuntimeProfile {
     let source_language = normalize_language(language);
 
-    let bridge_kind = manifest
-        .metadata
+    let bridge_kind = metadata
         .get("bridge_kind")
         .and_then(|value| parse_bridge_kind(value))
         .or_else(|| {
-            manifest
-                .metadata
+            metadata
                 .get("protocol")
                 .filter(|value| value.eq_ignore_ascii_case("mcp"))
                 .map(|_| PluginBridgeKind::McpServer)
         })
-        .unwrap_or_else(|| default_bridge_kind(&source_language, manifest.endpoint.as_deref()));
+        .unwrap_or_else(|| default_bridge_kind(&source_language, endpoint));
 
-    let adapter_family = manifest
-        .metadata
+    let adapter_family = metadata
         .get("adapter_family")
         .cloned()
         .unwrap_or_else(|| default_adapter_family(&source_language, bridge_kind));
 
-    let entrypoint_hint = manifest
-        .metadata
+    let entrypoint_hint = metadata
         .get("entrypoint")
         .cloned()
-        .or_else(|| default_entrypoint_hint(bridge_kind, manifest.endpoint.as_deref()))
+        .or_else(|| default_entrypoint_hint(bridge_kind, endpoint))
         .unwrap_or_else(|| "invoke".to_owned());
 
     PluginRuntimeProfile {
@@ -423,6 +1176,35 @@ fn infer_runtime_profile(language: &str, manifest: &PluginManifest) -> PluginRun
         adapter_family,
         entrypoint_hint,
     }
+}
+
+fn legacy_plugin_ir_dialect(source_kind: PluginSourceKind) -> PluginContractDialect {
+    match source_kind {
+        PluginSourceKind::PackageManifest => PluginContractDialect::LoongClawPackageManifest,
+        PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+    }
+}
+
+fn legacy_plugin_ir_runtime_profile(
+    source_path: &str,
+    source_kind: PluginSourceKind,
+    metadata: &BTreeMap<String, String>,
+    endpoint: Option<&str>,
+) -> PluginRuntimeProfile {
+    let source_language = legacy_plugin_ir_source_language(source_path, source_kind);
+    infer_runtime_profile_from_parts(&source_language, metadata, endpoint)
+}
+
+fn legacy_plugin_ir_source_language(source_path: &str, source_kind: PluginSourceKind) -> String {
+    if source_kind == PluginSourceKind::PackageManifest {
+        return "unknown".to_owned();
+    }
+
+    let extension = Path::new(source_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    normalize_language(extension)
 }
 
 fn normalize_language(language: &str) -> String {
@@ -500,45 +1282,70 @@ fn default_entrypoint_hint(
 }
 
 fn bootstrap_hint(ir: &PluginIR) -> String {
+    let compatibility_prefix = PluginCompatibilityShim::for_mode(ir.compatibility_mode)
+        .map(|shim| {
+            format!(
+                "enable compatibility shim `{}` ({}) and then ",
+                shim.shim_id, shim.family
+            )
+        })
+        .unwrap_or_default();
+
     match ir.runtime.bridge_kind {
         PluginBridgeKind::HttpJson => format!(
-            "register http connector adapter for {} at {}",
+            "{}register http connector adapter for {} at {}",
+            compatibility_prefix,
             ir.connector_name,
             ir.endpoint.as_deref().unwrap_or("https://localhost/invoke")
         ),
         PluginBridgeKind::ProcessStdio => format!(
-            "spawn {} worker and bind stdio bridge {}",
-            ir.runtime.source_language, ir.runtime.entrypoint_hint
+            "{}spawn {} worker and bind stdio bridge {}",
+            compatibility_prefix, ir.runtime.source_language, ir.runtime.entrypoint_hint
         ),
         PluginBridgeKind::NativeFfi => format!(
-            "load native library adapter {} with symbol {}",
-            ir.runtime.adapter_family, ir.runtime.entrypoint_hint
+            "{}load native library adapter {} with symbol {}",
+            compatibility_prefix, ir.runtime.adapter_family, ir.runtime.entrypoint_hint
         ),
         PluginBridgeKind::WasmComponent => {
             format!(
-                "load wasm component and invoke {}",
-                ir.runtime.entrypoint_hint
+                "{}load wasm component and invoke {}",
+                compatibility_prefix, ir.runtime.entrypoint_hint
             )
         }
-        PluginBridgeKind::McpServer => {
-            "register MCP server bridge and handshake capability schema".to_owned()
-        }
-        PluginBridgeKind::AcpBridge => {
-            "register ACP bridge surface and bind the external gateway/runtime contract".to_owned()
-        }
+        PluginBridgeKind::McpServer => format!(
+            "{}register MCP server bridge and handshake capability schema",
+            compatibility_prefix
+        ),
+        PluginBridgeKind::AcpBridge => format!(
+            "{}register ACP bridge surface and bind the external gateway/runtime contract",
+            compatibility_prefix
+        ),
         PluginBridgeKind::AcpRuntime => {
-            "register ACP runtime backend and bind a session-aware control plane".to_owned()
+            format!(
+                "{}register ACP runtime backend and bind a session-aware control plane",
+                compatibility_prefix
+            )
         }
-        PluginBridgeKind::Unknown => {
-            "inspect plugin metadata and define explicit bridge_kind override".to_owned()
-        }
+        PluginBridgeKind::Unknown => format!(
+            "{}inspect plugin metadata and define explicit bridge_kind override",
+            compatibility_prefix
+        ),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::{PluginManifest, PluginSetup, PluginSetupMode, PluginSourceKind};
+    use crate::{
+        integration::ProviderConfig,
+        plugin::{
+            CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, PluginCompatibility,
+            PluginCompatibilityMode, PluginContractDialect, PluginDiagnosticCode,
+            PluginDiagnosticFinding, PluginDiagnosticPhase, PluginDiagnosticSeverity,
+            PluginManifest, PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode,
+            PluginSourceKind, PluginTrustTier,
+        },
+    };
 
     fn descriptor(language: &str, metadata: BTreeMap<String, String>) -> PluginDescriptor {
         let source_kind = if language == "manifest" {
@@ -560,16 +1367,29 @@ mod tests {
         PluginDescriptor {
             path,
             source_kind,
+            dialect: match source_kind {
+                PluginSourceKind::PackageManifest => {
+                    PluginContractDialect::LoongClawPackageManifest
+                }
+                PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+            },
+            dialect_version: matches!(source_kind, PluginSourceKind::PackageManifest)
+                .then(|| CURRENT_PLUGIN_MANIFEST_API_VERSION.to_owned()),
+            compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp".to_owned(),
             package_manifest_path,
             language: language.to_owned(),
             manifest: PluginManifest {
+                api_version: matches!(source_kind, PluginSourceKind::PackageManifest)
+                    .then(|| CURRENT_PLUGIN_MANIFEST_API_VERSION.to_owned()),
+                version: Some("1.0.0".to_owned()),
                 plugin_id: format!("sample-{language}"),
                 provider_id: "sample-provider".to_owned(),
                 connector_name: "sample-connector".to_owned(),
                 channel_id: Some("primary".to_owned()),
                 endpoint: Some("https://example.com/invoke".to_owned()),
                 capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: PluginTrustTier::VerifiedCommunity,
                 metadata,
                 summary: None,
                 tags: Vec::new(),
@@ -586,7 +1406,16 @@ mod tests {
                     docs_urls: vec!["https://docs.example.com/tavily".to_owned()],
                     remediation: Some("set a Tavily credential before enabling search".to_owned()),
                 }),
+                slot_claims: Vec::new(),
+                compatibility: None,
             },
+        }
+    }
+
+    fn verified_setup_readiness_context() -> PluginSetupReadinessContext {
+        PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
+            verified_config_keys: BTreeSet::from(["tools.web_search.default_provider".to_owned()]),
         }
     }
 
@@ -595,6 +1424,7 @@ mod tests {
         let scanner_report = PluginScanReport {
             scanned_files: 2,
             matched_plugins: 2,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![
                 descriptor("rs", BTreeMap::new()),
                 descriptor("py", BTreeMap::new()),
@@ -612,6 +1442,12 @@ mod tests {
         assert_eq!(
             report.bridge_distribution.get("process_stdio").copied(),
             Some(1)
+        );
+        assert!(
+            report
+                .entries
+                .iter()
+                .all(|entry| entry.trust_tier == PluginTrustTier::VerifiedCommunity)
         );
     }
 
@@ -643,6 +1479,7 @@ mod tests {
         assert_eq!(ir.runtime.source_language, "manifest");
         assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::HttpJson);
         assert_eq!(ir.runtime.adapter_family, "http-adapter");
+        assert_eq!(ir.trust_tier, PluginTrustTier::VerifiedCommunity);
         assert_eq!(ir.source_kind, PluginSourceKind::PackageManifest);
         assert_eq!(ir.package_root, "/tmp");
         assert_eq!(
@@ -686,6 +1523,40 @@ mod tests {
     }
 
     #[test]
+    fn translator_projects_scan_diagnostics_into_ir() {
+        let descriptor = descriptor("js", BTreeMap::new());
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: vec![PluginDiagnosticFinding {
+                code: PluginDiagnosticCode::EmbeddedSourceLegacyContract,
+                severity: PluginDiagnosticSeverity::Warning,
+                phase: PluginDiagnosticPhase::Scan,
+                blocking: false,
+                plugin_id: Some("sample-js".to_owned()),
+                source_path: Some("/tmp/plugin.js".to_owned()),
+                source_kind: Some(PluginSourceKind::EmbeddedSource),
+                field_path: None,
+                message: "legacy source marker".to_owned(),
+                remediation: Some("add loongclaw.plugin.json".to_owned()),
+            }],
+            descriptors: vec![descriptor],
+        });
+
+        assert_eq!(translation.entries.len(), 1);
+        assert_eq!(translation.entries[0].diagnostic_findings.len(), 1);
+        assert_eq!(
+            translation.entries[0].diagnostic_findings[0].code,
+            PluginDiagnosticCode::EmbeddedSourceLegacyContract
+        );
+        assert_eq!(
+            translation.entries[0].diagnostic_findings[0].phase,
+            PluginDiagnosticPhase::Scan
+        );
+        assert!(!translation.entries[0].diagnostic_findings[0].blocking);
+    }
+
+    #[test]
     fn activation_plan_marks_setup_incomplete_when_required_setup_is_missing() {
         let descriptor = descriptor(
             "js",
@@ -695,12 +1566,16 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
         };
         let setup_readiness_context = PluginSetupReadinessContext::default();
         let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
@@ -715,6 +1590,10 @@ mod tests {
         );
         assert_eq!(plan.candidates[0].package_root, "/tmp");
         assert_eq!(plan.candidates[0].package_manifest_path, None);
+        assert_eq!(
+            plan.candidates[0].trust_tier,
+            PluginTrustTier::VerifiedCommunity
+        );
         assert!(matches!(
             plan.candidates[0].status,
             PluginActivationStatus::SetupIncomplete
@@ -786,6 +1665,116 @@ mod tests {
     }
 
     #[test]
+    fn plugin_ir_deserializes_legacy_embedded_source_payload_with_inferred_defaults() {
+        let raw = r#"{
+            "plugin_id": "legacy-plugin",
+            "provider_id": "legacy-provider",
+            "connector_name": "legacy-connector",
+            "capabilities": [],
+            "metadata": {},
+            "source_path": "/tmp/legacy-plugin.py",
+            "source_kind": "embedded_source",
+            "package_root": "/tmp"
+        }"#;
+
+        let ir: PluginIR =
+            serde_json::from_str(raw).expect("legacy embedded-source payload should deserialize");
+
+        assert_eq!(ir.dialect, PluginContractDialect::LoongClawEmbeddedSource);
+        assert_eq!(ir.compatibility_mode, PluginCompatibilityMode::Native);
+        assert!(ir.diagnostic_findings.is_empty());
+        assert!(ir.slot_claims.is_empty());
+        assert_eq!(ir.runtime.source_language, "python");
+        assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::ProcessStdio);
+        assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
+    }
+
+    #[test]
+    fn plugin_ir_deserializes_legacy_package_manifest_payload_with_inferred_defaults() {
+        let raw = r#"{
+            "plugin_id": "legacy-package",
+            "provider_id": "legacy-provider",
+            "connector_name": "legacy-connector",
+            "endpoint": "https://plugins.example.test/invoke",
+            "capabilities": [],
+            "metadata": {},
+            "source_path": "/tmp/loongclaw.plugin.json",
+            "source_kind": "package_manifest",
+            "package_root": "/tmp"
+        }"#;
+
+        let ir: PluginIR =
+            serde_json::from_str(raw).expect("legacy package payload should deserialize");
+
+        assert_eq!(ir.dialect, PluginContractDialect::LoongClawPackageManifest);
+        assert_eq!(ir.compatibility_mode, PluginCompatibilityMode::Native);
+        assert_eq!(ir.runtime.source_language, "unknown");
+        assert_eq!(ir.runtime.bridge_kind, PluginBridgeKind::HttpJson);
+        assert_eq!(
+            ir.runtime.entrypoint_hint,
+            "https://plugins.example.test/invoke"
+        );
+    }
+
+    #[test]
+    fn plugin_activation_status_deserializes_unknown_variants_as_unknown() {
+        let raw = "\"blocked_future_contract_surface\"";
+        let status: PluginActivationStatus =
+            serde_json::from_str(raw).expect("unknown activation status should deserialize");
+
+        assert_eq!(status, PluginActivationStatus::Unknown);
+        assert_eq!(status.as_str(), "unknown");
+    }
+
+    #[test]
+    fn activation_plan_blocks_unsupported_bridge() {
+        let descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "mcp_server".to_owned())]),
+        );
+        let translator = PluginTranslator::new();
+        let translation = translator.translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+        let setup_readiness_context = PluginSetupReadinessContext::default();
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
+
+        assert_eq!(plan.total_plugins, 1);
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert_eq!(
+            plan.candidates[0].source_kind,
+            PluginSourceKind::EmbeddedSource
+        );
+        assert_eq!(plan.candidates[0].package_root, "/tmp");
+        assert_eq!(plan.candidates[0].package_manifest_path, None);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedUnsupportedBridge
+        ));
+        assert_eq!(
+            plan.candidates[0].diagnostic_findings[0].code,
+            PluginDiagnosticCode::UnsupportedBridge
+        );
+        assert_eq!(
+            plan.candidates[0].diagnostic_findings[0].phase,
+            PluginDiagnosticPhase::Activation
+        );
+        assert!(plan.candidates[0].diagnostic_findings[0].blocking);
+    }
+
+    #[test]
     fn activation_plan_blocks_unsupported_adapter_family() {
         let descriptor = descriptor(
             "py",
@@ -798,12 +1787,16 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
             supported_adapter_families: BTreeSet::from(["rust-stdio-adapter".to_owned()]),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
         };
         let setup_readiness_context = PluginSetupReadinessContext {
             verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
@@ -818,6 +1811,691 @@ mod tests {
             plan.candidates[0].status,
             PluginActivationStatus::BlockedUnsupportedAdapterFamily
         ));
+        assert_eq!(
+            plan.candidates[0].diagnostic_findings[0].code,
+            PluginDiagnosticCode::UnsupportedAdapterFamily
+        );
+    }
+
+    #[test]
+    fn activation_plan_blocks_conflicting_slot_claims_within_translation() {
+        let mut first = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        first.manifest.plugin_id = "search-a".to_owned();
+        first.manifest.provider_id = "search-a".to_owned();
+        first.manifest.connector_name = "search-a".to_owned();
+        first.path = "/tmp/search-a.js".to_owned();
+        first.manifest.slot_claims = vec![PluginSlotClaim {
+            slot: "provider:web_search".to_owned(),
+            key: "tavily".to_owned(),
+            mode: PluginSlotMode::Exclusive,
+        }];
+
+        let mut second = descriptor(
+            "ts",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        second.manifest.plugin_id = "search-b".to_owned();
+        second.manifest.provider_id = "search-b".to_owned();
+        second.manifest.connector_name = "search-b".to_owned();
+        second.path = "/tmp/search-b.ts".to_owned();
+        second.manifest.slot_claims = vec![PluginSlotClaim {
+            slot: "provider:web_search".to_owned(),
+            key: "tavily".to_owned(),
+            mode: PluginSlotMode::Exclusive,
+        }];
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 2,
+            matched_plugins: 2,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![first, second],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.total_plugins, 2);
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 2);
+        assert!(plan.candidates.iter().all(|candidate| matches!(
+            candidate.status,
+            PluginActivationStatus::BlockedSlotClaimConflict
+        )));
+        assert!(
+            plan.candidates[0].reason.contains("provider:web_search"),
+            "slot conflict reason should mention the claimed surface"
+        );
+        assert!(plan.candidates.iter().all(|candidate| {
+            candidate
+                .diagnostic_findings
+                .iter()
+                .any(|finding| finding.code == PluginDiagnosticCode::SlotClaimConflict)
+        }));
+    }
+
+    #[test]
+    fn activation_plan_blocks_slot_claim_conflicts_against_existing_catalog() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        descriptor.manifest.plugin_id = "incoming-search".to_owned();
+        descriptor.manifest.provider_id = "incoming-search".to_owned();
+        descriptor.manifest.connector_name = "incoming-search".to_owned();
+        descriptor.path = "/tmp/incoming-search.js".to_owned();
+        descriptor.manifest.slot_claims = vec![PluginSlotClaim {
+            slot: "provider:web_search".to_owned(),
+            key: "tavily".to_owned(),
+            mode: PluginSlotMode::Exclusive,
+        }];
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+        let mut catalog = IntegrationCatalog::new();
+        catalog.upsert_provider(ProviderConfig {
+            provider_id: "existing-search".to_owned(),
+            connector_name: "existing-search".to_owned(),
+            version: "1.0.0".to_owned(),
+            metadata: BTreeMap::from([
+                ("plugin_id".to_owned(), "existing-search".to_owned()),
+                (
+                    PLUGIN_SLOT_CLAIMS_METADATA_KEY.to_owned(),
+                    "[{\"slot\":\"provider:web_search\",\"key\":\"tavily\",\"mode\":\"exclusive\"}]"
+                        .to_owned(),
+                ),
+                (
+                    "plugin_source_path".to_owned(),
+                    "/tmp/existing-search.plugin.json".to_owned(),
+                ),
+            ]),
+        });
+
+        let setup_readiness_context = PluginSetupReadinessContext::default();
+        let plan = PluginTranslator::new().plan_activation_with_catalog(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+            Some(&catalog),
+        );
+
+        assert_eq!(plan.total_plugins, 1);
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedSlotClaimConflict
+        ));
+        assert!(
+            plan.candidates[0]
+                .reason
+                .contains("existing plugin `existing-search`")
+        );
+        assert!(
+            plan.candidates[0]
+                .diagnostic_findings
+                .iter()
+                .any(|finding| { finding.code == PluginDiagnosticCode::SlotClaimConflict })
+        );
+    }
+
+    #[test]
+    fn activation_plan_blocks_incompatible_host_before_bridge_checks() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "mcp_server".to_owned())]),
+        );
+        descriptor.manifest.compatibility = Some(PluginCompatibility {
+            host_api: Some("loongclaw-plugin/v999".to_owned()),
+            host_version_req: None,
+        });
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.total_plugins, 1);
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedIncompatibleHost
+        ));
+        assert!(
+            plan.candidates[0].reason.contains(CURRENT_PLUGIN_HOST_API),
+            "compatibility reason should mention the supported host api"
+        );
+        assert!(
+            plan.candidates[0]
+                .diagnostic_findings
+                .iter()
+                .any(|finding| { finding.code == PluginDiagnosticCode::IncompatibleHost })
+        );
+    }
+
+    #[test]
+    fn activation_plan_projects_inventory_entries_with_activation_truth() {
+        let descriptor = descriptor(
+            "manifest",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        let translator = PluginTranslator::new();
+        let translation = translator.translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = translator.plan_activation(
+            &translation,
+            &BridgeSupportMatrix::default(),
+            &setup_readiness_context,
+        );
+
+        let inventory = plan.inventory_entries(&translation);
+
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].plugin_id, "sample-manifest");
+        assert_eq!(
+            inventory[0].manifest_api_version.as_deref(),
+            Some("v1alpha1")
+        );
+        assert_eq!(inventory[0].plugin_version.as_deref(), Some("1.0.0"));
+        assert_eq!(
+            inventory[0].dialect,
+            PluginContractDialect::LoongClawPackageManifest
+        );
+        assert_eq!(
+            inventory[0].compatibility_mode,
+            PluginCompatibilityMode::Native
+        );
+        assert_eq!(inventory[0].provider_id, "sample-provider");
+        assert_eq!(inventory[0].connector_name, "sample-connector");
+        assert_eq!(inventory[0].bridge_kind, PluginBridgeKind::HttpJson);
+        assert_eq!(inventory[0].source_language, "manifest");
+        assert_eq!(
+            inventory[0]
+                .activation_status
+                .map(|status| status.as_str().to_owned()),
+            Some("ready".to_owned())
+        );
+        assert!(
+            inventory[0]
+                .activation_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("runtime profile"))
+        );
+        assert!(inventory[0].bootstrap_hint.is_some());
+        assert!(inventory[0].diagnostic_findings.is_empty());
+    }
+
+    #[test]
+    fn activation_plan_blocker_summary_includes_specific_plugin_reasons() {
+        let mut first = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        first.manifest.plugin_id = "search-a".to_owned();
+        first.manifest.provider_id = "search-a".to_owned();
+        first.manifest.connector_name = "search-a".to_owned();
+        first.path = "/tmp/search-a.js".to_owned();
+        first.manifest.slot_claims = vec![PluginSlotClaim {
+            slot: "provider:web_search".to_owned(),
+            key: "default".to_owned(),
+            mode: PluginSlotMode::Exclusive,
+        }];
+
+        let mut second = descriptor(
+            "ts",
+            BTreeMap::from([("bridge_kind".to_owned(), "http_json".to_owned())]),
+        );
+        second.manifest.plugin_id = "search-b".to_owned();
+        second.manifest.provider_id = "search-b".to_owned();
+        second.manifest.connector_name = "search-b".to_owned();
+        second.path = "/tmp/search-b.ts".to_owned();
+        second.manifest.slot_claims = vec![PluginSlotClaim {
+            slot: "provider:web_search".to_owned(),
+            key: "default".to_owned(),
+            mode: PluginSlotMode::Exclusive,
+        }];
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 2,
+            matched_plugins: 2,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![first, second],
+        });
+        let setup_readiness_context = PluginSetupReadinessContext::default();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &BridgeSupportMatrix::default(),
+            &setup_readiness_context,
+        );
+
+        let summary = plan.blocker_summary(1);
+
+        assert!(summary.contains("search-a") || summary.contains("search-b"));
+        assert!(summary.contains("blocked_slot_claim_conflict"));
+        assert!(summary.contains("provider:web_search"));
+        assert!(summary.contains("+1 more blocked plugin(s)"));
+    }
+
+    #[test]
+    fn activation_plan_blocks_unsupported_compatibility_mode() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([PluginCompatibilityMode::Native]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedCompatibilityMode
+        ));
+        assert_eq!(
+            plan.candidates[0].compatibility_mode,
+            PluginCompatibilityMode::OpenClawModern
+        );
+        assert_eq!(
+            plan.candidates[0]
+                .compatibility_shim
+                .as_ref()
+                .map(|shim| shim.shim_id.as_str()),
+            Some("openclaw-modern-compat")
+        );
+        assert!(plan.candidates[0].reason.contains("openclaw-modern-compat"));
+        assert!(
+            plan.candidates[0]
+                .bootstrap_hint
+                .contains("enable compatibility shim `openclaw-modern-compat`")
+        );
+        assert!(
+            plan.candidates[0]
+                .diagnostic_findings
+                .iter()
+                .any(|finding| {
+                    finding.code == PluginDiagnosticCode::CompatibilityShimRequired
+                        && finding.blocking
+                })
+        );
+    }
+
+    #[test]
+    fn activation_plan_allows_supported_compatibility_mode() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedCompatibilityMode
+        ));
+        assert_eq!(
+            plan.candidates[0]
+                .compatibility_shim
+                .as_ref()
+                .map(|shim| shim.shim_id.as_str()),
+            Some("openclaw-modern-compat")
+        );
+        assert!(
+            plan.candidates[0]
+                .reason
+                .contains("requires compatibility shim `openclaw-modern-compat`")
+        );
+        assert!(
+            plan.candidates[0]
+                .bootstrap_hint
+                .contains("enable compatibility shim `openclaw-modern-compat`")
+        );
+    }
+
+    #[test]
+    fn activation_plan_allows_supported_compatibility_mode_when_shim_is_enabled() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ]),
+            supported_compatibility_shims: BTreeSet::from([PluginCompatibilityShim {
+                shim_id: "openclaw-modern-compat".to_owned(),
+                family: "openclaw-modern-compat".to_owned(),
+            }]),
+            supported_compatibility_shim_profiles: BTreeMap::new(),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.ready_plugins, 1);
+        assert_eq!(plan.blocked_plugins, 0);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::Ready
+        ));
+    }
+
+    #[test]
+    fn activation_plan_blocks_enabled_shim_profile_when_runtime_projection_mismatches() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let shim = PluginCompatibilityShim {
+            shim_id: "openclaw-modern-compat".to_owned(),
+            family: "openclaw-modern-compat".to_owned(),
+        };
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::from([(
+                shim.clone(),
+                PluginCompatibilityShimSupport {
+                    shim,
+                    version: Some("openclaw-modern@1".to_owned()),
+                    supported_dialects: BTreeSet::from([
+                        PluginContractDialect::OpenClawModernManifest,
+                    ]),
+                    supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+                    supported_adapter_families: BTreeSet::new(),
+                    supported_source_languages: BTreeSet::from(["python".to_owned()]),
+                },
+            )]),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedCompatibilityMode
+        ));
+        assert_eq!(
+            plan.candidates[0]
+                .compatibility_shim_support
+                .as_ref()
+                .and_then(|support| support.version.as_deref()),
+            Some("openclaw-modern@1")
+        );
+        assert_eq!(
+            plan.candidates[0].compatibility_shim_support_mismatch_reasons,
+            vec!["source language `javascript`".to_owned()]
+        );
+        assert!(
+            plan.candidates[0]
+                .reason
+                .contains("source language `javascript`")
+        );
+        assert!(plan.candidates[0].reason.contains("openclaw-modern@1"));
+    }
+
+    #[test]
+    fn activation_plan_allows_enabled_shim_profile_when_runtime_projection_matches() {
+        let mut descriptor = descriptor(
+            "js",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let shim = PluginCompatibilityShim {
+            shim_id: "openclaw-modern-compat".to_owned(),
+            family: "openclaw-modern-compat".to_owned(),
+        };
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::from([(
+                shim.clone(),
+                PluginCompatibilityShimSupport {
+                    shim,
+                    version: Some("openclaw-modern@1".to_owned()),
+                    supported_dialects: BTreeSet::from([
+                        PluginContractDialect::OpenClawModernManifest,
+                    ]),
+                    supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+                    supported_adapter_families: BTreeSet::new(),
+                    supported_source_languages: BTreeSet::from(["javascript".to_owned()]),
+                },
+            )]),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.ready_plugins, 1);
+        assert_eq!(plan.blocked_plugins, 0);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::Ready
+        ));
+        assert_eq!(
+            plan.candidates[0]
+                .compatibility_shim_support
+                .as_ref()
+                .and_then(|support| support.version.as_deref()),
+            Some("openclaw-modern@1")
+        );
+        assert!(
+            plan.candidates[0]
+                .compatibility_shim_support_mismatch_reasons
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn activation_plan_normalizes_source_language_before_shim_profile_match() {
+        let mut descriptor = descriptor(
+            "JavaScript",
+            BTreeMap::from([("bridge_kind".to_owned(), "process_stdio".to_owned())]),
+        );
+        descriptor.dialect = PluginContractDialect::OpenClawModernManifest;
+        descriptor.dialect_version = Some("openclaw.plugin.json".to_owned());
+        descriptor.compatibility_mode = PluginCompatibilityMode::OpenClawModern;
+
+        let translation = PluginTranslator::new().translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
+            descriptors: vec![descriptor],
+        });
+        let shim = PluginCompatibilityShim {
+            shim_id: "openclaw-modern-compat".to_owned(),
+            family: "openclaw-modern-compat".to_owned(),
+        };
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+            supported_adapter_families: BTreeSet::new(),
+            supported_compatibility_modes: BTreeSet::from([
+                PluginCompatibilityMode::Native,
+                PluginCompatibilityMode::OpenClawModern,
+            ]),
+            supported_compatibility_shims: BTreeSet::new(),
+            supported_compatibility_shim_profiles: BTreeMap::from([(
+                shim.clone(),
+                PluginCompatibilityShimSupport {
+                    shim,
+                    version: Some("openclaw-modern@1".to_owned()),
+                    supported_dialects: BTreeSet::from([
+                        PluginContractDialect::OpenClawModernManifest,
+                    ]),
+                    supported_bridges: BTreeSet::from([PluginBridgeKind::ProcessStdio]),
+                    supported_adapter_families: BTreeSet::new(),
+                    supported_source_languages: BTreeSet::from(["javascript".to_owned()]),
+                },
+            )]),
+        };
+
+        let setup_readiness_context = verified_setup_readiness_context();
+        let plan = PluginTranslator::new().plan_activation(
+            &translation,
+            &matrix,
+            &setup_readiness_context,
+        );
+
+        assert_eq!(plan.ready_plugins, 1);
+        assert_eq!(plan.blocked_plugins, 0);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::Ready
+        ));
+        assert!(
+            plan.candidates[0]
+                .compatibility_shim_support_mismatch_reasons
+                .is_empty()
+        );
     }
 
     #[test]
@@ -827,12 +2505,14 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
+            ..BridgeSupportMatrix::default()
         };
         let setup_readiness_context = PluginSetupReadinessContext {
             verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
@@ -860,12 +2540,14 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
+            ..BridgeSupportMatrix::default()
         };
         let setup_readiness_context = PluginSetupReadinessContext {
             verified_env_vars: BTreeSet::from(["tavily_api_key".to_owned()]),
@@ -887,12 +2569,14 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
+            ..BridgeSupportMatrix::default()
         };
         let setup_readiness_context = PluginSetupReadinessContext {
             verified_env_vars: BTreeSet::from(["tavily_api_key".to_owned()]),
@@ -948,12 +2632,14 @@ mod tests {
         let translation = translator.translate_scan_report(&PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor],
         });
 
         let matrix = BridgeSupportMatrix {
             supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
             supported_adapter_families: BTreeSet::new(),
+            ..BridgeSupportMatrix::default()
         };
         let setup_readiness_context = PluginSetupReadinessContext {
             verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
@@ -968,5 +2654,64 @@ mod tests {
             plan.candidates[0].status,
             PluginActivationStatus::BlockedUnsupportedBridge
         ));
+    }
+
+    #[test]
+    fn blocker_summary_excludes_setup_incomplete_candidates() {
+        let plan = PluginActivationPlan {
+            total_plugins: 2,
+            ready_plugins: 0,
+            setup_incomplete_plugins: 1,
+            blocked_plugins: 1,
+            candidates: vec![
+                PluginActivationCandidate {
+                    plugin_id: "setup-plugin".to_owned(),
+                    source_path: "/tmp/setup-plugin.py".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::Unverified,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "http-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
+                    status: PluginActivationStatus::SetupIncomplete,
+                    reason: "missing TAVILY_API_KEY".to_owned(),
+                    missing_required_env_vars: vec!["TAVILY_API_KEY".to_owned()],
+                    missing_required_config_keys: Vec::new(),
+                    bootstrap_hint: "export TAVILY_API_KEY".to_owned(),
+                },
+                PluginActivationCandidate {
+                    plugin_id: "blocked-plugin".to_owned(),
+                    source_path: "/tmp/blocked-plugin.py".to_owned(),
+                    source_kind: PluginSourceKind::EmbeddedSource,
+                    package_root: "/tmp".to_owned(),
+                    package_manifest_path: None,
+                    trust_tier: PluginTrustTier::Unverified,
+                    compatibility_mode: PluginCompatibilityMode::Native,
+                    compatibility_shim: None,
+                    compatibility_shim_support: None,
+                    compatibility_shim_support_mismatch_reasons: Vec::new(),
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "http-adapter".to_owned(),
+                    slot_claims: Vec::new(),
+                    diagnostic_findings: Vec::new(),
+                    status: PluginActivationStatus::BlockedUnsupportedBridge,
+                    reason: "http_json bridge is disabled".to_owned(),
+                    missing_required_env_vars: Vec::new(),
+                    missing_required_config_keys: Vec::new(),
+                    bootstrap_hint: "enable http bridge".to_owned(),
+                },
+            ],
+        };
+
+        let summary = plan.blocker_summary(4);
+
+        assert!(summary.contains("blocked-plugin"));
+        assert!(!summary.contains("setup-plugin"));
     }
 }

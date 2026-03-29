@@ -3,7 +3,10 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedNextcloudTalkChannelConfig};
 
-use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 type NextcloudTalkHmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -23,6 +26,7 @@ pub(super) async fn run_nextcloud_talk_send(
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     if target_kind != ChannelOutboundTargetKind::Conversation {
         return Err(format!(
@@ -54,9 +58,10 @@ pub(super) async fn run_nextcloud_talk_send(
         random_header.as_str(),
         request_body_json.as_str(),
     )?;
-    let request_url = build_nextcloud_talk_request_url(server_url.as_str(), conversation_token)?;
+    let request_url =
+        build_nextcloud_talk_request_url(server_url.as_str(), conversation_token, policy)?;
 
-    let client = build_outbound_http_client("nextcloud talk send")?;
+    let client = build_outbound_http_client("nextcloud talk send", policy)?;
     let request = client
         .post(request_url)
         .header(reqwest::header::ACCEPT, "application/json")
@@ -84,9 +89,9 @@ fn build_random_reference_id() -> String {
 fn build_nextcloud_talk_request_url(
     server_url: &str,
     conversation_token: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<String> {
-    let mut url = reqwest::Url::parse(server_url)
-        .map_err(|error| format!("nextcloud talk server_url is invalid: {error}"))?;
+    let mut url = validate_outbound_http_target("nextcloud talk server_url", server_url, policy)?;
     let mut path_segments = url.path_segments_mut().map_err(|_path_error| {
         "nextcloud talk server_url cannot be used as a hierarchical base url".to_owned()
     })?;
@@ -146,9 +151,15 @@ mod tests {
 
     #[test]
     fn build_nextcloud_talk_request_url_preserves_base_path() {
-        let request_url =
-            build_nextcloud_talk_request_url("https://cloud.example.test/nextcloud", "room-token")
-                .expect("build nextcloud talk request url");
+        let policy = ChannelOutboundHttpPolicy {
+            allow_private_hosts: false,
+        };
+        let request_url = build_nextcloud_talk_request_url(
+            "https://cloud.example.test/nextcloud",
+            "room-token",
+            policy,
+        )
+        .expect("build nextcloud talk request url");
 
         assert_eq!(
             request_url,

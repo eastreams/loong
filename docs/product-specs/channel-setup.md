@@ -11,13 +11,13 @@ needs.
 - [ ] Product docs clearly distinguish the shipped MVP surfaces:
       CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
       Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
-      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
-      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, and
-      iMessage / BlueBubbles.
+      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch,
+      Tlon,
+      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
+      iMessage / BlueBubbles, and Nostr.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
       config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Nostr, Twitch, Tlon, Zalo, Zalo Personal, and
-      WebChat.
+      surfaces such as Zalo, Zalo Personal, and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel today.
 - [ ] Product docs describe `multi-channel-serve` as the current attached
@@ -37,9 +37,8 @@ needs.
 
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
-- Promoting the remaining catalog-only planned surfaces such as Nostr,
-  Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
-  shipped support in this slice
+- Promoting the remaining catalog-only planned surfaces such as Zalo,
+  Zalo Personal, or WebChat to shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
@@ -61,12 +60,16 @@ needs.
 | Webhook | Config-backed outbound | generic HTTP webhook POST | `webhook.enabled`, `webhook.endpoint_url`; `auth_token` is optional and can pair with custom header and prefix overrides | `loongclaw webhook-send` |
 | Google Chat | Config-backed outbound | Google Chat incoming webhook | `google_chat.enabled`, `google_chat.webhook_url` | `loongclaw google-chat-send` |
 | Signal | Config-backed outbound | signal-cli REST bridge | `signal.enabled`, `signal.service_url`, `signal.account` | `loongclaw signal-send` |
+| Tlon | Config-backed outbound | Urbit ship HTTP poke API | `tlon.enabled`, `tlon.ship`, `tlon.url`, `tlon.code` | `loongclaw tlon-send` |
+| Twitch | Config-backed outbound | Twitch Chat API | `twitch.enabled`, `twitch.access_token` or `twitch.access_token_env`; optional `default_account`, `accounts`, `api_base_url`, `oauth_base_url`, and `channel_names` remain available for account routing, controlled environments, and planned serve work | `loongclaw twitch-send` |
+| Tlon | Config-backed outbound | Urbit ship HTTP poke API | `tlon.enabled`, `tlon.ship`, `tlon.url`, `tlon.code` | `loongclaw tlon-send` |
 | Microsoft Teams | Config-backed outbound | Teams incoming webhook | `teams.enabled`, `teams.webhook_url` for sends; future bot runtime fields keep `teams.app_id`, `teams.app_password`, `teams.tenant_id`, `teams.allowed_conversation_ids` reserved for the planned serve path | `loongclaw teams-send` |
 | Mattermost | Config-backed outbound | Mattermost REST API | `mattermost.enabled`, `mattermost.server_url`, `mattermost.bot_token` | `loongclaw mattermost-send` |
 | Nextcloud Talk | Config-backed outbound | Nextcloud Talk bot API | `nextcloud_talk.enabled`, `nextcloud_talk.server_url`, `nextcloud_talk.shared_secret` | `loongclaw nextcloud-talk-send` |
 | Synology Chat | Config-backed outbound | Synology Chat incoming webhook | `synology_chat.enabled`, `synology_chat.incoming_url` | `loongclaw synology-chat-send` |
 | IRC | Config-backed outbound | IRC socket client | `irc.enabled`, `irc.server`, `irc.nickname`; `password` is optional, and `username`, `realname`, `channel_names` are optional operator hints | `loongclaw irc-send` |
 | iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loongclaw imessage-send` |
+| Nostr | Config-backed outbound | relay publish over WebSocket | `nostr.enabled`, `nostr.relay_urls`, `nostr.private_key`; `allowed_pubkeys` stays reserved for the planned inbound path | `loongclaw nostr-send` |
 
 ## Expansion Model
 
@@ -151,8 +154,10 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 ### Config-Backed Outbound Surfaces
 
 Discord, Slack, LINE, DingTalk, WhatsApp, Email, generic Webhook, Google
-Chat, Signal, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat,
-IRC, and iMessage / BlueBubbles are shipped as account-aware outbound
+Chat, Signal, Twitch, Tlon, Microsoft Teams, Mattermost, Nextcloud Talk,
+Synology
+Chat, IRC, iMessage / BlueBubbles, and Nostr are shipped as account-aware
+outbound
 surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
@@ -161,6 +166,12 @@ surfaces:
   reply-loop runtime
 - their `serve` metadata remains planned or unsupported until the gateway layer
   and the underlying inbound transport contract are implemented
+- their HTTP targets must use `http` or `https`, must not embed credentials,
+  block private or special-use hosts by default, and do not auto-follow
+  redirects
+- operators who intentionally send through a private bridge, loopback service,
+  or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
+  at the top level of `loongclaw.toml`
 
 ### Webhook
 
@@ -179,6 +190,19 @@ Generic Webhook is shipped as a minimal config-backed outbound POST surface:
   override the endpoint with `--target` for one-off delivery
 - `webhook.public_base_url` and `webhook.signing_secret` remain reserved for
   the planned inbound serve contract and are not required for send readiness
+
+### Signal
+
+Signal is shipped through a `signal-cli` REST bridge send surface:
+
+- configure `signal.account`
+- use `signal.service_url` to point at the bridge; when unset, LoongClaw
+  defaults to `http://127.0.0.1:8080`
+- because outbound HTTP delivery defaults to public-only mode, the default
+  local bridge requires `[outbound_http] allow_private_hosts = true`
+- use `signal-send` with a Signal account target such as an E.164 number
+- `signal-serve` remains planned until LoongClaw owns a real inbound listener
+  contract
 
 ### Email
 
@@ -208,6 +232,76 @@ Microsoft Teams is shipped through the incoming webhook send surface:
   runtime and are not required for send readiness today
 - `teams-serve` remains planned until LoongClaw owns the bot-framework style
   inbound contract
+
+### Twitch
+
+Twitch is shipped through the official Twitch Chat API send surface:
+
+- enable the surface with `twitch.enabled = true`
+- configure `twitch.access_token` or `twitch.access_token_env` with a Twitch
+  user access token that carries `user:write:chat`
+- use `twitch.account_id` when the operator wants an explicit runtime account
+  identity label for the default config
+- use `twitch.default_account` and `twitch.accounts.<account>` when the
+  deployment needs multiple Twitch identities or environment-specific tokens
+- use `twitch-send` with a channel login or broadcaster id target
+- LoongClaw validates the token at send time to derive the sender user id and
+  client id instead of duplicating those identifiers in config
+- `twitch.api_base_url` and `twitch.oauth_base_url` stay overridable for tests
+  and controlled environments
+- `twitch.channel_names` remains reserved for the planned EventSub or
+  chat-listener serve path
+
+Example:
+
+```toml
+[twitch]
+enabled = true
+default_account = "ops"
+channel_names = ["main-stream"]
+
+[twitch.access_token]
+env = "TWITCH_ACCESS_TOKEN"
+
+[twitch.accounts.ops]
+account_id = "twitch-ops"
+
+[twitch.accounts.ops.access_token]
+env = "TWITCH_OPS_ACCESS_TOKEN"
+
+[twitch.accounts.backup]
+enabled = false
+account_id = "twitch-backup"
+access_token_env = "TWITCH_BACKUP_ACCESS_TOKEN"
+channel_names = ["backup-stream"]
+```
+
+Resolution notes:
+
+- when `--account` is omitted, LoongClaw selects `twitch.default_account` if it
+  is configured, otherwise it falls back to the single configured account or the
+  sorted first account key
+- `twitch.accounts.<account>.access_token` or
+  `twitch.accounts.<account>.access_token_env` override the top-level token only
+  for that account
+- `twitch.accounts.<account>.account_id` overrides the top-level
+  `twitch.account_id` for the resolved runtime identity
+
+### Tlon
+
+Tlon is shipped through the outbound Urbit ship poke surface:
+
+- configure `tlon.ship`, `tlon.url`, and `tlon.code`
+- `tlon.url` may omit the scheme; LoongClaw normalizes bare hosts to `https://`
+- use `tlon-send` with DM targets such as `~sampel-palnet` or
+  `dm:~sampel-palnet`
+- use `tlon-send` with group targets such as `chat/~host-ship/channel` or
+  `group:~host-ship/channel`
+- LoongClaw authenticates to the configured ship, reuses the returned session
+  cookie for one HTTP poke, and fails fast if login or poke acknowledgement
+  does not succeed
+- `tlon-serve` remains planned until LoongClaw owns a stable inbound Urbit
+  subscription and reply-loop runtime
 
 ### Nextcloud Talk
 
@@ -260,6 +354,21 @@ iMessage is shipped through a BlueBubbles bridge send surface:
 - `imessage-serve` remains planned until LoongClaw owns the inbound bridge
   synchronization contract
 
+### Nostr
+
+Nostr is shipped as a signed relay-publish surface:
+
+- configure one or more relay URLs through `nostr.relay_urls`
+- configure a signing key through `nostr.private_key`; both raw hex and `nsec`
+  input are accepted, but LoongClaw normalizes internally to the standard hex
+  representation
+- use `nostr-send` to publish a regular text-note event and wait for relay `OK`
+  acknowledgements from the configured relay set
+- `nostr-send` may omit `--target` for a plain public note, or pass a public
+  key target to attach a `p` tag to the outbound event
+- `nostr.allowed_pubkeys` remains reserved for the planned inbound relay
+  subscriber path and is not required for send readiness today
+
 ### Multi-Channel Serve And Gateway Direction
 
 `multi-channel-serve` is the current attached runtime owner for the shipped
@@ -272,11 +381,11 @@ gateway service rather than the long-term product noun:
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
-  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat,
+  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat, Tlon,
   Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage / BlueBubbles
   into runtime supervision until those adapters grow real serve ownership
-- it never promotes catalog-only planned surfaces such as Nostr, Tlon, Zalo,
-  Zalo Personal, or WebChat into runtime supervision until those adapters are
+- it never promotes catalog-only planned surfaces such as Twitch, Zalo, Zalo
+  Personal, or WebChat into runtime supervision until those adapters are
   implemented
 - the later gateway service should absorb this runtime ownership model, then
   add detached service lifecycle, route mounting, status/log surfaces, pairing,

@@ -1,7 +1,116 @@
-/// Shared HTTP utilities for web tools (web.fetch, web.search).
-/// Provides SSRF-safe DNS resolution and other common patterns.
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
+/// Shared HTTP utilities for outbound HTTP surfaces.
+use std::collections::BTreeSet;
 use std::sync::Arc;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HttpTargetValidationOptions<'a> {
+    pub allow_private_hosts: bool,
+    pub reject_userinfo: bool,
+    pub resolve_dns: bool,
+    pub enforce_allowed_domains: bool,
+    pub allowed_domains: Option<&'a BTreeSet<String>>,
+    pub blocked_domains: Option<&'a BTreeSet<String>>,
+}
+
+pub(crate) fn validate_http_target(
+    url: &reqwest::Url,
+    options: &HttpTargetValidationOptions<'_>,
+    surface_name: &str,
+) -> Result<String, String> {
+    use std::net::{IpAddr, ToSocketAddrs};
+
+    let scheme = url.scheme();
+    let is_http = scheme == "http";
+    let is_https = scheme == "https";
+    if !is_http && !is_https {
+        return Err(format!(
+            "{surface_name} requires http or https url, got scheme `{scheme}`"
+        ));
+    }
+
+    let username = url.username();
+    let password = url.password();
+    let has_userinfo = !username.is_empty() || password.is_some();
+    if options.reject_userinfo && has_userinfo {
+        return Err(format!(
+            "{surface_name} must not embed credentials in the url userinfo section"
+        ));
+    }
+
+    let raw_host = url
+        .host_str()
+        .map(normalize_domain_text)
+        .ok_or_else(|| format!("{surface_name} url has no host"))?;
+    let host = raw_host;
+
+    let blocked_rule = options
+        .blocked_domains
+        .and_then(|rules| first_matching_domain_rule(host.as_str(), rules));
+    if let Some(rule) = blocked_rule {
+        return Err(format!(
+            "{surface_name} blocked host `{host}` because it matches blocked domain rule `{rule}`"
+        ));
+    }
+
+    let allowed_rule = options
+        .allowed_domains
+        .and_then(|rules| first_matching_domain_rule(host.as_str(), rules));
+    if options.enforce_allowed_domains && allowed_rule.is_none() {
+        return Err(format!(
+            "{surface_name} denied host `{host}` because it is not in allowed_domains"
+        ));
+    }
+
+    if options.allow_private_hosts {
+        return Ok(host);
+    }
+
+    if host == "localhost" {
+        return Err(format!(
+            "{surface_name} blocked private or special-use host `localhost`"
+        ));
+    }
+
+    let parsed_ip = host.parse::<IpAddr>();
+    if let Ok(ip) = parsed_ip {
+        if is_private_or_special_ip(ip) {
+            return Err(format!(
+                "{surface_name} blocked private or special-use address `{ip}`"
+            ));
+        }
+        return Ok(host);
+    }
+
+    if !options.resolve_dns {
+        return Ok(host);
+    }
+
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| format!("{surface_name} url has no known port"))?;
+    let addrs = (host.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|error| format!("{surface_name} failed to resolve host `{host}`: {error}"))?;
+
+    let mut saw_addr = false;
+    for addr in addrs {
+        saw_addr = true;
+        if is_private_or_special_ip(addr.ip()) {
+            return Err(format!(
+                "{surface_name} blocked private or special-use address `{}` for host `{host}`",
+                addr.ip()
+            ));
+        }
+    }
+
+    if !saw_addr {
+        return Err(format!(
+            "{surface_name} resolved no addresses for host `{host}`"
+        ));
+    }
+
+    Ok(host)
+}
 
 /// Bridge sync-to-async execution for web tools.
 ///
@@ -48,12 +157,10 @@ where
 /// Custom DNS resolver that rejects private/special-use IP addresses at
 /// connection time, eliminating the TOCTOU window between validation and
 /// the HTTP client's own DNS resolution.
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 pub struct SsrfSafeResolver {
     pub allow_private_hosts: bool,
 }
 
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 impl reqwest::dns::Resolve for SsrfSafeResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let allow_private = self.allow_private_hosts;
@@ -93,7 +200,6 @@ impl reqwest::dns::Resolve for SsrfSafeResolver {
 }
 
 /// Build an SSRF-safe HTTP client for web tools.
-#[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 pub fn build_ssrf_safe_client(
     allow_private_hosts: bool,
     timeout_seconds: u64,
@@ -112,11 +218,6 @@ pub fn build_ssrf_safe_client(
         .map_err(|error| format!("failed to build SSRF-safe HTTP client: {error}"))
 }
 
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
 pub(crate) fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
     use std::net::IpAddr;
 
@@ -126,11 +227,6 @@ pub(crate) fn is_private_or_special_ip(ip: std::net::IpAddr) -> bool {
     }
 }
 
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
 pub(crate) fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
     let octets = ip.octets();
     let first = octets[0];
@@ -153,11 +249,6 @@ pub(crate) fn is_private_or_special_ipv4(ip: std::net::Ipv4Addr) -> bool {
         || first >= 240
 }
 
-#[cfg(any(
-    feature = "tool-webfetch",
-    feature = "tool-browser",
-    feature = "tool-websearch"
-))]
 pub(crate) fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return true;
@@ -175,6 +266,34 @@ pub(crate) fn is_private_or_special_ipv6(ip: std::net::Ipv6Addr) -> bool {
         || ((segments[0] & 0xffc0) == 0xfe80)
         || ((segments[0] & 0xffc0) == 0xfec0)
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
+}
+
+fn first_matching_domain_rule<'a>(host: &str, rules: &'a BTreeSet<String>) -> Option<&'a str> {
+    rules
+        .iter()
+        .find(|rule| domain_rule_matches(host, rule.as_str()))
+        .map(String::as_str)
+}
+
+/// Wildcard rules in the `*.example.com` form intentionally match both the
+/// apex domain (`example.com`) and any subdomain beneath it.
+fn domain_rule_matches(host: &str, rule: &str) -> bool {
+    let normalized_host = normalize_domain_text(host);
+    let normalized_rule = normalize_domain_text(rule);
+
+    if let Some(suffix) = normalized_rule.strip_prefix("*.") {
+        let suffix_match = normalized_host == suffix;
+        let subdomain_match = normalized_host.ends_with(format!(".{suffix}").as_str());
+        return suffix_match || subdomain_match;
+    }
+
+    normalized_host == normalized_rule
+}
+
+fn normalize_domain_text(value: &str) -> String {
+    let trimmed_value = value.trim();
+    let trimmed_root_label = trimmed_value.trim_end_matches('.');
+    trimmed_root_label.to_ascii_lowercase()
 }
 
 #[cfg(all(test, any(feature = "tool-webfetch", feature = "tool-websearch")))]
@@ -342,5 +461,37 @@ mod tests {
             !must(accepted_request, "test server exited with error"),
             "unexpected error: {error}"
         );
+    }
+
+    #[test]
+    fn validate_http_target_blocks_trailing_dot_localhost_alias() {
+        let url = must(
+            reqwest::Url::parse("http://localhost./"),
+            "parse localhost alias url",
+        );
+        let options = HttpTargetValidationOptions {
+            allow_private_hosts: false,
+            reject_userinfo: true,
+            resolve_dns: false,
+            enforce_allowed_domains: false,
+            allowed_domains: None,
+            blocked_domains: None,
+        };
+
+        let error = validate_http_target(&url, &options, "web.fetch")
+            .expect_err("localhost. should stay blocked when private hosts are disabled");
+
+        assert!(
+            error.contains("localhost"),
+            "expected localhost validation error, got {error}"
+        );
+    }
+
+    #[test]
+    fn domain_rule_matches_treats_wildcard_rules_as_apex_aware() {
+        assert!(domain_rule_matches("example.com", "*.example.com"));
+        assert!(domain_rule_matches("api.example.com", "*.example.com"));
+        assert!(domain_rule_matches("API.EXAMPLE.COM.", "*.example.com."));
+        assert!(!domain_rule_matches("example.net", "*.example.com"));
     }
 }

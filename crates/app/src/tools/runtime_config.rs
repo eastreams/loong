@@ -236,6 +236,10 @@ pub struct BrowserCompanionRuntimePolicy {
     pub command: Option<String>,
     pub expected_version: Option<String>,
     pub timeout_seconds: u64,
+    pub allow_private_hosts: bool,
+    pub enforce_allowed_domains: bool,
+    pub allowed_domains: BTreeSet<String>,
+    pub blocked_domains: BTreeSet<String>,
 }
 
 impl Default for BrowserCompanionRuntimePolicy {
@@ -246,6 +250,10 @@ impl Default for BrowserCompanionRuntimePolicy {
             command: None,
             expected_version: None,
             timeout_seconds: crate::config::DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS,
+            allow_private_hosts: false,
+            enforce_allowed_domains: false,
+            allowed_domains: BTreeSet::new(),
+            blocked_domains: BTreeSet::new(),
         }
     }
 }
@@ -262,6 +270,22 @@ impl BrowserCompanionRuntimePolicy {
             ExecutionSecurityTier::Balanced
         } else {
             ExecutionSecurityTier::Restricted
+        }
+    }
+
+    /// Project the companion's destination-boundary policy into the shared web
+    /// policy shape without inheriting unrelated fetch-only transport limits.
+    #[must_use]
+    pub fn web_policy(&self) -> WebFetchRuntimePolicy {
+        WebFetchRuntimePolicy {
+            enabled: self.enabled,
+            allow_private_hosts: self.allow_private_hosts,
+            enforce_allowed_domains: self.enforce_allowed_domains,
+            allowed_domains: self.allowed_domains.clone(),
+            blocked_domains: self.blocked_domains.clone(),
+            timeout_seconds: self.timeout_seconds,
+            max_bytes: crate::config::DEFAULT_WEB_FETCH_MAX_BYTES,
+            max_redirects: crate::config::DEFAULT_WEB_FETCH_MAX_REDIRECTS,
         }
     }
 }
@@ -536,6 +560,10 @@ impl ToolRuntimeConfig {
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
+        let browser_companion_allowed_domains =
+            config.tools.browser_companion.normalized_allowed_domains();
+        let browser_companion_enforce_allowed_domains =
+            !browser_companion_allowed_domains.is_empty();
         Self {
             file_root: Some(config.tools.resolved_file_root()),
             shell_allow: config
@@ -572,6 +600,15 @@ impl ToolRuntimeConfig {
                 config.tools.browser_companion.command.as_deref(),
                 config.tools.browser_companion.expected_version.as_deref(),
                 config.tools.browser_companion.timeout_seconds,
+                config.tools.browser_companion.allow_private_hosts,
+                browser_companion_allowed_domains.into_iter().collect(),
+                config
+                    .tools
+                    .browser_companion
+                    .normalized_blocked_domains()
+                    .into_iter()
+                    .collect(),
+                browser_companion_enforce_allowed_domains,
             ),
             web_fetch: WebFetchRuntimePolicy {
                 enabled: config.tools.web.enabled,
@@ -786,6 +823,12 @@ impl ToolRuntimeConfig {
             per_tool_timeout: tool_execution_per_tool_timeout,
         };
 
+        let browser_companion_allow_private_hosts = web_fetch_allow_private_hosts;
+        let browser_companion_allowed_domains = web_fetch_allowed_domains.clone();
+        let browser_companion_blocked_domains = web_fetch_blocked_domains.clone();
+        let browser_companion_enforce_allowed_domains =
+            !browser_companion_allowed_domains.is_empty();
+
         Self {
             file_root,
             config_path,
@@ -806,6 +849,10 @@ impl ToolRuntimeConfig {
                 browser_companion_command.as_deref(),
                 browser_companion_expected_version.as_deref(),
                 browser_companion_timeout_seconds,
+                browser_companion_allow_private_hosts,
+                browser_companion_allowed_domains,
+                browser_companion_blocked_domains,
+                browser_companion_enforce_allowed_domains,
             ),
             web_fetch: WebFetchRuntimePolicy {
                 enabled: web_fetch_enabled,
@@ -1077,12 +1124,22 @@ fn resolve_web_search_secret_binding(
 pub(crate) fn browser_companion_runtime_policy_from_tool_config(
     config: &crate::config::ToolConfig,
 ) -> BrowserCompanionRuntimePolicy {
+    let allowed_domains = config.browser_companion.normalized_allowed_domains();
+    let enforce_allowed_domains = !allowed_domains.is_empty();
     browser_companion_runtime_policy(
         config.browser_companion.enabled,
         parse_env_bool("LOONGCLAW_BROWSER_COMPANION_READY").unwrap_or(false),
         config.browser_companion.command.as_deref(),
         config.browser_companion.expected_version.as_deref(),
         config.browser_companion.timeout_seconds,
+        config.browser_companion.allow_private_hosts,
+        allowed_domains.into_iter().collect(),
+        config
+            .browser_companion
+            .normalized_blocked_domains()
+            .into_iter()
+            .collect(),
+        enforce_allowed_domains,
     )
 }
 
@@ -1091,6 +1148,32 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
 ) -> BrowserCompanionRuntimePolicy {
     let env_command = parse_env_string("LOONGCLAW_BROWSER_COMPANION_COMMAND");
     let env_expected_version = parse_env_string("LOONGCLAW_BROWSER_COMPANION_EXPECTED_VERSION");
+    let default_browser_companion = crate::config::BrowserCompanionToolConfig::default();
+    let use_env_web_policy = config.browser_companion == default_browser_companion;
+    let allow_private_hosts = if use_env_web_policy {
+        parse_env_bool("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS").unwrap_or(false)
+    } else {
+        config.browser_companion.allow_private_hosts
+    };
+    let allowed_domains = if use_env_web_policy {
+        parse_env_domain_list("LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS")
+    } else {
+        config
+            .browser_companion
+            .normalized_allowed_domains()
+            .into_iter()
+            .collect()
+    };
+    let blocked_domains = if use_env_web_policy {
+        parse_env_domain_list("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS")
+    } else {
+        config
+            .browser_companion
+            .normalized_blocked_domains()
+            .into_iter()
+            .collect()
+    };
+    let enforce_allowed_domains = !allowed_domains.is_empty();
     browser_companion_runtime_policy(
         config.browser_companion.enabled
             || parse_env_bool("LOONGCLAW_BROWSER_COMPANION_ENABLED").unwrap_or(false),
@@ -1107,6 +1190,10 @@ pub(crate) fn browser_companion_runtime_policy_with_env_fallback(
             .or(env_expected_version.as_deref()),
         parse_env_u64("LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS")
             .unwrap_or(config.browser_companion.timeout_seconds),
+        allow_private_hosts,
+        allowed_domains,
+        blocked_domains,
+        enforce_allowed_domains,
     )
 }
 
@@ -1116,6 +1203,10 @@ fn browser_companion_runtime_policy(
     command: Option<&str>,
     expected_version: Option<&str>,
     timeout_seconds: u64,
+    allow_private_hosts: bool,
+    allowed_domains: BTreeSet<String>,
+    blocked_domains: BTreeSet<String>,
+    enforce_allowed_domains: bool,
 ) -> BrowserCompanionRuntimePolicy {
     BrowserCompanionRuntimePolicy {
         enabled,
@@ -1123,6 +1214,10 @@ fn browser_companion_runtime_policy(
         command: normalize_optional_string(command),
         expected_version: normalize_optional_string(expected_version),
         timeout_seconds: timeout_seconds.max(1),
+        allow_private_hosts,
+        enforce_allowed_domains,
+        allowed_domains,
+        blocked_domains,
     }
 }
 
@@ -1536,6 +1631,10 @@ mod tests {
                 command: Some("loongclaw-browser-companion".to_owned()),
                 expected_version: Some("1.2.3".to_owned()),
                 timeout_seconds: 9,
+                allow_private_hosts: false,
+                enforce_allowed_domains: false,
+                allowed_domains: BTreeSet::new(),
+                blocked_domains: BTreeSet::new(),
             },
             web_fetch: WebFetchRuntimePolicy {
                 enabled: false,
@@ -1642,6 +1741,13 @@ mod tests {
         config.tools.browser_companion.timeout_seconds = 7;
         config.tools.browser_companion.command = Some("loongclaw-browser-companion".to_owned());
         config.tools.browser_companion.expected_version = Some("1.2.3".to_owned());
+        config.tools.browser_companion.allow_private_hosts = true;
+        config.tools.browser_companion.allowed_domains =
+            vec!["Docs.Example.com".to_owned(), "api.example.com".to_owned()];
+        config.tools.browser_companion.blocked_domains = vec![
+            "internal.example".to_owned(),
+            " INTERNAL.EXAMPLE ".to_owned(),
+        ];
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
         assert!(runtime.browser_companion.enabled);
@@ -1655,6 +1761,16 @@ mod tests {
             Some("1.2.3")
         );
         assert_eq!(runtime.browser_companion.timeout_seconds, 7);
+        assert!(runtime.browser_companion.allow_private_hosts);
+        assert!(runtime.browser_companion.enforce_allowed_domains);
+        assert_eq!(
+            runtime.browser_companion.allowed_domains,
+            BTreeSet::from(["api.example.com".to_owned(), "docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            runtime.browser_companion.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
     }
 
     #[test]
@@ -1806,6 +1922,26 @@ mod tests {
             Some("1.2.3")
         );
         assert_eq!(config.browser_companion.timeout_seconds, 11);
+        assert!(config.browser_companion.allow_private_hosts);
+        assert!(
+            config
+                .browser_companion
+                .allowed_domains
+                .contains("docs.example.com")
+        );
+        assert!(
+            config
+                .browser_companion
+                .allowed_domains
+                .contains("api.example.com")
+        );
+        assert!(
+            config
+                .browser_companion
+                .blocked_domains
+                .contains("internal.example")
+        );
+        assert!(config.browser_companion.enforce_allowed_domains);
         assert!(!config.web_fetch.enabled);
         assert!(config.web_fetch.allow_private_hosts);
         assert!(
@@ -2010,6 +2146,10 @@ mod tests {
             command: Some("loongclaw-browser-companion".to_owned()),
             expected_version: Some("1.2.3".to_owned()),
             timeout_seconds: 9,
+            allow_private_hosts: false,
+            enforce_allowed_domains: true,
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            blocked_domains: BTreeSet::from(["internal.example".to_owned()]),
         };
 
         assert!(policy.enabled);
@@ -2021,6 +2161,16 @@ mod tests {
         );
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
         assert_eq!(policy.timeout_seconds, 9);
+        assert!(!policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
     }
 
     #[test]
@@ -2030,10 +2180,21 @@ mod tests {
         let mut config = crate::config::ToolConfig::default();
         config.browser_companion.enabled = true;
         config.browser_companion.timeout_seconds = 0;
+        config.browser_companion.allowed_domains = vec!["Docs.Example.com".to_owned()];
+        config.browser_companion.blocked_domains = vec!["internal.example".to_owned()];
 
         let policy = browser_companion_runtime_policy_from_tool_config(&config);
 
         assert_eq!(policy.timeout_seconds, 1);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["docs.example.com".to_owned()])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
     }
 
     #[test]
@@ -2061,6 +2222,35 @@ mod tests {
         );
         assert_eq!(policy.expected_version.as_deref(), Some("1.2.3"));
         assert_eq!(policy.timeout_seconds, 11);
+    }
+
+    #[test]
+    fn browser_companion_runtime_policy_with_env_fallback_reuses_web_fetch_boundaries() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
+        env.set("LOONGCLAW_BROWSER_COMPANION_READY", "true");
+        env.set("LOONGCLAW_WEB_FETCH_ALLOW_PRIVATE_HOSTS", "true");
+        env.set(
+            "LOONGCLAW_WEB_FETCH_ALLOWED_DOMAINS",
+            "docs.example.com,api.example.com",
+        );
+        env.set("LOONGCLAW_WEB_FETCH_BLOCKED_DOMAINS", "internal.example");
+
+        let policy = browser_companion_runtime_policy_with_env_fallback(
+            &crate::config::ToolConfig::default(),
+        );
+
+        assert!(policy.allow_private_hosts);
+        assert!(policy.enforce_allowed_domains);
+        assert_eq!(
+            policy.allowed_domains,
+            BTreeSet::from(["api.example.com".to_owned(), "docs.example.com".to_owned(),])
+        );
+        assert_eq!(
+            policy.blocked_domains,
+            BTreeSet::from(["internal.example".to_owned()])
+        );
     }
 
     #[test]

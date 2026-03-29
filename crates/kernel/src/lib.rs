@@ -32,6 +32,7 @@ pub use audit::{
 pub use awareness::{CodebaseAwarenessConfig, CodebaseAwarenessEngine, CodebaseAwarenessSnapshot};
 pub use bootstrap::{
     BootstrapPolicy, BootstrapReport, BootstrapTask, BootstrapTaskStatus, PluginBootstrapExecutor,
+    plugin_bridge_is_high_risk_auto_apply,
 };
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use connector::{
@@ -57,14 +58,18 @@ pub use memory::{
 };
 pub use pack::VerticalPackManifest;
 pub use plugin::{
-    PluginAbsorbReport, PluginDescriptor, PluginManifest, PluginScanReport, PluginScanner,
-    PluginSetup, PluginSetupMode, PluginSourceKind,
+    CURRENT_PLUGIN_HOST_API, CURRENT_PLUGIN_MANIFEST_API_VERSION, PluginAbsorbReport,
+    PluginCompatibility, PluginCompatibilityMode, PluginCompatibilityShim, PluginContractDialect,
+    PluginDescriptor, PluginDiagnosticCode, PluginDiagnosticFinding, PluginDiagnosticPhase,
+    PluginDiagnosticSeverity, PluginManifest, PluginScanReport, PluginScanner, PluginSetup,
+    PluginSetupMode, PluginSlotClaim, PluginSlotMode, PluginSourceKind, PluginTrustTier,
+    format_plugin_provenance_summary, plugin_provenance_summary_for_descriptor,
 };
 pub use plugin_ir::{
-    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus,
-    PluginBridgeKind, PluginIR, PluginRuntimeProfile, PluginSetupReadiness,
-    PluginSetupReadinessContext, PluginTranslationReport, PluginTranslator,
-    evaluate_plugin_setup_requirements,
+    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationInventoryEntry,
+    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginCompatibilityShimSupport,
+    PluginIR, PluginRuntimeProfile, PluginSetupReadiness, PluginSetupReadinessContext,
+    PluginTranslationReport, PluginTranslator, evaluate_plugin_setup_requirements,
 };
 pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};

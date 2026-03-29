@@ -25,6 +25,18 @@ use crate::secrets::resolve_secret_with_legacy_env;
 
 #[path = "channels_irc_impl.rs"]
 mod irc_impl;
+#[path = "channels_nostr_impl.rs"]
+mod nostr_impl;
+#[path = "channels_signal_impl.rs"]
+mod signal_impl;
+mod twitch;
+
+pub use self::twitch::{ResolvedTwitchChannelConfig, TwitchAccountConfig, TwitchChannelConfig};
+pub use nostr_impl::{NostrAccountConfig, NostrChannelConfig, ResolvedNostrChannelConfig};
+pub(crate) use nostr_impl::{parse_nostr_private_key_hex, parse_nostr_public_key_hex};
+use signal_impl::{
+    default_signal_account_env, default_signal_service_url, default_signal_service_url_env,
+};
 
 pub(crate) const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
 pub(crate) const DISCORD_BOT_TOKEN_ENV: &str = "DISCORD_BOT_TOKEN";
@@ -50,6 +62,7 @@ pub(crate) const SYNOLOGY_CHAT_TOKEN_ENV: &str = "SYNOLOGY_CHAT_TOKEN";
 pub(crate) const SYNOLOGY_CHAT_INCOMING_URL_ENV: &str = "SYNOLOGY_CHAT_INCOMING_URL";
 pub(crate) const SIGNAL_SERVICE_URL_ENV: &str = "SIGNAL_SERVICE_URL";
 pub(crate) const SIGNAL_ACCOUNT_ENV: &str = "SIGNAL_ACCOUNT";
+pub(crate) const TWITCH_ACCESS_TOKEN_ENV: &str = "TWITCH_ACCESS_TOKEN";
 pub(crate) const SLACK_BOT_TOKEN_ENV: &str = "SLACK_BOT_TOKEN";
 pub(crate) const TEAMS_APP_ID_ENV: &str = "TEAMS_APP_ID";
 pub(crate) const TEAMS_APP_PASSWORD_ENV: &str = "TEAMS_APP_PASSWORD";
@@ -57,6 +70,11 @@ pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
 pub(crate) const TEAMS_WEBHOOK_URL_ENV: &str = "TEAMS_WEBHOOK_URL";
 pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
 pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
+pub(crate) const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
+pub(crate) const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
+pub(crate) const TLON_SHIP_ENV: &str = "TLON_SHIP";
+pub(crate) const TLON_URL_ENV: &str = "TLON_URL";
+pub(crate) const TLON_CODE_ENV: &str = "TLON_CODE";
 pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
 pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
@@ -1409,6 +1427,54 @@ impl ResolvedWhatsappChannelConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TlonAccountConfig {
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub ship: Option<String>,
+    #[serde(default)]
+    pub ship_env: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub url_env: Option<String>,
+    #[serde(default)]
+    pub code: Option<SecretRef>,
+    #[serde(default)]
+    pub code_env: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedTlonChannelConfig {
+    pub configured_account_id: String,
+    pub configured_account_label: String,
+    pub account: ChannelAccountIdentity,
+    pub enabled: bool,
+    pub ship: Option<String>,
+    pub ship_env: Option<String>,
+    pub url: Option<String>,
+    pub url_env: Option<String>,
+    pub code: Option<SecretRef>,
+    pub code_env: Option<String>,
+}
+
+impl ResolvedTlonChannelConfig {
+    pub fn ship(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.ship.as_deref(), self.ship_env.as_deref())
+    }
+
+    pub fn url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.url.as_deref(), self.url_env.as_deref())
+    }
+
+    pub fn code(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.code.as_ref(), self.code_env.as_deref())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct DiscordChannelConfig {
@@ -1778,6 +1844,31 @@ pub struct WhatsappChannelConfig {
     pub api_base_url: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, WhatsappAccountConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TlonChannelConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub default_account: Option<String>,
+    #[serde(default)]
+    pub ship: Option<String>,
+    #[serde(default = "tlon_support::default_tlon_ship_env")]
+    pub ship_env: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "tlon_support::default_tlon_url_env")]
+    pub url_env: Option<String>,
+    #[serde(default)]
+    pub code: Option<SecretRef>,
+    #[serde(default = "tlon_support::default_tlon_code_env")]
+    pub code_env: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub accounts: BTreeMap<String, TlonAccountConfig>,
 }
 
 impl Default for CliChannelConfig {
@@ -2341,6 +2432,23 @@ impl Default for WhatsappChannelConfig {
             app_secret: None,
             app_secret_env: Some(WHATSAPP_APP_SECRET_ENV.to_owned()),
             api_base_url: Some(default_whatsapp_api_base_url()),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for TlonChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            ship: None,
+            ship_env: Some(TLON_SHIP_ENV.to_owned()),
+            url: None,
+            url_env: Some(TLON_URL_ENV.to_owned()),
+            code: None,
+            code_env: Some(TLON_CODE_ENV.to_owned()),
             accounts: BTreeMap::new(),
         }
     }
@@ -6042,6 +6150,235 @@ impl WhatsappChannelConfig {
     }
 }
 
+impl TlonChannelConfig {
+    pub(crate) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+        validate_channel_account_integrity(
+            &mut issues,
+            "tlon",
+            self.default_account.as_deref(),
+            self.accounts.keys(),
+        );
+        tlon_support::validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.ship_env",
+            self.ship_env.as_deref(),
+            "tlon.ship",
+        );
+        tlon_support::validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.url_env",
+            self.url_env.as_deref(),
+            "tlon.url",
+        );
+        tlon_support::validate_tlon_env_pointer(
+            &mut issues,
+            "tlon.code_env",
+            self.code_env.as_deref(),
+            "tlon.code",
+        );
+        tlon_support::validate_tlon_secret_ref_env_pointer(
+            &mut issues,
+            "tlon.code",
+            self.code.as_ref(),
+        );
+
+        for (raw_account_id, account) in &self.accounts {
+            let account_id = normalize_channel_account_id(raw_account_id);
+
+            let ship_field_path = format!("tlon.accounts.{account_id}.ship");
+            let ship_env_field_path = format!("{ship_field_path}_env");
+            tlon_support::validate_tlon_env_pointer(
+                &mut issues,
+                ship_env_field_path.as_str(),
+                account.ship_env.as_deref(),
+                ship_field_path.as_str(),
+            );
+
+            let url_field_path = format!("tlon.accounts.{account_id}.url");
+            let url_env_field_path = format!("{url_field_path}_env");
+            tlon_support::validate_tlon_env_pointer(
+                &mut issues,
+                url_env_field_path.as_str(),
+                account.url_env.as_deref(),
+                url_field_path.as_str(),
+            );
+
+            let code_field_path = format!("tlon.accounts.{account_id}.code");
+            let code_env_field_path = format!("{code_field_path}_env");
+            tlon_support::validate_tlon_env_pointer(
+                &mut issues,
+                code_env_field_path.as_str(),
+                account.code_env.as_deref(),
+                code_field_path.as_str(),
+            );
+            tlon_support::validate_tlon_secret_ref_env_pointer(
+                &mut issues,
+                code_field_path.as_str(),
+                account.code.as_ref(),
+            );
+        }
+
+        issues
+    }
+
+    pub fn ship(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.ship.as_deref(), self.ship_env.as_deref())
+    }
+
+    pub fn url(&self) -> Option<String> {
+        resolve_string_with_legacy_env(self.url.as_deref(), self.url_env.as_deref())
+    }
+
+    pub fn code(&self) -> Option<String> {
+        resolve_secret_with_legacy_env(self.code.as_ref(), self.code_env.as_deref())
+    }
+
+    pub fn configured_account_ids(&self) -> Vec<String> {
+        let ids = configured_account_ids(self.accounts.keys());
+        if ids.is_empty() {
+            return vec![self.default_configured_account_id()];
+        }
+        ids
+    }
+
+    pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
+        resolve_default_configured_account_selection(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+
+    pub fn default_configured_account_id(&self) -> String {
+        let selection = self.default_configured_account_selection();
+        selection.id
+    }
+
+    pub fn resolved_account_route(
+        &self,
+        requested_account_id: Option<&str>,
+        selected_configured_account_id: &str,
+    ) -> ChannelResolvedAccountRoute {
+        resolve_channel_account_route(
+            self.accounts.keys(),
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+            requested_account_id,
+            selected_configured_account_id,
+        )
+    }
+
+    pub fn resolve_account(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTlonChannelConfig> {
+        let configured = self.resolve_configured_account_selection(requested_account_id)?;
+        let account_override = configured
+            .account_key
+            .as_deref()
+            .and_then(|key| self.accounts.get(key));
+
+        let merged = TlonChannelConfig {
+            enabled: self.enabled
+                && account_override
+                    .and_then(|account| account.enabled)
+                    .unwrap_or(true),
+            account_id: account_override
+                .and_then(|account| account.account_id.clone())
+                .or_else(|| self.account_id.clone()),
+            default_account: None,
+            ship: account_override
+                .and_then(|account| account.ship.clone())
+                .or_else(|| self.ship.clone()),
+            ship_env: account_override
+                .and_then(|account| account.ship_env.clone())
+                .or_else(|| self.ship_env.clone()),
+            url: account_override
+                .and_then(|account| account.url.clone())
+                .or_else(|| self.url.clone()),
+            url_env: account_override
+                .and_then(|account| account.url_env.clone())
+                .or_else(|| self.url_env.clone()),
+            code: account_override
+                .and_then(|account| account.code.clone())
+                .or_else(|| self.code.clone()),
+            code_env: account_override
+                .and_then(|account| account.code_env.clone())
+                .or_else(|| self.code_env.clone()),
+            accounts: BTreeMap::new(),
+        };
+        let account = merged.resolved_account_identity();
+
+        Ok(ResolvedTlonChannelConfig {
+            configured_account_id: configured.id,
+            configured_account_label: configured.label,
+            account,
+            enabled: merged.enabled,
+            ship: merged.ship,
+            ship_env: merged.ship_env,
+            url: merged.url,
+            url_env: merged.url_env,
+            code: merged.code,
+            code_env: merged.code_env,
+        })
+    }
+
+    pub fn resolve_account_for_session_account_id(
+        &self,
+        session_account_id: Option<&str>,
+    ) -> CliResult<ResolvedTlonChannelConfig> {
+        resolve_account_for_session_account_id(
+            session_account_id,
+            || self.resolve_account(session_account_id),
+            || self.configured_account_ids(),
+            |configured_id| self.resolve_account(Some(configured_id)),
+            |resolved| resolved.account.id.as_str(),
+        )
+    }
+
+    pub fn resolved_account_identity(&self) -> ChannelAccountIdentity {
+        if let Some((id, label)) = resolve_configured_account_identity(self.account_id.as_deref()) {
+            return ChannelAccountIdentity {
+                id,
+                label,
+                source: ChannelAccountIdentitySource::Configured,
+            };
+        }
+
+        let ship = self.ship();
+        let ship = ship
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(ship) = ship {
+            let trimmed_ship = ship.trim_start_matches('~');
+            let normalized_ship = normalize_channel_account_id(trimmed_ship);
+            let account_id = format!("tlon_{normalized_ship}");
+            let account_label = format!("ship:{ship}");
+            return ChannelAccountIdentity {
+                id: account_id,
+                label: account_label,
+                source: ChannelAccountIdentitySource::DerivedCredential,
+            };
+        }
+
+        default_channel_account_identity()
+    }
+
+    fn resolve_configured_account_selection(
+        &self,
+        requested_account_id: Option<&str>,
+    ) -> CliResult<ResolvedConfiguredAccount> {
+        resolve_configured_account_selection(
+            self.accounts.keys(),
+            requested_account_id,
+            self.default_account.as_deref(),
+            self.resolved_account_identity().id.as_str(),
+        )
+    }
+}
+
 fn default_telegram_base_url() -> String {
     "https://api.telegram.org".to_owned()
 }
@@ -6158,18 +6495,6 @@ fn default_imessage_bridge_token_env() -> Option<String> {
     Some(IMESSAGE_BRIDGE_TOKEN_ENV.to_owned())
 }
 
-fn default_signal_service_url() -> String {
-    "http://127.0.0.1:8080".to_owned()
-}
-
-fn default_signal_account_env() -> Option<String> {
-    Some(SIGNAL_ACCOUNT_ENV.to_owned())
-}
-
-fn default_signal_service_url_env() -> Option<String> {
-    Some(SIGNAL_SERVICE_URL_ENV.to_owned())
-}
-
 fn default_slack_api_base_url() -> String {
     "https://slack.com/api".to_owned()
 }
@@ -6261,6 +6586,50 @@ fn resolve_string_with_legacy_env(raw: Option<&str>, env_key: Option<&str>) -> O
         return None;
     }
     Some(trimmed_value.to_owned())
+}
+
+fn resolve_string_list_with_legacy_env(
+    raw: Option<&[String]>,
+    env_key: Option<&str>,
+) -> Vec<String> {
+    let inline = raw.map(normalize_inline_string_list).unwrap_or_default();
+    if !inline.is_empty() {
+        return inline;
+    }
+
+    let env_name = env_key.map(str::trim).filter(|value| !value.is_empty());
+    let Some(env_name) = env_name else {
+        return Vec::new();
+    };
+    let env_value = std::env::var(env_name).ok();
+    let Some(env_value) = env_value else {
+        return Vec::new();
+    };
+    parse_env_string_list(env_value.as_str())
+}
+
+fn normalize_inline_string_list(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(String::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_env_string_list(raw: &str) -> Vec<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    trimmed
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 pub(crate) fn parse_email_smtp_endpoint(raw: &str) -> CliResult<EmailSmtpEndpoint> {
@@ -7431,6 +7800,11 @@ where
         account_key: None,
     })
 }
+
+mod tlon_support;
+
+#[cfg(test)]
+mod hotspot_tests;
 
 #[cfg(test)]
 mod tests {
@@ -9381,66 +9755,5 @@ mod tests {
             backup.resolved_api_base_url(),
             "https://graph.facebook.com/v26.0"
         );
-    }
-
-    #[test]
-    fn telegram_streaming_mode_deserializes_from_json() {
-        let off: TelegramStreamingMode = serde_json::from_str("\"off\"").expect("deserialize off");
-        assert_eq!(off, TelegramStreamingMode::Off);
-
-        let draft: TelegramStreamingMode =
-            serde_json::from_str("\"draft\"").expect("deserialize draft");
-        assert_eq!(draft, TelegramStreamingMode::Draft);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_default_is_off() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "TEST_TOKEN"
-        }))
-        .expect("deserialize telegram config");
-        assert_eq!(config.streaming_mode, TelegramStreamingMode::Off);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_inherited_from_base_in_multi_account() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "BASE_TOKEN",
-            "streaming_mode": "draft",
-            "accounts": {
-                "Account1": {
-                    "bot_token_env": "ACCOUNT1_TOKEN"
-                }
-            }
-        }))
-        .expect("deserialize telegram config");
-
-        let resolved = config
-            .resolve_account(Some("Account1"))
-            .expect("resolve account1");
-        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Draft);
-    }
-
-    #[test]
-    fn telegram_streaming_mode_overridden_per_account() {
-        let config: TelegramChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "bot_token_env": "BASE_TOKEN",
-            "streaming_mode": "draft",
-            "accounts": {
-                "Account1": {
-                    "streaming_mode": "off",
-                    "bot_token_env": "ACCOUNT1_TOKEN"
-                }
-            }
-        }))
-        .expect("deserialize telegram config");
-
-        let resolved = config
-            .resolve_account(Some("Account1"))
-            .expect("resolve account1");
-        assert_eq!(resolved.streaming_mode, TelegramStreamingMode::Off);
     }
 }

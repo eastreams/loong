@@ -590,7 +590,10 @@ fn descriptor_wasm_artifact(descriptor: &PluginDescriptor) -> Option<String> {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use kernel::{Capability, PluginManifest, PluginSourceKind};
+    use kernel::{
+        Capability, PluginCompatibilityMode, PluginContractDialect, PluginManifest,
+        PluginSourceKind,
+    };
 
     use super::*;
 
@@ -598,16 +601,22 @@ mod tests {
         PluginDescriptor {
             path: format!("/tmp/{plugin_id}.plugin.json"),
             source_kind: PluginSourceKind::PackageManifest,
+            dialect: PluginContractDialect::LoongClawPackageManifest,
+            dialect_version: Some("v1alpha1".to_owned()),
+            compatibility_mode: PluginCompatibilityMode::Native,
             package_root: "/tmp".to_owned(),
             package_manifest_path: Some(format!("/tmp/{plugin_id}.plugin.json")),
             language: "json".to_owned(),
             manifest: PluginManifest {
+                api_version: Some("v1alpha1".to_owned()),
+                version: Some("1.0.0".to_owned()),
                 plugin_id: plugin_id.to_owned(),
                 provider_id: "test-provider".to_owned(),
                 connector_name: "test-connector".to_owned(),
                 channel_id: None,
                 endpoint: None,
                 capabilities: BTreeSet::from([Capability::InvokeConnector]),
+                trust_tier: kernel::PluginTrustTier::Unverified,
                 metadata: BTreeMap::from([(
                     "bridge_kind".to_owned(),
                     bridge_kind.as_str().to_owned(),
@@ -618,6 +627,8 @@ mod tests {
                 output_examples: Vec::new(),
                 defer_loading: false,
                 setup: None,
+                slot_claims: Vec::new(),
+                compatibility: None,
             },
         }
     }
@@ -627,6 +638,7 @@ mod tests {
         let report = PluginScanReport {
             scanned_files: 2,
             matched_plugins: 2,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![
                 test_descriptor("acp-bridge-plugin", PluginBridgeKind::AcpBridge),
                 test_descriptor("acp-runtime-plugin", PluginBridgeKind::AcpRuntime),

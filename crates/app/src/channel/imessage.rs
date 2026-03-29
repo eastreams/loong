@@ -2,7 +2,10 @@ use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedImessageChannelConfig};
 
-use super::{ChannelOutboundTargetKind, http::build_outbound_http_client};
+use super::{
+    ChannelOutboundTargetKind,
+    http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+};
 
 #[derive(Debug, Serialize)]
 struct ImessageSendRequestBody {
@@ -16,6 +19,7 @@ pub(super) async fn run_imessage_send(
     target_kind: ChannelOutboundTargetKind,
     target_id: &str,
     text: &str,
+    policy: ChannelOutboundHttpPolicy,
 ) -> CliResult<()> {
     ensure_imessage_target_kind(target_kind)?;
 
@@ -25,7 +29,8 @@ pub(super) async fn run_imessage_send(
     let bridge_token = resolved.bridge_token().ok_or_else(|| {
         "imessage bridge_token missing (set imessage.bridge_token or env)".to_owned()
     })?;
-    let request_url = build_imessage_request_url(bridge_url.as_str(), bridge_token.as_str())?;
+    let request_url =
+        build_imessage_request_url(bridge_url.as_str(), bridge_token.as_str(), policy)?;
 
     let chat_guid = target_id.trim();
     if chat_guid.is_empty() {
@@ -37,7 +42,7 @@ pub(super) async fn run_imessage_send(
         message: text.to_owned(),
     };
 
-    let client = build_outbound_http_client("imessage send")?;
+    let client = build_outbound_http_client("imessage send", policy)?;
     let request = client.post(request_url).json(&request_body);
     let response = request
         .send()
@@ -58,19 +63,17 @@ fn ensure_imessage_target_kind(target_kind: ChannelOutboundTargetKind) -> CliRes
     ))
 }
 
-fn build_imessage_request_url(bridge_url: &str, bridge_token: &str) -> CliResult<reqwest::Url> {
-    let trimmed_bridge_url = bridge_url.trim();
-    if trimmed_bridge_url.is_empty() {
-        return Err("imessage bridge_url is empty".to_owned());
-    }
-
+fn build_imessage_request_url(
+    bridge_url: &str,
+    bridge_token: &str,
+    policy: ChannelOutboundHttpPolicy,
+) -> CliResult<reqwest::Url> {
     let trimmed_bridge_token = bridge_token.trim();
     if trimmed_bridge_token.is_empty() {
         return Err("imessage bridge_token is empty".to_owned());
     }
 
-    let mut request_url = reqwest::Url::parse(trimmed_bridge_url)
-        .map_err(|error| format!("imessage bridge_url is invalid: {error}"))?;
+    let mut request_url = validate_outbound_http_target("imessage bridge_url", bridge_url, policy)?;
     let mut path_segments = request_url.path_segments_mut().map_err(|_path_error| {
         "imessage bridge_url cannot be used as a hierarchical base url".to_owned()
     })?;
@@ -115,9 +118,15 @@ mod tests {
 
     #[test]
     fn build_imessage_request_url_preserves_base_path_and_guid_query() {
-        let request_url =
-            build_imessage_request_url("https://bluebubbles.example.test/base", "bridge-password")
-                .expect("build imessage request url");
+        let policy = ChannelOutboundHttpPolicy {
+            allow_private_hosts: false,
+        };
+        let request_url = build_imessage_request_url(
+            "https://bluebubbles.example.test/base",
+            "bridge-password",
+            policy,
+        )
+        .expect("build imessage request url");
 
         assert_eq!(
             request_url.as_str(),
