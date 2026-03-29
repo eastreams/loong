@@ -332,7 +332,8 @@ Remaining deliverables:
   - Web UI implementation as a thin shell over existing ask/chat, onboarding,
     dashboard, and browser semantics, not a separate assistant runtime
   - current product mode stays same-origin and localhost-only by default, but
-    that operating boundary is not the long-term architecture endpoint
+    that bind policy is a security and rollout boundary for the current slice,
+    not the long-term architecture endpoint
 - gateway service foundation:
   - land the first explicit daemon-owned gateway owner contract through
     `gateway run`, `gateway status`, and `gateway stop`, while keeping
