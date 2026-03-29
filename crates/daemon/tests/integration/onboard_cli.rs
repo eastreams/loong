@@ -2026,6 +2026,7 @@ async fn post_write_verification_failure_preserves_old_config_and_reports_blocke
     config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
         "test-openai-key".to_owned(),
     ));
+    config.tools.file_root = Some(root.join("restored-tool-root").display().to_string());
     config.memory.sqlite_path = invalid_sqlite_dir.display().to_string();
     mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
         .expect("write existing config");
@@ -2070,8 +2071,63 @@ async fn post_write_verification_failure_preserves_old_config_and_reports_blocke
         "post-write verification failures should render a blocked-after-verification outcome instead of only returning an error: {transcript:#?}"
     );
     assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("- model: openai/gpt-5.1-codex")),
+        "blocked-after-verification summary should describe the restored config on disk, not the failed draft model: {transcript:#?}"
+    );
+    assert!(
+        transcript
+            .iter()
+            .all(|line| !line.contains("- model: gpt-4.1-mini")),
+        "blocked-after-verification summary should not advertise the unwritten draft model after rollback succeeds: {transcript:#?}"
+    );
+    assert!(
         transcript.iter().all(|line| line != "onboarding complete"),
         "blocked-after-verification flows should not be reported as a clean onboarding completion: {transcript:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_derives_workspace_root_backed_file_root_defaults() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let workspace_root = unique_temp_path("non-interactive-workspace-root");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let output_path = unique_temp_path("non-interactive-workspace-root-config.toml");
+
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        Some(workspace_root.clone()),
+        None,
+    )
+    .await
+    .expect("run non-interactive onboarding with workspace root context");
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load non-interactive workspace config");
+    assert_eq!(
+        config.tools.file_root.as_deref(),
+        Some(workspace_root.to_string_lossy().as_ref()),
+        "non-interactive onboarding should still derive and persist the workspace-root-backed file_root default: {transcript:#?}"
     );
 }
 

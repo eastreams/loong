@@ -1512,14 +1512,47 @@ pub async fn run_onboard_cli_with_ui(
                 let verification_detail = format!("failed to bootstrap sqlite memory: {error}");
                 if let Some(write_recovery) = write_recovery.as_ref() {
                     let rollback_result = write_recovery.rollback(&output_path);
-                    let config_status = match &rollback_result {
-                        Ok(()) => {
-                            Some("previous config restored after verification failed".to_owned())
-                        }
-                        Err(rollback_error) => Some(format!(
-                            "verification failed and rollback also failed: {rollback_error}"
-                        )),
-                    };
+                    let restored_summary_candidate =
+                        existing_output_config.as_ref().map(|config| {
+                            (
+                                config,
+                                build_onboard_review_candidate_with_selected_context(
+                                    config,
+                                    &workspace_guidance,
+                                    starting_selection.review_candidate.as_ref(),
+                                ),
+                            )
+                        });
+                    let (summary_config, summary_review_candidate, config_status) =
+                        match &rollback_result {
+                            Ok(()) => match restored_summary_candidate.as_ref() {
+                                Some((config, review_candidate)) => (
+                                    *config,
+                                    Some(review_candidate),
+                                    Some(
+                                        "previous config restored after verification failed"
+                                            .to_owned(),
+                                    ),
+                                ),
+                                None => (
+                                    &flow.draft().config,
+                                    Some(&review_candidate),
+                                    Some(
+                                        "verification failed after write; rollback removed the \
+                                         partial config and no prior config was available"
+                                            .to_owned(),
+                                    ),
+                                ),
+                            },
+                            Err(rollback_error) => (
+                                &flow.draft().config,
+                                Some(&review_candidate),
+                                Some(format!(
+                                    "verification failed and rollback also failed: \
+                                     {rollback_error}"
+                                )),
+                            ),
+                        };
                     let failure = match &rollback_result {
                         Ok(()) => verification_detail.clone(),
                         Err(rollback_error) => format!(
@@ -1532,9 +1565,9 @@ pub async fn run_onboard_cli_with_ui(
                     print_guided_step_boundary(ui, OnboardWizardStep::Ready)?;
                     let blocked_summary = build_onboarding_success_summary_with_outcome(
                         &output_path,
-                        &flow.draft().config,
+                        summary_config,
                         starting_selection.import_source.as_deref(),
-                        Some(&review_candidate),
+                        summary_review_candidate,
                         None,
                         config_status.as_deref(),
                         blocked_outcome,
@@ -1737,11 +1770,16 @@ where
     }
 
     fn run_workspace_step(&mut self, draft: &mut OnboardDraft) -> CliResult<OnboardFlowStepAction> {
+        let workspace_values = onboard_workspace::derive_workspace_step_values(draft, self.context);
+
         if self.options.non_interactive {
+            onboard_workspace::commit_workspace_step_selection(
+                draft,
+                &workspace_values,
+                &workspace_values,
+            );
             return Ok(OnboardFlowStepAction::Next);
         }
-
-        let workspace_values = onboard_workspace::derive_workspace_step_values(draft, self.context);
         print_lines(
             self.ui,
             render_workspace_step_screen_lines_with_style(
