@@ -2553,6 +2553,319 @@ fn runtime_capability_plan_uses_memory_stage_profile_dry_run_artifact_surface() 
 }
 
 #[test]
+fn runtime_capability_plan_scopes_memory_stage_profile_payload_provenance_to_accepted_evidence() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-memory-stage-profile-provenance");
+    write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(
+        &root,
+        "memory-stage-profile-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(
+        &root,
+        "memory-stage-profile-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let candidate_a_path = root.join("artifacts/runtime-capability-memory-stage-profile-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-memory-stage-profile-b.json");
+    let candidate_a = propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "memory-stage-profile-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile,
+        "Promote governed memory pipeline intent into a reusable profile",
+        "Governed memory pipeline promotion intent only",
+        &["memory_read"],
+        &["memory", "pipeline"],
+    );
+    let _candidate_b = propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "memory-stage-profile-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::MemoryStageProfile,
+        "Promote governed memory pipeline intent into a reusable profile",
+        "Governed memory pipeline promotion intent only",
+        &["memory_read"],
+        &["memory", "pipeline"],
+    );
+    rewrite_json_file(&candidate_b_path, |payload| {
+        let changed_surface_count = payload
+            .pointer("/source_run/snapshot_delta/changed_surface_count")
+            .and_then(Value::as_u64)
+            .expect(
+                "candidate fixture should include source_run.snapshot_delta.changed_surface_count",
+            );
+        *payload
+            .pointer_mut("/source_run/snapshot_delta/changed_surface_count")
+            .expect(
+                "candidate fixture should include source_run.snapshot_delta.changed_surface_count",
+            ) = Value::from(changed_surface_count + 1);
+        let acp_policy_after = payload
+            .pointer_mut("/source_run/snapshot_delta/acp_policy/after")
+            .expect("candidate fixture should include source_run.snapshot_delta.acp_policy.after");
+        *acp_policy_after = Value::String("rejected-only-policy".to_owned());
+    });
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "memory-stage-profile-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Rejected,
+        "memory-stage-profile-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+    let payload = serde_json::to_value(&plan).expect("serialize runtime capability plan");
+    let planned_payload = payload
+        .pointer("/planned_payload/memory_stage_profile")
+        .expect("memory-stage-profile plan should include a promoted payload");
+    let family_changed_surfaces = payload
+        .pointer("/evidence/changed_surfaces")
+        .and_then(Value::as_array)
+        .expect("plan should preserve broader report-level changed surfaces")
+        .iter()
+        .map(|value| value.as_str().expect("changed surface should be a string"))
+        .collect::<Vec<_>>();
+    assert!(
+        family_changed_surfaces.contains(&"acp_policy"),
+        "broader report-level evidence should still include rejected family evidence"
+    );
+
+    assert_eq!(
+        planned_payload
+            .pointer("/schema_version")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        planned_payload
+            .pointer("/artifact_kind")
+            .and_then(Value::as_str),
+        Some("memory_stage_profile")
+    );
+    assert_eq!(
+        planned_payload
+            .pointer("/profile/id")
+            .and_then(Value::as_str),
+        Some(plan.planned_artifact.artifact_id.as_str())
+    );
+    assert_eq!(
+        planned_payload
+            .pointer("/profile/summary")
+            .and_then(Value::as_str),
+        Some("Promote governed memory pipeline intent into a reusable profile")
+    );
+    assert_eq!(
+        planned_payload
+            .pointer("/profile/review_scope")
+            .and_then(Value::as_str),
+        Some("Governed memory pipeline promotion intent only")
+    );
+    let required_capabilities = planned_payload
+        .pointer("/profile/required_capabilities")
+        .and_then(Value::as_array)
+        .expect("payload should include the profile required capabilities")
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .expect("required capability should be a string")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(required_capabilities, vec!["memory_read"]);
+    let tags = planned_payload
+        .pointer("/profile/tags")
+        .and_then(Value::as_array)
+        .expect("payload should include the profile tags")
+        .iter()
+        .map(|value| value.as_str().expect("tag should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(tags, vec!["memory", "pipeline"]);
+    assert_eq!(
+        planned_payload
+            .pointer("/provenance/family_id")
+            .and_then(Value::as_str),
+        Some(family.family_id.as_str())
+    );
+    let accepted_candidate_ids = planned_payload
+        .pointer("/provenance/accepted_candidate_ids")
+        .and_then(Value::as_array)
+        .expect("payload should include the accepted candidate ids")
+        .iter()
+        .map(|value| value.as_str().expect("candidate id should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        accepted_candidate_ids,
+        vec![candidate_a.candidate_id.as_str()]
+    );
+    let changed_surfaces = planned_payload
+        .pointer("/provenance/evidence_digest/changed_surfaces")
+        .and_then(Value::as_array)
+        .expect("payload should include the compact changed-surfaces digest")
+        .iter()
+        .map(|value| value.as_str().expect("changed surface should be a string"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        changed_surfaces,
+        vec!["context_engine_compaction", "memory_policy"]
+    );
+    assert!(
+        !changed_surfaces.contains(&"acp_policy"),
+        "payload provenance digest should exclude rejected-only changed surfaces"
+    );
+
+    let rendered =
+        loongclaw_daemon::runtime_capability_cli::render_runtime_capability_promotion_plan_text(
+            &plan,
+        );
+    assert!(
+        rendered.contains(&format!(
+            "planned_payload=profile_id={}",
+            plan.planned_artifact.artifact_id
+        )),
+        "rendered text should mention the payload compactly when present"
+    );
+    assert!(
+        !rendered.contains("planned_payload=null"),
+        "rendered text should omit null planned payload noise"
+    );
+    assert!(
+        !rendered.contains("memory_stage_profile:memory_stage_profile"),
+        "rendered text should not repeat the payload discriminator"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_capability_plan_omits_memory_stage_profile_payload_for_other_targets() {
+    let root = unique_temp_dir("loongclaw-runtime-capability-plan-non-memory-payload");
+    let config_path = write_runtime_capability_config(&root);
+
+    let (run_a_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "managed-skill-a",
+        -0.2,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+    let (run_b_path, _) = finish_runtime_experiment_variant(
+        &root,
+        &config_path,
+        "managed-skill-b",
+        -0.4,
+        &[],
+        loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentDecision::Promoted,
+    );
+
+    let candidate_a_path = root.join("artifacts/runtime-capability-managed-skill-a.json");
+    let candidate_b_path = root.join("artifacts/runtime-capability-managed-skill-b.json");
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_a_path,
+        "managed-skill-a",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    propose_runtime_capability_variant_with_target(
+        &root,
+        &run_b_path,
+        "managed-skill-b",
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityTarget::ManagedSkill,
+        "Codify browser preview onboarding as a reusable managed skill",
+        "Browser preview onboarding and companion readiness checks only",
+        &["invoke_tool", "memory_read"],
+        &["browser", "onboarding"],
+    );
+    review_runtime_capability_variant(
+        &candidate_a_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "managed-skill-a",
+    );
+    review_runtime_capability_variant(
+        &candidate_b_path,
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityReviewDecision::Accepted,
+        "managed-skill-b",
+    );
+
+    let index_report =
+        loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_index_command(
+            loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityIndexCommandOptions {
+                root: root.join("artifacts").display().to_string(),
+                json: false,
+            },
+        )
+        .expect("runtime capability index should succeed");
+    let family = index_report
+        .families
+        .first()
+        .expect("one capability family should be reported");
+
+    let plan = loongclaw_daemon::runtime_capability_cli::execute_runtime_capability_plan_command(
+        loongclaw_daemon::runtime_capability_cli::RuntimeCapabilityPlanCommandOptions {
+            root: root.join("artifacts").display().to_string(),
+            family_id: family.family_id.clone(),
+            json: false,
+        },
+    )
+    .expect("runtime capability plan should succeed");
+    let payload = serde_json::to_value(&plan).expect("serialize runtime capability plan");
+    let rendered =
+        loongclaw_daemon::runtime_capability_cli::render_runtime_capability_promotion_plan_text(
+            &plan,
+        );
+
+    assert!(
+        payload.pointer("/planned_payload").is_some(),
+        "planned_payload field should always be present"
+    );
+    assert!(
+        payload
+            .pointer("/planned_payload")
+            .is_some_and(Value::is_null),
+        "non-memory targets should serialize planned_payload as null"
+    );
+    assert!(
+        !rendered.contains("planned_payload="),
+        "non-memory targets should not render a planned payload line"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_capability_plan_marks_memory_stage_profile_promotable_with_memory_delta_evidence() {
     let root = unique_temp_dir("loongclaw-runtime-capability-plan-memory-stage-profile-ready");
     let (run_a_path, _) = finish_runtime_experiment_variant_with_memory_compare_delta(

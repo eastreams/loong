@@ -280,6 +280,40 @@ pub struct RuntimeCapabilityPromotionProvenance {
     pub latest_reviewed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionPlannedPayload {
+    pub memory_stage_profile: RuntimeCapabilityMemoryStageProfileDryRunPayload,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunPayload {
+    pub schema_version: u32,
+    pub artifact_kind: String,
+    pub profile: RuntimeCapabilityMemoryStageProfileDryRunProfile,
+    pub provenance: RuntimeCapabilityMemoryStageProfileDryRunProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunProfile {
+    pub id: String,
+    pub summary: String,
+    pub review_scope: String,
+    pub required_capabilities: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+    pub family_id: String,
+    pub accepted_candidate_ids: Vec<String>,
+    pub evidence_digest: RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest {
+    pub changed_surfaces: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RuntimeCapabilityPromotionPlanReport {
     pub generated_at: String,
@@ -294,6 +328,7 @@ pub struct RuntimeCapabilityPromotionPlanReport {
     pub approval_checklist: Vec<String>,
     pub rollback_hints: Vec<String>,
     pub provenance: RuntimeCapabilityPromotionProvenance,
+    pub planned_payload: Option<RuntimeCapabilityPromotionPlannedPayload>,
 }
 
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
@@ -477,6 +512,11 @@ pub fn execute_runtime_capability_plan_command(
         provenance: build_runtime_capability_promotion_provenance(
             &family_artifacts,
             &family.evidence,
+        ),
+        planned_payload: build_runtime_capability_promotion_planned_payload(
+            &family.family_id,
+            &planned_artifact,
+            &family_artifacts,
         ),
     })
 }
@@ -1638,10 +1678,62 @@ fn build_runtime_capability_promotion_provenance(
     }
 }
 
+fn build_runtime_capability_promotion_planned_payload(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> Option<RuntimeCapabilityPromotionPlannedPayload> {
+    match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            Some(RuntimeCapabilityPromotionPlannedPayload {
+                memory_stage_profile: RuntimeCapabilityMemoryStageProfileDryRunPayload {
+                    schema_version: 1,
+                    artifact_kind: planned_artifact.artifact_kind.clone(),
+                    profile: RuntimeCapabilityMemoryStageProfileDryRunProfile {
+                        id: planned_artifact.artifact_id.clone(),
+                        summary: planned_artifact.summary.clone(),
+                        review_scope: planned_artifact.bounded_scope.clone(),
+                        required_capabilities: planned_artifact.required_capabilities.clone(),
+                        tags: planned_artifact.tags.clone(),
+                    },
+                    provenance: build_memory_stage_profile_dry_run_provenance(family_id, artifacts),
+                },
+            })
+        }
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => None,
+    }
+}
+
+fn build_memory_stage_profile_dry_run_provenance(
+    family_id: &str,
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+    let mut accepted_artifacts = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_runtime_capability_artifacts(&mut accepted_artifacts);
+    let accepted_evidence = build_family_evidence_digest(&accepted_artifacts);
+
+    RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+        family_id: family_id.to_owned(),
+        accepted_candidate_ids: accepted_artifacts
+            .iter()
+            .map(|artifact| artifact.candidate_id.clone())
+            .collect(),
+        evidence_digest: RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest {
+            changed_surfaces: accepted_evidence.changed_surfaces,
+        },
+    }
+}
+
 pub fn render_runtime_capability_promotion_plan_text(
     report: &RuntimeCapabilityPromotionPlanReport,
 ) -> String {
-    [
+    let mut lines = vec![
         format!("family_id={}", report.family_id),
         format!("promotable={}", report.promotable),
         format!(
@@ -1711,8 +1803,21 @@ pub fn render_runtime_capability_promotion_plan_text(
                 " | "
             )
         ),
-    ]
-    .join("\n")
+    ];
+
+    if let Some(planned_payload) =
+        render_runtime_capability_planned_payload_summary(report.planned_payload.as_ref())
+    {
+        lines.push(format!("planned_payload={planned_payload}"));
+    }
+
+    lines.join("\n")
+}
+
+fn render_runtime_capability_planned_payload_summary(
+    payload: Option<&RuntimeCapabilityPromotionPlannedPayload>,
+) -> Option<String> {
+    payload.map(|payload| format!("profile_id={}", payload.memory_stage_profile.profile.id))
 }
 
 fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessCheck]) -> String {
