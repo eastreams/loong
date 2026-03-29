@@ -84,6 +84,7 @@ mod cli_handoff;
 pub mod completions_cli;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
+mod external_skills_policy_probe;
 pub mod feishu_cli;
 pub mod feishu_support;
 pub mod gateway;

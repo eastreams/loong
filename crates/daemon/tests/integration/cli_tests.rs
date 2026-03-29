@@ -146,6 +146,38 @@ fn doctor_security_cli_accepts_global_flags_after_subcommand() {
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("build test runtime");
+
+    let fix_error = runtime
+        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
+            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
+                config: None,
+                fix: true,
+                json: false,
+                skip_model_probe: false,
+                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
+            },
+        ))
+        .expect_err("doctor security should reject --fix at runtime");
+
+    let probe_error = runtime
+        .block_on(loongclaw_daemon::doctor_cli::run_doctor_cli(
+            loongclaw_daemon::doctor_cli::DoctorCommandOptions {
+                config: None,
+                fix: false,
+                json: false,
+                skip_model_probe: true,
+                command: Some(loongclaw_daemon::doctor_cli::DoctorCommands::Security),
+            },
+        ))
+        .expect_err("doctor security should reject --skip-model-probe at runtime");
+
+    assert!(fix_error.contains("--fix"));
+    assert!(probe_error.contains("--skip-model-probe"));
 }
 
 #[test]

@@ -328,9 +328,11 @@ fn collect_runtime_snapshot_external_skills_state(
         "shadowed_skills": [],
     });
 
-    let (effective_policy, override_active) =
-        match runtime_snapshot_effective_external_skills_policy(tool_runtime) {
-            Ok(policy_state) => policy_state,
+    let policy_probe =
+        match crate::external_skills_policy_probe::resolve_effective_external_skills_policy(
+            tool_runtime,
+        ) {
+            Ok(policy_probe) => policy_probe,
             Err(error) => {
                 return (
                     RuntimeSnapshotExternalSkillsState {
@@ -350,6 +352,9 @@ fn collect_runtime_snapshot_external_skills_state(
                 );
             }
         };
+
+    let effective_policy = policy_probe.policy;
+    let override_active = policy_probe.override_active;
 
     let mut effective_tool_runtime = tool_runtime.clone();
     effective_tool_runtime.external_skills = effective_policy.clone();
@@ -407,81 +412,6 @@ fn collect_runtime_snapshot_external_skills_state(
     }
 }
 
-fn runtime_snapshot_effective_external_skills_policy(
-    tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
-) -> Result<
-    (
-        mvp::tools::runtime_config::ExternalSkillsRuntimePolicy,
-        bool,
-    ),
-    String,
-> {
-    let outcome = mvp::tools::execute_tool_core_with_config(
-        ToolCoreRequest {
-            tool_name: "external_skills.policy".to_owned(),
-            payload: json!({
-                "action": "get",
-            }),
-        },
-        tool_runtime,
-    )
-    .map_err(|error| format!("resolve effective external skills policy failed: {error}"))?;
-
-    let policy = runtime_snapshot_external_skills_policy_from_payload(&outcome.payload)?;
-    let override_active = outcome
-        .payload
-        .get("override_active")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    Ok((policy, override_active))
-}
-
-fn runtime_snapshot_external_skills_policy_from_payload(
-    payload: &Value,
-) -> Result<mvp::tools::runtime_config::ExternalSkillsRuntimePolicy, String> {
-    let policy = payload
-        .get("policy")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            "runtime snapshot external skills policy payload missing `policy`".to_owned()
-        })?;
-
-    Ok(mvp::tools::runtime_config::ExternalSkillsRuntimePolicy {
-        enabled: policy
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `enabled`".to_owned()
-            })?,
-        require_download_approval: policy
-            .get("require_download_approval")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `require_download_approval`"
-                    .to_owned()
-            })?,
-        allowed_domains: json_string_array_to_set(
-            policy.get("allowed_domains"),
-            "runtime snapshot external skills policy.allowed_domains",
-        )?,
-        blocked_domains: json_string_array_to_set(
-            policy.get("blocked_domains"),
-            "runtime snapshot external skills policy.blocked_domains",
-        )?,
-        install_root: policy
-            .get("install_root")
-            .and_then(Value::as_str)
-            .map(Path::new)
-            .map(Path::to_path_buf),
-        auto_expose_installed: policy
-            .get("auto_expose_installed")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| {
-                "runtime snapshot external skills policy missing `auto_expose_installed`".to_owned()
-            })?,
-    })
-}
-
 fn runtime_snapshot_tool_digest(
     visible_tool_names: &[String],
     capability_snapshot: &str,
@@ -496,23 +426,6 @@ fn runtime_snapshot_tool_digest(
 
 fn json_array_len(value: Option<&Value>) -> usize {
     value.and_then(Value::as_array).map_or(0, Vec::len)
-}
-
-fn json_string_array_to_set(
-    value: Option<&Value>,
-    context: &str,
-) -> Result<BTreeSet<String>, String> {
-    let items = value
-        .and_then(Value::as_array)
-        .ok_or_else(|| format!("{context} must be an array"))?;
-    items
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| format!("{context} must contain only strings"))
-        })
-        .collect()
 }
 
 fn build_runtime_snapshot_restore_spec(
