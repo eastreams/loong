@@ -377,24 +377,24 @@ impl AutonomyPolicySnapshot {
                 profile,
                 capability_acquisition_mode: AutonomyOperationMode::ApprovalRequired,
                 provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
-                topology_mutation_mode: AutonomyOperationMode::Deny,
+                topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
                 requires_kernel_binding: true,
                 budget: AutonomyBudgetPolicy {
                     max_capability_acquisitions_per_turn: 1,
                     max_provider_switches_per_turn: 1,
-                    max_topology_mutations_per_turn: 0,
+                    max_topology_mutations_per_turn: 1,
                 },
             },
             AutonomyProfile::BoundedAutonomous => Self {
                 profile,
                 capability_acquisition_mode: AutonomyOperationMode::Allow,
                 provider_switch_mode: AutonomyOperationMode::ApprovalRequired,
-                topology_mutation_mode: AutonomyOperationMode::Deny,
+                topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
                 requires_kernel_binding: true,
                 budget: AutonomyBudgetPolicy {
                     max_capability_acquisitions_per_turn: 2,
                     max_provider_switches_per_turn: 1,
-                    max_topology_mutations_per_turn: 0,
+                    max_topology_mutations_per_turn: 1,
                 },
             },
         }
@@ -1540,11 +1540,14 @@ mod tests {
             snapshot.provider_switch_mode,
             AutonomyOperationMode::ApprovalRequired
         );
-        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert_eq!(
+            snapshot.topology_mutation_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
         assert!(snapshot.requires_kernel_binding);
         assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 1);
         assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
-        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
     }
 
     #[test]
@@ -1565,11 +1568,14 @@ mod tests {
             snapshot.provider_switch_mode,
             AutonomyOperationMode::ApprovalRequired
         );
-        assert_eq!(snapshot.topology_mutation_mode, AutonomyOperationMode::Deny);
+        assert_eq!(
+            snapshot.topology_mutation_mode,
+            AutonomyOperationMode::ApprovalRequired
+        );
         assert!(snapshot.requires_kernel_binding);
         assert_eq!(snapshot.budget.max_capability_acquisitions_per_turn, 2);
         assert_eq!(snapshot.budget.max_provider_switches_per_turn, 1);
-        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 0);
+        assert_eq!(snapshot.budget.max_topology_mutations_per_turn, 1);
     }
 
     #[test]

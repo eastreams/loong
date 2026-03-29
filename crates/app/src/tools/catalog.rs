@@ -575,7 +575,7 @@ fn build_tool_catalog() -> ToolCatalog {
             availability: runtime_session_tool_availability(),
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Sessions,
-            capability_action_class: CapabilityActionClass::PolicyMutation,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: approval_request_resolve_definition,
         },
@@ -3662,7 +3662,7 @@ mod tests {
             ("delegate_async", CapabilityActionClass::TopologyExpand),
             (
                 "approval_request_resolve",
-                CapabilityActionClass::PolicyMutation,
+                CapabilityActionClass::ExecuteExisting,
             ),
             (
                 "external_skills.policy",
