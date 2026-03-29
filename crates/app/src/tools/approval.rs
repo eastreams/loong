@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
 
-#[cfg(feature = "memory-sqlite")]
-use crate::config::SessionVisibility;
 use crate::config::ToolConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::config::{SessionVisibility, ToolConsentMode};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -30,6 +30,7 @@ struct ApprovalRequestsListRequest {
 struct ApprovalRequestResolveRequest {
     approval_request_id: String,
     decision: ApprovalDecision,
+    session_consent_mode: Option<ToolConsentMode>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -38,6 +39,7 @@ pub(crate) struct ApprovalResolutionRequest {
     pub current_session_id: String,
     pub approval_request_id: String,
     pub decision: ApprovalDecision,
+    pub session_consent_mode: Option<ToolConsentMode>,
     pub visibility: SessionVisibility,
 }
 
@@ -533,6 +535,7 @@ async fn execute_approval_request_resolve(
             current_session_id: current_session_id.to_owned(),
             approval_request_id: request.approval_request_id,
             decision: request.decision,
+            session_consent_mode: request.session_consent_mode,
             visibility: tool_config.sessions.visibility,
         })
         .await?;
@@ -806,18 +809,37 @@ fn parse_approval_requests_list_request(
 fn parse_approval_request_resolve_request(
     payload: &Value,
 ) -> Result<ApprovalRequestResolveRequest, String> {
+    let approval_request_id =
+        required_payload_string(payload, "approval_request_id", "approval tool")?;
+    let decision_value = required_payload_string(payload, "decision", "approval tool")?;
+    let decision = parse_approval_decision(&decision_value)?;
+    let session_consent_mode = optional_payload_string(payload, "session_consent_mode")
+        .map(|value| parse_session_consent_mode(value.as_str()))
+        .transpose()?;
+
+    if session_consent_mode.is_some() && decision != ApprovalDecision::ApproveOnce {
+        return Err(
+            "approval_request_resolve_invalid_request: session_consent_mode requires decision `approve_once`"
+                .to_owned(),
+        );
+    }
+
     Ok(ApprovalRequestResolveRequest {
-        approval_request_id: required_payload_string(
-            payload,
-            "approval_request_id",
-            "approval tool",
-        )?,
-        decision: parse_approval_decision(&required_payload_string(
-            payload,
-            "decision",
-            "approval tool",
-        )?)?,
+        approval_request_id,
+        decision,
+        session_consent_mode,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_session_consent_mode(value: &str) -> Result<ToolConsentMode, String> {
+    match value {
+        "auto" => Ok(ToolConsentMode::Auto),
+        "full" => Ok(ToolConsentMode::Full),
+        _ => Err(format!(
+            "approval_request_resolve_invalid_request: unknown session_consent_mode `{value}`"
+        )),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]

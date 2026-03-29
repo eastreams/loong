@@ -1321,7 +1321,12 @@ impl SessionRepository {
         &self,
         scope_session_id: &str,
     ) -> Result<Option<SessionToolConsentRecord>, String> {
-        let scope_session_id = normalize_required_text(scope_session_id, "scope_session_id")?;
+        let requested_scope_session_id =
+            normalize_required_text(scope_session_id, "scope_session_id")?;
+        let scope_session_id = match self.lineage_root_session_id(&requested_scope_session_id)? {
+            Some(root_scope_session_id) => root_scope_session_id,
+            None => return Ok(None),
+        };
         let conn = self.open_connection()?;
         let raw = conn
             .query_row(
@@ -3715,6 +3720,12 @@ mod tests {
             .expect("load session tool consent")
             .expect("session tool consent row");
         assert_eq!(loaded, created);
+
+        let loaded_via_child = repo
+            .load_session_tool_consent("child-session")
+            .expect("load child session tool consent")
+            .expect("child session tool consent row");
+        assert_eq!(loaded_via_child, created);
     }
 
     #[test]

@@ -754,6 +754,11 @@ fn render_approval_prompt_view(view: &ApprovalPromptView) -> String {
             "allowed_decisions: {}",
             view.action_commands_text()
         ));
+        for action in &view.actions {
+            for detail_line in &action.detail_lines {
+                lines.push(detail_line.clone());
+            }
+        }
         lines.push(String::new());
         lines.extend(view.reply_hint_lines());
     }
@@ -2000,13 +2005,13 @@ mod tests {
         assert_eq!(
             phase.raw_reply(),
             Some(
-                "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call"
+                "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\nExecute only this tool call\nLow-risk tools continue automatically\nWrites, shell exec, provider switching, and similar actions still pause\nStop asking for tool consent in this session\nGoverned approvals and kernel hard limits still apply\nDo not run this tool call\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call"
             )
         );
         assert_eq!(
             phase.decision(),
             &ToolDrivenReplyBaseDecision::FinalizeDirect {
-                reply: "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call".to_owned(),
+                reply: "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\nExecute only this tool call\nLow-risk tools continue automatically\nWrites, shell exec, provider switching, and similar actions still pause\nStop asking for tool consent in this session\nGoverned approvals and kernel hard limits still apply\nDo not run this tool call\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call".to_owned(),
             }
         );
     }

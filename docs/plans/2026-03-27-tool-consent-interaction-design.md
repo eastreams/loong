@@ -840,7 +840,7 @@ And:
 
 ```text
 ApprovalPromptPresentation
-  prompt_kind: tool_consent | governed_approval | kernel_required
+  prompt_kind: tool_consent | governed_approval | kernel_required | combined
   request_id: String
   tool_name: Option<String>
   rule_id: Option<String>

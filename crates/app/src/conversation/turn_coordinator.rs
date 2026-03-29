@@ -1893,11 +1893,6 @@ impl ConversationTurnCoordinator {
             return Ok(None);
         };
 
-        let scope_session_id = repo
-            .lineage_root_session_id(&pending_request.session_id)?
-            .unwrap_or_else(|| pending_request.session_id.clone());
-        let approval_request_id = pending_request.approval_request_id.clone();
-
         observe_turn_phase(observer, ConversationTurnPhaseEvent::preparing());
         let session_context = runtime.session_context(config, session_id, binding)?;
         let assembled_context = runtime
@@ -1919,14 +1914,27 @@ impl ConversationTurnCoordinator {
             ),
         );
 
+        let mut approval_args = serde_json::Map::new();
+        approval_args.insert(
+            "approval_request_id".to_owned(),
+            Value::String(pending_request.approval_request_id.clone()),
+        );
+        approval_args.insert(
+            "decision".to_owned(),
+            Value::String(control_decision.approval_decision().as_str().to_owned()),
+        );
+        if let Some(session_consent_mode) = control_decision.session_mode() {
+            approval_args.insert(
+                "session_consent_mode".to_owned(),
+                Value::String(session_consent_mode.as_str().to_owned()),
+            );
+        }
+
         let approval_turn = ProviderTurn {
             assistant_text: String::new(),
             tool_intents: vec![ToolIntent {
                 tool_name: "approval_request_resolve".to_owned(),
-                args_json: json!({
-                    "approval_request_id": pending_request.approval_request_id,
-                    "decision": control_decision.approval_decision().as_str(),
-                }),
+                args_json: Value::Object(approval_args),
                 source: "approval_control".to_owned(),
                 session_id: session_context.session_id.clone(),
                 turn_id: preparation.turn_id.clone(),
@@ -1951,22 +1959,6 @@ impl ConversationTurnCoordinator {
             observer,
         )
         .await;
-        if let Some(mode) = control_decision.session_mode() {
-            let resolved_request = repo
-                .load_approval_request(&approval_request_id)?
-                .ok_or_else(|| format!("approval_request_not_found: `{approval_request_id}`"))?;
-            let approval_request_was_resolved = resolved_request.decision
-                == Some(ApprovalDecision::ApproveOnce)
-                && resolved_request.status != ApprovalRequestStatus::Pending;
-
-            if approval_request_was_resolved {
-                repo.upsert_session_tool_consent(NewSessionToolConsentRecord {
-                    scope_session_id,
-                    mode,
-                    updated_by_session_id: Some(session_id.to_owned()),
-                })?;
-            }
-        }
         let reply = apply_resolved_provider_turn(
             config,
             runtime,
@@ -3732,10 +3724,6 @@ where
     ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
         let execution_kind = self.replay_execution_kind(approval_request)?;
         let replay_request = self.replay_request(approval_request)?;
-        let session_context = self
-            .runtime
-            .session_context(self.config, &approval_request.session_id, self.binding)
-            .map_err(|error| format!("load approval request session context failed: {error}"))?;
 
         match execution_kind {
             ToolExecutionKind::Core => {
@@ -3746,6 +3734,13 @@ where
                 crate::tools::execute_tool(replay_request, kernel_ctx).await
             }
             ToolExecutionKind::App => {
+                let session_context = self
+                    .runtime
+                    .session_context(self.config, &approval_request.session_id, self.binding)
+                    .map_err(|error| {
+                        format!("load approval request session context failed: {error}")
+                    })?;
+
                 match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
                     "delegate" => {
                         execute_delegate_tool(
@@ -3947,7 +3942,22 @@ where
                         ));
                     }
                 };
-                let _ = approved;
+                if let Some(session_consent_mode) = request.session_consent_mode {
+                    let scope_session_id = repo
+                        .lineage_root_session_id(&approved.session_id)?
+                        .ok_or_else(|| {
+                            format!(
+                                "approval_request_session_not_found: `{}`",
+                                approved.session_id
+                            )
+                        })?;
+                    let updated_by_session_id = Some(request.current_session_id.clone());
+                    repo.upsert_session_tool_consent(NewSessionToolConsentRecord {
+                        scope_session_id,
+                        mode: session_consent_mode,
+                        updated_by_session_id,
+                    })?;
+                }
                 self.execute_approved_request(&repo, &request.approval_request_id)
                     .await
             }
@@ -6742,6 +6752,7 @@ async fn execute_single_tool_intent(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ToolConfig;
     use crate::context::bootstrap_test_kernel_context;
     use crate::conversation::turn_engine::ToolBatchExecutionIntentTrace;
     use crate::conversation::{
@@ -6907,6 +6918,77 @@ mod tests {
                 .expect("bootstrap call lock should not be poisoned");
             *bootstrap_calls += 1;
             Ok(Default::default())
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    struct CoreReplayRuntime;
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for CoreReplayRuntime {
+        fn session_context(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<SessionContext> {
+            Err("session_context should not be called for core approval replay".to_owned())
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _include_system_prompt: bool,
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            Err("build_messages should not run during core approval replay".to_owned())
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Err("request_completion should not run during core approval replay".to_owned())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            Err("request_turn should not run during core approval replay".to_owned())
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            Err("request_turn_streaming should not run during core approval replay".to_owned())
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Err("persist_turn should not run during core approval replay".to_owned())
         }
     }
 
@@ -8636,6 +8718,149 @@ mod tests {
             .expect("load approval request")
             .expect("approval request row");
         assert_eq!(approval_request.status, ApprovalRequestStatus::Pending);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_persists_session_mode_on_success() {
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-session-mode-success");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(
+            &repo,
+            "root-session",
+            "apr-auto-success",
+            "sessions_list",
+            "app",
+        );
+        let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
+        let approval_runtime = CoordinatorApprovalResolutionRuntime {
+            config: &config,
+            runtime: &runtime,
+            fallback: &fallback,
+            binding: ConversationRuntimeBinding::direct(),
+        };
+        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
+            &approval_runtime,
+            crate::tools::approval::ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-auto-success".to_owned(),
+                decision: ApprovalDecision::ApproveOnce,
+                session_consent_mode: Some(ToolConsentMode::Auto),
+                visibility: crate::config::SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve should succeed");
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Executed
+        );
+
+        let stored = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+        assert_eq!(stored.mode, ToolConsentMode::Auto);
+        assert_eq!(
+            stored.updated_by_session_id.as_deref(),
+            Some("root-session")
+        );
+
+        let approval_request = repo
+            .load_approval_request("apr-auto-success")
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(
+            approval_request.decision,
+            Some(ApprovalDecision::ApproveOnce)
+        );
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Executed);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn core_approval_replay_skips_app_session_context_loading() {
+        let runtime = CoreReplayRuntime;
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-core-replay");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-core-replay".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-core-replay".to_owned(),
+            tool_call_id: "call-core-replay".to_owned(),
+            tool_name: "provider.switch".to_owned(),
+            approval_key: "tool:provider.switch".to_owned(),
+            request_payload_json: json!({
+                "session_id": "root-session",
+                "turn_id": "turn-core-replay",
+                "tool_call_id": "call-core-replay",
+                "tool_name": "provider.switch",
+                "args_json": {
+                    "selector": "openai"
+                },
+                "source": "test",
+                "execution_kind": "core",
+            }),
+            governance_snapshot_json: json!({
+                "rule_id": "session_tool_consent_auto_blocked",
+            }),
+        })
+        .expect("seed core approval request");
+        let approval_request = repo
+            .load_approval_request("apr-core-replay")
+            .expect("load approval request")
+            .expect("approval request row");
+        let kernel_ctx =
+            bootstrap_test_kernel_context("approval-core-replay", 60).expect("kernel context");
+        let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
+        let approval_runtime = CoordinatorApprovalResolutionRuntime {
+            config: &config,
+            runtime: &runtime,
+            fallback: &fallback,
+            binding: ConversationRuntimeBinding::kernel(&kernel_ctx),
+        };
+
+        let error = approval_runtime
+            .replay_approved_request(&approval_request)
+            .await
+            .expect_err("provider.switch should fail at core execution");
+        assert!(
+            error.contains("provider.switch requires a resolved runtime config path"),
+            "expected core execution failure, got: {error}"
+        );
     }
 
     #[test]

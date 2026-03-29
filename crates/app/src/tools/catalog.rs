@@ -2281,6 +2281,11 @@ fn approval_request_resolve_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "enum": ["approve_once", "approve_always", "deny"],
                         "description": "Operator decision for the pending approval request."
+                    },
+                    "session_consent_mode": {
+                        "type": "string",
+                        "enum": ["auto", "full"],
+                        "description": "Optional session consent mode to persist when approve_once wins the request."
                     }
                 },
                 "required": ["approval_request_id", "decision"],
@@ -3188,7 +3193,9 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "feishu.calendar.freebusy" => &["time_min", "time_max"],
         "feishu.doc.append" | "feishu.doc.read" => &["url"],
         "feishu.messages.get" => &["message_id"],
+        "feishu.messages.reply" => &["message_id"],
         "feishu.messages.search" => &["query"],
+        "feishu.messages.send" => &["receive_id"],
         "tool.search" => &["query"],
         "tool.invoke" => &["tool_id", "lease", "arguments"],
         "external_skills.fetch" => &["url"],
