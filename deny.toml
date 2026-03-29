@@ -10,7 +10,10 @@ targets = [
 ]
 
 [advisories]
-ignore = ["RUSTSEC-2025-0057"]  # fxhash unmaintained — transitive dep of scraper 0.24, no security impact
+ignore = [
+    "RUSTSEC-2025-0057",  # fxhash unmaintained — transitive dep of scraper 0.24, no security impact
+    "RUSTSEC-2024-0436",  # paste unmaintained — transitive dep of ratatui 0.29, no safe upgrade available yet
+]
 
 [licenses]
 allow = [
@@ -20,9 +23,9 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
-    "CC0-1.0",
     "ISC",
     "MPL-2.0",
+    "CC0-1.0",
     "Unicode-3.0",
     "Unicode-DFS-2016",
     "Zlib",
