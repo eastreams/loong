@@ -5286,6 +5286,8 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.lock().await;
     let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-flush");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 
@@ -5369,6 +5371,8 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_is_skipped() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.lock().await;
     let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-skip");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 

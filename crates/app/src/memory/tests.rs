@@ -269,6 +269,8 @@ fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_proje
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.blocking_lock();
     let _guard = core_dispatch_test_lock()
         .lock()
         .expect("core dispatch test lock");
@@ -335,6 +337,8 @@ fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
 #[cfg(feature = "memory-sqlite")]
 #[test]
 fn pre_compaction_durable_flush_skips_when_no_summary_checkpoint_exists() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.blocking_lock();
     let _guard = core_dispatch_test_lock()
         .lock()
         .expect("core dispatch test lock");

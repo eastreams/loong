@@ -79,6 +79,12 @@ pub(crate) fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{}-{id}", std::process::id()))
 }
 
+#[cfg(test)]
+pub(crate) fn durable_memory_flush_test_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 #[cfg(all(test, unix))]
 pub(crate) fn write_executable_script_atomically(
     script_path: &std::path::Path,
