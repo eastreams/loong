@@ -20,6 +20,7 @@ use crate::onboard_finalize::{
 use crate::onboard_finalize::{
     OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
 };
+use crate::onboard_flow::OnboardFlowController;
 pub use crate::onboard_preflight::{
     OnboardCheck, OnboardCheckLevel, OnboardNonInteractiveWarningPolicy,
     collect_channel_preflight_checks, directory_preflight_check, provider_credential_check,
@@ -32,6 +33,7 @@ use crate::onboard_preflight::{
     non_interactive_preflight_failure_message, render_preflight_summary_screen_lines_with_progress,
     run_preflight_checks,
 };
+use crate::onboard_state::{OnboardDraft, OnboardValueOrigin, OnboardWizardStep};
 pub use crate::onboard_types::OnboardingCredentialSummary;
 #[cfg(test)]
 use crate::onboard_web_search::{
@@ -1243,14 +1245,18 @@ pub async fn run_onboard_cli_with_ui(
         .map(mvp::config::expand_path)
         .unwrap_or_else(mvp::config::default_config_path);
     let starting_selection = load_import_starting_config(&output_path, &options, ui, context)?;
+    let mut flow = OnboardFlowController::new(OnboardDraft::from_config(
+        starting_selection.config.clone(),
+        output_path.clone(),
+        initial_draft_origin(starting_selection.entry_choice),
+    ));
     let shortcut_kind = resolve_onboard_shortcut_kind(&options, &starting_selection);
-    let mut config = starting_selection.config.clone();
     let skip_detailed_setup = if let Some(shortcut_kind) = shortcut_kind {
         print_lines(
             ui,
             render_onboard_shortcut_header_lines_with_style(
                 shortcut_kind,
-                &config,
+                &flow.draft().config,
                 starting_selection.import_source.as_deref(),
                 context.render_width,
                 true,
@@ -1268,89 +1274,101 @@ pub async fn run_onboard_cli_with_ui(
             .map(OnboardShortcutKind::review_flow_style)
             .unwrap_or(ReviewFlowStyle::Guided(GuidedPromptPath::NativePromptPack))
     } else {
-        ReviewFlowStyle::Guided(resolve_guided_prompt_path(&options, &config))
+        ReviewFlowStyle::Guided(resolve_guided_prompt_path(&options, &flow.draft().config))
     };
 
     if !skip_detailed_setup {
-        let guided_prompt_path = resolve_guided_prompt_path(&options, &config);
+        debug_assert_eq!(flow.current_step(), OnboardWizardStep::Welcome);
+        let _ = flow.advance();
+        let guided_prompt_path = resolve_guided_prompt_path(&options, &flow.draft().config);
         let selected_provider = resolve_provider_selection(
             &options,
-            &config,
+            &flow.draft().config,
             &starting_selection.provider_selection,
             guided_prompt_path,
             ui,
             context,
         )?;
-        config.provider = selected_provider;
+        flow.draft_mut().config.provider = selected_provider;
 
-        let available_models = load_onboarding_model_catalog(&options, &config).await;
+        let available_models = load_onboarding_model_catalog(&options, &flow.draft().config).await;
         let selected_model = resolve_model_selection(
             &options,
-            &config,
+            &flow.draft().config,
             guided_prompt_path,
             &available_models,
             ui,
             context,
         )?;
-        config.provider.model = selected_model;
+        flow.draft_mut().config.provider.model = selected_model;
 
-        let default_api_key_env = preferred_api_key_env_default(&config);
+        let default_api_key_env = preferred_api_key_env_default(&flow.draft().config);
         let selected_api_key_env = resolve_api_key_env_selection(
             &options,
-            &config,
+            &flow.draft().config,
             default_api_key_env,
             guided_prompt_path,
             ui,
             context,
         )?;
-        apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        apply_selected_api_key_env(&mut flow.draft_mut().config.provider, selected_api_key_env);
+        let _ = flow.advance();
 
         match guided_prompt_path {
             GuidedPromptPath::NativePromptPack => {
-                let personality = resolve_personality_selection(&options, &config, ui, context)?;
-                config.cli.prompt_pack_id = Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                config.cli.personality = Some(personality);
-                config.cli.system_prompt_addendum =
-                    resolve_prompt_addendum_selection(&options, &config, ui, context)?;
-                config.cli.refresh_native_system_prompt();
+                let personality =
+                    resolve_personality_selection(&options, &flow.draft().config, ui, context)?;
+                flow.draft_mut().config.cli.prompt_pack_id =
+                    Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
+                flow.draft_mut().config.cli.personality = Some(personality);
+                flow.draft_mut().config.cli.system_prompt_addendum =
+                    resolve_prompt_addendum_selection(&options, &flow.draft().config, ui, context)?;
+                flow.draft_mut().config.cli.refresh_native_system_prompt();
             }
             GuidedPromptPath::InlineOverride => {
                 let system_prompt_selection =
-                    resolve_system_prompt_selection(&options, &config, ui, context)?;
+                    resolve_system_prompt_selection(&options, &flow.draft().config, ui, context)?;
                 match system_prompt_selection {
                     SystemPromptSelection::KeepCurrent => {}
                     SystemPromptSelection::RestoreBuiltIn => {
-                        config.cli.prompt_pack_id =
+                        flow.draft_mut().config.cli.prompt_pack_id =
                             Some(mvp::prompt::DEFAULT_PROMPT_PACK_ID.to_owned());
-                        config.cli.personality = Some(mvp::prompt::PromptPersonality::default());
-                        config.cli.system_prompt_addendum = None;
-                        config.cli.refresh_native_system_prompt();
+                        flow.draft_mut().config.cli.personality =
+                            Some(mvp::prompt::PromptPersonality::default());
+                        flow.draft_mut().config.cli.system_prompt_addendum = None;
+                        flow.draft_mut().config.cli.refresh_native_system_prompt();
                     }
                     SystemPromptSelection::Set(system_prompt) => {
-                        config.cli.prompt_pack_id = Some(String::new());
-                        config.cli.personality = None;
-                        config.cli.system_prompt_addendum = None;
-                        config.cli.system_prompt = system_prompt;
+                        flow.draft_mut().config.cli.prompt_pack_id = Some(String::new());
+                        flow.draft_mut().config.cli.personality = None;
+                        flow.draft_mut().config.cli.system_prompt_addendum = None;
+                        flow.draft_mut().config.cli.system_prompt = system_prompt;
                     }
                 }
             }
         }
 
-        config.memory.profile =
-            resolve_memory_profile_selection(&options, &config, guided_prompt_path, ui, context)?;
+        flow.draft_mut().config.memory.profile = resolve_memory_profile_selection(
+            &options,
+            &flow.draft().config,
+            guided_prompt_path,
+            ui,
+            context,
+        )?;
 
         let selected_web_search_provider = resolve_web_search_provider_selection(
             &options,
-            &config,
+            &flow.draft().config,
             guided_prompt_path,
             ui,
             context,
         )
         .await?;
-        config.tools.web_search.default_provider = selected_web_search_provider.clone();
+        flow.draft_mut().config.tools.web_search.default_provider =
+            selected_web_search_provider.clone();
         let web_search_credential_selection = resolve_web_search_credential_selection(
             &options,
-            &config,
+            &flow.draft().config,
             selected_web_search_provider.as_str(),
             guided_prompt_path,
             options.non_interactive,
@@ -1358,10 +1376,14 @@ pub async fn run_onboard_cli_with_ui(
             context,
         )?;
         apply_selected_web_search_credential(
-            &mut config,
+            &mut flow.draft_mut().config,
             selected_web_search_provider.as_str(),
             web_search_credential_selection,
         );
+    }
+
+    while flow.current_step() != OnboardWizardStep::ReviewAndWrite {
+        let _ = flow.skip();
     }
 
     let workspace_guidance = context
@@ -1370,7 +1392,7 @@ pub async fn run_onboard_cli_with_ui(
         .map(crate::migration::detect_workspace_guidance)
         .unwrap_or_default();
     let review_candidate = build_onboard_review_candidate_with_selected_context(
-        &config,
+        &flow.draft().config,
         &workspace_guidance,
         starting_selection.review_candidate.as_ref(),
     );
@@ -1378,7 +1400,7 @@ pub async fn run_onboard_cli_with_ui(
         print_lines(
             ui,
             render_onboard_review_lines_with_guidance_and_style(
-                &config,
+                &flow.draft().config,
                 starting_selection.import_source.as_deref(),
                 &workspace_guidance,
                 starting_selection.review_candidate.as_ref(),
@@ -1389,7 +1411,7 @@ pub async fn run_onboard_cli_with_ui(
         )?;
     }
 
-    let checks = run_preflight_checks(&config, options.skip_model_probe).await;
+    let checks = run_preflight_checks(&flow.draft().config, options.skip_model_probe).await;
     let config_validation_failure = config_validation_failure_message(&checks);
 
     let credential_ok = checks
@@ -1403,7 +1425,8 @@ pub async fn run_onboard_cli_with_ui(
         .iter()
         .any(|check| check.level == OnboardCheckLevel::Warn);
     let existing_output_config = load_existing_output_config(&output_path);
-    let skip_config_write = should_skip_config_write(existing_output_config.as_ref(), &config);
+    let skip_config_write =
+        should_skip_config_write(existing_output_config.as_ref(), &flow.draft().config);
     let has_blocking_non_interactive_warnings = !skip_config_write
         && checks.iter().any(|check| {
             check.level == OnboardCheckLevel::Warn
@@ -1415,9 +1438,10 @@ pub async fn run_onboard_cli_with_ui(
             return Err(message);
         }
         if !credential_ok {
-            let credential_hint =
-                provider_credential_policy::provider_credential_env_hint(&config.provider)
-                    .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
+            let credential_hint = provider_credential_policy::provider_credential_env_hint(
+                &flow.draft().config.provider,
+            )
+            .unwrap_or_else(|| "PROVIDER_API_KEY".to_owned());
             return Err(format!(
                 "onboard preflight failed: provider credentials missing. configure inline credentials or set {} in env",
                 credential_hint
@@ -1489,7 +1513,11 @@ pub async fn run_onboard_cli_with_ui(
             let backup_message = format!("Backed up existing config to: {}", backup_path.display());
             print_message(ui, backup_message)?;
         }
-        let path = match mvp::config::write(options.output.as_deref(), &config, write_plan.force) {
+        let path = match mvp::config::write(
+            options.output.as_deref(),
+            &flow.draft().config,
+            write_plan.force,
+        ) {
             Ok(path) => path,
             Err(error) => {
                 return Err(rollback_onboard_write_failure(
@@ -1503,10 +1531,11 @@ pub async fn run_onboard_cli_with_ui(
     };
     #[cfg(feature = "memory-sqlite")]
     let memory_path = {
-        let mem_config =
-            mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let mem_config = mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+            &flow.draft().config.memory,
+        );
         match mvp::memory::ensure_memory_db_ready(
-            Some(config.memory.resolved_sqlite_path()),
+            Some(flow.draft().config.memory.resolved_sqlite_path()),
             &mem_config,
         ) {
             Ok(path) => path,
@@ -1531,10 +1560,11 @@ pub async fn run_onboard_cli_with_ui(
     if let Some(write_recovery) = write_recovery.as_ref() {
         write_recovery.finish_success();
     }
+    let _ = flow.advance();
 
     let success_summary = build_onboarding_success_summary_with_memory(
         &path,
-        &config,
+        &flow.draft().config,
         starting_selection.import_source.as_deref(),
         Some(&review_candidate),
         memory_path_display.as_deref(),
@@ -1544,6 +1574,14 @@ pub async fn run_onboard_cli_with_ui(
         render_onboarding_success_summary_lines(&success_summary, context.render_width, true);
     print_lines(ui, success_summary_lines)?;
     Ok(())
+}
+
+fn initial_draft_origin(entry_choice: OnboardEntryChoice) -> Option<OnboardValueOrigin> {
+    match entry_choice {
+        OnboardEntryChoice::ContinueCurrentSetup => Some(OnboardValueOrigin::CurrentSetup),
+        OnboardEntryChoice::ImportDetectedSetup => Some(OnboardValueOrigin::DetectedStartingPoint),
+        OnboardEntryChoice::StartFresh => None,
+    }
 }
 
 fn resolve_guided_prompt_path(
