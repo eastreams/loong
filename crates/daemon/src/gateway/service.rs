@@ -10,6 +10,8 @@ use crate::{
     },
 };
 
+use crate::mvp::acp::AcpSessionManager;
+
 use super::control::start_gateway_control_surface;
 use super::state::{
     GatewayOwnerMode, GatewayOwnerStatus, GatewayOwnerTracker, GatewayStopRequestOutcome,
@@ -112,7 +114,9 @@ async fn run_gateway_runtime_with_hooks_for_test(
         spec.surfaces.len(),
     )?);
     let owner_token = tracker.owner_token().to_owned();
-    let control_surface_result = start_gateway_control_surface(runtime_dir, &loaded_config).await;
+    let acp_manager = Arc::new(AcpSessionManager::default());
+    let control_surface_result =
+        start_gateway_control_surface(runtime_dir, &loaded_config, Some(acp_manager)).await;
     let control_surface = match control_surface_result {
         Ok(control_surface) => control_surface,
         Err(error) => {

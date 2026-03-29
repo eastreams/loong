@@ -188,6 +188,7 @@ impl GatewayControlSurface {
 pub async fn start_gateway_control_surface(
     runtime_dir: &Path,
     loaded_config: &LoadedSupervisorConfig,
+    acp_manager: Option<Arc<AcpSessionManager>>,
 ) -> CliResult<GatewayControlSurface> {
     let channel_inventory = build_gateway_channel_inventory_read_model(loaded_config)?;
     let runtime_snapshot = build_gateway_runtime_snapshot_read_model(loaded_config)?;
@@ -228,14 +229,20 @@ pub async fn start_gateway_control_surface(
         token_path: token_path.clone(),
     };
 
+    let event_bus = if acp_manager.is_some() {
+        Some(GatewayEventBus::new(256))
+    } else {
+        None
+    };
+
     let app_state = GatewayControlAppState {
         runtime_dir: runtime_dir.to_path_buf(),
         bearer_token,
         channel_inventory: Arc::new(channel_inventory),
         runtime_snapshot: Arc::new(runtime_snapshot),
-        event_bus: None,
-        acp_manager: None,
-        config: None,
+        event_bus,
+        acp_manager,
+        config: Some(loaded_config.config.clone()),
     };
     let app_state = Arc::new(app_state);
     let router = build_gateway_control_router(app_state);
