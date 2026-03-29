@@ -10,14 +10,30 @@ pub const CAPABILITY_ACQUISITION_APPROVAL_CODE: &str =
 pub const CAPABILITY_ACQUISITION_BUDGET_EXCEEDED_CODE: &str =
     "autonomy_policy_capability_acquisition_budget_exceeded";
 pub const PROVIDER_SWITCH_APPROVAL_CODE: &str = "autonomy_policy_provider_switch_requires_approval";
+pub const PROVIDER_SWITCH_DISALLOWED_CODE: &str = "autonomy_policy_provider_switch_disallowed";
 pub const PROVIDER_SWITCH_BUDGET_EXCEEDED_CODE: &str =
     "autonomy_policy_provider_switch_budget_exceeded";
+pub const TOPOLOGY_MUTATION_APPROVAL_CODE: &str =
+    "autonomy_policy_topology_mutation_requires_approval";
+pub const TOPOLOGY_MUTATION_DISALLOWED_CODE: &str = "autonomy_policy_topology_mutation_disallowed";
+pub const TOPOLOGY_MUTATION_BUDGET_EXCEEDED_CODE: &str =
+    "autonomy_policy_topology_mutation_budget_exceeded";
+pub const POLICY_MUTATION_APPROVAL_CODE: &str = "autonomy_policy_policy_mutation_requires_approval";
+pub const POLICY_MUTATION_DISALLOWED_CODE: &str = "autonomy_policy_policy_mutation_disallowed";
+pub const POLICY_MUTATION_BUDGET_EXCEEDED_CODE: &str =
+    "autonomy_policy_policy_mutation_budget_exceeded";
+pub const SESSION_MUTATION_APPROVAL_CODE: &str =
+    "autonomy_policy_session_mutation_requires_approval";
+pub const SESSION_MUTATION_DISALLOWED_CODE: &str = "autonomy_policy_session_mutation_disallowed";
+pub const SESSION_MUTATION_BUDGET_EXCEEDED_CODE: &str =
+    "autonomy_policy_session_mutation_budget_exceeded";
 pub const BINDING_MISSING_CODE: &str = "autonomy_policy_binding_missing";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AutonomyTurnBudgetState {
     pub capability_acquisitions_used: usize,
     pub provider_switches_used: usize,
+    pub topology_mutations_used: usize,
 }
 
 impl AutonomyTurnBudgetState {
@@ -32,11 +48,12 @@ impl AutonomyTurnBudgetState {
             CapabilityActionClass::RuntimeSwitch => {
                 self.provider_switches_used = self.provider_switches_used.saturating_add(1);
             }
-            CapabilityActionClass::Discover
-            | CapabilityActionClass::ExecuteExisting
-            | CapabilityActionClass::TopologyExpand
+            CapabilityActionClass::TopologyExpand
             | CapabilityActionClass::PolicyMutation
-            | CapabilityActionClass::SessionMutation => {}
+            | CapabilityActionClass::SessionMutation => {
+                self.topology_mutations_used = self.topology_mutations_used.saturating_add(1);
+            }
+            CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => {}
         }
     }
 }
@@ -109,11 +126,10 @@ pub fn action_mode(
         | CapabilityActionClass::CapabilityInstall
         | CapabilityActionClass::CapabilityLoad => Some(snapshot.capability_acquisition_mode),
         CapabilityActionClass::RuntimeSwitch => Some(snapshot.provider_switch_mode),
-        CapabilityActionClass::Discover
-        | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
+        CapabilityActionClass::TopologyExpand
         | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => None,
+        | CapabilityActionClass::SessionMutation => Some(snapshot.topology_mutation_mode),
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => None,
     }
 }
 
@@ -131,11 +147,15 @@ fn budget_deny_reason(input: PolicyDecisionInput<'_>) -> Option<&'static str> {
             let limit = input.snapshot.budget.max_provider_switches_per_turn;
             would_exceed_budget(used, limit).then_some(PROVIDER_SWITCH_BUDGET_EXCEEDED_CODE)
         }
-        CapabilityActionClass::Discover
-        | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
+        CapabilityActionClass::TopologyExpand
         | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => None,
+        | CapabilityActionClass::SessionMutation => {
+            let used = input.budget.topology_mutations_used;
+            let limit = input.snapshot.budget.max_topology_mutations_per_turn;
+            let reason_code = topology_budget_reason_code(input.action_class);
+            would_exceed_budget(used, limit).then_some(reason_code)
+        }
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => None,
     }
 }
 
@@ -151,11 +171,18 @@ fn approval_rule_id(action_class: CapabilityActionClass) -> &'static str {
             "autonomy_policy_capability_acquisition_requires_approval"
         }
         CapabilityActionClass::RuntimeSwitch => "autonomy_policy_provider_switch_requires_approval",
-        CapabilityActionClass::Discover
-        | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
-        | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => "autonomy_policy_not_applicable",
+        CapabilityActionClass::TopologyExpand => {
+            "autonomy_policy_topology_mutation_requires_approval"
+        }
+        CapabilityActionClass::PolicyMutation => {
+            "autonomy_policy_policy_mutation_requires_approval"
+        }
+        CapabilityActionClass::SessionMutation => {
+            "autonomy_policy_session_mutation_requires_approval"
+        }
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => {
+            "autonomy_policy_not_applicable"
+        }
     }
 }
 
@@ -165,11 +192,12 @@ fn approval_reason_code(action_class: CapabilityActionClass) -> &'static str {
         | CapabilityActionClass::CapabilityInstall
         | CapabilityActionClass::CapabilityLoad => CAPABILITY_ACQUISITION_APPROVAL_CODE,
         CapabilityActionClass::RuntimeSwitch => PROVIDER_SWITCH_APPROVAL_CODE,
-        CapabilityActionClass::Discover
-        | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
-        | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => "autonomy_policy_not_applicable",
+        CapabilityActionClass::TopologyExpand => TOPOLOGY_MUTATION_APPROVAL_CODE,
+        CapabilityActionClass::PolicyMutation => POLICY_MUTATION_APPROVAL_CODE,
+        CapabilityActionClass::SessionMutation => SESSION_MUTATION_APPROVAL_CODE,
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => {
+            "autonomy_policy_not_applicable"
+        }
     }
 }
 
@@ -181,11 +209,12 @@ fn deny_rule_id(action_class: CapabilityActionClass) -> &'static str {
             "autonomy_policy_capability_acquisition_disallowed"
         }
         CapabilityActionClass::RuntimeSwitch => "autonomy_policy_provider_switch_disallowed",
-        CapabilityActionClass::Discover
-        | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
-        | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => "autonomy_policy_not_applicable",
+        CapabilityActionClass::TopologyExpand => "autonomy_policy_topology_mutation_disallowed",
+        CapabilityActionClass::PolicyMutation => "autonomy_policy_policy_mutation_disallowed",
+        CapabilityActionClass::SessionMutation => "autonomy_policy_session_mutation_disallowed",
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => {
+            "autonomy_policy_not_applicable"
+        }
     }
 }
 
@@ -194,12 +223,27 @@ fn deny_reason_code(action_class: CapabilityActionClass) -> &'static str {
         CapabilityActionClass::CapabilityFetch
         | CapabilityActionClass::CapabilityInstall
         | CapabilityActionClass::CapabilityLoad => CAPABILITY_ACQUISITION_DISALLOWED_CODE,
-        CapabilityActionClass::RuntimeSwitch => "autonomy_policy_provider_switch_disallowed",
+        CapabilityActionClass::RuntimeSwitch => PROVIDER_SWITCH_DISALLOWED_CODE,
+        CapabilityActionClass::TopologyExpand => TOPOLOGY_MUTATION_DISALLOWED_CODE,
+        CapabilityActionClass::PolicyMutation => POLICY_MUTATION_DISALLOWED_CODE,
+        CapabilityActionClass::SessionMutation => SESSION_MUTATION_DISALLOWED_CODE,
+        CapabilityActionClass::Discover | CapabilityActionClass::ExecuteExisting => {
+            "autonomy_policy_not_applicable"
+        }
+    }
+}
+
+fn topology_budget_reason_code(action_class: CapabilityActionClass) -> &'static str {
+    match action_class {
+        CapabilityActionClass::TopologyExpand => TOPOLOGY_MUTATION_BUDGET_EXCEEDED_CODE,
+        CapabilityActionClass::PolicyMutation => POLICY_MUTATION_BUDGET_EXCEEDED_CODE,
+        CapabilityActionClass::SessionMutation => SESSION_MUTATION_BUDGET_EXCEEDED_CODE,
         CapabilityActionClass::Discover
         | CapabilityActionClass::ExecuteExisting
-        | CapabilityActionClass::TopologyExpand
-        | CapabilityActionClass::PolicyMutation
-        | CapabilityActionClass::SessionMutation => "autonomy_policy_not_applicable",
+        | CapabilityActionClass::CapabilityFetch
+        | CapabilityActionClass::CapabilityInstall
+        | CapabilityActionClass::CapabilityLoad
+        | CapabilityActionClass::RuntimeSwitch => "autonomy_policy_not_applicable",
     }
 }
 
@@ -226,8 +270,48 @@ pub fn render_reason(
             "operator approval required before running `{tool_name}` under `{}` product mode",
             snapshot.profile.as_str()
         ),
+        PROVIDER_SWITCH_DISALLOWED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: provider switch is disabled in `{}`",
+            snapshot.profile.as_str()
+        ),
         PROVIDER_SWITCH_BUDGET_EXCEEDED_CODE => format!(
             "autonomy policy denied `{tool_name}`: provider switch budget exceeded for `{}`",
+            snapshot.profile.as_str()
+        ),
+        TOPOLOGY_MUTATION_APPROVAL_CODE => format!(
+            "operator approval required before running `{tool_name}` under `{}` product mode",
+            snapshot.profile.as_str()
+        ),
+        TOPOLOGY_MUTATION_DISALLOWED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: topology expansion is disabled in `{}`",
+            snapshot.profile.as_str()
+        ),
+        TOPOLOGY_MUTATION_BUDGET_EXCEEDED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: topology mutation budget exceeded for `{}`",
+            snapshot.profile.as_str()
+        ),
+        POLICY_MUTATION_APPROVAL_CODE => format!(
+            "operator approval required before running `{tool_name}` under `{}` product mode",
+            snapshot.profile.as_str()
+        ),
+        POLICY_MUTATION_DISALLOWED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: policy mutation is disabled in `{}`",
+            snapshot.profile.as_str()
+        ),
+        POLICY_MUTATION_BUDGET_EXCEEDED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: topology mutation budget exceeded for `{}`",
+            snapshot.profile.as_str()
+        ),
+        SESSION_MUTATION_APPROVAL_CODE => format!(
+            "operator approval required before running `{tool_name}` under `{}` product mode",
+            snapshot.profile.as_str()
+        ),
+        SESSION_MUTATION_DISALLOWED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: session mutation is disabled in `{}`",
+            snapshot.profile.as_str()
+        ),
+        SESSION_MUTATION_BUDGET_EXCEEDED_CODE => format!(
+            "autonomy policy denied `{tool_name}`: topology mutation budget exceeded for `{}`",
             snapshot.profile.as_str()
         ),
         BINDING_MISSING_CODE => format!(
@@ -256,7 +340,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn autonomy_policy_decision_requires_approval_for_guided_capability_install() {
+    fn autonomy_policy_decision_requires_kernel_binding_before_guided_capability_install() {
         let snapshot = AutonomyPolicySnapshot::from_profile(AutonomyProfile::GuidedAcquisition);
         let budget = AutonomyTurnBudgetState::default();
         let input = PolicyDecisionInput {
@@ -278,11 +362,45 @@ mod tests {
     }
 
     #[test]
+    fn autonomy_policy_decision_routes_topology_expand_through_mutation_mode() {
+        let snapshot = AutonomyPolicySnapshot {
+            profile: AutonomyProfile::GuidedAcquisition,
+            capability_acquisition_mode: AutonomyOperationMode::Deny,
+            provider_switch_mode: AutonomyOperationMode::Deny,
+            topology_mutation_mode: AutonomyOperationMode::ApprovalRequired,
+            requires_kernel_binding: false,
+            budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
+                max_capability_acquisitions_per_turn: 0,
+                max_provider_switches_per_turn: 0,
+                max_topology_mutations_per_turn: 1,
+            },
+        };
+        let budget = AutonomyTurnBudgetState::default();
+        let input = PolicyDecisionInput {
+            snapshot: &snapshot,
+            action_class: CapabilityActionClass::TopologyExpand,
+            binding: ConversationRuntimeBinding::direct(),
+            budget: &budget,
+        };
+
+        let decision = evaluate_policy(input);
+
+        assert_eq!(
+            decision,
+            PolicyDecision::ApprovalRequired {
+                rule_id: "autonomy_policy_topology_mutation_requires_approval",
+                reason_code: TOPOLOGY_MUTATION_APPROVAL_CODE,
+            }
+        );
+    }
+
+    #[test]
     fn autonomy_policy_decision_enforces_capability_budget() {
         let snapshot = AutonomyPolicySnapshot::from_profile(AutonomyProfile::BoundedAutonomous);
         let budget = AutonomyTurnBudgetState {
             capability_acquisitions_used: 2,
             provider_switches_used: 0,
+            topology_mutations_used: 0,
         };
         let input = PolicyDecisionInput {
             snapshot: &snapshot,
@@ -298,6 +416,43 @@ mod tests {
             PolicyDecision::Deny {
                 rule_id: "autonomy_policy_budget_guard",
                 reason_code: CAPABILITY_ACQUISITION_BUDGET_EXCEEDED_CODE,
+            }
+        );
+    }
+
+    #[test]
+    fn autonomy_policy_decision_enforces_mutation_budget_for_session_mutation() {
+        let snapshot = AutonomyPolicySnapshot {
+            profile: AutonomyProfile::BoundedAutonomous,
+            capability_acquisition_mode: AutonomyOperationMode::Deny,
+            provider_switch_mode: AutonomyOperationMode::Deny,
+            topology_mutation_mode: AutonomyOperationMode::Allow,
+            requires_kernel_binding: false,
+            budget: crate::tools::runtime_config::AutonomyBudgetPolicy {
+                max_capability_acquisitions_per_turn: 0,
+                max_provider_switches_per_turn: 0,
+                max_topology_mutations_per_turn: 1,
+            },
+        };
+        let budget = AutonomyTurnBudgetState {
+            capability_acquisitions_used: 0,
+            provider_switches_used: 0,
+            topology_mutations_used: 1,
+        };
+        let input = PolicyDecisionInput {
+            snapshot: &snapshot,
+            action_class: CapabilityActionClass::SessionMutation,
+            binding: ConversationRuntimeBinding::direct(),
+            budget: &budget,
+        };
+
+        let decision = evaluate_policy(input);
+
+        assert_eq!(
+            decision,
+            PolicyDecision::Deny {
+                rule_id: "autonomy_policy_budget_guard",
+                reason_code: SESSION_MUTATION_BUDGET_EXCEEDED_CODE,
             }
         );
     }
