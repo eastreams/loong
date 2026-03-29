@@ -7,30 +7,31 @@ can recover a broken setup without reverse-engineering runtime internals.
 
 ## Acceptance Criteria
 
-- [ ] `loongclaw doctor` reports the health of the local assistant runtime in
+- [x] `loongclaw doctor` reports the health of the local assistant runtime in
       user-facing language.
-- [ ] `loongclaw doctor --fix` only applies safe, local repair actions and
+- [x] `loongclaw doctor --fix` only applies safe, local repair actions and
       explains what it changed.
-- [ ] `loongclaw doctor --json` produces stable machine-readable output for
+- [x] `loongclaw doctor --json` produces stable machine-readable output for
       automation and support tooling, including machine-readable `next_steps`
       when doctor can recommend a concrete repair or first-value command.
-- [ ] Text-mode doctor output ends with concrete next actions such as
+- [x] Text-mode doctor output ends with concrete next actions such as
       credential env hints, `doctor --fix`, first-turn ask/chat commands, and
       optional browser preview enable or runtime setup commands when relevant.
-- [ ] On a healthy setup, the first-turn recommendations read like the next user
+- [x] On a healthy setup, the first-turn recommendations read like the next user
       action, not just a status report, for example "Get a first answer" and
       "Continue in chat".
-- [ ] When `onboard`, `ask`, `chat`, or channel setup hits a common health
-      failure, the CLI points users toward `doctor`.
-- [ ] Doctor checks cover the current MVP path: config presence, provider
+- [x] When `onboard`, `ask`, `chat`, or channel setup hits a common health
+      failure, the CLI points users toward `doctor`, and onboarding points to
+      `doctor --fix` when a blocker has a safe local repair path.
+- [x] Doctor checks cover the current MVP path: config presence, provider
       readiness, SQLite memory readiness, shipped channel prerequisites, and
       the optional browser preview companion readiness path.
-- [ ] Durable audit readiness checks exercise the runtime `open + lock + unlock`
+- [x] Durable audit readiness checks exercise the runtime `open + lock + unlock`
       path for JSONL retention instead of relying on metadata-only validation.
-- [ ] When `tools.browser_companion.enabled=true`, doctor surfaces companion
+- [x] When `tools.browser_companion.enabled=true`, doctor surfaces companion
       install/runtime readiness as warnings with concrete repair steps instead
       of turning the optional managed lane into a hard core-runtime failure.
-- [ ] When provider model probing fails before any HTTP status is returned,
+- [x] When provider model probing fails before any HTTP status is returned,
       doctor surfaces request/models host route diagnostics, including DNS
       results, fake-ip-style address detection, and a short TCP reachability
       probe with concrete repair guidance.
