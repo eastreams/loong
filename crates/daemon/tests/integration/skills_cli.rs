@@ -1512,7 +1512,11 @@ fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() 
         shell_quote(&config_path.display().to_string())
     );
     let inspect_occurrences = rendered.matches(expected_inspect.as_str()).count();
-    let shadowed_skill_md_path = root.join(".agents/skills/release-guard/SKILL.md");
+    let shadowed_skill_md_path = root
+        .join(".agents")
+        .join("skills")
+        .join("release-guard")
+        .join("SKILL.md");
     let expected_shadowed_path = format!("  skill_md_path={}", shadowed_skill_md_path.display());
     assert!(
         rendered.contains("shadowed matches:"),
