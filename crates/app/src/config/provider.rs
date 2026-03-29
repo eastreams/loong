@@ -99,6 +99,19 @@ pub enum ProviderFeatureFamily {
 }
 
 impl ProviderFeatureFamily {
+    pub fn support_facts(self) -> ProviderFeatureSupportFacts {
+        let gate_name = self.feature_gate_name();
+        let enabled_in_build = self.is_enabled_in_build();
+        let disabled_message = self.disabled_message();
+
+        ProviderFeatureSupportFacts {
+            family: self,
+            gate_name,
+            enabled_in_build,
+            disabled_message,
+        }
+    }
+
     pub fn feature_gate_name(self) -> &'static str {
         match self {
             Self::Anthropic => "provider-anthropic",
@@ -188,6 +201,37 @@ pub struct ProviderTransportPolicy {
     pub models_endpoint: String,
     pub readiness: ProviderTransportReadiness,
     pub fallback: Option<ProviderTransportFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFeatureSupportFacts {
+    pub family: ProviderFeatureFamily,
+    pub gate_name: &'static str,
+    pub enabled_in_build: bool,
+    pub disabled_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAuthSupportFacts {
+    pub hint_env_names: Vec<String>,
+    pub requires_explicit_configuration: bool,
+    pub guidance_hint: Option<String>,
+    pub alternative_configuration_hint: Option<String>,
+    pub missing_configuration_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRegionEndpointSupportFacts {
+    pub note: Option<String>,
+    pub catalog_failure_hint: Option<String>,
+    pub request_failure_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSupportFacts {
+    pub feature: ProviderFeatureSupportFacts,
+    pub auth: ProviderAuthSupportFacts,
+    pub region_endpoint: ProviderRegionEndpointSupportFacts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1224,23 +1268,65 @@ impl ProviderConfig {
         env_names
     }
 
+    pub fn support_facts(&self) -> ProviderSupportFacts {
+        let feature = self.kind.feature_family().support_facts();
+        let auth = self.build_auth_support_facts();
+        let region_endpoint = self.build_region_endpoint_support_facts();
+
+        ProviderSupportFacts {
+            feature,
+            auth,
+            region_endpoint,
+        }
+    }
+
     pub fn requires_explicit_auth_configuration(&self) -> bool {
-        !self.auth_hint_env_names().is_empty()
+        let support_facts = self.support_facts();
+        support_facts.auth.requires_explicit_configuration
     }
 
     pub fn auth_guidance_hint(&self) -> Option<String> {
-        let profile = self.kind.profile();
-        profile.auth_guidance_hint()
+        let support_facts = self.support_facts();
+        support_facts.auth.guidance_hint
     }
 
     pub fn missing_auth_configuration_message(&self) -> String {
+        let support_facts = self.support_facts();
+        support_facts.auth.missing_configuration_message
+    }
+
+    fn build_auth_support_facts(&self) -> ProviderAuthSupportFacts {
         let env_names = self.auth_hint_env_names();
+        let requires_explicit_configuration = !env_names.is_empty();
+        let guidance_hint = self.build_auth_guidance_hint();
+        let alternative_configuration_hint = self.build_alternative_auth_configuration_hint();
+        let missing_configuration_message = self.build_missing_auth_configuration_message(
+            &env_names,
+            guidance_hint.as_deref(),
+            alternative_configuration_hint.as_deref(),
+        );
+
+        ProviderAuthSupportFacts {
+            hint_env_names: env_names,
+            requires_explicit_configuration,
+            guidance_hint,
+            alternative_configuration_hint,
+            missing_configuration_message,
+        }
+    }
+
+    fn build_missing_auth_configuration_message(
+        &self,
+        env_names: &[String],
+        guidance_hint: Option<&str>,
+        alternative_configuration_hint: Option<&str>,
+    ) -> String {
         let mut configuration_paths = vec!["configure provider credentials".to_owned()];
         if !env_names.is_empty() {
             configuration_paths.push(format!("set {} in env", env_names.join(", ")));
         }
-        if let Some(hint) = self.alternative_auth_configuration_hint() {
-            configuration_paths.push(hint);
+        if let Some(hint) = alternative_configuration_hint {
+            configuration_paths.push(hint.to_owned());
         }
         let mut message = "provider credentials are missing".to_owned();
         if let Some(detail) = self.missing_auth_runtime_detail() {
@@ -1249,14 +1335,19 @@ impl ProviderConfig {
         }
         message.push_str("; ");
         message.push_str(join_guidance_options(&configuration_paths).as_str());
-        if let Some(hint) = self.auth_guidance_hint() {
+        if let Some(hint) = guidance_hint {
             message.push(' ');
-            message.push_str(hint.as_str());
+            message.push_str(hint);
         }
         message
     }
 
-    fn alternative_auth_configuration_hint(&self) -> Option<String> {
+    fn build_auth_guidance_hint(&self) -> Option<String> {
+        let profile = self.kind.profile();
+        profile.auth_guidance_hint()
+    }
+
+    fn build_alternative_auth_configuration_hint(&self) -> Option<String> {
         let profile = self.kind.profile();
         let hint = profile.alternative_auth_configuration_hint();
         hint.map(str::to_owned)
@@ -1724,20 +1815,32 @@ impl ProviderConfig {
         None
     }
 
+    fn build_region_endpoint_support_facts(&self) -> ProviderRegionEndpointSupportFacts {
+        let guide = self.kind.region_endpoint_guide();
+        let note = guide.map(|value| value.note(self));
+        let catalog_failure_hint = guide.map(|value| value.failure_hint(self));
+        let request_failure_hint = guide.map(|value| value.request_failure_hint(self));
+
+        ProviderRegionEndpointSupportFacts {
+            note,
+            catalog_failure_hint,
+            request_failure_hint,
+        }
+    }
+
     pub fn region_endpoint_note(&self) -> Option<String> {
-        Some(self.kind.region_endpoint_guide()?.note(self))
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.note
     }
 
     pub fn region_endpoint_failure_hint(&self) -> Option<String> {
-        Some(self.kind.region_endpoint_guide()?.failure_hint(self))
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.catalog_failure_hint
     }
 
     pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
-        Some(
-            self.kind
-                .region_endpoint_guide()?
-                .request_failure_hint(self),
-        )
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.request_failure_hint
     }
 
     fn uses_byteplus_coding_plan_path(&self) -> bool {
@@ -3831,6 +3934,84 @@ mod tests {
         assert!(custom_hint.contains("Authorization"));
         assert!(custom_hint.contains("X-API-Key"));
         assert!(custom_hint.contains("provider.headers"));
+    }
+
+    #[test]
+    fn provider_feature_support_facts_are_stable() {
+        let facts = ProviderFeatureFamily::Volcengine.support_facts();
+
+        assert_eq!(facts.family, ProviderFeatureFamily::Volcengine);
+        assert_eq!(facts.gate_name, "provider-volcengine");
+        assert_eq!(
+            facts.enabled_in_build,
+            ProviderFeatureFamily::Volcengine.is_enabled_in_build()
+        );
+        assert_eq!(
+            facts.disabled_message,
+            "volcengine provider is disabled (enable feature `provider-volcengine`)"
+        );
+    }
+
+    #[test]
+    fn provider_support_facts_preserve_auth_guidance_and_missing_auth_message() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::ByteplusCoding,
+            ..ProviderConfig::default()
+        };
+
+        let support_facts = provider.support_facts();
+        let auth_support = support_facts.auth;
+        let guidance_hint = auth_support
+            .guidance_hint
+            .expect("byteplus coding should expose auth guidance");
+
+        assert!(auth_support.requires_explicit_configuration);
+        assert!(
+            auth_support
+                .hint_env_names
+                .contains(&"BYTEPLUS_API_KEY".to_owned())
+        );
+        assert!(guidance_hint.contains("BytePlus"));
+        assert!(guidance_hint.contains("BYTEPLUS_API_KEY"));
+        assert!(guidance_hint.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
+        assert!(
+            auth_support
+                .missing_configuration_message
+                .contains("BYTEPLUS_API_KEY")
+        );
+        assert!(
+            auth_support
+                .missing_configuration_message
+                .contains("BytePlus")
+        );
+    }
+
+    #[test]
+    fn provider_support_facts_preserve_region_endpoint_hints() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let support_facts = provider.support_facts();
+        let region_endpoint_support = support_facts.region_endpoint;
+        let note = region_endpoint_support
+            .note
+            .expect("minimax should expose a region endpoint note");
+        let catalog_failure_hint = region_endpoint_support
+            .catalog_failure_hint
+            .expect("minimax should expose a catalog failure hint");
+        let request_failure_hint = region_endpoint_support
+            .request_failure_hint
+            .expect("minimax should expose a request failure hint");
+
+        assert!(note.contains("MiniMax region endpoint"));
+        assert!(note.contains("https://api.minimaxi.com"));
+        assert!(note.contains("https://api.minimax.io"));
+        assert!(catalog_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(catalog_failure_hint.contains("https://api.minimax.io"));
+        assert!(request_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(request_failure_hint.contains("https://api.minimax.io"));
     }
 
     #[test]

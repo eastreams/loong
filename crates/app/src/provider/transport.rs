@@ -180,9 +180,9 @@ pub(super) async fn resolve_request_auth_context(
                 bedrock_region: Some(region),
             });
         }
-        let feature_family = provider.kind.feature_family();
-        let message = feature_family.disabled_message();
-        Err(message)
+        let support_facts = provider.support_facts();
+        let feature_support = support_facts.feature;
+        Err(feature_support.disabled_message)
     }
 }
 

@@ -4,11 +4,10 @@ use crate::config::{LoongClawConfig, ProviderConfig};
 use super::contracts::provider_runtime_contract;
 
 pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
-    let feature_family = config.provider.kind.feature_family();
-    let feature_enabled = feature_family.is_enabled_in_build();
-    if !feature_enabled {
-        let message = feature_family.disabled_message();
-        return Err(message);
+    let support_facts = config.provider.support_facts();
+    let feature_support = support_facts.feature;
+    if !feature_support.enabled_in_build {
+        return Err(feature_support.disabled_message);
     }
     Ok(())
 }
@@ -39,7 +38,9 @@ pub(super) fn validate_provider_configuration(config: &LoongClawConfig) -> CliRe
 }
 
 pub(super) async fn validate_provider_auth_readiness(config: &LoongClawConfig) -> CliResult<()> {
-    if !config.provider.requires_explicit_auth_configuration() {
+    let support_facts = config.provider.support_facts();
+    let auth_support = support_facts.auth;
+    if !auth_support.requires_explicit_configuration {
         return Ok(());
     }
 
@@ -47,7 +48,7 @@ pub(super) async fn validate_provider_auth_readiness(config: &LoongClawConfig) -
         return Ok(());
     }
 
-    Err(config.provider.missing_auth_configuration_message())
+    Err(auth_support.missing_configuration_message)
 }
 
 fn provider_uses_kimi_coding_endpoint(provider: &ProviderConfig) -> bool {
