@@ -611,7 +611,11 @@ fn select_one_stdio(
 }
 
 fn rich_prompt_ui_available() -> bool {
-    user_attended()
+    user_attended() && terminal_supports_rich_prompt_ui()
+}
+
+fn terminal_supports_rich_prompt_ui() -> bool {
+    !matches!(env::var("TERM").ok().as_deref(), Some("dumb") | Some(""))
 }
 
 fn rich_prompt_theme() -> ColorfulTheme {
@@ -1656,40 +1660,61 @@ impl<UI> GuidedOnboardUiRunner<'_, UI>
 where
     UI: OnboardUi,
 {
-    async fn run_authentication_step(&mut self, draft: &mut OnboardDraft) -> CliResult<()> {
+    async fn run_authentication_step(
+        &mut self,
+        draft: &mut OnboardDraft,
+    ) -> CliResult<OnboardFlowStepAction> {
         let guided_prompt_path = resolve_guided_prompt_path(self.options, &draft.config);
-        let selected_provider = resolve_provider_selection(
+        let selected_provider = match resolve_provider_selection(
             self.options,
             &draft.config,
             &self.starting_selection.provider_selection,
             guided_prompt_path,
             self.ui,
             self.context,
-        )?;
+        ) {
+            Ok(selected_provider) => selected_provider,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
         draft.set_provider_config(selected_provider);
 
         let available_models = load_onboarding_model_catalog(self.options, &draft.config).await;
-        let selected_model = resolve_model_selection(
+        let selected_model = match resolve_model_selection(
             self.options,
             &draft.config,
             guided_prompt_path,
             &available_models,
             self.ui,
             self.context,
-        )?;
+        ) {
+            Ok(selected_model) => selected_model,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
         draft.set_provider_model(selected_model);
 
         let default_api_key_env = preferred_api_key_env_default(&draft.config);
-        let selected_api_key_env = resolve_api_key_env_selection(
+        let selected_api_key_env = match resolve_api_key_env_selection(
             self.options,
             &draft.config,
             default_api_key_env,
             guided_prompt_path,
             self.ui,
             self.context,
-        )?;
+        ) {
+            Ok(selected_api_key_env) => selected_api_key_env,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
         draft.set_provider_credential_env(selected_api_key_env);
-        Ok(())
+        Ok(OnboardFlowStepAction::Next)
     }
 
     async fn run_runtime_defaults_step(
@@ -1964,10 +1989,7 @@ where
         print_guided_step_boundary(self.ui, step)?;
         match step {
             OnboardWizardStep::Welcome => Ok(OnboardFlowStepAction::Next),
-            OnboardWizardStep::Authentication => {
-                self.run_authentication_step(draft).await?;
-                Ok(OnboardFlowStepAction::Next)
-            }
+            OnboardWizardStep::Authentication => self.run_authentication_step(draft).await,
             OnboardWizardStep::RuntimeDefaults => self.run_runtime_defaults_step(draft).await,
             OnboardWizardStep::Workspace => self.run_workspace_step(draft),
             OnboardWizardStep::Protocols => self.run_protocols_step(draft),
@@ -6864,6 +6886,42 @@ mod tests {
             crate::onboard_state::OnboardInteractionMode::PlainInteractive,
             "interactive onboarding should fall back to plain prompts when the terminal is attended but rich prompt support is degraded"
         );
+    }
+
+    #[test]
+    fn rich_prompt_ui_is_disabled_for_dumb_term() {
+        let mut env = ScopedEnv::new();
+        env.set("TERM", "dumb");
+
+        assert!(
+            !terminal_supports_rich_prompt_ui(),
+            "TERM=dumb should force onboarding to use the plain-prompt path"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn authentication_step_back_returns_flow_back_action() {
+        let options = interactive_onboard_options();
+        let context = onboard_test_context();
+        let starting_selection = default_starting_config_selection();
+        let mut ui = TestOnboardUi::with_inputs(["back"]);
+        let mut draft = OnboardDraft::from_config(
+            mvp::config::LoongClawConfig::default(),
+            PathBuf::from("/tmp/auth-back.toml"),
+            None,
+        );
+
+        let action = GuidedOnboardUiRunner {
+            options: &options,
+            ui: &mut ui,
+            context: &context,
+            starting_selection: &starting_selection,
+        }
+        .run_authentication_step(&mut draft)
+        .await
+        .expect("authentication step should map back-navigation to a flow action");
+
+        assert_eq!(action, OnboardFlowStepAction::Back);
     }
 
     fn browser_companion_temp_dir(label: &str) -> PathBuf {

@@ -227,13 +227,16 @@ impl OnboardDraft {
     }
 
     pub fn clear_web_search_credential(&mut self, provider: &str) {
-        self.set_web_search_credential_value(provider, None);
-        self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
+        if self.set_web_search_credential_value(provider, None) {
+            self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
+        }
     }
 
     pub fn set_web_search_credential_env(&mut self, provider: &str, env_name: String) {
-        self.set_web_search_credential_value(provider, Some(format!("${{{}}}", env_name.trim())));
-        self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
+        if self.set_web_search_credential_value(provider, Some(format!("${{{}}}", env_name.trim())))
+        {
+            self.mark_user_selected(Self::WEB_SEARCH_CREDENTIAL_KEY);
+        }
     }
 
     pub fn set_workspace_sqlite_path(&mut self, sqlite_path: PathBuf) {
@@ -279,24 +282,29 @@ impl OnboardDraft {
         self.seed_origin(key, OnboardValueOrigin::UserSelected);
     }
 
-    fn set_web_search_credential_value(&mut self, provider: &str, value: Option<String>) {
+    fn set_web_search_credential_value(&mut self, provider: &str, value: Option<String>) -> bool {
         match provider {
             mvp::config::WEB_SEARCH_PROVIDER_BRAVE => {
                 self.config.tools.web_search.brave_api_key = value;
+                true
             }
             mvp::config::WEB_SEARCH_PROVIDER_TAVILY => {
                 self.config.tools.web_search.tavily_api_key = value;
+                true
             }
             mvp::config::WEB_SEARCH_PROVIDER_PERPLEXITY => {
                 self.config.tools.web_search.perplexity_api_key = value;
+                true
             }
             mvp::config::WEB_SEARCH_PROVIDER_EXA => {
                 self.config.tools.web_search.exa_api_key = value;
+                true
             }
             mvp::config::WEB_SEARCH_PROVIDER_JINA => {
                 self.config.tools.web_search.jina_api_key = value;
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 }
@@ -376,6 +384,20 @@ mod tests {
         assert_eq!(
             draft.origin_for(OnboardDraft::CLI_SYSTEM_PROMPT_KEY),
             Some(OnboardValueOrigin::UserSelected)
+        );
+    }
+
+    #[test]
+    fn unknown_web_search_provider_does_not_mark_credential_origin() {
+        let mut draft =
+            OnboardDraft::from_config(sample_config(), PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_web_search_credential_env("unknown-provider", "IGNORED_KEY".to_owned());
+        draft.clear_web_search_credential("unknown-provider");
+
+        assert_eq!(
+            draft.origin_for(OnboardDraft::WEB_SEARCH_CREDENTIAL_KEY),
+            None
         );
     }
 }

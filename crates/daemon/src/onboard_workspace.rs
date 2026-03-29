@@ -23,23 +23,24 @@ pub(super) fn derive_workspace_step_values(
     let sqlite_origin = draft.origin_for(OnboardDraft::WORKSPACE_SQLITE_PATH_KEY);
 
     let explicit_file_root = draft.config.tools.explicit_file_root();
-    let persist_displayed_file_root =
-        explicit_file_root.is_some() || context.workspace_root.is_some();
-    let (file_root, file_root_origin) =
-        if explicit_file_root.is_none() && context.workspace_root.is_some() {
+    let seeded_file_root_origin = draft.origin_for(OnboardDraft::WORKSPACE_FILE_ROOT_KEY);
+    let uses_workspace_root_default =
+        explicit_file_root.is_none() && context.workspace_root.is_some();
+    let persist_displayed_file_root = explicit_file_root.is_some()
+        || (uses_workspace_root_default
+            && seeded_file_root_origin != Some(OnboardValueOrigin::CurrentSetup));
+    let (file_root, file_root_origin) = if explicit_file_root.is_none() {
+        if let Some(workspace_root) = context.workspace_root.clone() {
             (
-                context
-                    .workspace_root
-                    .clone()
-                    .unwrap_or_else(|| draft.workspace.file_root.clone()),
-                Some(OnboardValueOrigin::DetectedStartingPoint),
+                workspace_root,
+                seeded_file_root_origin.or(Some(OnboardValueOrigin::DetectedStartingPoint)),
             )
         } else {
-            (
-                draft.workspace.file_root.clone(),
-                draft.origin_for(OnboardDraft::WORKSPACE_FILE_ROOT_KEY),
-            )
-        };
+            (draft.workspace.file_root.clone(), seeded_file_root_origin)
+        }
+    } else {
+        (draft.workspace.file_root.clone(), seeded_file_root_origin)
+    };
 
     WorkspaceStepValues {
         sqlite_path,
@@ -112,7 +113,7 @@ fn validate_sqlite_path(sqlite_path: &Path) -> CliResult<()> {
                 sqlite_path.display()
             ));
         }
-        Ok(metadata) if metadata.permissions().readonly() => {
+        Ok(_) if !sqlite_file_is_writable(sqlite_path) => {
             return Err(format!(
                 "workspace step blocked: sqlite memory path {} is not writable",
                 sqlite_path.display()
@@ -130,6 +131,10 @@ fn validate_sqlite_path(sqlite_path: &Path) -> CliResult<()> {
 
     let sqlite_parent = sqlite_path.parent().unwrap_or(Path::new("."));
     validate_directory_target("sqlite memory path", sqlite_parent)
+}
+
+fn sqlite_file_is_writable(sqlite_path: &Path) -> bool {
+    fs::OpenOptions::new().write(true).open(sqlite_path).is_ok()
 }
 
 fn validate_directory_target(name: &'static str, target: &Path) -> CliResult<()> {
@@ -174,10 +179,80 @@ fn nearest_existing_ancestor(target: &Path) -> Option<&Path> {
 fn directory_permissions_block_write(permissions: &fs::Permissions) -> bool {
     use std::os::unix::fs::PermissionsExt;
 
+    // This is a best-effort preflight heuristic based on Unix mode bits, not the
+    // effective permissions of the current process. Real filesystem operations
+    // still surface the authoritative EACCES-style failures when they happen.
     permissions.mode() & 0o222 == 0
 }
 
 #[cfg(not(unix))]
 fn directory_permissions_block_write(permissions: &fs::Permissions) -> bool {
     permissions.readonly()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use loongclaw_app as mvp;
+
+    fn test_context(workspace_root: Option<PathBuf>) -> OnboardRuntimeContext {
+        OnboardRuntimeContext::new_for_tests(80, workspace_root, std::iter::empty::<PathBuf>())
+    }
+
+    #[test]
+    fn blank_current_file_root_stays_implicit_when_workspace_root_is_only_display_default() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.file_root = Some(String::new());
+        let mut draft = OnboardDraft::from_config(
+            config,
+            PathBuf::from("loongclaw.toml"),
+            Some(OnboardValueOrigin::CurrentSetup),
+        );
+        let workspace_root = std::env::temp_dir().join("loongclaw-current-workspace-root");
+
+        let displayed_values =
+            derive_workspace_step_values(&draft, &test_context(Some(workspace_root.clone())));
+
+        assert_eq!(displayed_values.file_root, workspace_root);
+        assert_eq!(
+            displayed_values.file_root_origin,
+            Some(OnboardValueOrigin::CurrentSetup)
+        );
+        assert!(
+            !displayed_values.persist_displayed_file_root,
+            "reruns with an implicit current file root should not materialize it as an explicit value"
+        );
+
+        apply_workspace_step_values(&mut draft, &displayed_values);
+        assert_eq!(draft.config.tools.file_root.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn start_fresh_workspace_root_default_is_persistable() {
+        let mut draft = OnboardDraft::from_config(
+            mvp::config::LoongClawConfig::default(),
+            PathBuf::from("loongclaw.toml"),
+            None,
+        );
+        let workspace_root = std::env::temp_dir().join("loongclaw-start-fresh-workspace-root");
+
+        let displayed_values =
+            derive_workspace_step_values(&draft, &test_context(Some(workspace_root.clone())));
+
+        assert_eq!(
+            displayed_values.file_root_origin,
+            Some(OnboardValueOrigin::DetectedStartingPoint)
+        );
+        assert!(
+            displayed_values.persist_displayed_file_root,
+            "fresh onboarding should persist the workspace-root-backed default when the user keeps it"
+        );
+
+        apply_workspace_step_values(&mut draft, &displayed_values);
+        let workspace_root_display = workspace_root.display().to_string();
+        assert_eq!(
+            draft.config.tools.file_root.as_deref(),
+            Some(workspace_root_display.as_str())
+        );
+    }
 }

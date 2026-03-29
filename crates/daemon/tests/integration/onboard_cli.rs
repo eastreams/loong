@@ -538,6 +538,14 @@ fn extract_success_section_lines(transcript: &[String]) -> Vec<String> {
     transcript[start..].to_vec()
 }
 
+fn extract_outcome_section_lines(transcript: &[String], title: &str) -> Vec<String> {
+    let start = transcript
+        .iter()
+        .position(|line| line == title)
+        .unwrap_or_else(|| panic!("transcript should include outcome section {title:?}"));
+    transcript[start..].to_vec()
+}
+
 fn assert_transcript_steps_in_order(transcript: &[String], expected_steps: &[&str]) {
     let mut search_start = 0;
 
@@ -2083,23 +2091,24 @@ async fn post_write_verification_failure_preserves_old_config_and_reports_blocke
         original_body,
         "blocked-after-verification flows should restore the original config after rollback"
     );
+    let blocked_lines = extract_outcome_section_lines(&transcript, "onboarding blocked");
     assert!(
-        transcript
+        blocked_lines
             .iter()
             .any(|line| line.contains("blocked after verification")),
-        "post-write verification failures should render a blocked-after-verification outcome instead of only returning an error: {transcript:#?}"
+        "post-write verification failures should render a blocked-after-verification outcome instead of only returning an error: {blocked_lines:#?}"
     );
     assert!(
-        transcript
+        blocked_lines
             .iter()
             .any(|line| line.contains("- model: openai/gpt-5.1-codex")),
-        "blocked-after-verification summary should describe the restored config on disk, not the failed draft model: {transcript:#?}"
+        "blocked-after-verification summary should describe the restored config on disk, not the failed draft model: {blocked_lines:#?}"
     );
     assert!(
-        transcript
+        blocked_lines
             .iter()
             .all(|line| !line.contains("- model: gpt-4.1-mini")),
-        "blocked-after-verification summary should not advertise the unwritten draft model after rollback succeeds: {transcript:#?}"
+        "blocked-after-verification summary should not advertise the unwritten draft model after rollback succeeds: {blocked_lines:#?}"
     );
     assert!(
         transcript.iter().all(|line| line != "onboarding complete"),
@@ -6500,8 +6509,8 @@ async fn onboard_current_setup_adjustments_preserve_unchanged_domain_actions_in_
     assert!(
         success_lines
             .iter()
-            .any(|line| line == "- adjusted now: cli, tools"),
-        "success summary should group domains adjusted during onboarding, including workspace-backed tool defaults: {success_lines:#?}"
+            .any(|line| line == "- adjusted now: cli"),
+        "success summary should group domains adjusted during onboarding without inventing workspace-backed tool defaults for current-setup reruns: {success_lines:#?}"
     );
 }
 
@@ -7448,6 +7457,10 @@ async fn workspace_step_blocks_on_unwritable_paths() {
     {
         use std::os::unix::fs::PermissionsExt;
 
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
         let readonly_root = workspace_root.join("readonly-root");
         std::fs::create_dir_all(&readonly_root).expect("create readonly root");
         let original_permissions = std::fs::metadata(&readonly_root)
@@ -7525,7 +7538,7 @@ async fn workspace_step_blocks_on_unwritable_paths() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn guided_onboard_review_labels_current_and_detected_values_differently() {
+async fn guided_onboard_review_keeps_current_setup_values_labeled_as_current() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("guided-review-labels-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -7589,13 +7602,13 @@ async fn guided_onboard_review_labels_current_and_detected_values_differently() 
     assert!(
         review_lines
             .iter()
-            .any(|line| line.contains("detected value")),
-        "review should label detected values explicitly once the new wizard contract lands: {review_lines:#?}"
+            .all(|line| !line.contains("detected value")),
+        "continue-current flows should not relabel implicit current values as detected ones: {review_lines:#?}"
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn guided_onboard_rerun_keeps_current_values_distinct_from_detected_values() {
+async fn guided_onboard_rerun_does_not_invent_detected_labels_for_current_setup() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("guided-rerun-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -7660,8 +7673,8 @@ async fn guided_onboard_rerun_keeps_current_values_distinct_from_detected_values
         .count();
 
     assert!(
-        current_value_lines > 0 && detected_value_lines > 0,
-        "rerun review should preserve distinct current and detected value labels: {review_lines:#?}"
+        current_value_lines > 0 && detected_value_lines == 0,
+        "continue-current reruns should preserve current value labels without inventing detected labels: {review_lines:#?}"
     );
 }
 
@@ -7751,7 +7764,8 @@ async fn guided_onboard_back_navigation_preserves_draft_state() {
                 credential_step_count >= 2,
                 "a real next/back round-trip should preserve the credential draft while revisiting the earlier selection flow: {transcript:#?}"
             );
-            let review_lines = transcript;
+            let review_lines =
+                extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
             assert_line_present(
                 &review_lines,
                 "- provider: OpenAI",
