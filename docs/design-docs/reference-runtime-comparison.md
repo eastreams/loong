@@ -96,7 +96,7 @@ The runtime also already maintains a multi-scope discovery inventory with:
 
 This is not a weak substrate. The gap is not "how to install skills". The gap
 is "how users discover the right skill and understand why it is or is not the
-right next step".
+appropriate next step".
 
 ### Memory Substrate Already Exists
 
