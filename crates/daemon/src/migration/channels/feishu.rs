@@ -29,7 +29,7 @@ pub(super) fn collect_preview(
         || config.feishu.app_id_env != default_feishu.app_id_env
         || config.feishu.app_secret_env != default_feishu.app_secret_env
         || config.feishu.base_url != default_feishu.base_url
-        || config.feishu.mode.is_some()
+        || config.feishu.mode != default_feishu.mode
         || config.feishu.receive_id_type != default_feishu.receive_id_type
         || config.feishu.webhook_bind != default_feishu.webhook_bind
         || config.feishu.webhook_path != default_feishu.webhook_path
@@ -168,7 +168,12 @@ pub(super) fn apply_default_env_bindings(config: &mut mvp::config::LoongClawConf
         "set feishu.app_secret_env",
         &mut fixes,
     );
-    if config.feishu.mode.unwrap_or_default() != mvp::config::FeishuChannelServeMode::Websocket {
+    if config
+        .feishu
+        .mode
+        .unwrap_or(mvp::config::FeishuChannelServeMode::Websocket)
+        != mvp::config::FeishuChannelServeMode::Websocket
+    {
         ensure_default_env_binding(
             &mut config.feishu.verification_token_env,
             default.verification_token_env.as_deref(),
@@ -216,9 +221,16 @@ fn merge_feishu_config(
         target.base_url = source.base_url.clone();
         changed = true;
     }
-    if target.mode.is_none() && source.mode.is_some() {
-        target.mode = source.mode;
-        changed = true;
+    if target.mode.is_none() {
+        let next_mode = source.mode.or(if target.enabled {
+            Some(mvp::config::FeishuChannelServeMode::Websocket)
+        } else {
+            None
+        });
+        if next_mode.is_some() {
+            target.mode = next_mode;
+            changed = true;
+        }
     }
     if target.receive_id_type == default.receive_id_type
         && source.receive_id_type != default.receive_id_type
@@ -271,7 +283,12 @@ fn descriptor() -> &'static mvp::config::ChannelDescriptor {
 }
 
 fn inbound_transport_check(config: &mvp::config::LoongClawConfig) -> (ChannelCheckLevel, String) {
-    if config.feishu.mode.unwrap_or_default() == mvp::config::FeishuChannelServeMode::Websocket {
+    if config
+        .feishu
+        .mode
+        .unwrap_or(mvp::config::FeishuChannelServeMode::Websocket)
+        == mvp::config::FeishuChannelServeMode::Websocket
+    {
         return (
             ChannelCheckLevel::Pass,
             "websocket mode configured; webhook secrets are not required".to_owned(),
@@ -373,5 +390,93 @@ mod tests {
         );
         assert!(config.feishu.verification_token_env.is_none());
         assert!(config.feishu.encrypt_key_env.is_none());
+    }
+
+    #[test]
+    fn absent_mode_env_fix_skips_webhook_secrets() {
+        let mut config = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+        // Deserialized config with [feishu] present but no mode key gives mode = None.
+        assert!(
+            config.feishu.mode.is_none(),
+            "deserialized config with absent mode field must be None"
+        );
+        config.feishu.app_id_env = None;
+        config.feishu.app_secret_env = None;
+        config.feishu.verification_token_env = None;
+        config.feishu.encrypt_key_env = None;
+
+        let fixes = apply_default_env_bindings(&mut config);
+
+        assert!(
+            fixes
+                .iter()
+                .all(|fix| !fix.starts_with("set feishu.verification_token_env=")),
+            "absent mode (defaulting to websocket) must not auto-fill webhook verification secrets"
+        );
+        assert!(
+            fixes
+                .iter()
+                .all(|fix| !fix.starts_with("set feishu.encrypt_key_env=")),
+            "absent mode (defaulting to websocket) must not auto-fill webhook encrypt secrets"
+        );
+        assert!(config.feishu.verification_token_env.is_none());
+        assert!(config.feishu.encrypt_key_env.is_none());
+    }
+
+    #[test]
+    fn merge_defaults_to_websocket_when_enabling_feishu_without_explicit_mode() {
+        let mut target = parse_config(
+            r#"
+            [feishu]
+            enabled = false
+            "#,
+        );
+        let source = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+
+        assert!(
+            apply(&mut target, &source),
+            "enabling feishu without explicit mode should still produce a persisted mode"
+        );
+        assert_eq!(
+            target.feishu.mode,
+            Some(mvp::config::FeishuChannelServeMode::Websocket),
+            "merge should persist websocket mode for enabled feishu imports when mode is omitted"
+        );
+    }
+
+    #[test]
+    fn merge_defaults_to_websocket_when_target_already_enabled() {
+        let mut target = parse_config(
+            r#"
+            [feishu]
+            enabled = true
+            "#,
+        );
+        let source = parse_config(
+            r#"
+            [feishu]
+            enabled = false
+            "#,
+        );
+
+        assert!(
+            apply(&mut target, &source),
+            "enabled feishu target should persist websocket mode even if incoming source omits mode"
+        );
+        assert_eq!(
+            target.feishu.mode,
+            Some(mvp::config::FeishuChannelServeMode::Websocket),
+            "merge should persist websocket mode whenever merged feishu remains enabled and mode is omitted"
+        );
     }
 }
