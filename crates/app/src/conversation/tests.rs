@@ -994,6 +994,25 @@ fn persisted_conversation_event_payloads_by_name(
         .collect()
 }
 
+fn persisted_internal_records_by_type(
+    persisted: &[(String, String, String)],
+    record_type: &str,
+) -> Vec<Value> {
+    persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != record_type {
+                return None;
+            }
+            Some(parsed)
+        })
+        .collect()
+}
+
 fn assert_discovery_first_followup_summary(
     persisted: &[(String, String, String)],
     raw_tool_output_requested: bool,
@@ -12075,6 +12094,274 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_se
         governance_snapshot["reason_code"],
         "autonomy_policy_session_mutation_requires_approval"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_approval_required_tool_decision() {
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-telemetry", "guided-install-approval");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-guided-approval");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-guided",
+                "turn-autonomy-telemetry-guided",
+                "call-autonomy-telemetry-guided",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-guided",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-guided",
+            "install the demo skill",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("guided autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 0);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-guided"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "approval_required");
+    assert_eq!(decision["allow"], false);
+    assert_eq!(decision["deny"], false);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "guided_acquisition");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+    assert_eq!(
+        decision["rule_id"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+    assert_eq!(
+        decision["reason_code"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_denied_tool_decision() {
+    let workspace_root_name = unique_acp_test_id(
+        "conversation-autonomy-telemetry",
+        "discovery-install-denied",
+    );
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-discovery-denied");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-discovery",
+                "turn-autonomy-telemetry-discovery",
+                "call-autonomy-telemetry-discovery",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-discovery",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-discovery",
+            "install the demo skill",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("discovery autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 0);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-discovery"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "deny");
+    assert_eq!(decision["allow"], false);
+    assert_eq!(decision["deny"], true);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "discovery_only");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+    assert_eq!(
+        decision["rule_id"],
+        "autonomy_policy_capability_acquisition_disallowed"
+    );
+    assert_eq!(
+        decision["reason_code"],
+        "autonomy_policy_capability_acquisition_disallowed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_outcome() {
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-telemetry", "bounded-install-allow");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-bounded-allow");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-bounded",
+                "turn-autonomy-telemetry-bounded",
+                "call-autonomy-telemetry-bounded",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-bounded",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-bounded",
+            "install the demo skill and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("bounded autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 1);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-bounded"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "allow");
+    assert_eq!(decision["allow"], true);
+    assert_eq!(decision["deny"], false);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "bounded_autonomous");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+
+    let outcome = &outcomes[0]["outcome"];
+    assert!(
+        outcomes[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        outcomes[0]["tool_call_id"],
+        "call-autonomy-telemetry-bounded"
+    );
+    assert_eq!(outcome["tool_name"], "external_skills.install");
+    assert_eq!(outcome["status"], "ok");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

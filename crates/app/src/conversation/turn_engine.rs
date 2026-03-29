@@ -73,6 +73,121 @@ pub struct ToolOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ToolDecisionKind {
+    Allow,
+    ApprovalRequired,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolDecisionTelemetry {
+    pub tool_name: String,
+    pub decision_kind: ToolDecisionKind,
+    pub allow: bool,
+    pub deny: bool,
+    pub reason: String,
+    pub rule_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autonomy_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_action_class: Option<String>,
+}
+
+impl ToolDecisionTelemetry {
+    fn allow(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::Allow,
+            allow: true,
+            deny: false,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn approval_required(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::ApprovalRequired,
+            allow: false,
+            deny: false,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn deny(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::Deny,
+            allow: false,
+            deny: true,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn with_reason_code(mut self, reason_code: impl Into<String>) -> Self {
+        self.reason_code = Some(reason_code.into());
+        self
+    }
+
+    fn with_policy_source(mut self, policy_source: impl Into<String>) -> Self {
+        self.policy_source = Some(policy_source.into());
+        self
+    }
+
+    fn with_autonomy_profile(mut self, autonomy_profile: impl Into<String>) -> Self {
+        self.autonomy_profile = Some(autonomy_profile.into());
+        self
+    }
+
+    fn with_capability_action_class(mut self, capability_action_class: impl Into<String>) -> Self {
+        self.capability_action_class = Some(capability_action_class.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ToolOutcomeTelemetry {
+    pub tool_name: String,
+    pub status: String,
+    pub payload: serde_json::Value,
+    pub error_code: Option<String>,
+    pub human_reason: Option<String>,
+    pub audit_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ApprovalRequirementKind {
     KernelContextRequired,
     GovernedTool,
@@ -109,9 +224,15 @@ impl ApprovalRequirement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolPreflightOutcome {
-    Allow,
-    NeedsApproval(ApprovalRequirement),
-    Denied(TurnFailure),
+    Allow(ToolDecisionTelemetry),
+    NeedsApproval {
+        requirement: ApprovalRequirement,
+        decision: ToolDecisionTelemetry,
+    },
+    Denied {
+        failure: TurnFailure,
+        decision: ToolDecisionTelemetry,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +257,9 @@ pub enum ToolResultPayloadSemantics {
 const TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 2048;
 const MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 256;
 const MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 64_000;
+const TOOL_PREFLIGHT_ALLOW_RULE_ID: &str = "tool_preflight_allowed";
+const AUTONOMY_POLICY_ALLOW_RULE_ID: &str = "autonomy_policy_allow";
+const AUTONOMY_POLICY_ALLOW_REASON_CODE: &str = "autonomy_policy_allow";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -278,6 +402,26 @@ pub(crate) fn classify_kernel_error(error: &KernelError) -> KernelFailureClass {
     }
 }
 
+fn generic_allow_tool_decision(tool_name: &str) -> ToolDecisionTelemetry {
+    let reason = format!("tool preflight allowed `{tool_name}`");
+    ToolDecisionTelemetry::allow(tool_name, reason, TOOL_PREFLIGHT_ALLOW_RULE_ID)
+}
+
+fn approval_required_tool_decision(
+    tool_name: &str,
+    requirement: &ApprovalRequirement,
+) -> ToolDecisionTelemetry {
+    let reason = requirement.reason.clone();
+    let rule_id = requirement.rule_id.clone();
+    ToolDecisionTelemetry::approval_required(tool_name, reason, rule_id)
+}
+
+fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionTelemetry {
+    let reason = failure.reason.clone();
+    let rule_id = failure.code.clone();
+    ToolDecisionTelemetry::deny(tool_name, reason, rule_id)
+}
+
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
     async fn preflight_tool_intent_with_binding(
@@ -292,8 +436,17 @@ pub trait AppToolDispatcher: Send + Sync {
             .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
             .await
         {
-            Ok(Some(requirement)) => Ok(ToolPreflightOutcome::NeedsApproval(requirement)),
-            Ok(None) => Ok(ToolPreflightOutcome::Allow),
+            Ok(Some(requirement)) => {
+                let decision = approval_required_tool_decision(descriptor.name, &requirement);
+                Ok(ToolPreflightOutcome::NeedsApproval {
+                    requirement,
+                    decision,
+                })
+            }
+            Ok(None) => {
+                let decision = generic_allow_tool_decision(descriptor.name);
+                Ok(ToolPreflightOutcome::Allow(decision))
+            }
             Err(reason) => Err(reason),
         }
     }
@@ -371,6 +524,79 @@ impl DefaultAppToolDispatcher {
             crate::memory::runtime_config::get_memory_runtime_config().clone(),
             ToolConfig::default(),
         )
+    }
+
+    fn autonomy_policy_decision_base(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+    ) -> ToolDecisionTelemetry {
+        let profile = policy_snapshot.profile.as_str();
+        let action_class_name = action_class.as_str();
+        let base = ToolDecisionTelemetry::allow(tool_name, "", AUTONOMY_POLICY_ALLOW_RULE_ID);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(profile);
+        let with_action_class = with_profile.with_capability_action_class(action_class_name);
+        with_action_class.with_reason_code(AUTONOMY_POLICY_ALLOW_REASON_CODE)
+    }
+
+    fn autonomy_policy_allow_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+    ) -> ToolDecisionTelemetry {
+        let profile = policy_snapshot.profile.as_str();
+        let reason =
+            format!("autonomy policy allowed `{tool_name}` under `{profile}` product mode");
+        let base = Self::autonomy_policy_decision_base(tool_name, policy_snapshot, action_class);
+        ToolDecisionTelemetry { reason, ..base }
+    }
+
+    fn autonomy_policy_grant_satisfied_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = Self::autonomy_policy_decision_base(tool_name, policy_snapshot, action_class);
+        let decision = ToolDecisionTelemetry {
+            reason,
+            rule_id: rule_id.to_owned(),
+            ..base
+        };
+        decision.with_reason_code(reason_code)
+    }
+
+    fn autonomy_policy_approval_required_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = ToolDecisionTelemetry::approval_required(tool_name, reason, rule_id);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(policy_snapshot.profile.as_str());
+        let with_action_class = with_profile.with_capability_action_class(action_class.as_str());
+        with_action_class.with_reason_code(reason_code)
+    }
+
+    fn autonomy_policy_denied_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = ToolDecisionTelemetry::deny(tool_name, reason, rule_id);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(policy_snapshot.profile.as_str());
+        let with_action_class = with_profile.with_capability_action_class(action_class.as_str());
+        with_action_class.with_reason_code(reason_code)
     }
 
     fn effective_tool_config_for_session(&self, session_context: &SessionContext) -> ToolConfig {
@@ -717,9 +943,21 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             binding,
             budget: budget_state,
         };
+        let autonomy_policy_applies =
+            super::autonomy_policy::action_mode(&policy_snapshot, action_class).is_some();
         let policy_decision = evaluate_policy(policy_input);
+        let mut autonomy_allow_decision = None;
         match policy_decision {
-            PolicyDecision::Allow => {}
+            PolicyDecision::Allow => {
+                if autonomy_policy_applies {
+                    let decision = Self::autonomy_policy_allow_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                    );
+                    autonomy_allow_decision = Some(decision);
+                }
+            }
             PolicyDecision::ApprovalRequired {
                 rule_id,
                 reason_code,
@@ -733,9 +971,17 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                     let _ = (session_context, intent, approval_key);
                     let failure = TurnFailure::policy_denied(
                         "autonomy_policy_approval_support_missing",
+                        reason.clone(),
+                    );
+                    let decision = Self::autonomy_policy_denied_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                        rule_id,
+                        reason_code,
                         reason,
                     );
-                    return Ok(ToolPreflightOutcome::Denied(failure));
+                    return Ok(ToolPreflightOutcome::Denied { failure, decision });
                 }
 
                 #[cfg(feature = "memory-sqlite")]
@@ -743,9 +989,11 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                     let is_preapproved = self.is_tool_call_preapproved(&approval_key);
                     let is_predenied = self.is_tool_call_predenied(&approval_key);
                     if is_predenied {
-                        return Err(format!(
-                            "app_tool_denied: governed tool `{approval_key}` is denied by approval policy"
-                        ));
+                        let reason =
+                            format!("governed tool `{approval_key}` is denied by approval policy");
+                        let failure = TurnFailure::policy_denied("app_tool_denied", reason);
+                        let decision = denied_tool_decision(descriptor.name, &failure);
+                        return Ok(ToolPreflightOutcome::Denied { failure, decision });
                     }
 
                     let has_approval_grant =
@@ -754,6 +1002,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                     if !autonomy_approval_is_satisfied {
                         let governance_snapshot_json = json!({
                             "policy_source": AUTONOMY_POLICY_SOURCE,
+                            "decision_kind": ToolDecisionKind::ApprovalRequired,
                             "autonomy_profile": policy_snapshot.profile.as_str(),
                             "capability_action_class": action_class.as_str(),
                             "rule_id": rule_id,
@@ -769,18 +1018,60 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                             rule_id,
                             governance_snapshot_json,
                         )?;
-                        return Ok(ToolPreflightOutcome::NeedsApproval(requirement));
+                        let decision = Self::autonomy_policy_approval_required_decision(
+                            descriptor.name,
+                            &policy_snapshot,
+                            action_class,
+                            rule_id,
+                            reason_code,
+                            reason,
+                        );
+                        return Ok(ToolPreflightOutcome::NeedsApproval {
+                            requirement,
+                            decision,
+                        });
                     }
+
+                    let satisfied_reason = if is_preapproved {
+                        format!(
+                            "configured approval policy already allows `{}` under `{}` product mode",
+                            descriptor.name,
+                            policy_snapshot.profile.as_str()
+                        )
+                    } else {
+                        format!(
+                            "stored approval grant satisfied `{}` under `{}` product mode",
+                            descriptor.name,
+                            policy_snapshot.profile.as_str()
+                        )
+                    };
+                    let decision = Self::autonomy_policy_grant_satisfied_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                        rule_id,
+                        reason_code,
+                        satisfied_reason,
+                    );
+                    autonomy_allow_decision = Some(decision);
                 }
             }
             PolicyDecision::Deny {
-                rule_id: _rule_id,
+                rule_id,
                 reason_code,
             } => {
                 let reason =
                     render_reason(&policy_snapshot, action_class, descriptor.name, reason_code);
-                let failure = TurnFailure::policy_denied(reason_code, reason);
-                return Ok(ToolPreflightOutcome::Denied(failure));
+                let failure = TurnFailure::policy_denied(reason_code, reason.clone());
+                let decision = Self::autonomy_policy_denied_decision(
+                    descriptor.name,
+                    &policy_snapshot,
+                    action_class,
+                    rule_id,
+                    reason_code,
+                    reason,
+                );
+                return Ok(ToolPreflightOutcome::Denied { failure, decision });
             }
         }
 
@@ -788,8 +1079,18 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
             .await
         {
-            Ok(Some(requirement)) => Ok(ToolPreflightOutcome::NeedsApproval(requirement)),
-            Ok(None) => Ok(ToolPreflightOutcome::Allow),
+            Ok(Some(requirement)) => {
+                let decision = approval_required_tool_decision(descriptor.name, &requirement);
+                Ok(ToolPreflightOutcome::NeedsApproval {
+                    requirement,
+                    decision,
+                })
+            }
+            Ok(None) => {
+                let decision = autonomy_allow_decision
+                    .unwrap_or_else(|| generic_allow_tool_decision(descriptor.name));
+                Ok(ToolPreflightOutcome::Allow(decision))
+            }
             Err(reason) => Err(reason),
         }
     }
@@ -1281,6 +1582,58 @@ pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .to_owned()
 }
 
+fn build_tool_decision_trace_record(
+    intent: &ToolIntent,
+    decision: ToolDecisionTelemetry,
+) -> ToolDecisionTraceRecord {
+    ToolDecisionTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        decision,
+    }
+}
+
+fn build_success_tool_outcome_trace_record(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> ToolOutcomeTraceRecord {
+    let tool_name = effective_result_tool_name(intent);
+    let outcome = ToolOutcomeTelemetry {
+        tool_name,
+        status: outcome.status.clone(),
+        payload: outcome.payload.clone(),
+        error_code: None,
+        human_reason: None,
+        audit_event_id: None,
+    };
+    ToolOutcomeTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        outcome,
+    }
+}
+
+fn build_failure_tool_outcome_trace_record(
+    intent: &ToolIntent,
+    turn_result: &TurnResult,
+) -> Option<ToolOutcomeTraceRecord> {
+    let failure = turn_result.failure()?;
+    let tool_name = effective_result_tool_name(intent);
+    let outcome = ToolOutcomeTelemetry {
+        tool_name,
+        status: "error".to_owned(),
+        payload: serde_json::Value::Null,
+        error_code: Some(failure.code.clone()),
+        human_reason: Some(failure.reason.clone()),
+        audit_event_id: None,
+    };
+    Some(ToolOutcomeTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        outcome,
+    })
+}
+
 fn build_tool_intent_completed_trace(
     intent: &ToolIntent,
     outcome: &ToolCoreOutcome,
@@ -1511,6 +1864,20 @@ pub(crate) struct ToolBatchExecutionIntentTrace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolDecisionTraceRecord {
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub decision: ToolDecisionTelemetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolOutcomeTraceRecord {
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub outcome: ToolOutcomeTelemetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolBatchExecutionTrace {
     pub total_intents: usize,
     pub parallel_execution_enabled: bool,
@@ -1518,6 +1885,8 @@ pub(crate) struct ToolBatchExecutionTrace {
     pub observed_peak_in_flight: usize,
     pub observed_wall_time_ms: u64,
     pub segments: Vec<ToolBatchExecutionSegmentTrace>,
+    pub decision_records: Vec<ToolDecisionTraceRecord>,
+    pub outcome_records: Vec<ToolOutcomeTraceRecord>,
     pub intent_outcomes: Vec<ToolBatchExecutionIntentTrace>,
 }
 
@@ -1529,6 +1898,10 @@ impl ToolBatchExecutionSegmentTrace {
 }
 
 impl ToolBatchExecutionTrace {
+    pub(crate) fn has_execution_segments(&self) -> bool {
+        !self.segments.is_empty()
+    }
+
     fn finish_observation(&mut self, observed_wall_time_ms: u64) {
         self.observed_wall_time_ms = observed_wall_time_ms;
         self.observed_peak_in_flight = self
@@ -1614,6 +1987,14 @@ struct PreparedToolIntent {
     capability_action_class: crate::tools::CapabilityActionClass,
     scheduling_class: ToolSchedulingClass,
     trusted_internal_context: bool,
+    decision: ToolDecisionTelemetry,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedToolIntentFailure {
+    intent: ToolIntent,
+    turn_result: TurnResult,
+    decision: ToolDecisionTelemetry,
 }
 
 impl TurnEngine {
@@ -1852,6 +2233,7 @@ impl TurnEngine {
             Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
+        let mut trace = self.trace_empty_batch(turn.tool_intents.len());
         let mut prepared = Vec::new();
         let mut autonomy_budget_state = AutonomyTurnBudgetState::default();
         for intent in &turn.tool_intents {
@@ -1863,18 +2245,34 @@ impl TurnEngine {
                     binding,
                     &autonomy_budget_state,
                     ingress,
+                    &mut trace,
                 )
                 .await
             {
                 Ok(prepared_intent) => {
+                    let decision_record = build_tool_decision_trace_record(
+                        &prepared_intent.intent,
+                        prepared_intent.decision.clone(),
+                    );
+                    trace.decision_records.push(decision_record);
                     autonomy_budget_state.record_action(prepared_intent.capability_action_class);
                     prepared.push(prepared_intent);
                 }
-                Err(result) => return (result, None),
+                Err(failure) => {
+                    let decision_record =
+                        build_tool_decision_trace_record(&failure.intent, failure.decision);
+                    trace.decision_records.push(decision_record);
+                    let intent_outcome =
+                        build_tool_intent_failure_trace(&failure.intent, &failure.turn_result);
+                    if let Some(intent_outcome) = intent_outcome {
+                        trace.intent_outcomes.push(intent_outcome);
+                    }
+                    return (failure.turn_result, Some(trace));
+                }
             }
         }
         let batch_segments = self.prepared_batch_segments(&prepared);
-        let mut trace = self.trace_prepared_batch(&prepared, &batch_segments);
+        self.populate_trace_segments(&mut trace, &batch_segments);
 
         let outputs = match self
             .execute_prepared_batch(
@@ -1922,6 +2320,7 @@ impl TurnEngine {
                             app_dispatcher,
                             binding,
                             &mut trace.intent_outcomes,
+                            &mut trace.outcome_records,
                             trace_segment,
                         )
                         .await?
@@ -1933,6 +2332,7 @@ impl TurnEngine {
                             app_dispatcher,
                             binding,
                             &mut trace.intent_outcomes,
+                            &mut trace.outcome_records,
                             trace_segment,
                         )
                         .await?
@@ -1949,31 +2349,39 @@ impl TurnEngine {
         result
     }
 
-    fn trace_prepared_batch(
-        &self,
-        prepared: &[PreparedToolIntent],
-        batch_segments: &[PreparedBatchSegment],
-    ) -> ToolBatchExecutionTrace {
+    fn trace_empty_batch(&self, total_intents: usize) -> ToolBatchExecutionTrace {
         ToolBatchExecutionTrace {
-            total_intents: prepared.len(),
+            total_intents,
             parallel_execution_enabled: self.parallel_tool_execution_enabled,
             parallel_execution_max_in_flight: self.parallel_tool_execution_max_in_flight,
             observed_peak_in_flight: 0,
             observed_wall_time_ms: 0,
-            segments: batch_segments
-                .iter()
-                .enumerate()
-                .map(|(segment_index, segment)| ToolBatchExecutionSegmentTrace {
-                    segment_index,
-                    scheduling_class: segment.scheduling_class,
-                    execution_mode: segment.execution_mode,
-                    intent_count: segment.len,
-                    observed_peak_in_flight: None,
-                    observed_wall_time_ms: None,
-                })
-                .collect(),
+            segments: Vec::new(),
+            decision_records: Vec::new(),
+            outcome_records: Vec::new(),
             intent_outcomes: Vec::new(),
         }
+    }
+
+    fn populate_trace_segments(
+        &self,
+        trace: &mut ToolBatchExecutionTrace,
+        batch_segments: &[PreparedBatchSegment],
+    ) {
+        trace.parallel_execution_enabled = self.parallel_tool_execution_enabled;
+        trace.parallel_execution_max_in_flight = self.parallel_tool_execution_max_in_flight;
+        trace.segments = batch_segments
+            .iter()
+            .enumerate()
+            .map(|(segment_index, segment)| ToolBatchExecutionSegmentTrace {
+                segment_index,
+                scheduling_class: segment.scheduling_class,
+                execution_mode: segment.execution_mode,
+                intent_count: segment.len,
+                observed_peak_in_flight: None,
+                observed_wall_time_ms: None,
+            })
+            .collect();
     }
 
     fn prepared_batch_segments(
@@ -2022,6 +2430,7 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
+        outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -2039,6 +2448,13 @@ impl TurnEngine {
                 {
                     Ok(outcome) => outcome,
                     Err(turn_result) => {
+                        let outcome_record = build_failure_tool_outcome_trace_record(
+                            &prepared_intent.intent,
+                            &turn_result,
+                        );
+                        if let Some(outcome_record) = outcome_record {
+                            outcome_records.push(outcome_record);
+                        }
                         let intent_outcome =
                             build_tool_intent_failure_trace(&prepared_intent.intent, &turn_result);
                         if let Some(intent_outcome) = intent_outcome {
@@ -2047,6 +2463,9 @@ impl TurnEngine {
                         return Err(turn_result);
                     }
                 };
+                let outcome_record =
+                    build_success_tool_outcome_trace_record(&prepared_intent.intent, &outcome);
+                outcome_records.push(outcome_record);
                 let intent_outcome =
                     build_tool_intent_completed_trace(&prepared_intent.intent, &outcome);
                 intent_outcomes.push(intent_outcome);
@@ -2073,6 +2492,7 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
+        outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -2101,18 +2521,26 @@ impl TurnEngine {
                                 &outcome,
                                 payload_summary_limit_chars,
                             );
+                            let outcome_record = build_success_tool_outcome_trace_record(
+                                &prepared_intent.intent,
+                                &outcome,
+                            );
                             let intent_outcome = build_tool_intent_completed_trace(
                                 &prepared_intent.intent,
                                 &outcome,
                             );
-                            (output, intent_outcome)
+                            (output, intent_outcome, outcome_record)
                         })
                         .map_err(|turn_result| {
                             let intent_outcome = build_tool_intent_failure_trace(
                                 &prepared_intent.intent,
                                 &turn_result,
                             );
-                            (turn_result, intent_outcome)
+                            let outcome_record = build_failure_tool_outcome_trace_record(
+                                &prepared_intent.intent,
+                                &turn_result,
+                            );
+                            (turn_result, intent_outcome, outcome_record)
                         });
                     in_flight.fetch_sub(1, Ordering::Relaxed);
                     (index, result)
@@ -2124,13 +2552,17 @@ impl TurnEngine {
         let result = async {
             while let Some((index, result)) = executions.next().await {
                 match result {
-                    Ok((output, intent_outcome)) => {
+                    Ok((output, intent_outcome, outcome_record)) => {
                         intent_outcomes.push(intent_outcome);
+                        outcome_records.push(outcome_record);
                         results.push((index, output));
                     }
-                    Err((turn_result, intent_outcome)) => {
+                    Err((turn_result, intent_outcome, outcome_record)) => {
                         if let Some(intent_outcome) = intent_outcome {
                             intent_outcomes.push(intent_outcome);
+                        }
+                        if let Some(outcome_record) = outcome_record {
+                            outcome_records.push(outcome_record);
                         }
                         return Err(turn_result);
                     }
@@ -2157,10 +2589,18 @@ impl TurnEngine {
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
         ingress: Option<&ConversationIngressContext>,
-    ) -> Result<PreparedToolIntent, TurnResult> {
+        _trace: &mut ToolBatchExecutionTrace,
+    ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
         let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
             let reason = format!("tool_not_found: {}", intent.tool_name);
-            return Err(TurnResult::policy_denied("tool_not_found", reason));
+            let turn_result = TurnResult::policy_denied("tool_not_found", reason.clone());
+            let decision =
+                ToolDecisionTelemetry::deny(intent.tool_name.as_str(), reason, "tool_not_found");
+            return Err(PreparedToolIntentFailure {
+                intent: intent.clone(),
+                turn_result,
+                decision,
+            });
         };
         let injected = inject_internal_tool_ingress(
             resolved_tool.canonical_name,
@@ -2237,15 +2677,23 @@ impl TurnEngine {
         });
         let Some(descriptor) = descriptor else {
             let reason = format!("tool_descriptor_missing: {}", effective_tool_name);
-            return Err(TurnResult::non_retryable_tool_error(
-                "tool_descriptor_missing",
+            let turn_result =
+                TurnResult::non_retryable_tool_error("tool_descriptor_missing", reason.clone());
+            let decision = ToolDecisionTelemetry::deny(
+                effective_tool_name.as_str(),
                 reason,
-            ));
+                "tool_descriptor_missing",
+            );
+            return Err(PreparedToolIntentFailure {
+                intent: effective_intent,
+                turn_result,
+                decision,
+            });
         };
         let capability_action_class = descriptor.capability_action_class();
         let scheduling_class = descriptor.scheduling_class();
 
-        match app_dispatcher
+        let decision = match app_dispatcher
             .preflight_tool_intent_with_binding(
                 session_context,
                 &effective_intent,
@@ -2255,38 +2703,77 @@ impl TurnEngine {
             )
             .await
         {
-            Ok(ToolPreflightOutcome::Allow) => {}
-            Ok(ToolPreflightOutcome::NeedsApproval(requirement)) => {
-                return Err(TurnResult::NeedsApproval(requirement));
+            Ok(ToolPreflightOutcome::Allow(decision)) => decision,
+            Ok(ToolPreflightOutcome::NeedsApproval {
+                requirement,
+                decision,
+            }) => {
+                let turn_result = TurnResult::NeedsApproval(requirement);
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
             }
-            Ok(ToolPreflightOutcome::Denied(failure)) => {
-                return Err(TurnResult::ToolDenied(failure));
+            Ok(ToolPreflightOutcome::Denied { failure, decision }) => {
+                let turn_result = TurnResult::ToolDenied(failure);
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
             }
             Err(reason) if reason.starts_with("app_tool_denied:") => {
-                return Err(TurnResult::policy_denied("app_tool_denied", reason));
+                let turn_result = TurnResult::policy_denied("app_tool_denied", reason.clone());
+                let decision = ToolDecisionTelemetry::deny(
+                    effective_tool_name.as_str(),
+                    reason,
+                    "app_tool_denied",
+                );
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
             }
             Err(reason) => {
-                return Err(TurnResult::non_retryable_tool_error(
-                    "tool_preflight_failed",
+                let turn_result =
+                    TurnResult::non_retryable_tool_error("tool_preflight_failed", reason.clone());
+                let decision = ToolDecisionTelemetry::deny(
+                    effective_tool_name.as_str(),
                     reason,
-                ));
+                    "tool_preflight_failed",
+                );
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
             }
-        }
+        };
 
         match effective_execution_kind {
             ToolExecutionKind::Core => {
                 if binding.kernel_context().is_none() {
-                    return Err(TurnResult::policy_denied(
+                    let turn_result =
+                        TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+                    let decision = ToolDecisionTelemetry::deny(
+                        effective_tool_name.as_str(),
                         "no_kernel_context",
                         "no_kernel_context",
-                    ));
+                    );
+                    return Err(PreparedToolIntentFailure {
+                        intent: effective_intent,
+                        turn_result,
+                        decision,
+                    });
                 }
             }
             ToolExecutionKind::App => {}
         }
 
         Ok(PreparedToolIntent {
-            intent: intent.clone(),
+            intent: effective_intent,
             request: effective_request,
             execution_kind: effective_execution_kind,
             capability_action_class,
@@ -2294,6 +2781,7 @@ impl TurnEngine {
             trusted_internal_context: injected.trusted_internal_context
                 || (!injected_payload_uses_reserved_internal_context
                     && augmented_payload_uses_reserved_internal_context),
+            decision,
         })
     }
 

@@ -730,6 +730,7 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
     let record = &view.record;
+    let snapshot = &record.governance_snapshot_json;
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -748,10 +749,14 @@ fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
             .governance_snapshot_json
             .get("reason")
             .and_then(Value::as_str),
-        "rule_id": record
-            .governance_snapshot_json
-            .get("rule_id")
+        "policy_source": snapshot.get("policy_source").and_then(Value::as_str),
+        "autonomy_profile": snapshot.get("autonomy_profile").and_then(Value::as_str),
+        "capability_action_class": snapshot
+            .get("capability_action_class")
             .and_then(Value::as_str),
+        "decision_kind": snapshot.get("decision_kind").and_then(Value::as_str),
+        "rule_id": snapshot.get("rule_id").and_then(Value::as_str),
+        "reason_code": snapshot.get("reason_code").and_then(Value::as_str),
         "execution_integrity": view.attention.execution_integrity_json(),
         "grant_review": view.attention.grant_review_json(),
         "grant_attention": view.attention.grant_attention_json(),
@@ -1524,6 +1529,74 @@ mod tests {
         assert!(
             error.contains("unknown grant_attention `unknown`"),
             "expected invalid grant attention error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_surfaces_autonomy_fields_in_summary() {
+        let config = isolated_memory_config("approval-summary-autonomy-fields");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: "apr-autonomy-summary".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-autonomy-summary".to_owned(),
+            tool_call_id: "call-autonomy-summary".to_owned(),
+            tool_name: "external_skills.install".to_owned(),
+            approval_key: "tool:external_skills.install".to_owned(),
+            request_payload_json: json!({
+                "session_id": "root-session",
+                "tool_name": "external_skills.install",
+                "args_json": {
+                    "path": "source/demo-skill"
+                },
+            }),
+            governance_snapshot_json: json!({
+                "policy_source": "autonomy_policy",
+                "autonomy_profile": "guided_acquisition",
+                "capability_action_class": "capability_install",
+                "decision_kind": "approval_required",
+                "rule_id": "autonomy_policy_capability_acquisition_requires_approval",
+                "reason_code": "autonomy_policy_capability_acquisition_requires_approval",
+                "reason": "operator approval required before running `external_skills.install` under `guided_acquisition` product mode",
+            }),
+        })
+        .expect("seed approval request");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({}),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome");
+
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        assert_eq!(requests.len(), 1);
+
+        let request = &requests[0];
+        assert_eq!(request["policy_source"], "autonomy_policy");
+        assert_eq!(request["autonomy_profile"], "guided_acquisition");
+        assert_eq!(request["capability_action_class"], "capability_install");
+        assert_eq!(request["decision_kind"], "approval_required");
+        assert_eq!(
+            request["rule_id"],
+            "autonomy_policy_capability_acquisition_requires_approval"
+        );
+        assert_eq!(
+            request["reason_code"],
+            "autonomy_policy_capability_acquisition_requires_approval"
+        );
+        assert_eq!(
+            request["reason"],
+            "operator approval required before running `external_skills.install` under `guided_acquisition` product mode"
         );
     }
 

@@ -43,7 +43,8 @@ use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
-    persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode,
+    persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode, persist_tool_decision,
+    persist_tool_outcome,
 };
 use super::plan_executor::{
     PlanExecutor, PlanNodeError, PlanNodeErrorKind, PlanNodeExecutor, PlanRunFailure,
@@ -5004,24 +5005,46 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         }
     };
 
-    if let Some(trace) = fast_lane_tool_batch_trace.as_ref()
-        && emit_fast_lane_tool_batch_event(runtime, session_id, trace, binding)
-            .await
-            .is_err()
-        && let Some(ctx) = binding.kernel_context()
-    {
-        let _ = ctx.kernel.record_audit_event(
-            Some(ctx.agent_id()),
-            AuditEventKind::PlaneInvoked {
-                pack_id: ctx.pack_id().to_owned(),
-                plane: ExecutionPlane::Runtime,
-                tier: PlaneTier::Core,
-                primary_adapter: "conversation.fast_lane".to_owned(),
-                delegated_core_adapter: None,
-                operation: "conversation.fast_lane.fast_lane_tool_batch_persist_failed".to_owned(),
-                required_capabilities: Vec::new(),
-            },
-        );
+    if let Some(trace) = fast_lane_tool_batch_trace.as_ref() {
+        let trace_persist_failed =
+            persist_fast_lane_tool_trace(runtime, session_id, trace, binding)
+                .await
+                .is_err();
+        if trace_persist_failed && let Some(ctx) = binding.kernel_context() {
+            let _ = ctx.kernel.record_audit_event(
+                Some(ctx.agent_id()),
+                AuditEventKind::PlaneInvoked {
+                    pack_id: ctx.pack_id().to_owned(),
+                    plane: ExecutionPlane::Runtime,
+                    tier: PlaneTier::Core,
+                    primary_adapter: "conversation.fast_lane".to_owned(),
+                    delegated_core_adapter: None,
+                    operation: "conversation.fast_lane.tool_trace_persist_failed".to_owned(),
+                    required_capabilities: Vec::new(),
+                },
+            );
+        }
+
+        let should_emit_batch_event = trace.has_execution_segments();
+        let batch_event_failed = should_emit_batch_event
+            && emit_fast_lane_tool_batch_event(runtime, session_id, trace, binding)
+                .await
+                .is_err();
+        if batch_event_failed && let Some(ctx) = binding.kernel_context() {
+            let _ = ctx.kernel.record_audit_event(
+                Some(ctx.agent_id()),
+                AuditEventKind::PlaneInvoked {
+                    pack_id: ctx.pack_id().to_owned(),
+                    plane: ExecutionPlane::Runtime,
+                    tier: PlaneTier::Core,
+                    primary_adapter: "conversation.fast_lane".to_owned(),
+                    delegated_core_adapter: None,
+                    operation: "conversation.fast_lane.fast_lane_tool_batch_persist_failed"
+                        .to_owned(),
+                    required_capabilities: Vec::new(),
+                },
+            );
+        }
     }
 
     let tool_events = build_provider_turn_tool_terminal_events(
@@ -5527,6 +5550,39 @@ async fn emit_fast_lane_tool_batch_event<R: ConversationRuntime + ?Sized>(
         binding,
     )
     .await
+}
+
+async fn persist_fast_lane_tool_trace<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    trace: &ToolBatchExecutionTrace,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<()> {
+    for record in &trace.decision_records {
+        persist_tool_decision(
+            runtime,
+            session_id,
+            &record.turn_id,
+            &record.tool_call_id,
+            &record.decision,
+            binding,
+        )
+        .await?;
+    }
+
+    for record in &trace.outcome_records {
+        persist_tool_outcome(
+            runtime,
+            session_id,
+            &record.turn_id,
+            &record.tool_call_id,
+            &record.outcome,
+            binding,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 async fn emit_turn_ingress_event<R: ConversationRuntime + ?Sized>(
@@ -7634,6 +7690,8 @@ mod tests {
             observed_peak_in_flight: 1,
             observed_wall_time_ms: 10,
             segments: Vec::new(),
+            decision_records: Vec::new(),
+            outcome_records: Vec::new(),
             intent_outcomes: vec![
                 ToolBatchExecutionIntentTrace {
                     tool_call_id: "call-1".to_owned(),
