@@ -273,6 +273,18 @@ pub const fn workspace_step_summary_line() -> &'static str {
     "these are the local paths LoongClaw will use for config, sqlite memory, and tool file access"
 }
 
+pub const fn protocol_step_title() -> &'static str {
+    "protocol defaults"
+}
+
+pub const fn protocol_step_subtitle() -> &'static str {
+    "review ACP and bootstrap MCP state"
+}
+
+pub const fn protocol_step_summary_line() -> &'static str {
+    "this step reflects the ACP backend and any bootstrap MCP servers already configured for this draft"
+}
+
 pub const fn current_value_label() -> &'static str {
     "current value"
 }

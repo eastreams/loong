@@ -57,6 +57,7 @@ pub(crate) async fn run_preflight_checks(
     checks.push(credential_check);
     checks.push(provider_transport_check(config));
     checks.push(web_search_provider_check(config));
+    checks.extend(collect_protocol_preflight_checks(config));
 
     if skip_model_probe {
         checks.push(OnboardCheck {
@@ -353,6 +354,70 @@ pub fn collect_channel_preflight_checks(
             }
         })
         .collect()
+}
+
+fn collect_protocol_preflight_checks(config: &mvp::config::LoongClawConfig) -> Vec<OnboardCheck> {
+    let mut checks = Vec::new();
+
+    if !config.acp.enabled {
+        checks.push(OnboardCheck {
+            name: "acp backend",
+            level: OnboardCheckLevel::Pass,
+            detail: "ACP is disabled for this draft".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        });
+        return checks;
+    }
+
+    match config.acp.backend_id() {
+        Some(backend_id) => match mvp::acp::describe_acp_backend(Some(backend_id.as_str())) {
+            Ok(metadata) => checks.push(OnboardCheck {
+                name: "acp backend",
+                level: OnboardCheckLevel::Pass,
+                detail: format!("ACP is enabled with backend `{}`", metadata.id),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            }),
+            Err(error) => checks.push(OnboardCheck {
+                name: "acp backend",
+                level: OnboardCheckLevel::Fail,
+                detail: format!("ACP backend `{backend_id}` is invalid: {error}"),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            }),
+        },
+        None => checks.push(OnboardCheck {
+            name: "acp backend",
+            level: OnboardCheckLevel::Warn,
+            detail: "ACP is enabled but no backend is configured yet".to_owned(),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        }),
+    }
+
+    match config.acp.dispatch.bootstrap_mcp_server_names() {
+        Ok(bootstrap_mcp_servers) => {
+            let detail = if bootstrap_mcp_servers.is_empty() {
+                "no bootstrap MCP servers configured".to_owned()
+            } else {
+                format!(
+                    "bootstrap MCP servers: {}",
+                    bootstrap_mcp_servers.join(", ")
+                )
+            };
+            checks.push(OnboardCheck {
+                name: "bootstrap mcp servers",
+                level: OnboardCheckLevel::Pass,
+                detail,
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            });
+        }
+        Err(error) => checks.push(OnboardCheck {
+            name: "bootstrap mcp servers",
+            level: OnboardCheckLevel::Fail,
+            detail: format!("bootstrap MCP servers are invalid: {error}"),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        }),
+    }
+
+    checks
 }
 
 pub(crate) fn render_preflight_summary_screen_lines_with_progress(
@@ -768,6 +833,32 @@ mod tests {
                 .count(),
             0,
             "post-write verification failures should not be labeled as success with warnings: {lines:#?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn protocol_preflight_flags_missing_acp_backend() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.model = "gpt-4.1".to_owned();
+        config.provider.api_key = Some(SecretRef::Inline("inline-secret".to_owned()));
+        config.acp.enabled = true;
+        config.acp.backend = None;
+
+        let checks = run_preflight_checks(&config, true).await;
+        let protocol_check = checks.iter().find(|check| check.name == "acp backend");
+
+        let protocol_check = protocol_check.unwrap_or_else(|| {
+            panic!("protocol preflight should report ACP backend readiness once the protocol step lands: {checks:#?}")
+        });
+        assert_eq!(
+            protocol_check.level,
+            OnboardCheckLevel::Warn,
+            "missing ACP backend should be flagged as a protocol warning before write: {checks:#?}"
+        );
+        assert!(
+            protocol_check.detail.contains("ACP is enabled")
+                && protocol_check.detail.contains("backend"),
+            "missing ACP backend warning should explain the ACP/backend mismatch: {checks:#?}"
         );
     }
 }
