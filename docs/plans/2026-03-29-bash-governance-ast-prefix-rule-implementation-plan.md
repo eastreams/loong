@@ -88,7 +88,7 @@
 - Test: `crates/app/src/config/tools.rs`
 - Test: `crates/app/src/tools/runtime_config.rs`
 
-- [ ] **Step 1: Add red tests for `tools.bash.rules_dir` parsing and default resolution**
+- [x] **Step 1: Add red tests for `tools.bash.rules_dir` parsing and default resolution**
 
 Add config tests in `crates/app/src/config/tools.rs`:
 
@@ -146,7 +146,7 @@ fn tool_runtime_config_projects_bash_rules_dir_override() {
 }
 ```
 
-- [ ] **Step 2: Add red tests for missing-dir vs broken-rule-file runtime state**
+- [x] **Step 2: Add red tests for missing-dir vs broken-rule-file runtime state**
 
 Add runtime-config tests in `crates/app/src/tools/runtime_config.rs`:
 
@@ -179,7 +179,7 @@ fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
 }
 ```
 
-- [ ] **Step 3: Run the red tests**
+- [x] **Step 3: Run the red tests**
 
 Run:
 
@@ -196,7 +196,7 @@ Expected:
 - FAIL because `ToolRuntimeConfig` has no typed Bash governance runtime state
 - FAIL because rule-directory resolution and rule-load states do not exist yet
 
-- [ ] **Step 4: Add dependencies, minimal rule types, and runtime scaffolding**
+- [x] **Step 4: Add dependencies, minimal rule types, and runtime scaffolding**
 
 In `crates/app/Cargo.toml`, add the parser and rule-engine dependencies needed by the new modules:
 
@@ -257,13 +257,13 @@ In `crates/app/src/tools/bash.rs`, `crates/app/src/tools/catalog.rs`, and `crate
 
 - update every direct `BashExecRuntimePolicy { ... }` constructor to include the new `governance` field, preferably via a small helper or `..Default::default()` where that keeps the intermediate task slice concise and compiling
 
-- [ ] **Step 5: Run the green tests**
+- [x] **Step 5: Run the green tests**
 
 Run the six targeted tests from Step 3 again.
 
 Expected: PASS
 
-- [ ] **Step 6: Run CI-parity checks and commit the scaffolding slice**
+- [x] **Step 6: Run CI-parity checks and commit the scaffolding slice**
 
 Run:
 
@@ -284,7 +284,7 @@ Then:
 - Modify: `crates/app/src/tools/mod.rs`
 - Test: `crates/app/src/tools/bash_rules.rs`
 
-- [ ] **Step 1: Expand `bash_rules.rs` with red tests for compatibility translation**
+- [x] **Step 1: Expand `bash_rules.rs` with red tests for compatibility translation**
 
 Add tests to `crates/app/src/tools/bash_rules.rs`:
 
@@ -316,7 +316,7 @@ fn shell_deny_entries_translate_to_single_token_deny_prefix_rules() {
 }
 ```
 
-- [ ] **Step 2: Write red tests for rule-file ordering and duplicates**
+- [x] **Step 2: Write red tests for rule-file ordering and duplicates**
 
 Add tests:
 
@@ -354,7 +354,7 @@ fn same_decision_duplicate_rules_can_be_normalized_away() {
 }
 ```
 
-- [ ] **Step 3: Write red tests for rule-source precedence**
+- [x] **Step 3: Write red tests for rule-source precedence**
 
 Add tests:
 
@@ -378,7 +378,7 @@ fn deny_precedence_holds_even_when_allow_and_deny_come_from_different_sources() 
 }
 ```
 
-- [ ] **Step 4: Run the red tests**
+- [x] **Step 4: Run the red tests**
 
 Run:
 
@@ -390,7 +390,7 @@ Run:
 
 Expected: FAIL because the rule-loader module, compiled rule types, and Starlark-backed `prefix_rule(...)` loading do not exist yet.
 
-- [ ] **Step 5: Implement the rule compiler**
+- [x] **Step 5: Implement the rule compiler**
 
 In `crates/app/src/tools/bash_rules.rs`, add:
 
@@ -415,13 +415,13 @@ Implementation requirements:
 
 Register the new module in `crates/app/src/tools/mod.rs`.
 
-- [ ] **Step 6: Run the green tests**
+- [x] **Step 6: Run the green tests**
 
 Run the five targeted tests from Step 4 again.
 
 Expected: PASS
 
-- [ ] **Step 7: Run CI-parity checks and commit the rule-loader slice**
+- [x] **Step 7: Run CI-parity checks and commit the rule-loader slice**
 
 Run:
 
@@ -442,7 +442,7 @@ Then:
 - Modify: `crates/app/src/tools/mod.rs`
 - Test: `crates/app/src/tools/bash_ast.rs`
 
-- [ ] **Step 1: Write red tests for supported outer splitting**
+- [x] **Step 1: Write red tests for supported outer splitting**
 
 Create `crates/app/src/tools/bash_ast.rs` with tests first:
 
@@ -462,7 +462,7 @@ fn splits_and_and_or_lists_into_potentially_executable_units() {
 }
 ```
 
-- [ ] **Step 2: Write red tests for unsupported-unit classification**
+- [x] **Step 2: Write red tests for unsupported-unit classification**
 
 Add tests:
 
@@ -484,7 +484,7 @@ fn pipeline_unit_is_classified_as_default_only() {
 }
 ```
 
-- [ ] **Step 3: Write red tests for parse errors**
+- [x] **Step 3: Write red tests for parse errors**
 
 Add tests:
 
@@ -504,7 +504,7 @@ fn command_substitution_unit_is_not_downgraded_to_plain_command() {
 }
 ```
 
-- [ ] **Step 4: Run the red tests**
+- [x] **Step 4: Run the red tests**
 
 Run:
 
@@ -517,7 +517,7 @@ Run:
 
 Expected: FAIL because `tree-sitter-bash` parsing and unit classification do not exist yet.
 
-- [ ] **Step 5: Implement the parser and unit extractor**
+- [x] **Step 5: Implement the parser and unit extractor**
 
 In `crates/app/src/tools/bash_ast.rs`, add:
 
@@ -542,13 +542,13 @@ Implementation rules:
 - preserve enough unit ordering / operator context for later conservative governance of `&&` and `||`
 - do not downgrade unsupported shell structures into plain-command argv
 
-- [ ] **Step 6: Run the green tests**
+- [x] **Step 6: Run the green tests**
 
 Run the six targeted tests from Step 4 again.
 
 Expected: PASS
 
-- [ ] **Step 7: Run CI-parity checks and commit the AST slice**
+- [x] **Step 7: Run CI-parity checks and commit the AST slice**
 
 Run:
 
@@ -571,7 +571,7 @@ Then:
 - Test: `crates/app/src/tools/bash_governance.rs`
 - Test: `crates/app/src/tools/mod.rs`
 
-- [ ] **Step 1: Write red tests for whole-command aggregation**
+- [x] **Step 1: Write red tests for whole-command aggregation**
 
 Create `crates/app/src/tools/bash_governance.rs` with tests first:
 
@@ -647,7 +647,7 @@ fn parse_unreliable_outcome_uses_default_allow_when_configured() {
 }
 ```
 
-- [ ] **Step 2: Write red tests for runtime load-error fail-closed behavior**
+- [x] **Step 2: Write red tests for runtime load-error fail-closed behavior**
 
 Add tests in `crates/app/src/tools/mod.rs`:
 
@@ -671,7 +671,7 @@ fn bash_exec_fails_closed_when_rule_loading_failed() {
 }
 ```
 
-- [ ] **Step 3: Write red tests for `bash.exec` allow / deny / default behavior**
+- [x] **Step 3: Write red tests for `bash.exec` allow / deny / default behavior**
 
 Add tests in `crates/app/src/tools/mod.rs`:
 
@@ -796,7 +796,7 @@ fn bash_exec_keeps_shell_exec_unchanged() {
 }
 ```
 
-- [ ] **Step 4: Run the red tests**
+- [x] **Step 4: Run the red tests**
 
 Run:
 
@@ -815,7 +815,7 @@ Run:
 
 Expected: FAIL because the evaluator and `bash.exec` pre-execution governance hook do not exist yet.
 
-- [ ] **Step 5: Implement aggregation and executor wiring**
+- [x] **Step 5: Implement aggregation and executor wiring**
 
 In `crates/app/src/tools/bash_governance.rs`, add:
 
@@ -843,13 +843,13 @@ In `crates/app/src/tools/bash.rs`:
   - parse-unreliable default deny
 - on allow, continue with the existing process execution path unchanged
 
-- [ ] **Step 6: Run the green tests**
+- [x] **Step 6: Run the green tests**
 
 Run the twelve targeted tests from Step 4 again.
 
 Expected: PASS
 
-- [ ] **Step 7: Run CI-parity checks and commit the integration slice**
+- [x] **Step 7: Run CI-parity checks and commit the integration slice**
 
 Run:
 
@@ -869,7 +869,7 @@ Then:
 - Modify: `docs/plans/2026-03-29-bash-governance-ast-prefix-rule-implementation-plan.md`
 - Verify: `crates/app`
 
-- [ ] **Step 1: Run focused bash-governance regression tests**
+- [x] **Step 1: Run focused bash-governance regression tests**
 
 Run:
 
@@ -883,7 +883,7 @@ Expected:
 - PASS for existing `bash.exec` behavior that remains in scope
 - PASS for adjacent `shell.exec` regressions
 
-- [ ] **Step 2: Run full CI-parity verification**
+- [x] **Step 2: Run full CI-parity verification**
 
 Run:
 
@@ -894,7 +894,7 @@ Run:
 
 Expected: PASS
 
-- [ ] **Step 3: Run ordinary correctness review to convergence**
+- [x] **Step 3: Run ordinary correctness review to convergence**
 
 Review the implementation against the spec with the chosen correctness mode:
 
@@ -902,7 +902,7 @@ Review the implementation against the spec with the chosen correctness mode:
 - fix any scope-in high or medium correctness / regression findings before moving on
 - repeat until no high or medium correctness findings remain
 
-- [ ] **Step 4: Run one final style / simplicity / maintainability review**
+- [x] **Step 4: Run one final style / simplicity / maintainability review**
 
 Because the chosen style-review mode is `single-pass`:
 

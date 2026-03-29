@@ -1156,7 +1156,7 @@ fn build_tool_catalog() -> ToolCatalog {
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::BashRuntime,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
-            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: bash_exec_definition,
         });
     }
@@ -4263,6 +4263,16 @@ mod tests {
         assert_ne!(descriptor.provider_name, "shell");
         assert!(descriptor.aliases.contains(&"shell"));
         assert_eq!(alias_policy, expected_policy);
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_exec_uses_high_risk_governance_profile() {
+        let policy = governance_profile_for_tool_name("bash.exec");
+
+        assert_eq!(policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(policy.risk_class, ToolRiskClass::High);
+        assert_eq!(policy.approval_mode, ToolApprovalMode::PolicyDriven);
     }
 
     #[test]

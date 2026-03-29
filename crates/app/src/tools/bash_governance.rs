@@ -421,6 +421,23 @@ mod tests {
     }
 
     #[test]
+    fn deny_rule_matches_escaped_static_command_name_under_default_allow() {
+        let outcome = evaluate_bash_governance_for_test(
+            r"r\m --version",
+            PrefixRuleFixture::rules([PrefixRuleFixture::deny(["rm"])]),
+            ShellPolicyDefault::Allow,
+        );
+
+        assert_eq!(outcome.final_decision, FinalGovernanceDecision::Deny);
+        assert_eq!(
+            outcome.unit_outcomes[0].decision_source,
+            UnitDecisionSource::ExplicitDeny {
+                rule_source: "test:deny:rm".to_owned(),
+            }
+        );
+    }
+
+    #[test]
     fn mixed_allow_and_default_resolves_through_default_mode() {
         let outcome = evaluate_bash_governance_for_test(
             "git status && cargo test | tee out.txt",

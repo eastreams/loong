@@ -2,6 +2,37 @@
 
 use tree_sitter::{Node, Parser};
 
+const ENV_PREFIX_ASSIGNMENT_KINDS: &[&str] = &["variable_assignment", "variable_assignments"];
+const DYNAMIC_WORD_KINDS: &[&str] = &[
+    "command_substitution",
+    "process_substitution",
+    "subshell",
+    "expansion",
+    "simple_expansion",
+    "arithmetic_expansion",
+    "brace_expression",
+    "translated_string",
+    "ansi_c_string",
+];
+const REDIRECTION_KINDS: &[&str] = &[
+    "redirected_statement",
+    "file_redirect",
+    "herestring_redirect",
+    "heredoc_redirect",
+];
+const COMPOUND_COMMAND_KINDS: &[&str] = &[
+    "list",
+    "function_definition",
+    "for_statement",
+    "c_style_for_statement",
+    "while_statement",
+    "if_statement",
+    "case_statement",
+    "compound_statement",
+    "test_command",
+    "negated_command",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BashCommandAnalysis {
     pub parse_unreliable: bool,
@@ -233,34 +264,78 @@ fn classify_command(node: Node<'_>, source: &[u8]) -> UnitClassification {
 }
 
 fn extract_static_token(node: Node<'_>, source: &[u8]) -> Option<String> {
-    if contains_kind(node, "command_substitution")
-        || contains_kind(node, "process_substitution")
-        || contains_kind(node, "subshell")
-        || contains_kind(node, "variable_assignment")
-        || contains_kind(node, "variable_assignments")
+    if contains_any_kind(node, DYNAMIC_WORD_KINDS)
+        || contains_any_kind(node, ENV_PREFIX_ASSIGNMENT_KINDS)
     {
         return None;
     }
 
     match node.kind() {
-        "command_name" | "word" | "raw_string" | "number" => {
-            let text = node.utf8_text(source).ok()?.trim();
-            (!text.is_empty()).then(|| text.to_owned())
+        "command_name" | "word" | "concatenation" | "raw_string" | "string" => {
+            resolve_static_shell_word(node.utf8_text(source).ok()?)
         }
-        "string" => {
-            let text = node.utf8_text(source).ok()?.trim();
-            let unquoted = text
-                .strip_prefix('"')
-                .and_then(|inner| inner.strip_suffix('"'))
-                .or_else(|| {
-                    text.strip_prefix('\'')
-                        .and_then(|inner| inner.strip_suffix('\''))
-                })
-                .unwrap_or(text);
-            (!unquoted.is_empty()).then(|| unquoted.to_owned())
-        }
+        "number" => Some(node.utf8_text(source).ok()?.to_owned()),
         _ => None,
     }
+}
+
+fn resolve_static_shell_word(text: &str) -> Option<String> {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum ShellWordState {
+        Unquoted,
+        SingleQuoted,
+        DoubleQuoted,
+    }
+
+    let mut resolved = String::new();
+    let mut chars = text.chars().peekable();
+    let mut state = ShellWordState::Unquoted;
+
+    while let Some(ch) = chars.next() {
+        match state {
+            ShellWordState::Unquoted => match ch {
+                '\\' => match chars.next() {
+                    Some('\n') => {}
+                    Some('\r') => {
+                        if chars.peek().is_some_and(|next| *next == '\n') {
+                            chars.next();
+                        }
+                    }
+                    Some(escaped) => resolved.push(escaped),
+                    None => return None,
+                },
+                '\'' => state = ShellWordState::SingleQuoted,
+                '"' => state = ShellWordState::DoubleQuoted,
+                '$' | '`' => return None,
+                _ => resolved.push(ch),
+            },
+            ShellWordState::SingleQuoted => match ch {
+                '\'' => state = ShellWordState::Unquoted,
+                _ => resolved.push(ch),
+            },
+            ShellWordState::DoubleQuoted => match ch {
+                '\\' => match chars.next() {
+                    Some('\n') => {}
+                    Some('\r') => {
+                        if chars.peek().is_some_and(|next| *next == '\n') {
+                            chars.next();
+                        }
+                    }
+                    Some(escaped @ ('"' | '\\' | '$' | '`')) => resolved.push(escaped),
+                    Some(other) => {
+                        resolved.push('\\');
+                        resolved.push(other);
+                    }
+                    None => return None,
+                },
+                '"' => state = ShellWordState::Unquoted,
+                '$' | '`' => return None,
+                _ => resolved.push(ch),
+            },
+        }
+    }
+
+    (state == ShellWordState::Unquoted).then_some(resolved)
 }
 
 fn separator_supports_sequential_split(separator: &str) -> bool {
@@ -294,33 +369,23 @@ fn classify_descendant_unsupported_kind(node: Node<'_>) -> UnsupportedStructureK
         UnsupportedStructureKind::ProcessSubstitution
     } else if contains_kind(node, "pipeline") {
         UnsupportedStructureKind::Pipeline
-    } else if contains_kind(node, "variable_assignment")
-        || contains_kind(node, "variable_assignments")
-    {
+    } else if contains_any_kind(node, ENV_PREFIX_ASSIGNMENT_KINDS) {
         UnsupportedStructureKind::EnvPrefixAssignment
     } else if contains_kind(node, "subshell") {
         UnsupportedStructureKind::Subshell
-    } else if contains_kind(node, "redirected_statement")
-        || contains_kind(node, "file_redirect")
-        || contains_kind(node, "herestring_redirect")
-        || contains_kind(node, "heredoc_redirect")
-    {
+    } else if contains_any_kind(node, DYNAMIC_WORD_KINDS) {
+        UnsupportedStructureKind::CompoundCommand
+    } else if contains_any_kind(node, REDIRECTION_KINDS) {
         UnsupportedStructureKind::Redirection
-    } else if contains_kind(node, "list")
-        || contains_kind(node, "function_definition")
-        || contains_kind(node, "for_statement")
-        || contains_kind(node, "c_style_for_statement")
-        || contains_kind(node, "while_statement")
-        || contains_kind(node, "if_statement")
-        || contains_kind(node, "case_statement")
-        || contains_kind(node, "compound_statement")
-        || contains_kind(node, "test_command")
-        || contains_kind(node, "negated_command")
-    {
+    } else if contains_any_kind(node, COMPOUND_COMMAND_KINDS) {
         UnsupportedStructureKind::CompoundCommand
     } else {
         UnsupportedStructureKind::BackgroundOperator
     }
+}
+
+fn contains_any_kind(node: Node<'_>, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| contains_kind(node, needle))
 }
 
 fn contains_kind(node: Node<'_>, needle: &str) -> bool {
@@ -430,6 +495,42 @@ mod tests {
             analysis.units.first().map(|unit| &unit.classification),
             Some(&UnitClassification::Unsupported(
                 UnsupportedStructureKind::CommandSubstitution,
+            ))
+        );
+    }
+
+    #[test]
+    fn escaped_command_name_resolves_to_static_argv_text() {
+        let analysis = analyze_bash_command(r"r\m --version");
+
+        assert_eq!(
+            analysis.units.first().map(|unit| &unit.classification),
+            Some(&UnitClassification::GovernablePlainCommand {
+                argv: vec!["rm".to_owned(), "--version".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn concatenated_quoted_command_name_resolves_to_static_argv_text() {
+        let analysis = analyze_bash_command("r''m --version");
+
+        assert_eq!(
+            analysis.units.first().map(|unit| &unit.classification),
+            Some(&UnitClassification::GovernablePlainCommand {
+                argv: vec!["rm".to_owned(), "--version".to_owned()],
+            })
+        );
+    }
+
+    #[test]
+    fn simple_expansion_command_name_is_not_downgraded_to_plain_command() {
+        let analysis = analyze_bash_command("r$m --version");
+
+        assert_eq!(
+            analysis.units.first().map(|unit| &unit.classification),
+            Some(&UnitClassification::Unsupported(
+                UnsupportedStructureKind::CompoundCommand,
             ))
         );
     }

@@ -3512,6 +3512,44 @@ mod tests {
 
     #[cfg(all(feature = "tool-shell", unix))]
     #[test]
+    fn bash_exec_denies_escaped_static_command_name_when_deny_rule_matches_under_default_allow() {
+        use std::fs;
+
+        let root = unique_tool_temp_dir("loongclaw-bash-governance-escaped-deny");
+        let rules_dir = root.join(".loongclaw").join("rules");
+        fs::create_dir_all(&rules_dir).expect("rules dir");
+        fs::write(
+            rules_dir.join("deny.rules"),
+            "prefix_rule(pattern=[\"rm\"], decision=\"deny\")\n",
+        )
+        .expect("rule file");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+        let (bash_exec, log_path) = configured_test_bash_runtime_with_rules(&root);
+        config.bash_exec = bash_exec;
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": r"r\m --version"}),
+            },
+            &config,
+        )
+        .expect_err("escaped static command name should still match deny rule");
+
+        assert!(error.contains("policy_denied"));
+        assert!(error.contains("matched deny rule"));
+        assert!(
+            !log_path.exists(),
+            "bash runtime should not have been launched"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
     fn bash_exec_denies_or_list_when_rhs_branch_matches_deny_rule() {
         use std::fs;
 
