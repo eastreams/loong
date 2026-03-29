@@ -85,6 +85,14 @@ where
 {
     while controller.current_step() != OnboardWizardStep::EnvironmentCheck {
         let step = controller.current_step();
+        // Guard: stop if past the environment-check boundary to avoid looping
+        // forever when the controller starts at or advances past ReviewAndWrite.
+        if matches!(
+            step,
+            OnboardWizardStep::ReviewAndWrite | OnboardWizardStep::Ready
+        ) {
+            break;
+        }
         let action = runner.run_step(step, controller.draft_mut()).await?;
         match action {
             OnboardFlowStepAction::Next => {

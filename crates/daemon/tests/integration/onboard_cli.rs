@@ -6832,16 +6832,18 @@ async fn workspace_step_prefills_existing_memory_and_file_root_paths() {
 
     let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let review_text = review_lines.join("\n");
+    // Unwrap continuation lines (leading "  ") so path assertions survive
+    // line-wrapping on Windows where temp paths are long.
+    let review_unwrapped = review_text.replace("\n  ", "");
+    let sqlite_subpath = format!("state{}memory.sqlite3", std::path::MAIN_SEPARATOR);
     assert!(
-        review_text.contains("- sqlite memory path (current value):")
-            && review_lines
-                .iter()
-                .any(|line| line.contains("state/memory.sqlite3")),
+        review_unwrapped.contains("- sqlite memory path (current value):")
+            && review_unwrapped.contains(&sqlite_subpath),
         "workspace review should keep the current sqlite memory path visible as a current value: {review_lines:#?}"
     );
     assert!(
-        review_text.contains("- tool file root (current value):")
-            && review_lines.iter().any(|line| line.contains("tool-root")),
+        review_unwrapped.contains("- tool file root (current value):")
+            && review_unwrapped.contains("tool-root"),
         "workspace review should keep the current tool file root visible as a current value: {review_lines:#?}"
     );
 }
@@ -6909,18 +6911,16 @@ async fn workspace_step_overrides_mark_user_selected_values() {
 
     let review_lines = extract_review_section_lines(&transcript, "step 7 of 8 · review and write");
     let review_text = review_lines.join("\n");
+    let review_unwrapped = review_text.replace("\n  ", "");
+    let override_sqlite_subpath = format!("override{}memory.sqlite3", std::path::MAIN_SEPARATOR);
     assert!(
-        review_text.contains("- sqlite memory path (user override):")
-            && review_lines
-                .iter()
-                .any(|line| line.contains("override/memory.sqlite3")),
+        review_unwrapped.contains("- sqlite memory path (user override):")
+            && review_unwrapped.contains(&override_sqlite_subpath),
         "workspace overrides should mark sqlite path changes as user overrides: {review_lines:#?}"
     );
     assert!(
-        review_text.contains("- tool file root (user override):")
-            && review_lines
-                .iter()
-                .any(|line| line.contains("override-root")),
+        review_unwrapped.contains("- tool file root (user override):")
+            && review_unwrapped.contains("override-root"),
         "workspace overrides should mark tool file root changes as user overrides: {review_lines:#?}"
     );
 }
