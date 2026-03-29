@@ -582,8 +582,15 @@ impl Default for WebSearchToolConfig {
 }
 
 impl ToolConfig {
+    pub fn explicit_file_root(&self) -> Option<&str> {
+        self.file_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }
+
     pub fn resolved_file_root(&self) -> PathBuf {
-        if let Some(path) = self.file_root.as_deref() {
+        if let Some(path) = self.explicit_file_root() {
             return expand_path(path);
         }
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))

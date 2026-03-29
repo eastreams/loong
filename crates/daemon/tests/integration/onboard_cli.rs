@@ -2145,6 +2145,43 @@ async fn non_interactive_onboard_derives_workspace_root_backed_file_root_default
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_onboard_does_not_synthesize_file_root_from_blank_existing_value() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("non-interactive-blank-file-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+    unsafe {
+        std::env::set_var("DEEPSEEK_API_KEY", "test-deepseek-key");
+    }
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.kind = mvp::config::ProviderKind::Deepseek;
+    config.provider.model = "deepseek-chat".to_owned();
+    config.provider.wire_api = mvp::config::ProviderWireApi::Responses;
+    config.provider.api_key_env = Some("DEEPSEEK_API_KEY".to_owned());
+    config.tools.file_root = Some(String::new());
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
+        .expect("write existing config");
+    let original_body = std::fs::read_to_string(&output).expect("read original config");
+
+    let mut options = default_non_interactive_onboard_options(&output);
+    options.skip_model_probe = true;
+
+    let mut ui = ScriptedOnboardUi::new(std::iter::empty::<String>());
+    let context =
+        loongclaw_daemon::onboard_cli::OnboardRuntimeContext::new_for_tests(80, None, None);
+    loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context)
+        .await
+        .expect("blank file_root without a workspace root should remain a no-op");
+
+    assert_eq!(
+        std::fs::read_to_string(&output).expect("read config after no-op"),
+        original_body,
+        "non-interactive onboarding should not synthesize a tool file root when the persisted value is blank and no workspace root exists"
+    );
+}
+
 #[test]
 fn provider_credential_check_accepts_inline_api_key() {
     let mut config = mvp::config::LoongClawConfig::default();

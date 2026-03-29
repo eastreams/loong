@@ -1773,7 +1773,9 @@ where
         let workspace_values = onboard_workspace::derive_workspace_step_values(draft, self.context);
 
         if self.options.non_interactive {
-            if self.context.workspace_root.is_some() || draft.config.tools.file_root.is_some() {
+            if self.context.workspace_root.is_some()
+                || draft.config.tools.explicit_file_root().is_some()
+            {
                 onboard_workspace::commit_workspace_step_selection(
                     draft,
                     &workspace_values,
