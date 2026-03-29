@@ -790,6 +790,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [Architecture](ARCHITECTURE.md)                             | Crate map and layered execution overview                                                                    |
 | [Core Beliefs](docs/design-docs/core-beliefs.md)            | Core engineering principles                                                                                 |
+| [SDK Docs](docs/sdk/index.md)                               | Capability authoring, internal integration seams, validator meaning, and promotion-oriented SDK references  |
 | [Roadmap](docs/ROADMAP.md)                                  | Stage-based milestones and direction                                                                        |
 | [Product Sense](docs/PRODUCT_SENSE.md)                      | Current product contract and user journey                                                                   |
 | [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, and memory                                  |

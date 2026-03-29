@@ -1,43 +1,14 @@
 use crate::CliResult;
 use crate::config::{LoongClawConfig, ProviderConfig};
 
-use super::contracts::{ProviderFeatureFamily, provider_runtime_contract};
+use super::contracts::provider_runtime_contract;
 
 pub(super) fn validate_provider_feature_gate(config: &LoongClawConfig) -> CliResult<()> {
-    let runtime_contract = provider_runtime_contract(&config.provider);
-    match runtime_contract.feature_family {
-        ProviderFeatureFamily::Anthropic => {
-            if !cfg!(feature = "provider-anthropic") {
-                return Err(
-                    "anthropic provider family is disabled (enable feature `provider-anthropic`)"
-                        .to_owned(),
-                );
-            }
-        }
-        ProviderFeatureFamily::Bedrock => {
-            if !cfg!(feature = "provider-bedrock") {
-                return Err(
-                    "bedrock provider family is disabled (enable feature `provider-bedrock`)"
-                        .to_owned(),
-                );
-            }
-        }
-        ProviderFeatureFamily::VolcengineCompatible => {
-            if !cfg!(feature = "provider-volcengine") {
-                return Err(
-                    "volcengine provider is disabled (enable feature `provider-volcengine`)"
-                        .to_owned(),
-                );
-            }
-        }
-        ProviderFeatureFamily::OpenAiCompatible => {
-            if !cfg!(feature = "provider-openai") {
-                return Err(
-                    "openai-compatible provider family is disabled (enable feature `provider-openai`)"
-                        .to_owned(),
-                );
-            }
-        }
+    let feature_family = config.provider.kind.feature_family();
+    let feature_enabled = feature_family.is_enabled_in_build();
+    if !feature_enabled {
+        let message = feature_family.disabled_message();
+        return Err(message);
     }
     Ok(())
 }

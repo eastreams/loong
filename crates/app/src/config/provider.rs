@@ -30,6 +30,43 @@ pub struct ProviderProfile {
     pub feature_family: ProviderFeatureFamily,
 }
 
+impl ProviderProfile {
+    pub fn alternative_auth_configuration_hint(self) -> Option<&'static str> {
+        let kind = self.kind;
+        if kind == ProviderKind::Bedrock {
+            return Some(
+                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with AWS_REGION or AWS_DEFAULT_REGION for SigV4",
+            );
+        }
+        if kind == ProviderKind::Custom {
+            return Some("add `Authorization` / `X-API-Key` in `provider.headers`");
+        }
+        None
+    }
+
+    pub fn auth_guidance_hint(self) -> Option<String> {
+        let feature_family = self.feature_family;
+        if feature_family != ProviderFeatureFamily::Volcengine {
+            return None;
+        }
+
+        let provider_label = self.auth_guidance_provider_label();
+        let env_name = self.default_api_key_env.unwrap_or("PROVIDER_API_KEY");
+        let hint = format!(
+            "LoongClaw's {provider_label} OpenAI-compatible path uses `provider.api_key` / `{env_name}` and sends `Authorization: Bearer <{env_name}>`; AK/SK request signing is not used on this path"
+        );
+        Some(hint)
+    }
+
+    fn auth_guidance_provider_label(self) -> &'static str {
+        let kind = self.kind;
+        if matches!(kind, ProviderKind::Byteplus | ProviderKind::ByteplusCoding) {
+            return "BytePlus";
+        }
+        "Volcengine"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProtocolFamily {
     OpenAiChatCompletions,
@@ -59,6 +96,42 @@ pub enum ProviderFeatureFamily {
     Anthropic,
     Bedrock,
     Volcengine,
+}
+
+impl ProviderFeatureFamily {
+    pub fn feature_gate_name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "provider-anthropic",
+            Self::Bedrock => "provider-bedrock",
+            Self::Volcengine => "provider-volcengine",
+            Self::OpenAiCompatible => "provider-openai",
+        }
+    }
+
+    pub fn disabled_message(self) -> String {
+        let subject = self.disabled_message_subject();
+        let feature_name = self.feature_gate_name();
+        let message = format!("{subject} is disabled (enable feature `{feature_name}`)");
+        message
+    }
+
+    pub fn is_enabled_in_build(self) -> bool {
+        match self {
+            Self::Anthropic => cfg!(feature = "provider-anthropic"),
+            Self::Bedrock => cfg!(feature = "provider-bedrock"),
+            Self::Volcengine => cfg!(feature = "provider-volcengine"),
+            Self::OpenAiCompatible => cfg!(feature = "provider-openai"),
+        }
+    }
+
+    fn disabled_message_subject(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic provider family",
+            Self::Bedrock => "bedrock provider family",
+            Self::Volcengine => "volcengine provider",
+            Self::OpenAiCompatible => "openai-compatible provider family",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1156,25 +1229,8 @@ impl ProviderConfig {
     }
 
     pub fn auth_guidance_hint(&self) -> Option<String> {
-        if self.kind.feature_family() == ProviderFeatureFamily::Volcengine {
-            let provider_label = if matches!(
-                self.kind,
-                ProviderKind::Byteplus | ProviderKind::ByteplusCoding
-            ) {
-                "BytePlus"
-            } else {
-                "Volcengine"
-            };
-            let env_name = self
-                .kind
-                .default_api_key_env()
-                .unwrap_or("PROVIDER_API_KEY");
-            Some(format!(
-                "LoongClaw's {provider_label} OpenAI-compatible path uses `provider.api_key` / `{env_name}` and sends `Authorization: Bearer <{env_name}>`; AK/SK request signing is not used on this path"
-            ))
-        } else {
-            None
-        }
+        let profile = self.kind.profile();
+        profile.auth_guidance_hint()
     }
 
     pub fn missing_auth_configuration_message(&self) -> String {
@@ -1201,16 +1257,9 @@ impl ProviderConfig {
     }
 
     fn alternative_auth_configuration_hint(&self) -> Option<String> {
-        if self.kind == ProviderKind::Bedrock {
-            Some(
-                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with AWS_REGION or AWS_DEFAULT_REGION for SigV4"
-                    .to_owned(),
-            )
-        } else if self.kind == ProviderKind::Custom {
-            Some("add `Authorization` / `X-API-Key` in `provider.headers`".to_owned())
-        } else {
-            None
-        }
+        let profile = self.kind.profile();
+        let hint = profile.alternative_auth_configuration_hint();
+        hint.map(str::to_owned)
     }
 
     pub fn transport_policy(&self) -> ProviderTransportPolicy {
@@ -3124,7 +3173,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
     ProviderProfile {
         kind: ProviderKind::StepPlan,
         id: "step_plan",
-        aliases: &["stepfun_step_plan", "step_plan"],
+        aliases: &["stepfun_step_plan"],
         base_url: "https://api.stepfun.ai",
         chat_completions_path: "/step_plan/v1/chat/completions",
         models_path: Some("/step_plan/v1/models"),
@@ -3672,6 +3721,8 @@ fn derive_responses_path(chat_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::{BTreeMap, BTreeSet};
+
     use crate::test_support::ScopedEnv;
     use loongclaw_contracts::SecretRef;
 
@@ -3680,6 +3731,106 @@ mod tests {
         for kind in ProviderKind::all_sorted() {
             assert_eq!(kind.profile().kind, *kind);
         }
+    }
+
+    #[test]
+    fn provider_profile_aliases_are_unique_and_do_not_shadow_ids() {
+        let mut provider_ids = BTreeSet::new();
+        for kind in ProviderKind::all_sorted() {
+            let profile = kind.profile();
+            let provider_id = profile.id;
+            let inserted = provider_ids.insert(provider_id);
+            assert!(inserted, "duplicate provider id detected: {provider_id}");
+        }
+
+        let mut alias_owners = BTreeMap::new();
+        for kind in ProviderKind::all_sorted() {
+            let profile = kind.profile();
+            let provider_id = profile.id;
+            for alias in profile.aliases {
+                let normalized_alias = alias.trim();
+                assert!(
+                    !normalized_alias.is_empty(),
+                    "provider `{provider_id}` contains an empty alias"
+                );
+                assert_ne!(
+                    normalized_alias, provider_id,
+                    "provider `{provider_id}` repeats its canonical id as an alias"
+                );
+                assert!(
+                    !provider_ids.contains(normalized_alias),
+                    "provider alias `{normalized_alias}` collides with a canonical provider id"
+                );
+
+                let previous_owner = alias_owners.insert(normalized_alias.to_owned(), provider_id);
+                assert!(
+                    previous_owner.is_none(),
+                    "provider alias `{normalized_alias}` is shared by `{}` and `{provider_id}`",
+                    previous_owner.unwrap_or_default()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn provider_feature_family_gate_messages_are_stable() {
+        let anthropic_message = ProviderFeatureFamily::Anthropic.disabled_message();
+        let bedrock_message = ProviderFeatureFamily::Bedrock.disabled_message();
+        let volcengine_message = ProviderFeatureFamily::Volcengine.disabled_message();
+        let openai_message = ProviderFeatureFamily::OpenAiCompatible.disabled_message();
+
+        assert_eq!(
+            anthropic_message,
+            "anthropic provider family is disabled (enable feature `provider-anthropic`)"
+        );
+        assert_eq!(
+            bedrock_message,
+            "bedrock provider family is disabled (enable feature `provider-bedrock`)"
+        );
+        assert_eq!(
+            volcengine_message,
+            "volcengine provider is disabled (enable feature `provider-volcengine`)"
+        );
+        assert_eq!(
+            openai_message,
+            "openai-compatible provider family is disabled (enable feature `provider-openai`)"
+        );
+    }
+
+    #[test]
+    fn provider_profile_static_auth_hints_are_stable() {
+        let byteplus_hint = ProviderKind::ByteplusCoding
+            .profile()
+            .auth_guidance_hint()
+            .expect("byteplus coding should expose auth guidance");
+        let volcengine_hint = ProviderKind::Volcengine
+            .profile()
+            .auth_guidance_hint()
+            .expect("volcengine should expose auth guidance");
+        let bedrock_hint = ProviderKind::Bedrock
+            .profile()
+            .alternative_auth_configuration_hint()
+            .expect("bedrock should expose a SigV4 fallback hint");
+        let custom_hint = ProviderKind::Custom
+            .profile()
+            .alternative_auth_configuration_hint()
+            .expect("custom provider should expose header guidance");
+
+        assert!(byteplus_hint.contains("BytePlus"));
+        assert!(byteplus_hint.contains("BYTEPLUS_API_KEY"));
+        assert!(byteplus_hint.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
+
+        assert!(volcengine_hint.contains("Volcengine"));
+        assert!(volcengine_hint.contains("ARK_API_KEY"));
+        assert!(volcengine_hint.contains("AK/SK request signing is not used"));
+
+        assert!(bedrock_hint.contains("AWS_ACCESS_KEY_ID"));
+        assert!(bedrock_hint.contains("AWS_SECRET_ACCESS_KEY"));
+        assert!(bedrock_hint.contains("AWS_REGION"));
+
+        assert!(custom_hint.contains("Authorization"));
+        assert!(custom_hint.contains("X-API-Key"));
+        assert!(custom_hint.contains("provider.headers"));
     }
 
     #[test]

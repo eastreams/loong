@@ -180,7 +180,9 @@ pub(super) async fn resolve_request_auth_context(
                 bedrock_region: Some(region),
             });
         }
-        Err("bedrock provider family is disabled (enable feature `provider-bedrock`)".to_owned())
+        let feature_family = provider.kind.feature_family();
+        let message = feature_family.disabled_message();
+        Err(message)
     }
 }
 
