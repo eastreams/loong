@@ -6387,6 +6387,171 @@ async fn guided_onboard_renders_workspace_and_protocol_steps_before_review() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn workspace_step_prefills_existing_memory_and_file_root_paths() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("workspace-prefill-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("workspace-prefill-config.toml");
+    let sqlite_path = workspace_root.join("state").join("memory.sqlite3");
+    let file_root = workspace_root.join("tool-root");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    existing.memory.sqlite_path = sqlite_path.display().to_string();
+    existing.tools.file_root = Some(file_root.display().to_string());
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![
+            "1".to_owned(),
+            "2".to_owned(),
+            provider_choice_input(mvp::config::ProviderKind::Openai),
+            "gpt-4.1".to_owned(),
+            "OPENAI_API_KEY".to_owned(),
+            String::new(),
+            "workspace defaults stay visible".to_owned(),
+            String::new(),
+            String::new(),
+            "y".to_owned(),
+            "y".to_owned(),
+            "o".to_owned(),
+        ],
+        Some(workspace_root),
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with existing workspace defaults");
+
+    let review_lines = extract_review_section_lines(&transcript, "step 8 of 8 · review");
+    let review_text = review_lines.join("\n");
+    assert!(
+        review_text.contains("- sqlite memory path (current value):")
+            && review_lines
+                .iter()
+                .any(|line| line.contains("state/memory.sqlite3")),
+        "workspace review should keep the current sqlite memory path visible as a current value: {review_lines:#?}"
+    );
+    assert!(
+        review_text.contains("- tool file root (current value):")
+            && review_lines.iter().any(|line| line.contains("tool-root")),
+        "workspace review should keep the current tool file root visible as a current value: {review_lines:#?}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn workspace_step_blocks_on_unwritable_paths() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let workspace_root = unique_temp_path("workspace-unwritable-workspace");
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
+        .expect("write workspace guidance");
+
+    let output_path = unique_temp_path("workspace-unwritable-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let readonly_root = workspace_root.join("readonly-root");
+        std::fs::create_dir_all(&readonly_root).expect("create readonly root");
+        let original_permissions = std::fs::metadata(&readonly_root)
+            .expect("readonly root metadata")
+            .permissions();
+        let mut readonly_permissions = original_permissions.clone();
+        readonly_permissions.set_mode(0o555);
+        std::fs::set_permissions(&readonly_root, readonly_permissions).expect("mark readonly root");
+
+        existing.tools.file_root = Some(readonly_root.join("tool-root").display().to_string());
+        mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+        let (result, transcript) = run_scripted_onboard_flow_collecting_transcript(
+            loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+                output: output_path.to_str().map(str::to_owned),
+                force: false,
+                non_interactive: false,
+                accept_risk: true,
+                provider: None,
+                model: None,
+                api_key_env: None,
+                web_search_provider: None,
+                web_search_api_key_env: None,
+                personality: None,
+                memory_profile: None,
+                system_prompt: None,
+                skip_model_probe: true,
+            },
+            vec![
+                "1".to_owned(),
+                "2".to_owned(),
+                provider_choice_input(mvp::config::ProviderKind::Openai),
+                "gpt-4.1".to_owned(),
+                "OPENAI_API_KEY".to_owned(),
+                String::new(),
+                "workspace validation should stop unwritable roots".to_owned(),
+                String::new(),
+                String::new(),
+            ],
+            Some(workspace_root.clone()),
+            None,
+        )
+        .await;
+
+        std::fs::set_permissions(&readonly_root, original_permissions)
+            .expect("restore readonly root permissions");
+
+        let error = result.expect_err("workspace step should block unwritable paths");
+        assert!(
+            error.contains("workspace") && error.contains("not writable"),
+            "workspace step should explain the unwritable-path blocker: {error}"
+        );
+        assert!(
+            transcript
+                .iter()
+                .any(|line| line == "step 4 of 8 · workspace"),
+            "workspace blocker should fire from the explicit workspace step: {transcript:#?}"
+        );
+        assert!(
+            transcript
+                .iter()
+                .all(|line| line != "step 7 of 8 · review and write"),
+            "workspace blockers should stop the flow before review and write: {transcript:#?}"
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = existing;
+        let _ = output_path;
+        let _ = workspace_root;
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn guided_onboard_review_labels_current_and_detected_values_differently() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("guided-review-labels-workspace");

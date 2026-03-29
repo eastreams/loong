@@ -5,6 +5,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
+#[path = "onboard_workspace.rs"]
+mod onboard_workspace;
+
 use dialoguer::console::{Term, user_attended};
 use dialoguer::theme::ColorfulTheme;
 use dialoguer::{Confirm, Error as DialoguerError, FuzzySelect, Input, Select};
@@ -73,6 +76,7 @@ const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 const ONBOARD_SINGLE_LINE_INPUT_HINT: &str = "- single-line input only";
 const ONBOARD_PASTE_DRAIN_WINDOW_ENV: &str = "LOONGCLAW_ONBOARD_PASTE_DRAIN_WINDOW_MS";
+const ONBOARD_BACK_NAVIGATION_SIGNAL: &str = "__loongclaw_onboard_back_navigation__";
 const DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW: Duration = Duration::from_millis(75);
 const ONBOARD_LINE_READER_BUFFER_SIZE: usize = 64;
 
@@ -778,8 +782,12 @@ fn select_one_selected_index(
 ) -> CliResult<usize> {
     match ui.select_one(label, options, default, interaction_mode)? {
         SelectAction::Selected(index) => Ok(index),
-        SelectAction::Back => Err("onboarding back navigation is not implemented yet".to_owned()),
+        SelectAction::Back => Err(ONBOARD_BACK_NAVIGATION_SIGNAL.to_owned()),
     }
+}
+
+fn is_onboard_back_navigation_requested(error: &str) -> bool {
+    error == ONBOARD_BACK_NAVIGATION_SIGNAL
 }
 
 fn build_onboard_entry_screen_options(options: &[OnboardEntryOption]) -> Vec<OnboardScreenOption> {
@@ -1305,8 +1313,8 @@ pub async fn run_onboard_cli_with_ui(
     if !options.non_interactive {
         print_lines(
             ui,
-            render_onboard_review_lines_with_guidance_and_style(
-                &flow.draft().config,
+            render_onboard_review_lines_for_draft_with_guidance_and_style(
+                flow.draft(),
                 starting_selection.import_source.as_deref(),
                 &workspace_guidance,
                 starting_selection.review_candidate.as_ref(),
@@ -1537,16 +1545,25 @@ where
         Ok(())
     }
 
-    async fn run_runtime_defaults_step(&mut self, draft: &mut OnboardDraft) -> CliResult<()> {
+    async fn run_runtime_defaults_step(
+        &mut self,
+        draft: &mut OnboardDraft,
+    ) -> CliResult<OnboardFlowStepAction> {
         let guided_prompt_path = resolve_guided_prompt_path(self.options, &draft.config);
         match guided_prompt_path {
             GuidedPromptPath::NativePromptPack => {
-                let personality = resolve_personality_selection(
+                let personality = match resolve_personality_selection(
                     self.options,
                     &draft.config,
                     self.ui,
                     self.context,
-                )?;
+                ) {
+                    Ok(personality) => personality,
+                    Err(error) if is_onboard_back_navigation_requested(&error) => {
+                        return Ok(OnboardFlowStepAction::Back);
+                    }
+                    Err(error) => return Err(error),
+                };
                 let prompt_addendum = resolve_prompt_addendum_selection(
                     self.options,
                     &draft.config,
@@ -1574,23 +1591,36 @@ where
             }
         }
 
-        let memory_profile = resolve_memory_profile_selection(
+        let memory_profile = match resolve_memory_profile_selection(
             self.options,
             &draft.config,
             guided_prompt_path,
             self.ui,
             self.context,
-        )?;
+        ) {
+            Ok(memory_profile) => memory_profile,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
         draft.set_memory_profile(memory_profile);
 
-        let selected_web_search_provider = resolve_web_search_provider_selection(
+        let selected_web_search_provider = match resolve_web_search_provider_selection(
             self.options,
             &draft.config,
             guided_prompt_path,
             self.ui,
             self.context,
         )
-        .await?;
+        .await
+        {
+            Ok(selected_web_search_provider) => selected_web_search_provider,
+            Err(error) if is_onboard_back_navigation_requested(&error) => {
+                return Ok(OnboardFlowStepAction::Back);
+            }
+            Err(error) => return Err(error),
+        };
         draft.set_web_search_default_provider(selected_web_search_provider.clone());
         let web_search_credential_selection = resolve_web_search_credential_selection(
             self.options,
@@ -1611,7 +1641,22 @@ where
                     .set_web_search_credential_env(selected_web_search_provider.as_str(), env_name);
             }
         }
-        Ok(())
+        Ok(OnboardFlowStepAction::Next)
+    }
+
+    fn run_workspace_step(&mut self, draft: &mut OnboardDraft) -> CliResult<OnboardFlowStepAction> {
+        let workspace_values = onboard_workspace::derive_workspace_step_values(draft, self.context);
+        print_lines(
+            self.ui,
+            render_workspace_step_screen_lines_with_style(
+                &workspace_values,
+                self.context.render_width,
+                true,
+            ),
+        )?;
+        onboard_workspace::validate_workspace_step_values(&workspace_values)?;
+        onboard_workspace::apply_workspace_step_values(draft, &workspace_values);
+        Ok(OnboardFlowStepAction::Next)
     }
 }
 
@@ -1631,13 +1676,11 @@ where
                 self.run_authentication_step(draft).await?;
                 Ok(OnboardFlowStepAction::Next)
             }
-            OnboardWizardStep::RuntimeDefaults => {
-                self.run_runtime_defaults_step(draft).await?;
-                Ok(OnboardFlowStepAction::Next)
+            OnboardWizardStep::RuntimeDefaults => self.run_runtime_defaults_step(draft).await,
+            OnboardWizardStep::Workspace => self.run_workspace_step(draft),
+            OnboardWizardStep::Protocols | OnboardWizardStep::EnvironmentCheck => {
+                Ok(OnboardFlowStepAction::Skip)
             }
-            OnboardWizardStep::Workspace
-            | OnboardWizardStep::Protocols
-            | OnboardWizardStep::EnvironmentCheck => Ok(OnboardFlowStepAction::Skip),
             OnboardWizardStep::ReviewAndWrite | OnboardWizardStep::Ready => {
                 Ok(OnboardFlowStepAction::Next)
             }
@@ -3920,6 +3963,26 @@ fn render_onboard_review_lines_with_guidance_and_style(
     render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
+fn render_onboard_review_lines_for_draft_with_guidance_and_style(
+    draft: &OnboardDraft,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: Option<&ImportCandidate>,
+    width: usize,
+    flow_style: ReviewFlowStyle,
+    color_enabled: bool,
+) -> Vec<String> {
+    let spec = build_onboard_review_screen_spec_for_draft(
+        draft,
+        import_source,
+        workspace_guidance,
+        selected_candidate,
+        flow_style,
+    );
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
+}
+
 fn build_onboard_review_screen_spec(
     config: &mvp::config::LoongClawConfig,
     import_source: Option<&str>,
@@ -3953,6 +4016,63 @@ fn build_onboard_review_screen_spec(
 
     let review_candidate = build_onboard_review_candidate_with_selected_context(
         config,
+        workspace_guidance,
+        selected_candidate,
+    );
+    let draft_source_lines =
+        crate::migration::render::candidate_preview_display_lines(&review_candidate);
+    let draft_source_section = TuiSectionSpec::Narrative {
+        title: Some("draft source".to_owned()),
+        lines: draft_source_lines,
+    };
+
+    sections.push(draft_source_section);
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(flow_style.header_subtitle().to_owned()),
+        title: Some("review setup".to_owned()),
+        progress_line: Some(flow_style.progress_line()),
+        intro_lines: Vec::new(),
+        sections,
+        choices: Vec::new(),
+        footer_lines: Vec::new(),
+    }
+}
+
+fn build_onboard_review_screen_spec_for_draft(
+    draft: &OnboardDraft,
+    import_source: Option<&str>,
+    workspace_guidance: &[crate::migration::WorkspaceGuidanceCandidate],
+    selected_candidate: Option<&ImportCandidate>,
+    flow_style: ReviewFlowStyle,
+) -> TuiScreenSpec {
+    let mut sections = Vec::new();
+
+    if let Some(source) = import_source {
+        let starting_point_label = onboard_starting_point_label(None, source);
+        let starting_point_lines = vec![onboard_display_line(
+            "- starting point: ",
+            &starting_point_label,
+        )];
+        let starting_point_section = TuiSectionSpec::Narrative {
+            title: Some("starting point".to_owned()),
+            lines: starting_point_lines,
+        };
+
+        sections.push(starting_point_section);
+    }
+
+    let configuration_lines = build_onboard_review_digest_display_lines_for_draft(draft);
+    let configuration_section = TuiSectionSpec::Narrative {
+        title: Some("configuration".to_owned()),
+        lines: configuration_lines,
+    };
+
+    sections.push(configuration_section);
+
+    let review_candidate = build_onboard_review_candidate_with_selected_context(
+        &draft.config,
         workspace_guidance,
         selected_candidate,
     );
@@ -4507,6 +4627,39 @@ fn build_onboard_input_screen_spec(
         choices: Vec::new(),
         footer_lines: resolved_footer_lines,
     }
+}
+
+fn render_workspace_step_screen_lines_with_style(
+    values: &onboard_workspace::WorkspaceStepValues,
+    width: usize,
+    color_enabled: bool,
+) -> Vec<String> {
+    let spec = TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some(crate::onboard_presentation::workspace_step_subtitle().to_owned()),
+        title: Some(crate::onboard_presentation::workspace_step_title().to_owned()),
+        progress_line: Some(guided_step_progress_line(OnboardWizardStep::Workspace)),
+        intro_lines: vec![crate::onboard_presentation::workspace_step_summary_line().to_owned()],
+        sections: vec![TuiSectionSpec::Narrative {
+            title: Some("workspace paths".to_owned()),
+            lines: vec![
+                onboard_review_value_line(
+                    "sqlite memory path",
+                    &values.sqlite_path.display().to_string(),
+                    values.sqlite_origin,
+                ),
+                onboard_review_value_line(
+                    "tool file root",
+                    &values.file_root.display().to_string(),
+                    values.file_root_origin,
+                ),
+            ],
+        }],
+        choices: Vec::new(),
+        footer_lines: Vec::new(),
+    };
+
+    render_onboard_screen_spec(&spec, width, color_enabled)
 }
 
 fn build_write_confirmation_screen_spec(
@@ -5614,6 +5767,57 @@ fn render_existing_config_write_header_lines_with_style(
 
 fn onboard_display_line(prefix: &str, value: &str) -> String {
     format!("{prefix}{value}")
+}
+
+fn review_value_origin_label(origin: OnboardValueOrigin) -> &'static str {
+    match origin {
+        OnboardValueOrigin::CurrentSetup => crate::onboard_presentation::current_value_label(),
+        OnboardValueOrigin::DetectedStartingPoint => {
+            crate::onboard_presentation::detected_value_label()
+        }
+        OnboardValueOrigin::UserSelected => crate::onboard_presentation::user_override_label(),
+    }
+}
+
+fn onboard_review_value_line(
+    label: &str,
+    value: &str,
+    origin: Option<OnboardValueOrigin>,
+) -> String {
+    match origin {
+        Some(origin) => format!("- {label} ({}): {value}", review_value_origin_label(origin)),
+        None => format!("- {label}: {value}"),
+    }
+}
+
+fn draft_output_path_origin(draft: &OnboardDraft) -> Option<OnboardValueOrigin> {
+    if draft.output_path.exists() {
+        return Some(OnboardValueOrigin::CurrentSetup);
+    }
+
+    None
+}
+
+fn build_onboard_review_digest_display_lines_for_draft(draft: &OnboardDraft) -> Vec<String> {
+    let mut lines = vec![
+        onboard_review_value_line(
+            "config output path",
+            &draft.output_path.display().to_string(),
+            draft_output_path_origin(draft),
+        ),
+        onboard_review_value_line(
+            "sqlite memory path",
+            &draft.workspace.sqlite_path.display().to_string(),
+            draft.origin_for(OnboardDraft::WORKSPACE_SQLITE_PATH_KEY),
+        ),
+        onboard_review_value_line(
+            "tool file root",
+            &draft.workspace.file_root.display().to_string(),
+            draft.origin_for(OnboardDraft::WORKSPACE_FILE_ROOT_KEY),
+        ),
+    ];
+    lines.extend(build_onboard_review_digest_display_lines(&draft.config));
+    lines
 }
 
 fn build_onboard_review_digest_display_lines(config: &mvp::config::LoongClawConfig) -> Vec<String> {

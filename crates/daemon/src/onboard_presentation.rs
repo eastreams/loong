@@ -261,6 +261,30 @@ pub const fn preflight_confirm_prompt() -> &'static str {
     "Continue anyway"
 }
 
+pub const fn workspace_step_title() -> &'static str {
+    "workspace defaults"
+}
+
+pub const fn workspace_step_subtitle() -> &'static str {
+    "review local storage paths"
+}
+
+pub const fn workspace_step_summary_line() -> &'static str {
+    "these are the local paths LoongClaw will use for config, sqlite memory, and tool file access"
+}
+
+pub const fn current_value_label() -> &'static str {
+    "current value"
+}
+
+pub const fn detected_value_label() -> &'static str {
+    "detected value"
+}
+
+pub const fn user_override_label() -> &'static str {
+    "user override"
+}
+
 pub const fn write_confirmation_title() -> &'static str {
     "ready to write config"
 }
