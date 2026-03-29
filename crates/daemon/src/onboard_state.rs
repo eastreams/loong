@@ -31,6 +31,31 @@ pub enum OnboardOutcome {
     Blocked,
 }
 
+impl OnboardOutcome {
+    pub const fn summary_label(self) -> &'static str {
+        match self {
+            Self::Success => "Success",
+            Self::SuccessWithWarnings => "SuccessWithWarnings",
+            Self::Blocked => "Blocked",
+        }
+    }
+
+    pub const fn ready_label(self) -> &'static str {
+        match self {
+            Self::Success => "ready",
+            Self::SuccessWithWarnings => "ready with warnings",
+            Self::Blocked => "blocked after verification",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnboardInteractionMode {
+    RichInteractive,
+    PlainInteractive,
+    NonInteractive,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnboardWorkspaceDraft {
     pub sqlite_path: PathBuf,

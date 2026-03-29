@@ -18,7 +18,7 @@ use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
 
 use crate::onboard_finalize::{
-    ConfigWritePlan, build_onboarding_success_summary_with_memory, prepare_output_path_for_write,
+    ConfigWritePlan, build_onboarding_success_summary_with_outcome, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
 };
 #[cfg(test)]
@@ -38,10 +38,13 @@ pub use crate::onboard_preflight::{
 use crate::onboard_preflight::{
     config_validation_failure_message,
     is_explicitly_accepted_non_interactive_warning as preflight_accepts_non_interactive_warning,
-    non_interactive_preflight_failure_message, render_preflight_summary_screen_lines_with_progress,
+    non_interactive_preflight_failure_message, onboard_check_outcome,
+    post_write_verification_failure_check, render_preflight_summary_screen_lines_with_progress,
     run_preflight_checks,
 };
-use crate::onboard_state::{OnboardDraft, OnboardValueOrigin, OnboardWizardStep};
+use crate::onboard_state::{
+    OnboardDraft, OnboardInteractionMode, OnboardOutcome, OnboardValueOrigin, OnboardWizardStep,
+};
 pub use crate::onboard_types::OnboardingCredentialSummary;
 #[cfg(test)]
 use crate::onboard_web_search::{
@@ -120,6 +123,7 @@ pub enum SelectAction {
 }
 
 pub trait OnboardUi {
+    fn set_interaction_mode(&mut self, _mode: OnboardInteractionMode) {}
     fn print_line(&mut self, line: &str) -> CliResult<()>;
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String>;
     fn prompt_required(&mut self, label: &str) -> CliResult<String>;
@@ -141,6 +145,8 @@ pub struct OnboardRuntimeContext {
     render_width: usize,
     workspace_root: Option<PathBuf>,
     codex_config_paths: Vec<PathBuf>,
+    attended_terminal: bool,
+    rich_prompt_ui_supported: bool,
 }
 
 impl OnboardRuntimeContext {
@@ -149,6 +155,8 @@ impl OnboardRuntimeContext {
             render_width: detect_render_width(),
             workspace_root: env::current_dir().ok(),
             codex_config_paths: default_codex_config_paths(),
+            attended_terminal: user_attended(),
+            rich_prompt_ui_supported: rich_prompt_ui_available(),
         }
     }
 
@@ -161,8 +169,33 @@ impl OnboardRuntimeContext {
             render_width,
             workspace_root,
             codex_config_paths: codex_config_paths.into_iter().collect(),
+            attended_terminal: true,
+            rich_prompt_ui_supported: true,
         }
     }
+}
+
+fn resolve_onboard_interaction_mode(
+    non_interactive: bool,
+    attended_terminal: bool,
+    rich_prompt_ui_supported: bool,
+) -> OnboardInteractionMode {
+    if non_interactive {
+        return OnboardInteractionMode::NonInteractive;
+    }
+    if attended_terminal && rich_prompt_ui_supported {
+        return OnboardInteractionMode::RichInteractive;
+    }
+    OnboardInteractionMode::PlainInteractive
+}
+
+#[cfg(test)]
+fn resolve_onboard_interaction_mode_for_test(
+    non_interactive: bool,
+    attended_terminal: bool,
+    rich_prompt_ui_supported: bool,
+) -> OnboardInteractionMode {
+    resolve_onboard_interaction_mode(non_interactive, attended_terminal, rich_prompt_ui_supported)
 }
 
 fn is_explicitly_accepted_non_interactive_warning(
@@ -367,6 +400,7 @@ impl OnboardPromptLineReader for StdioOnboardLineReader {
 #[derive(Debug, Default)]
 struct StdioOnboardUi {
     line_reader: Option<StdioOnboardLineReader>,
+    interaction_mode: Option<OnboardInteractionMode>,
 }
 
 impl StdioOnboardUi {
@@ -419,34 +453,38 @@ fn print_dropped_paste_notice(label: &str, dropped_line_count: usize) {
 }
 
 impl OnboardUi for StdioOnboardUi {
+    fn set_interaction_mode(&mut self, mode: OnboardInteractionMode) {
+        self.interaction_mode = Some(mode);
+    }
+
     fn print_line(&mut self, line: &str) -> CliResult<()> {
         println!("{line}");
         Ok(())
     }
 
     fn prompt_with_default(&mut self, label: &str, default: &str) -> CliResult<String> {
-        if rich_prompt_ui_available() {
+        if self.interaction_mode == Some(OnboardInteractionMode::RichInteractive) {
             return prompt_with_default_rich(label, default);
         }
         prompt_with_default_stdio(self.stdio_line_reader(), label, default)
     }
 
     fn prompt_required(&mut self, label: &str) -> CliResult<String> {
-        if rich_prompt_ui_available() {
+        if self.interaction_mode == Some(OnboardInteractionMode::RichInteractive) {
             return prompt_required_rich(label);
         }
         prompt_required_stdio(self.stdio_line_reader(), label)
     }
 
     fn prompt_allow_empty(&mut self, label: &str) -> CliResult<String> {
-        if rich_prompt_ui_available() {
+        if self.interaction_mode == Some(OnboardInteractionMode::RichInteractive) {
             return prompt_allow_empty_rich(label);
         }
         prompt_required_stdio(self.stdio_line_reader(), label)
     }
 
     fn prompt_confirm(&mut self, message: &str, default: bool) -> CliResult<bool> {
-        if rich_prompt_ui_available() {
+        if self.interaction_mode == Some(OnboardInteractionMode::RichInteractive) {
             return prompt_confirm_rich(message, default);
         }
         prompt_confirm_stdio(self.stdio_line_reader(), message, default)
@@ -459,7 +497,7 @@ impl OnboardUi for StdioOnboardUi {
         default: Option<usize>,
         interaction_mode: SelectInteractionMode,
     ) -> CliResult<SelectAction> {
-        if rich_prompt_ui_available() {
+        if self.interaction_mode == Some(OnboardInteractionMode::RichInteractive) {
             return select_one_rich(label, options, default, interaction_mode);
         }
         select_one_stdio(self.stdio_line_reader(), label, options, default)
@@ -1245,6 +1283,12 @@ pub async fn run_onboard_cli_with_ui(
     ui: &mut impl OnboardUi,
     context: &OnboardRuntimeContext,
 ) -> CliResult<()> {
+    let interaction_mode = resolve_onboard_interaction_mode(
+        options.non_interactive,
+        context.attended_terminal,
+        context.rich_prompt_ui_supported,
+    );
+    ui.set_interaction_mode(interaction_mode);
     validate_non_interactive_risk_gate(options.non_interactive, options.accept_risk)?;
 
     if !options.non_interactive && !options.accept_risk {
@@ -1337,6 +1381,7 @@ pub async fn run_onboard_cli_with_ui(
 
     let checks = run_preflight_checks(&flow.draft().config, options.skip_model_probe).await;
     let config_validation_failure = config_validation_failure_message(&checks);
+    let final_outcome = onboard_check_outcome(&checks, None);
 
     let credential_ok = checks
         .iter()
@@ -1464,15 +1509,46 @@ pub async fn run_onboard_cli_with_ui(
         ) {
             Ok(path) => path,
             Err(error) => {
-                let failure = format!("failed to bootstrap sqlite memory: {error}");
+                let verification_detail = format!("failed to bootstrap sqlite memory: {error}");
                 if let Some(write_recovery) = write_recovery.as_ref() {
-                    return Err(rollback_onboard_write_failure(
+                    let rollback_result = write_recovery.rollback(&output_path);
+                    let config_status = match &rollback_result {
+                        Ok(()) => {
+                            Some("previous config restored after verification failed".to_owned())
+                        }
+                        Err(rollback_error) => Some(format!(
+                            "verification failed and rollback also failed: {rollback_error}"
+                        )),
+                    };
+                    let failure = match &rollback_result {
+                        Ok(()) => verification_detail.clone(),
+                        Err(rollback_error) => format!(
+                            "{verification_detail}; additionally failed to restore original config: {rollback_error}"
+                        ),
+                    };
+                    let verification_check =
+                        post_write_verification_failure_check(verification_detail.as_str());
+                    let blocked_outcome = onboard_check_outcome(&checks, Some(&verification_check));
+                    print_guided_step_boundary(ui, OnboardWizardStep::Ready)?;
+                    let blocked_summary = build_onboarding_success_summary_with_outcome(
                         &output_path,
-                        write_recovery,
-                        failure,
-                    ));
+                        &flow.draft().config,
+                        starting_selection.import_source.as_deref(),
+                        Some(&review_candidate),
+                        None,
+                        config_status.as_deref(),
+                        blocked_outcome,
+                        Some(verification_check.detail.as_str()),
+                    );
+                    let blocked_lines = render_onboarding_success_summary_lines(
+                        &blocked_summary,
+                        context.render_width,
+                        true,
+                    );
+                    print_lines(ui, blocked_lines)?;
+                    return Err(failure);
                 }
-                return Err(failure);
+                return Err(verification_detail);
             }
         }
     };
@@ -1486,13 +1562,19 @@ pub async fn run_onboard_cli_with_ui(
     }
     print_guided_step_boundary(ui, OnboardWizardStep::Ready)?;
 
-    let success_summary = build_onboarding_success_summary_with_memory(
+    let success_summary = build_onboarding_success_summary_with_outcome(
         &path,
         &flow.draft().config,
         starting_selection.import_source.as_deref(),
         Some(&review_candidate),
         memory_path_display.as_deref(),
         config_status.as_deref(),
+        final_outcome,
+        Some(match final_outcome {
+            OnboardOutcome::Success => "passed",
+            OnboardOutcome::SuccessWithWarnings => "passed with warnings kept by choice",
+            OnboardOutcome::Blocked => "blocked after verification",
+        }),
     );
     let success_summary_lines =
         render_onboarding_success_summary_lines(&success_summary, context.render_width, true);
@@ -1655,6 +1737,10 @@ where
     }
 
     fn run_workspace_step(&mut self, draft: &mut OnboardDraft) -> CliResult<OnboardFlowStepAction> {
+        if self.options.non_interactive {
+            return Ok(OnboardFlowStepAction::Next);
+        }
+
         let workspace_values = onboard_workspace::derive_workspace_step_values(draft, self.context);
         print_lines(
             self.ui,
@@ -1706,6 +1792,10 @@ where
     }
 
     fn run_protocols_step(&mut self, draft: &mut OnboardDraft) -> CliResult<OnboardFlowStepAction> {
+        if self.options.non_interactive {
+            return Ok(OnboardFlowStepAction::Next);
+        }
+
         let protocol_values = onboard_protocols::derive_protocol_step_values(draft);
         print_lines(
             self.ui,
@@ -6688,6 +6778,17 @@ mod tests {
 
     fn onboard_test_context() -> OnboardRuntimeContext {
         OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>())
+    }
+
+    #[test]
+    fn degraded_terminal_uses_plain_prompt_fallback() {
+        let mode = resolve_onboard_interaction_mode_for_test(false, true, false);
+
+        assert_eq!(
+            mode,
+            crate::onboard_state::OnboardInteractionMode::PlainInteractive,
+            "interactive onboarding should fall back to plain prompts when the terminal is attended but rich prompt support is degraded"
+        );
     }
 
     fn browser_companion_temp_dir(label: &str) -> PathBuf {

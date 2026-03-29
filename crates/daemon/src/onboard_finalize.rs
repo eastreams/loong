@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
 
+use crate::onboard_state::OnboardOutcome;
 use crate::onboard_types::OnboardingCredentialSummary;
 use mvp::tui_surface::{
     TuiActionSpec, TuiHeaderStyle, TuiKeyValueSpec, TuiScreenSpec, TuiSectionSpec,
@@ -33,9 +34,11 @@ pub(crate) struct OnboardWriteRecovery {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnboardingSuccessSummary {
+    pub outcome: OnboardOutcome,
     pub import_source: Option<String>,
     pub config_path: String,
     pub config_status: Option<String>,
+    pub verification_status: Option<String>,
     pub provider: String,
     pub saved_provider_profiles: Vec<String>,
     pub model: String,
@@ -82,16 +85,27 @@ pub fn build_onboarding_success_summary(
     config: &mvp::config::LoongClawConfig,
     import_source: Option<&str>,
 ) -> OnboardingSuccessSummary {
-    build_onboarding_success_summary_with_memory(path, config, import_source, None, None, None)
+    build_onboarding_success_summary_with_outcome(
+        path,
+        config,
+        import_source,
+        None,
+        None,
+        None,
+        OnboardOutcome::Success,
+        None,
+    )
 }
 
-pub(crate) fn build_onboarding_success_summary_with_memory(
+pub(crate) fn build_onboarding_success_summary_with_outcome(
     path: &Path,
     config: &mvp::config::LoongClawConfig,
     import_source: Option<&str>,
     review_candidate: Option<&crate::migration::ImportCandidate>,
     memory_path: Option<&str>,
     config_status: Option<&str>,
+    outcome: OnboardOutcome,
+    verification_status: Option<&str>,
 ) -> OnboardingSuccessSummary {
     let config_path = path.display().to_string();
     let next_actions = crate::next_actions::collect_setup_next_actions(config, &config_path)
@@ -136,9 +150,11 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
     let suggested_channels = collect_onboarding_suggested_channels(config);
 
     OnboardingSuccessSummary {
+        outcome,
         import_source: import_source.map(str::to_owned),
         config_path,
         config_status: config_status.map(str::to_owned),
+        verification_status: verification_status.map(str::to_owned),
         provider: crate::provider_presentation::active_provider_label(config),
         saved_provider_profiles: crate::provider_presentation::saved_provider_profile_ids(config),
         model: config.provider.model.clone(),
@@ -439,10 +455,25 @@ fn build_onboarding_success_screen_spec(summary: &OnboardingSuccessSummary) -> T
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("setup complete".to_owned()),
-        title: Some("onboarding complete".to_owned()),
+        subtitle: Some(
+            match summary.outcome {
+                OnboardOutcome::Success => "setup complete",
+                OnboardOutcome::SuccessWithWarnings => "setup completed with warnings",
+                OnboardOutcome::Blocked => "setup blocked after verification",
+            }
+            .to_owned(),
+        ),
+        title: Some(
+            match summary.outcome {
+                OnboardOutcome::Blocked => "onboarding blocked",
+                OnboardOutcome::Success | OnboardOutcome::SuccessWithWarnings => {
+                    "onboarding complete"
+                }
+            }
+            .to_owned(),
+        ),
         progress_line: None,
-        intro_lines: Vec::new(),
+        intro_lines: vec![format!("- outcome: {}", summary.outcome.ready_label())],
         sections,
         choices: Vec::new(),
         footer_lines: Vec::new(),
@@ -459,6 +490,13 @@ fn build_onboarding_saved_setup_items(summary: &OnboardingSuccessSummary) -> Vec
         items.push(TuiKeyValueSpec::Plain {
             key: "config status".to_owned(),
             value: config_status.to_owned(),
+        });
+    }
+
+    if let Some(verification_status) = summary.verification_status.as_deref() {
+        items.push(TuiKeyValueSpec::Plain {
+            key: "verification".to_owned(),
+            value: verification_status.to_owned(),
         });
     }
 

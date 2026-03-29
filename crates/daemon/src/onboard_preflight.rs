@@ -9,6 +9,8 @@ use mvp::tui_surface::{
     TuiSectionSpec, render_onboard_screen_spec,
 };
 
+use crate::onboard_state::OnboardOutcome;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnboardCheckLevel {
     Pass,
@@ -40,6 +42,38 @@ pub struct OnboardCheck {
     pub level: OnboardCheckLevel,
     pub detail: String,
     pub non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum OnboardCheckSubsystem {
+    ProviderAuth,
+    WorkspaceStorage,
+    Protocols,
+    BrowserChannelRuntimeExtras,
+}
+
+impl OnboardCheckSubsystem {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::ProviderAuth => "provider/auth",
+            Self::WorkspaceStorage => "workspace/storage",
+            Self::Protocols => "protocols",
+            Self::BrowserChannelRuntimeExtras => "browser/channel/runtime extras",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnboardCheckGroup {
+    pub(crate) subsystem: OnboardCheckSubsystem,
+    pub(crate) checks: Vec<OnboardCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct OnboardGroupedChecks {
+    pub(crate) ready: Vec<OnboardCheckGroup>,
+    pub(crate) warnings: Vec<OnboardCheckGroup>,
+    pub(crate) blocked: Vec<OnboardCheckGroup>,
 }
 
 pub(crate) async fn run_preflight_checks(
@@ -600,16 +634,120 @@ fn summarize_onboard_checks(checks: &[OnboardCheck]) -> OnboardCheckCounts {
     counts
 }
 
+pub(crate) fn onboard_check_outcome(
+    checks: &[OnboardCheck],
+    post_write_verification: Option<&OnboardCheck>,
+) -> OnboardOutcome {
+    let grouped = group_onboard_checks_by_status_and_subsystem(checks);
+    outcome_from_grouped_checks(&grouped, post_write_verification)
+}
+
+pub(crate) fn post_write_verification_failure_check(detail: impl Into<String>) -> OnboardCheck {
+    OnboardCheck {
+        name: "post-write verification",
+        level: OnboardCheckLevel::Fail,
+        detail: detail.into(),
+        non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+    }
+}
+
+fn outcome_from_grouped_checks(
+    grouped: &OnboardGroupedChecks,
+    post_write_verification: Option<&OnboardCheck>,
+) -> OnboardOutcome {
+    if post_write_verification.is_some_and(|check| check.level == OnboardCheckLevel::Fail)
+        || !grouped.blocked.is_empty()
+    {
+        return OnboardOutcome::Blocked;
+    }
+
+    if post_write_verification.is_some_and(|check| check.level == OnboardCheckLevel::Warn)
+        || !grouped.warnings.is_empty()
+    {
+        return OnboardOutcome::SuccessWithWarnings;
+    }
+
+    OnboardOutcome::Success
+}
+
+fn group_onboard_checks_by_status_and_subsystem(checks: &[OnboardCheck]) -> OnboardGroupedChecks {
+    let mut grouped = OnboardGroupedChecks::default();
+
+    for subsystem in [
+        OnboardCheckSubsystem::ProviderAuth,
+        OnboardCheckSubsystem::WorkspaceStorage,
+        OnboardCheckSubsystem::Protocols,
+        OnboardCheckSubsystem::BrowserChannelRuntimeExtras,
+    ] {
+        let ready_checks = checks_for_group(checks, subsystem, OnboardCheckLevel::Pass);
+        if !ready_checks.is_empty() {
+            grouped.ready.push(OnboardCheckGroup {
+                subsystem,
+                checks: ready_checks,
+            });
+        }
+
+        let warning_checks = checks_for_group(checks, subsystem, OnboardCheckLevel::Warn);
+        if !warning_checks.is_empty() {
+            grouped.warnings.push(OnboardCheckGroup {
+                subsystem,
+                checks: warning_checks,
+            });
+        }
+
+        let blocked_checks = checks_for_group(checks, subsystem, OnboardCheckLevel::Fail);
+        if !blocked_checks.is_empty() {
+            grouped.blocked.push(OnboardCheckGroup {
+                subsystem,
+                checks: blocked_checks,
+            });
+        }
+    }
+
+    grouped
+}
+
+fn checks_for_group(
+    checks: &[OnboardCheck],
+    subsystem: OnboardCheckSubsystem,
+    level: OnboardCheckLevel,
+) -> Vec<OnboardCheck> {
+    checks
+        .iter()
+        .filter(|check| check.level == level && subsystem_for_check(check.name) == subsystem)
+        .cloned()
+        .collect()
+}
+
+fn subsystem_for_check(name: &str) -> OnboardCheckSubsystem {
+    match name {
+        "config validation"
+        | "provider credentials"
+        | "provider transport"
+        | "provider model probe"
+        | crate::provider_route_diagnostics::PROVIDER_ROUTE_PROBE_CHECK_NAME
+        | "web search provider" => OnboardCheckSubsystem::ProviderAuth,
+        "memory path" | "tool file root" | "workspace guidance" => {
+            OnboardCheckSubsystem::WorkspaceStorage
+        }
+        "acp backend" | "bootstrap mcp servers" => OnboardCheckSubsystem::Protocols,
+        _ => OnboardCheckSubsystem::BrowserChannelRuntimeExtras,
+    }
+}
+
 fn build_preflight_summary_screen_spec(
     checks: &[OnboardCheck],
     progress_line: &str,
 ) -> TuiScreenSpec {
     let counts = summarize_onboard_checks(checks);
+    let grouped = group_onboard_checks_by_status_and_subsystem(checks);
+    let outcome = outcome_from_grouped_checks(&grouped, None);
     let has_attention = counts.warn > 0 || counts.fail > 0;
     let mut summary_lines = vec![format!(
         "- status: {} pass · {} warn · {} fail",
         counts.pass, counts.warn, counts.fail
     )];
+    summary_lines.push(format!("- outcome: {}", outcome.summary_label()));
 
     if has_attention {
         summary_lines
@@ -623,11 +761,17 @@ fn build_preflight_summary_screen_spec(
     }
 
     let mut sections = Vec::new();
-    if !checks.is_empty() {
-        sections.push(TuiSectionSpec::Checklist {
-            title: None,
-            items: tui_checklist_items_from_preflight_checks(checks),
-        });
+    for (status_title, groups) in [
+        ("blocked", &grouped.blocked),
+        ("warnings", &grouped.warnings),
+        ("ready", &grouped.ready),
+    ] {
+        for group in groups.iter() {
+            sections.push(TuiSectionSpec::Checklist {
+                title: Some(format!("{status_title} · {}", group.subsystem.label())),
+                items: tui_checklist_items_from_preflight_checks(&group.checks),
+            });
+        }
     }
 
     let choices = if has_attention {
@@ -753,6 +897,76 @@ mod tests {
             detail: "verification failed after the write completed".to_owned(),
             non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
         }]
+    }
+
+    #[test]
+    fn environment_check_groups_results_by_status_and_subsystem() {
+        let grouped = group_onboard_checks_by_status_and_subsystem(&[
+            OnboardCheck {
+                name: "provider credentials",
+                level: OnboardCheckLevel::Pass,
+                detail: "inline api key configured".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+            OnboardCheck {
+                name: "memory path",
+                level: OnboardCheckLevel::Warn,
+                detail: "would create under /tmp".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+            OnboardCheck {
+                name: "acp backend",
+                level: OnboardCheckLevel::Fail,
+                detail: "ACP is enabled but no backend is configured yet".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+            OnboardCheck {
+                name: "browser companion install",
+                level: OnboardCheckLevel::Pass,
+                detail: "runtime is ready".to_owned(),
+                non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+            },
+        ]);
+
+        assert_eq!(
+            grouped.blocked.len(),
+            1,
+            "blocked checks should be grouped separately from warnings and ready checks: {grouped:#?}"
+        );
+        assert_eq!(
+            grouped.warnings.len(),
+            1,
+            "warning checks should be grouped separately from blocked and ready checks: {grouped:#?}"
+        );
+        assert_eq!(
+            grouped.ready.len(),
+            2,
+            "ready checks should preserve all green subsystems: {grouped:#?}"
+        );
+        assert_eq!(
+            grouped.blocked[0].subsystem.label(),
+            "protocols",
+            "ACP/backend failures should group under the protocols subsystem: {grouped:#?}"
+        );
+        assert_eq!(
+            grouped.warnings[0].subsystem.label(),
+            "workspace/storage",
+            "workspace path checks should group under workspace/storage: {grouped:#?}"
+        );
+        assert!(
+            grouped
+                .ready
+                .iter()
+                .any(|group| group.subsystem.label() == "provider/auth"),
+            "provider/auth checks should stay visible in the ready group: {grouped:#?}"
+        );
+        assert!(
+            grouped
+                .ready
+                .iter()
+                .any(|group| group.subsystem.label() == "browser/channel/runtime extras"),
+            "runtime extras should stay visible in the ready group: {grouped:#?}"
+        );
     }
 
     #[test]

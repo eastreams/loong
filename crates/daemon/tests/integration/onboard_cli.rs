@@ -2012,6 +2012,69 @@ async fn onboard_restores_original_config_when_memory_bootstrap_fails_after_writ
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn post_write_verification_failure_preserves_old_config_and_reports_blocked() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    let root = unique_temp_path("post-write-blocked-root");
+    std::fs::create_dir_all(&root).expect("create test root");
+    let output = root.join("loongclaw.toml");
+    let invalid_sqlite_dir = root.join("memory-dir");
+    std::fs::create_dir_all(&invalid_sqlite_dir).expect("create invalid sqlite directory");
+
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "test-openai-key".to_owned(),
+    ));
+    config.memory.sqlite_path = invalid_sqlite_dir.display().to_string();
+    mvp::config::write(Some(output.to_string_lossy().as_ref()), &config, true)
+        .expect("write existing config");
+    let original_body = std::fs::read_to_string(&output).expect("read original config");
+
+    let (result, transcript) = run_scripted_onboard_flow_collecting_transcript(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: Some(output.display().to_string()),
+            force: true,
+            non_interactive: true,
+            accept_risk: true,
+            provider: None,
+            model: Some("gpt-4.1-mini".to_owned()),
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        vec![String::new(), String::new(), String::new()],
+        None,
+        None,
+    )
+    .await;
+
+    let error = result.expect_err("post-write verification failure should still fail the command");
+    assert!(
+        error.contains("failed to bootstrap sqlite memory"),
+        "unexpected post-write verification error: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).expect("read config after rollback"),
+        original_body,
+        "blocked-after-verification flows should restore the original config after rollback"
+    );
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("blocked after verification")),
+        "post-write verification failures should render a blocked-after-verification outcome instead of only returning an error: {transcript:#?}"
+    );
+    assert!(
+        transcript.iter().all(|line| line != "onboarding complete"),
+        "blocked-after-verification flows should not be reported as a clean onboarding completion: {transcript:#?}"
+    );
+}
+
 #[test]
 fn provider_credential_check_accepts_inline_api_key() {
     let mut config = mvp::config::LoongClawConfig::default();
@@ -8307,9 +8370,11 @@ fn onboarding_success_summary_prefers_oauth_env_over_api_key_env_when_both_are_c
 #[test]
 fn onboarding_success_summary_reports_existing_config_kept() {
     let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+        outcome: loongclaw_daemon::onboard_state::OnboardOutcome::Success,
         import_source: None,
         config_path: "/tmp/loongclaw-config.toml".to_owned(),
         config_status: Some("existing config kept; no changes were needed".to_owned()),
+        verification_status: None,
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "auto".to_owned(),
@@ -8414,9 +8479,11 @@ fn onboarding_success_summary_reports_web_search_provider_and_credential() {
 #[test]
 fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
     let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+        outcome: loongclaw_daemon::onboard_state::OnboardOutcome::Success,
         import_source: Some("suggested starting point".to_owned()),
         config_path: "/tmp/loongclaw-config.toml".to_owned(),
         config_status: None,
+        verification_status: None,
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
@@ -8485,9 +8552,11 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
 #[test]
 fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
     let summary = loongclaw_daemon::onboard_cli::OnboardingSuccessSummary {
+        outcome: loongclaw_daemon::onboard_state::OnboardOutcome::Success,
         import_source: Some("suggested starting point".to_owned()),
         config_path: "/tmp/loongclaw-config.toml".to_owned(),
         config_status: None,
+        verification_status: None,
         provider: "openai".to_owned(),
         saved_provider_profiles: Vec::new(),
         model: "openai/gpt-5.1-codex".to_owned(),
