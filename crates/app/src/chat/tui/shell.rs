@@ -497,8 +497,26 @@ pub(super) async fn run(
             let tx2 = tx.clone();
             turn_future = Box::pin(async move {
                 let result = run_turn(runtime, &text, Some(obs)).await;
-                if let Err(e) = result {
-                    let _ = tx2.send(UiEvent::TurnError(e));
+                match result {
+                    Ok(reply) => {
+                        // The observer streams tokens live, but if the provider
+                        // returned a non-streaming response, or the final text
+                        // differs from what was streamed, ensure the reply is
+                        // captured as a token event so it appears in the transcript.
+                        if !reply.is_empty() {
+                            let _ = tx2.send(UiEvent::Token {
+                                content: reply,
+                                is_thinking: false,
+                            });
+                        }
+                        let _ = tx2.send(UiEvent::ResponseDone {
+                            input_tokens: 0,
+                            output_tokens: 0,
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx2.send(UiEvent::TurnError(e));
+                    }
                 }
             });
             turn_active = true;

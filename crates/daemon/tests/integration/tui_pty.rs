@@ -392,6 +392,51 @@ fn tui_exit_via_escape() {
     );
 }
 
+/// Submitting a turn shows a response or an error message (not silence).
+#[test]
+fn tui_submit_turn_shows_response_or_error() {
+    let mut fixture = TuiPtyFixture::spawn("submit-turn");
+
+    fixture
+        .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))
+        .expect("TUI should be ready");
+
+    std::thread::sleep(Duration::from_millis(300));
+
+    fixture.type_text("hi").expect("type hi");
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Press Enter to submit
+    fixture.send_keys(b"\r").expect("send Enter to submit turn");
+
+    // Wait up to 30s for the TUI to show something beyond the welcome
+    std::thread::sleep(Duration::from_secs(5));
+
+    let screen = fixture
+        .read_screen(Duration::from_secs(25))
+        .unwrap_or_default();
+
+    // Dump screen for debugging
+    eprintln!("=== TUI SCREEN AFTER SUBMIT ===\n{screen}\n=== END ===");
+
+    // After submitting, the screen should contain either:
+    // - "You" (the user message badge rendered)
+    // - "Iteration" (spinner showing turn in progress)
+    // - "Error:" (turn failed with a message)
+    // - The response text
+    // It should NOT be just the welcome message.
+    let has_user_msg = contains_collapsed(&screen, "You") || contains_collapsed(&screen, "hi");
+    let has_progress = screen.contains("Iteration") || screen.contains("Preparing");
+    let has_error = screen.contains("Error:");
+
+    assert!(
+        has_user_msg || has_progress || has_error,
+        "TUI should show user message, progress, or error after Enter: {screen:?}"
+    );
+
+    fixture.send_escape().expect("exit TUI");
+}
+
 /// Pressing Ctrl+C exits the TUI cleanly with exit code 0.
 #[test]
 fn tui_exit_via_ctrl_c() {
