@@ -1,13 +1,19 @@
 mod webhook;
 
+use std::path::Path;
+use std::sync::Arc;
+
+use axum::{Router, routing::{get, post}};
 use serde_json::{Value, json};
 
-use crate::{CliResult, config::ResolvedWhatsappChannelConfig};
-
+use crate::{CliResult, KernelContext, config::ResolvedWhatsappChannelConfig};
 use super::{
-    ChannelOutboundTargetKind,
+    ChannelOutboundTargetKind, ChannelServeStopHandle,
     http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
+    runtime_state::ChannelOperationRuntimeTracker,
 };
+use crate::config::{ChannelDefaultAccountSelectionSource, LoongClawConfig};
+use webhook::{WhatsappWebhookState, whatsapp_verify_handler, whatsapp_webhook_handler};
 
 pub(super) async fn run_whatsapp_send(
     resolved: &ResolvedWhatsappChannelConfig,
@@ -79,6 +85,63 @@ pub(super) async fn run_whatsapp_send(
     }
 
     Ok(())
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub(super) async fn run_whatsapp_channel(
+    config: &LoongClawConfig,
+    resolved: &ResolvedWhatsappChannelConfig,
+    resolved_path: &Path,
+    selected_by_default: bool,
+    default_account_source: ChannelDefaultAccountSelectionSource,
+    kernel_ctx: KernelContext,
+    runtime: Arc<ChannelOperationRuntimeTracker>,
+    stop: ChannelServeStopHandle,
+) -> CliResult<()> {
+    let bind = resolved.resolved_webhook_bind();
+    if bind.is_empty() {
+        return Err("whatsapp webhook bind address is empty".to_owned());
+    }
+
+    let path = resolved.resolved_webhook_path();
+    let path = if path.starts_with('/') {
+        path
+    } else {
+        format!("/{path}")
+    };
+
+    let state = WhatsappWebhookState::new(
+        config.clone(),
+        resolved_path.to_path_buf(),
+        resolved,
+        kernel_ctx,
+        runtime,
+    )?;
+    let app = Router::new()
+        .route(path.as_str(), get(whatsapp_verify_handler).post(whatsapp_webhook_handler))
+        .with_state(state);
+
+    let listener = tokio::net::TcpListener::bind(bind.as_str())
+        .await
+        .map_err(|error| format!("bind whatsapp webhook listener failed: {error}"))?;
+
+    println!(
+        "whatsapp channel started (config={}, configured_account={}, account={}, selected_by_default={}, default_source={}, bind={}, path={})",
+        resolved_path.display(),
+        resolved.configured_account_id,
+        resolved.account.label,
+        selected_by_default,
+        default_account_source.as_str(),
+        bind,
+        path
+    );
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            stop.wait().await;
+        })
+        .await
+        .map_err(|error| format!("whatsapp webhook server stopped: {error}"))
 }
 
 async fn read_whatsapp_json_response(response: reqwest::Response) -> CliResult<Value> {
