@@ -22,10 +22,7 @@ use crate::onboard_finalize::{
     ConfigWritePlan, build_onboarding_success_summary_with_outcome, prepare_output_path_for_write,
     render_onboarding_success_summary_lines, resolve_backup_path, rollback_onboard_write_failure,
 };
-// #[cfg(test)] imports disabled — tests use #[cfg(any())] until Task 8-9 rewrite.
-// use crate::onboard_finalize::{
-//     OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
-// };
+// Test-only onboard_finalize imports live in tests.rs directly.
 use crate::onboard_flow::{OnboardFlowController, run_guided_onboard_flow};
 pub use crate::onboard_preflight::{
     OnboardCheck, OnboardCheckLevel, OnboardNonInteractiveWarningPolicy,
@@ -44,12 +41,7 @@ use crate::onboard_state::{
     OnboardDraft, OnboardInteractionMode, OnboardOutcome, OnboardValueOrigin, OnboardWizardStep,
 };
 pub use crate::onboard_types::OnboardingCredentialSummary;
-// #[cfg(test)] imports disabled — tests use #[cfg(any())] until Task 8-9 rewrite.
-// use crate::onboard_web_search::{
-//     WebSearchProviderRecommendation, WebSearchProviderRecommendationSource,
-//     explicit_web_search_provider_override,
-//     recommend_web_search_provider_from_available_credentials,
-// };
+// Test-only onboard_web_search imports live in tests.rs directly.
 use crate::onboard_web_search::{
     configured_web_search_provider_credential_source_value,
     configured_web_search_provider_env_name, configured_web_search_provider_secret,
@@ -64,9 +56,7 @@ use mvp::tui_surface::{
     TuiCalloutTone, TuiChoiceSpec, TuiHeaderStyle, TuiScreenSpec, TuiSectionSpec,
     render_onboard_screen_spec,
 };
-// #[cfg(test)] imports disabled — tests use #[cfg(any())] until Task 8-9 rewrite.
-// use std::fs;
-// use time::OffsetDateTime;
+// Test-only std::fs and time::OffsetDateTime imports live in tests.rs directly.
 
 pub use crate::onboard_finalize::{
     OnboardingAction, OnboardingActionKind, OnboardingDomainOutcome, OnboardingSuccessSummary,
@@ -5866,7 +5856,5 @@ fn resolve_write_plan(
     }
 }
 
-// Tests disabled — they depend on the removed OnboardUi trait and will be
-// rewritten in Tasks 8-9.
-#[cfg(any())]
+#[cfg(test)]
 mod tests;

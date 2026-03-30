@@ -1,70 +1,17 @@
 use super::*;
-use std::collections::VecDeque;
-use std::ffi::OsString;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, MutexGuard};
+use std::sync::MutexGuard;
+use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::onboard_finalize::{
+    OnboardWriteRecovery, format_backup_timestamp_at, resolve_backup_path_at,
+};
+use crate::onboard_web_search::{
+    WebSearchProviderRecommendation, WebSearchProviderRecommendationSource,
+    explicit_web_search_provider_override,
+    recommend_web_search_provider_from_available_credentials,
+};
 use crate::test_support::ScopedEnv;
-
-struct TestOnboardUi {
-    inputs: VecDeque<String>,
-}
-
-impl TestOnboardUi {
-    fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            inputs: inputs.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-struct SelectOnlyTestUi {
-    inputs: VecDeque<String>,
-}
-
-impl SelectOnlyTestUi {
-    fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            inputs: inputs.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-struct AllowEmptyOnlyTestUi {
-    inputs: VecDeque<String>,
-}
-
-impl AllowEmptyOnlyTestUi {
-    fn with_inputs(inputs: impl IntoIterator<Item = impl Into<String>>) -> Self {
-        Self {
-            inputs: inputs.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-fn interactive_onboard_options() -> OnboardCommandOptions {
-    OnboardCommandOptions {
-        output: None,
-        force: false,
-        non_interactive: false,
-        accept_risk: true,
-        provider: None,
-        model: None,
-        api_key_env: None,
-        web_search_provider: None,
-        web_search_api_key_env: None,
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: false,
-    }
-}
-
-fn onboard_test_context() -> OnboardRuntimeContext {
-    OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>())
-}
 
 #[test]
 fn degraded_terminal_uses_plain_prompt_fallback() {
@@ -77,12 +24,6 @@ fn degraded_terminal_uses_plain_prompt_fallback() {
     );
 }
 
-// Test removed: terminal_supports_rich_prompt_ui was a dialoguer helper that no longer exists.
-// The TUI runner handles terminal detection differently now.
-
-// Test removed: GuidedOnboardUiRunner no longer exists.
-// Back-navigation is now tested via RatatuiOnboardRunner in onboard_tui::runner::tests.
-
 fn browser_companion_temp_dir(label: &str) -> PathBuf {
     static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
     let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -92,15 +33,6 @@ fn browser_companion_temp_dir(label: &str) -> PathBuf {
     ));
     std::fs::create_dir_all(&temp_dir).expect("create browser companion onboard temp dir");
     temp_dir
-}
-
-fn uuid_shaped_secret_fixture() -> String {
-    let first = "9f479837";
-    let second = "0a12";
-    let third = "4b56";
-    let fourth = "89ab";
-    let fifth = "cdef01234567";
-    format!("{first}-{second}-{third}-{fourth}-{fifth}")
 }
 
 fn browser_companion_script_path(temp_dir: &Path) -> PathBuf {
@@ -127,6 +59,7 @@ fn write_browser_companion_version_script(temp_dir: &Path, version: &str) -> Pat
 
     #[cfg(unix)]
     {
+        use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
 
         let script_body = format!(
@@ -150,209 +83,9 @@ fn write_browser_companion_version_script(temp_dir: &Path, version: &str) -> Pat
     script_path
 }
 
-impl OnboardUi for TestOnboardUi {
-    fn print_line(&mut self, _line: &str) -> CliResult<()> {
-        Ok(())
-    }
-
-    fn prompt_with_default(&mut self, _label: &str, default: &str) -> CliResult<String> {
-        let value =
-            ensure_onboard_input_not_cancelled(self.inputs.pop_front().unwrap_or_default())?;
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return Ok(default.to_owned());
-        }
-        Ok(trimmed.to_owned())
-    }
-
-    fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-        let value = self
-            .inputs
-            .pop_front()
-            .ok_or_else(|| "missing required test input".to_owned())?;
-        Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
-    }
-
-    fn prompt_confirm(&mut self, _message: &str, default: bool) -> CliResult<bool> {
-        let Some(value) = self.inputs.pop_front() else {
-            return Ok(default);
-        };
-        let value = ensure_onboard_input_not_cancelled(value)?;
-        let value = value.trim().to_ascii_lowercase();
-        if value.is_empty() {
-            return Ok(default);
-        }
-        Ok(matches!(value.as_str(), "y" | "yes"))
-    }
-
-    fn select_one(
-        &mut self,
-        _label: &str,
-        options: &[SelectOption],
-        default: Option<usize>,
-        _interaction_mode: SelectInteractionMode,
-    ) -> CliResult<SelectAction> {
-        let default = validate_select_one_state(options.len(), default)?;
-        match self.inputs.pop_front() {
-            Some(value) => {
-                let value = ensure_onboard_input_not_cancelled(value)?;
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return default
-                        .map(SelectAction::Selected)
-                        .ok_or_else(|| "no default for required selection".to_owned());
-                }
-                if let Ok(n) = trimmed.parse::<usize>() {
-                    if n >= 1 && n <= options.len() {
-                        return Ok(SelectAction::Selected(n - 1));
-                    }
-                    return Err(format!(
-                        "test selection {n} out of range 1..={}",
-                        options.len()
-                    ));
-                }
-                if let Some(index) = parse_select_one_input(trimmed, options) {
-                    return Ok(SelectAction::Selected(index));
-                }
-                if trimmed.eq_ignore_ascii_case("back") {
-                    return Ok(SelectAction::Back);
-                }
-                Err(format!("invalid test selection input: {trimmed}"))
-            }
-            None => default
-                .map(SelectAction::Selected)
-                .ok_or_else(|| "missing test input for required selection".to_owned()),
-        }
-    }
-}
-
-impl OnboardUi for SelectOnlyTestUi {
-    fn print_line(&mut self, _line: &str) -> CliResult<()> {
-        Ok(())
-    }
-
-    fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
-        Err("test expected interactive select widget instead of prompt_with_default".to_owned())
-    }
-
-    fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-        Err("test expected interactive select widget instead of prompt_required".to_owned())
-    }
-
-    fn prompt_confirm(&mut self, _message: &str, _default: bool) -> CliResult<bool> {
-        Err("test expected interactive select widget instead of prompt_confirm".to_owned())
-    }
-
-    fn select_one(
-        &mut self,
-        _label: &str,
-        options: &[SelectOption],
-        default: Option<usize>,
-        _interaction_mode: SelectInteractionMode,
-    ) -> CliResult<SelectAction> {
-        let default = validate_select_one_state(options.len(), default)?;
-        match self.inputs.pop_front() {
-            Some(value) => {
-                let value = ensure_onboard_input_not_cancelled(value)?;
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return default
-                        .map(SelectAction::Selected)
-                        .ok_or_else(|| "no default for required selection".to_owned());
-                }
-                if let Ok(n) = trimmed.parse::<usize>() {
-                    if n >= 1 && n <= options.len() {
-                        return Ok(SelectAction::Selected(n - 1));
-                    }
-                    return Err(format!(
-                        "test selection {n} out of range 1..={}",
-                        options.len()
-                    ));
-                }
-                if let Some(index) = parse_select_one_input(trimmed, options) {
-                    return Ok(SelectAction::Selected(index));
-                }
-                if trimmed.eq_ignore_ascii_case("back") {
-                    return Ok(SelectAction::Back);
-                }
-                Err(format!("invalid test selection input: {trimmed}"))
-            }
-            None => default
-                .map(SelectAction::Selected)
-                .ok_or_else(|| "missing test input for required selection".to_owned()),
-        }
-    }
-}
-
-impl OnboardUi for AllowEmptyOnlyTestUi {
-    fn print_line(&mut self, _line: &str) -> CliResult<()> {
-        Ok(())
-    }
-
-    fn prompt_with_default(&mut self, _label: &str, _default: &str) -> CliResult<String> {
-        Err("test expected prompt_allow_empty instead of prompt_with_default".to_owned())
-    }
-
-    fn prompt_required(&mut self, _label: &str) -> CliResult<String> {
-        Err("test expected prompt_allow_empty instead of prompt_required".to_owned())
-    }
-
-    fn prompt_allow_empty(&mut self, _label: &str) -> CliResult<String> {
-        let value = self
-            .inputs
-            .pop_front()
-            .ok_or_else(|| "missing allow-empty test input".to_owned())?;
-        Ok(ensure_onboard_input_not_cancelled(value)?.trim().to_owned())
-    }
-
-    fn prompt_confirm(&mut self, _message: &str, _default: bool) -> CliResult<bool> {
-        Err("test expected prompt_allow_empty instead of prompt_confirm".to_owned())
-    }
-
-    fn select_one(
-        &mut self,
-        _label: &str,
-        _options: &[SelectOption],
-        _default: Option<usize>,
-        _interaction_mode: SelectInteractionMode,
-    ) -> CliResult<SelectAction> {
-        Err("test expected prompt_allow_empty instead of select_one".to_owned())
-    }
-}
-
-struct TestPromptLineReader {
-    blocking_reads: VecDeque<OnboardPromptRead>,
-    pending_lines: VecDeque<String>,
-}
-
-impl TestPromptLineReader {
-    fn new(
-        blocking_reads: impl IntoIterator<Item = OnboardPromptRead>,
-        pending_lines: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Self {
-        Self {
-            blocking_reads: blocking_reads.into_iter().collect(),
-            pending_lines: pending_lines.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl OnboardPromptLineReader for TestPromptLineReader {
-    fn read_blocking_line(&mut self) -> CliResult<OnboardPromptRead> {
-        Ok(self
-            .blocking_reads
-            .pop_front()
-            .unwrap_or(OnboardPromptRead::Eof))
-    }
-
-    fn read_pending_line(&mut self) -> CliResult<Option<String>> {
-        Ok(self.pending_lines.pop_front())
-    }
-}
-
 struct BrowserCompanionEnvGuard {
     _lock: MutexGuard<'static, ()>,
-    saved_ready: Option<OsString>,
+    saved_ready: Option<std::ffi::OsString>,
 }
 
 fn set_browser_companion_env_var(key: &str, value: &str) {
@@ -395,40 +128,6 @@ impl BrowserCompanionEnvGuard {
         Self {
             _lock: lock,
             saved_ready,
-        }
-    }
-}
-
-struct PasteDrainWindowEnvGuard {
-    _lock: MutexGuard<'static, ()>,
-    saved_value: Option<OsString>,
-}
-
-impl PasteDrainWindowEnvGuard {
-    fn set(value: Option<&str>) -> Self {
-        let lock = crate::test_support::lock_daemon_test_environment();
-        let saved_value = std::env::var_os(ONBOARD_PASTE_DRAIN_WINDOW_ENV);
-        match value {
-            Some(value) => set_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV, value),
-            None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
-        }
-        Self {
-            _lock: lock,
-            saved_value,
-        }
-    }
-}
-
-impl Drop for PasteDrainWindowEnvGuard {
-    fn drop(&mut self) {
-        match &self.saved_value {
-            Some(value) => {
-                set_browser_companion_env_var(
-                    ONBOARD_PASTE_DRAIN_WINDOW_ENV,
-                    &value.to_string_lossy(),
-                );
-            }
-            None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
         }
     }
 }
@@ -1011,281 +710,122 @@ fn build_onboarding_success_summary_does_not_echo_invalid_credential_env_value()
 }
 
 #[test]
-fn resolve_api_key_env_selection_accepts_explicit_clear_token_in_interactive_mode() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.api_key = Some(SecretRef::Inline("inline-secret".to_owned()));
-    let mut ui = TestOnboardUi::with_inputs([":clear"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
+    let mut provider = mvp::config::ProviderConfig {
+        kind: mvp::config::ProviderKind::Openai,
+        api_key: Some(SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        }),
+        ..mvp::config::ProviderConfig::default()
+    };
 
-    let selected = resolve_api_key_env_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        "OPENAI_API_KEY".to_owned(),
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve api key env selection");
-
-    assert!(
-        selected.is_empty(),
-        "typing :clear should explicitly clear the api-key env selection instead of persisting the literal token: {selected:?}"
-    );
-}
-
-#[test]
-fn resolve_api_key_env_selection_reprompts_after_secret_literal_interactively() {
-    let secret = "sk-live-direct-secret-value";
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Openai;
-    let mut ui = TestOnboardUi::with_inputs([secret, "OPENAI_API_KEY"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_api_key_env_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        "OPENAI_API_KEY".to_owned(),
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("interactive credential selection should reprompt on invalid secret-like input");
+    apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
 
     assert_eq!(
-        selected, "OPENAI_API_KEY",
-        "interactive onboarding should reject secret-like input and keep asking for an env var name"
+        provider.oauth_access_token,
+        Some(SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        })
     );
-}
-
-#[test]
-fn resolve_api_key_env_selection_rejects_secret_literal_non_interactively() {
-    let secret = "sk-live-direct-secret-value";
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Openai;
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let error = resolve_api_key_env_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: true,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: Some(secret.to_owned()),
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        "OPENAI_API_KEY".to_owned(),
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect_err("non-interactive onboarding should reject secret-like env selections");
-
-    assert!(
-        error.contains("provider.api_key.env"),
-        "the validation error should identify the bad field: {error}"
+    assert_eq!(
+        provider.api_key_env, None,
+        "switching to the OpenAI oauth env should clear the stale api-key env binding"
     );
-    assert!(
-        !error.contains(secret),
-        "non-interactive validation must not echo the secret-like input: {error}"
-    );
+    assert_eq!(provider.api_key, None);
 }
 
 #[test]
-fn resolve_api_key_env_selection_reprompts_after_uuid_secret_literal_interactively() {
-    let secret = uuid_shaped_secret_fixture();
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
-    let mut ui = TestOnboardUi::with_inputs([secret.as_str(), "ARK_API_KEY"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_api_key_env_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        "ARK_API_KEY".to_owned(),
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("uuid-shaped credential input should be rejected and reprompted");
-
-    assert_eq!(selected, "ARK_API_KEY");
-}
-
-#[test]
-fn resolve_api_key_env_selection_rejects_uuid_secret_literal_non_interactively() {
-    let secret = uuid_shaped_secret_fixture();
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::VolcengineCoding;
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let error = resolve_api_key_env_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: true,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: Some(secret.clone()),
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        "ARK_API_KEY".to_owned(),
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect_err("uuid-shaped env selections should be rejected non-interactively");
-
-    assert!(error.contains("provider.api_key.env"));
-    assert!(!error.contains(secret.as_str()));
-}
-
-#[test]
-fn resolve_web_search_credential_selection_accepts_clear_token_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.tools.web_search.default_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
-    config.tools.web_search.tavily_api_key = Some("${TEAM_TAVILY_KEY}".to_owned());
-    let mut ui = TestOnboardUi::with_inputs([":clear"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-    let options = OnboardCommandOptions {
-        output: None,
-        force: false,
-        non_interactive: false,
-        accept_risk: true,
-        provider: None,
-        model: None,
-        api_key_env: None,
-        web_search_provider: None,
-        web_search_api_key_env: None,
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: false,
+fn apply_selected_api_key_env_routes_unknown_openai_env_to_api_key_binding() {
+    let mut provider = mvp::config::ProviderConfig {
+        kind: mvp::config::ProviderKind::Openai,
+        oauth_access_token: Some(SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        }),
+        ..mvp::config::ProviderConfig::default()
     };
 
-    let selected = resolve_web_search_credential_selection(
-        &options,
-        &config,
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-        GuidedPromptPath::NativePromptPack,
-        false,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve web search credential selection");
-
-    assert_eq!(selected, WebSearchCredentialSelection::ClearConfigured);
-}
-
-#[test]
-fn resolve_web_search_credential_selection_reprompts_after_secret_literal_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.tools.web_search.default_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
-    let mut ui = TestOnboardUi::with_inputs(["sk-live-direct-secret-value", "TEAM_TAVILY_KEY"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-    let options = OnboardCommandOptions {
-        output: None,
-        force: false,
-        non_interactive: false,
-        accept_risk: true,
-        provider: None,
-        model: None,
-        api_key_env: None,
-        web_search_provider: None,
-        web_search_api_key_env: None,
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: false,
-    };
-
-    let selected = resolve_web_search_credential_selection(
-        &options,
-        &config,
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-        GuidedPromptPath::NativePromptPack,
-        false,
-        &mut ui,
-        &context,
-    )
-    .expect("interactive web search credential selection should reprompt");
+    apply_selected_api_key_env(&mut provider, "OPENAI_ALT_BEARER".to_owned());
 
     assert_eq!(
-        selected,
-        WebSearchCredentialSelection::UseEnv("TEAM_TAVILY_KEY".to_owned())
+        provider.api_key,
+        Some(SecretRef::Env {
+            env: "OPENAI_ALT_BEARER".to_owned(),
+        }),
+        "unknown env names should stay on the explicit api-key field instead of being silently rebound to oauth"
+    );
+    assert_eq!(
+        provider.oauth_access_token_env, None,
+        "switching to a custom env name should clear the stale oauth binding"
+    );
+    assert_eq!(provider.oauth_access_token, None);
+}
+
+#[test]
+fn provider_matches_for_review_ignores_credential_field_explicitness() {
+    let current = mvp::config::ProviderConfig {
+        kind: mvp::config::ProviderKind::Openai,
+        model: "gpt-4.1".to_owned(),
+        api_key: Some(SecretRef::Inline("inline-secret".to_owned())),
+        ..mvp::config::ProviderConfig::default()
+    };
+
+    let mut api_key_env_update = current.clone();
+    apply_selected_api_key_env(&mut api_key_env_update, "OPENAI_API_KEY".to_owned());
+    assert_eq!(
+        api_key_env_update.api_key,
+        Some(SecretRef::Env {
+            env: "OPENAI_API_KEY".to_owned(),
+        })
+    );
+    assert!(!api_key_env_update.api_key_env_explicit);
+    assert!(
+        provider_matches_for_review(&current, &api_key_env_update),
+        "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
+    );
+
+    let mut oauth_env_update = current.clone();
+    apply_selected_api_key_env(&mut oauth_env_update, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
+    assert_eq!(
+        oauth_env_update.oauth_access_token,
+        Some(SecretRef::Env {
+            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
+        })
+    );
+    assert!(!oauth_env_update.oauth_access_token_env_explicit);
+    assert!(
+        provider_matches_for_review(&current, &oauth_env_update),
+        "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
     );
 }
 
 #[test]
-fn resolve_web_search_credential_selection_keeps_inline_secret_on_blank_input() {
+fn apply_selected_system_prompt_restore_uses_rendered_native_prompt() {
     let mut config = mvp::config::LoongClawConfig::default();
-    config.tools.web_search.default_provider = mvp::config::WEB_SEARCH_PROVIDER_TAVILY.to_owned();
-    config.tools.web_search.tavily_api_key = Some("inline-web-secret".to_owned());
-    let mut ui = TestOnboardUi::with_inputs([""]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
+    config.cli.system_prompt = "custom review prompt".to_owned();
+    config.cli.system_prompt_addendum = Some("Prefer concrete remediation steps.".to_owned());
+    let expected = config.cli.rendered_native_system_prompt();
+
+    apply_selected_system_prompt(&mut config, SystemPromptSelection::RestoreBuiltIn);
+
+    assert_eq!(
+        config.cli.system_prompt, expected,
+        "restoring the built-in prompt should respect the active native prompt rendering inputs"
+    );
+}
+
+#[test]
+fn accepted_non_interactive_warnings_do_not_depend_on_display_text() {
+    let check = OnboardCheck {
+        name: "provider model probe",
+        level: OnboardCheckLevel::Warn,
+        detail: "display text changed".to_owned(),
+        non_interactive_warning_policy:
+            OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
+    };
     let options = OnboardCommandOptions {
         output: None,
         force: false,
-        non_interactive: false,
+        non_interactive: true,
         accept_risk: true,
         provider: None,
         model: None,
@@ -1295,21 +835,13 @@ fn resolve_web_search_credential_selection_keeps_inline_secret_on_blank_input() 
         personality: None,
         memory_profile: None,
         system_prompt: None,
-        skip_model_probe: false,
+        skip_model_probe: true,
     };
 
-    let selected = resolve_web_search_credential_selection(
-        &options,
-        &config,
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-        GuidedPromptPath::NativePromptPack,
-        false,
-        &mut ui,
-        &context,
-    )
-    .expect("blank input should keep current inline web search credential");
-
-    assert_eq!(selected, WebSearchCredentialSelection::KeepCurrent);
+    assert!(
+        is_explicitly_accepted_non_interactive_warning(&check, &options),
+        "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
+    );
 }
 
 #[test]
@@ -1402,35 +934,6 @@ fn explicit_web_search_provider_override_prefers_cli_option_over_env() {
     assert_eq!(
         recommendation.source,
         WebSearchProviderRecommendationSource::ExplicitCli
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn resolve_web_search_provider_selection_keeps_current_provider_on_blank_interactive_input_when_recommendation_differs()
- {
-    let options = interactive_onboard_options();
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
-
-    let mut env = ScopedEnv::new();
-    env.set("TAVILY_API_KEY", "tavily-test-token");
-
-    let mut ui = TestOnboardUi::with_inputs([""]);
-    let context = onboard_test_context();
-    let selected = resolve_web_search_provider_selection(
-        &options,
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .await
-    .expect("blank interactive input should keep the current web search provider");
-
-    assert_eq!(
-        selected,
-        mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
-        "interactive enter should preserve the current provider even when another provider is recommended"
     );
 }
 
@@ -1537,1146 +1040,6 @@ fn resolve_effective_web_search_default_provider_falls_back_for_detected_tavily_
         selected,
         mvp::config::WEB_SEARCH_PROVIDER_DUCKDUCKGO,
         "detected Tavily recommendations should still fall back to the key-free provider in non-interactive mode when no Tavily credential is ready"
-    );
-}
-
-#[test]
-fn resolve_web_search_credential_selection_uses_explicit_option_non_interactively() {
-    let options = OnboardCommandOptions {
-        output: None,
-        force: false,
-        non_interactive: true,
-        accept_risk: true,
-        provider: None,
-        model: None,
-        api_key_env: None,
-        web_search_provider: Some("tavily".to_owned()),
-        web_search_api_key_env: Some("TEAM_TAVILY_KEY".to_owned()),
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: false,
-    };
-    let config = mvp::config::LoongClawConfig::default();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_web_search_credential_selection(
-        &options,
-        &config,
-        mvp::config::WEB_SEARCH_PROVIDER_TAVILY,
-        GuidedPromptPath::NativePromptPack,
-        true,
-        &mut ui,
-        &context,
-    )
-    .expect("non-interactive explicit web-search credential env should be accepted");
-
-    assert_eq!(
-        selected,
-        WebSearchCredentialSelection::UseEnv("TEAM_TAVILY_KEY".to_owned())
-    );
-}
-
-#[test]
-fn apply_selected_api_key_env_routes_openai_oauth_env_to_oauth_binding() {
-    let mut provider = mvp::config::ProviderConfig {
-        kind: mvp::config::ProviderKind::Openai,
-        api_key: Some(SecretRef::Env {
-            env: "OPENAI_API_KEY".to_owned(),
-        }),
-        ..mvp::config::ProviderConfig::default()
-    };
-
-    apply_selected_api_key_env(&mut provider, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
-
-    assert_eq!(
-        provider.oauth_access_token,
-        Some(SecretRef::Env {
-            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
-        })
-    );
-    assert_eq!(
-        provider.api_key_env, None,
-        "switching to the OpenAI oauth env should clear the stale api-key env binding"
-    );
-    assert_eq!(provider.api_key, None);
-}
-
-#[test]
-fn apply_selected_api_key_env_routes_unknown_openai_env_to_api_key_binding() {
-    let mut provider = mvp::config::ProviderConfig {
-        kind: mvp::config::ProviderKind::Openai,
-        oauth_access_token: Some(SecretRef::Env {
-            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
-        }),
-        ..mvp::config::ProviderConfig::default()
-    };
-
-    apply_selected_api_key_env(&mut provider, "OPENAI_ALT_BEARER".to_owned());
-
-    assert_eq!(
-        provider.api_key,
-        Some(SecretRef::Env {
-            env: "OPENAI_ALT_BEARER".to_owned(),
-        }),
-        "unknown env names should stay on the explicit api-key field instead of being silently rebound to oauth"
-    );
-    assert_eq!(
-        provider.oauth_access_token_env, None,
-        "switching to a custom env name should clear the stale oauth binding"
-    );
-    assert_eq!(provider.oauth_access_token, None);
-}
-
-#[test]
-fn provider_matches_for_review_ignores_credential_field_explicitness() {
-    let current = mvp::config::ProviderConfig {
-        kind: mvp::config::ProviderKind::Openai,
-        model: "gpt-4.1".to_owned(),
-        api_key: Some(SecretRef::Inline("inline-secret".to_owned())),
-        ..mvp::config::ProviderConfig::default()
-    };
-
-    let mut api_key_env_update = current.clone();
-    apply_selected_api_key_env(&mut api_key_env_update, "OPENAI_API_KEY".to_owned());
-    assert_eq!(
-        api_key_env_update.api_key,
-        Some(SecretRef::Env {
-            env: "OPENAI_API_KEY".to_owned(),
-        })
-    );
-    assert!(!api_key_env_update.api_key_env_explicit);
-    assert!(
-        provider_matches_for_review(&current, &api_key_env_update),
-        "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
-    );
-
-    let mut oauth_env_update = current.clone();
-    apply_selected_api_key_env(&mut oauth_env_update, "OPENAI_CODEX_OAUTH_TOKEN".to_owned());
-    assert_eq!(
-        oauth_env_update.oauth_access_token,
-        Some(SecretRef::Env {
-            env: "OPENAI_CODEX_OAUTH_TOKEN".to_owned(),
-        })
-    );
-    assert!(!oauth_env_update.oauth_access_token_env_explicit);
-    assert!(
-        provider_matches_for_review(&current, &oauth_env_update),
-        "review matching should ignore credential binding rewrites when the provider identity is otherwise unchanged"
-    );
-}
-
-#[test]
-fn resolve_system_prompt_selection_accepts_explicit_clear_token_in_interactive_mode() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs([":clear"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::RestoreBuiltIn,
-        "typing :clear should restore the built-in system prompt instead of keeping the literal token"
-    );
-}
-
-#[test]
-fn resolve_system_prompt_selection_keeps_current_prompt_when_interactive_default_is_used() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::KeepCurrent,
-        "using the prompt default should keep the current system prompt when no override is prefilled"
-    );
-}
-
-#[test]
-fn resolve_system_prompt_selection_keeps_prefilled_override_when_interactive_default_is_used() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt = "be terse and code-focused".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_system_prompt_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: Some("prefer concise code reviews".to_owned()),
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve system prompt selection");
-
-    assert_eq!(
-        selected,
-        SystemPromptSelection::Set("prefer concise code reviews".to_owned()),
-        "using the prompt default should still apply a prefilled system prompt override"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_keeps_current_addendum_when_blank_input_is_used() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = TestOnboardUi::with_inputs([""]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected.as_deref(),
-        Some("Keep answers direct."),
-        "blank optional input should keep the current addendum"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_blank_first_run_input() {
-    let config = mvp::config::LoongClawConfig::default();
-    let mut ui = AllowEmptyOnlyTestUi::with_inputs([""]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "blank first-run optional input should preserve the absence of an addendum"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_uses_allow_empty_prompt_path_for_clear_input() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = AllowEmptyOnlyTestUi::with_inputs(["-"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "allow-empty prompt handling should still respect the explicit clear token"
-    );
-}
-
-#[test]
-fn resolve_prompt_addendum_selection_clears_current_addendum_when_dash_input_is_used() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt_addendum = Some("Keep answers direct.".to_owned());
-    let mut ui = TestOnboardUi::with_inputs(["-"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_prompt_addendum_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve prompt addendum selection");
-
-    assert_eq!(
-        selected, None,
-        "typing '-' should still clear the current addendum"
-    );
-}
-
-#[test]
-fn apply_selected_system_prompt_restore_uses_rendered_native_prompt() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.system_prompt = "custom review prompt".to_owned();
-    config.cli.system_prompt_addendum = Some("Prefer concrete remediation steps.".to_owned());
-    let expected = config.cli.rendered_native_system_prompt();
-
-    apply_selected_system_prompt(&mut config, SystemPromptSelection::RestoreBuiltIn);
-
-    assert_eq!(
-        config.cli.system_prompt, expected,
-        "restoring the built-in prompt should respect the active native prompt rendering inputs"
-    );
-}
-
-#[test]
-fn accepted_non_interactive_warnings_do_not_depend_on_display_text() {
-    let check = OnboardCheck {
-        name: "provider model probe",
-        level: OnboardCheckLevel::Warn,
-        detail: "display text changed".to_owned(),
-        non_interactive_warning_policy:
-            OnboardNonInteractiveWarningPolicy::AcceptedBySkipModelProbe,
-    };
-    let options = OnboardCommandOptions {
-        output: None,
-        force: false,
-        non_interactive: true,
-        accept_risk: true,
-        provider: None,
-        model: None,
-        api_key_env: None,
-        web_search_provider: None,
-        web_search_api_key_env: None,
-        personality: None,
-        memory_profile: None,
-        system_prompt: None,
-        skip_model_probe: true,
-    };
-
-    assert!(
-        is_explicitly_accepted_non_interactive_warning(&check, &options),
-        "non-interactive warning acceptance should follow structured policy rather than fragile display strings"
-    );
-}
-
-#[test]
-fn resolve_provider_selection_keeps_zai_available_in_interactive_list() {
-    let config = mvp::config::LoongClawConfig::default();
-    let options = interactive_onboard_options();
-    let provider_selection = crate::migration::ProviderSelectionPlan::default();
-    let context = onboard_test_context();
-    let mut ui = TestOnboardUi::with_inputs(["zai"]);
-
-    let selected = resolve_provider_selection(
-        &options,
-        &config,
-        &provider_selection,
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("z.ai should stay selectable in the interactive provider list");
-
-    assert_eq!(selected.kind, mvp::config::ProviderKind::Zai);
-    assert_eq!(selected.base_url, "https://api.z.ai");
-}
-
-#[test]
-fn resolve_provider_selection_preserves_kimi_coding_default_variant() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    let options = interactive_onboard_options();
-    let provider_selection = crate::migration::ProviderSelectionPlan::default();
-    let context = onboard_test_context();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    config.provider =
-        mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::KimiCoding);
-
-    let selected = resolve_provider_selection(
-        &options,
-        &config,
-        &provider_selection,
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("default kimi coding selection should stay stable");
-
-    assert_eq!(selected.kind, mvp::config::ProviderKind::KimiCoding);
-}
-
-#[test]
-fn resolve_provider_selection_preserves_step_plan_default_variant() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    let options = interactive_onboard_options();
-    let provider_selection = crate::migration::ProviderSelectionPlan::default();
-    let context = onboard_test_context();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    config.provider =
-        mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::StepPlan);
-
-    let selected = resolve_provider_selection(
-        &options,
-        &config,
-        &provider_selection,
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("default step plan selection should stay stable");
-
-    assert_eq!(selected.kind, mvp::config::ProviderKind::StepPlan);
-}
-
-#[test]
-fn resolve_provider_selection_preserves_existing_region_endpoint_default() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    let options = interactive_onboard_options();
-    let provider_selection = crate::migration::ProviderSelectionPlan::default();
-    let context = onboard_test_context();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let global_minimax_base_url = "https://api.minimax.io".to_owned();
-    config.provider =
-        mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Minimax);
-    config.provider.base_url = global_minimax_base_url.clone();
-
-    let selected = resolve_provider_selection(
-        &options,
-        &config,
-        &provider_selection,
-        GuidedPromptPath::NativePromptPack,
-        &mut ui,
-        &context,
-    )
-    .expect("region selection should preserve the current endpoint when accepting defaults");
-
-    assert_eq!(selected.kind, mvp::config::ProviderKind::Minimax);
-    assert_eq!(selected.base_url, global_minimax_base_url);
-}
-
-#[test]
-fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Minimax;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert!(
-        selected == "MiniMax-M2.7",
-        "interactive onboarding should prefill the provider-recommended explicit model for MiniMax instead of leaving the operator on hidden runtime fallbacks: {selected:?}"
-    );
-}
-
-#[test]
-fn resolve_model_selection_applies_minimax_recommended_model_non_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Minimax;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: true,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert!(
-        selected == "MiniMax-M2.7",
-        "non-interactive onboarding should use the reviewed provider default for MiniMax instead of carrying auto into preflight: {selected:?}"
-    );
-}
-
-#[test]
-fn resolve_model_selection_prefills_deepseek_recommended_model_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Deepseek;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert!(
-        selected == "deepseek-chat",
-        "interactive onboarding should prefill the provider-recommended explicit model for DeepSeek instead of leaving the operator on auto: {selected:?}"
-    );
-}
-
-#[test]
-fn resolve_model_selection_applies_deepseek_recommended_model_non_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Deepseek;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: true,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert!(
-        selected == "deepseek-chat",
-        "non-interactive onboarding should use the reviewed provider default for DeepSeek instead of carrying auto into preflight: {selected:?}"
-    );
-}
-
-#[test]
-fn resolve_model_selection_prefills_reviewed_model_for_mixed_case_auto_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Deepseek;
-    config.provider.model = "  AUTO  ".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert_eq!(
-        selected, "deepseek-chat",
-        "interactive onboarding should treat mixed-case auto the same as auto when choosing a reviewed provider default"
-    );
-}
-
-#[test]
-fn resolve_model_selection_rejects_blank_explicit_model_non_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Deepseek;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let error = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: true,
-            accept_risk: true,
-            provider: None,
-            model: Some("   ".to_owned()),
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &[],
-        &mut ui,
-        &context,
-    )
-    .expect_err(
-        "blank explicit --model should fail instead of falling back to a recommended model",
-    );
-
-    assert_eq!(error, "model cannot be empty");
-}
-
-#[test]
-fn resolve_model_selection_uses_catalog_choices_when_available_interactively() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Deepseek;
-    config.provider.model = "auto".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(["2"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-    let available_models = vec!["deepseek-chat".to_owned(), "deepseek-reasoner".to_owned()];
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &available_models,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert_eq!(
-        selected, "deepseek-reasoner",
-        "interactive onboarding should use the probed model catalog instead of treating numeric selection input as a literal model id"
-    );
-}
-
-#[test]
-fn resolve_model_selection_allows_custom_override_when_catalog_is_available() {
-    let mut config = mvp::config::LoongClawConfig::default();
-    config.provider.kind = mvp::config::ProviderKind::Openai;
-    config.provider.model = "openai/gpt-5.1-codex".to_owned();
-    let mut ui = TestOnboardUi::with_inputs(["2", "openai/gpt-5.2"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-    let available_models = vec!["openai/gpt-5.1-codex".to_owned()];
-
-    let selected = resolve_model_selection(
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &config,
-        GuidedPromptPath::NativePromptPack,
-        &available_models,
-        &mut ui,
-        &context,
-    )
-    .expect("resolve model selection");
-
-    assert_eq!(
-        selected, "openai/gpt-5.2",
-        "interactive onboarding should keep a manual override path even when a searchable model catalog is available"
-    );
-}
-
-#[test]
-fn prompt_onboard_entry_choice_uses_select_widget() {
-    let options = vec![
-        OnboardEntryOption {
-            choice: OnboardEntryChoice::ContinueCurrentSetup,
-            label: "continue current setup",
-            detail: "reuse current draft".to_owned(),
-            recommended: true,
-        },
-        OnboardEntryOption {
-            choice: OnboardEntryChoice::StartFresh,
-            label: "start fresh",
-            detail: "ignore detected setup".to_owned(),
-            recommended: false,
-        },
-    ];
-    let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
-
-    let choice = prompt_onboard_entry_choice(&mut ui, &options)
-        .expect("entry choice should route through select_one");
-
-    assert_eq!(choice, OnboardEntryChoice::StartFresh);
-}
-
-#[test]
-fn prompt_import_candidate_choice_uses_select_widget() {
-    let mut ui = SelectOnlyTestUi::with_inputs(["3"]);
-    let candidates = vec![
-        ImportCandidate {
-            source_kind: crate::migration::ImportSourceKind::RecommendedPlan,
-            source: "recommended plan".to_owned(),
-            config: mvp::config::LoongClawConfig::default(),
-            surfaces: Vec::new(),
-            domains: Vec::new(),
-            channel_candidates: Vec::new(),
-            workspace_guidance: Vec::new(),
-        },
-        ImportCandidate {
-            source_kind: crate::migration::ImportSourceKind::CodexConfig,
-            source: "codex config".to_owned(),
-            config: mvp::config::LoongClawConfig::default(),
-            surfaces: Vec::new(),
-            domains: Vec::new(),
-            channel_candidates: Vec::new(),
-            workspace_guidance: Vec::new(),
-        },
-    ];
-
-    let choice = prompt_import_candidate_choice(&mut ui, &candidates, 80)
-        .expect("starting-point choice should route through select_one");
-
-    assert_eq!(choice, None);
-}
-
-#[test]
-fn prompt_onboard_shortcut_choice_uses_select_widget() {
-    let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
-
-    let choice = prompt_onboard_shortcut_choice(&mut ui, OnboardShortcutKind::CurrentSetup)
-        .expect("shortcut choice should route through select_one");
-
-    assert_eq!(choice, OnboardShortcutChoice::AdjustSettings);
-}
-
-#[test]
-fn resolve_write_plan_uses_select_widget_for_existing_config() {
-    let temp_dir = std::env::temp_dir().join(format!(
-        "loongclaw-onboard-write-plan-{}",
-        OffsetDateTime::now_utc().unix_timestamp_nanos()
-    ));
-    fs::create_dir_all(&temp_dir).expect("create temp dir");
-    let output_path = temp_dir.join("loongclaw.toml");
-    fs::write(&output_path, "provider = 'openai'\n").expect("seed existing config");
-    let mut ui = SelectOnlyTestUi::with_inputs(["2"]);
-    let context = OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>());
-
-    let plan = resolve_write_plan(
-        &output_path,
-        &OnboardCommandOptions {
-            output: None,
-            force: false,
-            non_interactive: false,
-            accept_risk: true,
-            provider: None,
-            model: None,
-            api_key_env: None,
-            web_search_provider: None,
-            web_search_api_key_env: None,
-            personality: None,
-            memory_profile: None,
-            system_prompt: None,
-            skip_model_probe: false,
-        },
-        &mut ui,
-        &context,
-    )
-    .expect("existing-config confirmation should route through select_one");
-
-    assert!(plan.force);
-    assert!(
-        plan.backup_path.is_some(),
-        "backup selection should preserve the safer write path"
-    );
-    fs::remove_dir_all(&temp_dir).expect("cleanup temp dir");
-}
-
-#[test]
-fn prompt_onboard_shortcut_choice_cancels_on_escape_input() {
-    let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
-
-    let error = prompt_onboard_shortcut_choice(&mut ui, OnboardShortcutKind::CurrentSetup)
-        .expect_err("escape input should cancel instead of silently falling through");
-
-    assert!(
-        error.contains("cancelled"),
-        "escape cancellation should produce a user-facing cancel error: {error}"
-    );
-}
-
-#[test]
-fn test_onboard_ui_prompt_with_default_only_checks_user_input_for_cancel() {
-    let mut ui = TestOnboardUi::with_inputs(std::iter::empty::<&str>());
-
-    let value = ui
-        .prompt_with_default("Provider", "\u{1b}")
-        .expect("missing input should keep the configured default");
-
-    assert_eq!(value, "\u{1b}");
-}
-
-#[test]
-fn explicit_onboard_cancel_input_requires_escape_byte() {
-    assert!(is_explicit_onboard_cancel_input("\u{1b}"));
-    assert!(
-        !is_explicit_onboard_cancel_input("esc"),
-        "literal text should remain valid operator input instead of being treated as an escape keystroke"
-    );
-    assert!(
-        !is_explicit_onboard_cancel_input("ESC"),
-        "case variants of plain text should not trigger onboarding cancellation"
-    );
-}
-
-#[test]
-fn literal_esc_text_is_not_treated_as_cancel_input() {
-    let value = ensure_onboard_input_not_cancelled("esc".to_owned())
-        .expect("literal esc text should remain valid input");
-
-    assert_eq!(value, "esc");
-}
-
-#[test]
-fn test_onboard_ui_prompt_required_trims_input_like_stdio() {
-    let mut ui = TestOnboardUi::with_inputs(["  minimax  "]);
-
-    let value = ui
-        .prompt_required("Provider")
-        .expect("required prompt should preserve stdio trimming semantics");
-
-    assert_eq!(value, "minimax");
-}
-
-#[test]
-fn single_line_prompt_capture_drains_follow_up_paste_before_next_prompt() {
-    let mut reader = TestPromptLineReader::new(
-        [
-            OnboardPromptRead::Line("You are helpful.\n".to_owned()),
-            OnboardPromptRead::Line("window-plus-summary\n".to_owned()),
-        ],
-        ["Always be concise.\n"],
-    );
-
-    let first =
-        read_single_line_prompt_capture(&mut reader).expect("first prompt capture should succeed");
-    let second = read_single_line_prompt_capture(&mut reader)
-        .expect("second prompt capture should consume the next real prompt line");
-
-    assert_eq!(first.raw, "You are helpful.\n");
-    assert_eq!(first.dropped_line_count, 1);
-    assert!(!first.reached_eof);
-    assert_eq!(second.raw, "window-plus-summary\n");
-    assert_eq!(second.dropped_line_count, 0);
-    assert!(!second.reached_eof);
-}
-
-#[test]
-fn onboard_paste_drain_window_prefers_valid_env_override() {
-    let _guard = PasteDrainWindowEnvGuard::set(Some("125"));
-
-    assert_eq!(onboard_paste_drain_window(), Duration::from_millis(125));
-}
-
-#[test]
-fn onboard_paste_drain_window_falls_back_for_invalid_env_values() {
-    let _guard = PasteDrainWindowEnvGuard::set(Some("not-a-number"));
-
-    assert_eq!(
-        onboard_paste_drain_window(),
-        DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW
-    );
-}
-
-#[test]
-fn onboard_paste_drain_window_rejects_zero_millisecond_override() {
-    let _guard = PasteDrainWindowEnvGuard::set(Some("0"));
-
-    assert_eq!(
-        onboard_paste_drain_window(),
-        DEFAULT_ONBOARD_PASTE_DRAIN_WINDOW
-    );
-}
-
-#[test]
-fn onboard_line_channel_applies_backpressure_after_buffer_limit() {
-    let (sender, receiver) = onboard_line_channel_with_capacity(1);
-    let second_send_completed = Arc::new(AtomicBool::new(false));
-    let completed_flag = Arc::clone(&second_send_completed);
-    let producer = thread::spawn(move || {
-        sender
-            .send(StdioOnboardLineMessage::Line("system prompt\n".to_owned()))
-            .expect("send first line");
-        sender
-            .send(StdioOnboardLineMessage::Line(
-                "follow-up paste\n".to_owned(),
-            ))
-            .expect("send second line after receiver drains");
-        completed_flag.store(true, Ordering::SeqCst);
-    });
-
-    for _ in 0..1_000 {
-        if second_send_completed.load(Ordering::SeqCst) {
-            break;
-        }
-        thread::yield_now();
-    }
-    assert!(
-        !second_send_completed.load(Ordering::SeqCst),
-        "bounded onboarding queue should apply backpressure once the first buffered line is occupied"
-    );
-
-    let mut reader = StdioOnboardLineReader::background_from_receiver(receiver);
-    let capture = read_single_line_prompt_capture(&mut reader)
-        .expect("capture should drain the queued follow-up line");
-    producer.join().expect("producer join");
-
-    assert_eq!(capture.raw, "system prompt\n");
-    assert_eq!(capture.dropped_line_count, 1);
-    assert!(!capture.reached_eof);
-    assert!(
-        second_send_completed.load(Ordering::SeqCst),
-        "receiver drain should unblock the producer once capacity is freed"
-    );
-}
-
-#[test]
-fn stdio_onboard_line_reader_warns_once_when_background_spawn_fails() {
-    let mut reader =
-        StdioOnboardLineReader::from_spawn_result(Err(io::Error::other("thread quota exhausted")));
-
-    assert!(
-        matches!(reader, StdioOnboardLineReader::Direct { .. }),
-        "spawn failure should fall back to direct reads instead of constructing a broken background reader"
-    );
-
-    let first_notice = reader
-        .take_degraded_notice()
-        .expect("spawn failure should surface a degraded-mode notice");
-    assert!(
-        first_notice.contains("single-line paste draining is disabled"),
-        "spawn failure notice should explain the lost hardening: {first_notice}"
-    );
-    assert_eq!(
-        reader.take_degraded_notice(),
-        None,
-        "degraded-mode notice should only be emitted once per session"
-    );
-}
-
-#[test]
-fn prompt_addendum_screen_mentions_single_line_terminal_input() {
-    let lines =
-        render_prompt_addendum_selection_screen_lines(&mvp::config::LoongClawConfig::default(), 80);
-
-    assert!(
-        lines.iter().any(|line| line == "- single-line input only"),
-        "prompt addendum screen should keep the terminal input note concise: {lines:#?}"
-    );
-}
-
-#[test]
-fn system_prompt_screen_mentions_single_line_terminal_input() {
-    let lines =
-        render_system_prompt_selection_screen_lines(&mvp::config::LoongClawConfig::default(), 80);
-
-    assert!(
-        lines.iter().any(|line| line == "- single-line input only"),
-        "system prompt screen should keep the terminal input note concise: {lines:#?}"
-    );
-}
-
-#[test]
-fn test_onboard_ui_select_one_cancels_on_escape_input() {
-    let mut ui = TestOnboardUi::with_inputs(["\u{1b}"]);
-    let options = vec![SelectOption {
-        label: "OpenAI".to_owned(),
-        slug: "openai".to_owned(),
-        description: String::new(),
-        recommended: true,
-    }];
-
-    let error = ui
-        .select_one("Provider", &options, Some(0), SelectInteractionMode::List)
-        .expect_err("escape input should cancel selection instead of surfacing a parse error");
-
-    assert!(
-        error.contains("cancelled"),
-        "escape cancellation should stay user-facing for selection prompts: {error}"
     );
 }
 
@@ -2862,16 +1225,6 @@ fn interactive_existing_config_write_screen_omits_static_options_when_selection_
 }
 
 #[test]
-fn plain_onboard_ui_starts_without_initializing_line_reader() {
-    let ui = PlainOnboardUi::default();
-
-    assert!(
-        ui.line_reader.is_none(),
-        "plain ui should not create a stdin reader until the stdio fallback path is actually used"
-    );
-}
-
-#[test]
 fn parse_select_one_input_accepts_custom_alias_for_custom_model_option() {
     let options = vec![
         SelectOption {
@@ -2922,38 +1275,6 @@ fn render_select_one_invalid_input_message_hides_internal_custom_model_slug() {
         !message.contains(ONBOARD_CUSTOM_MODEL_OPTION_SLUG),
         "invalid-input help must not leak the internal custom sentinel: {message}"
     );
-}
-
-#[test]
-fn test_onboard_ui_select_one_accepts_slug_input() {
-    let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
-    let options = vec![
-        SelectOption {
-            label: "calm engineering".to_owned(),
-            slug: "calm_engineering".to_owned(),
-            description: String::new(),
-            recommended: true,
-        },
-        SelectOption {
-            label: "friendly collab".to_owned(),
-            slug: "friendly_collab".to_owned(),
-            description: String::new(),
-            recommended: false,
-        },
-    ];
-
-    match ui
-        .select_one(
-            "Personality",
-            &options,
-            Some(0),
-            SelectInteractionMode::List,
-        )
-        .expect("test ui should stay aligned with shared slug-selection behavior")
-    {
-        SelectAction::Selected(index) => assert_eq!(index, 1),
-        SelectAction::Back => panic!("slug selection test should not return back"),
-    }
 }
 
 #[test]
@@ -3266,7 +1587,7 @@ fn rollback_removes_partial_first_write_config() {
         "loongclaw-first-write-rollback-{}.toml",
         std::process::id()
     ));
-    fs::write(&output_path, "partial = true\n").expect("write partial config");
+    std::fs::write(&output_path, "partial = true\n").expect("write partial config");
 
     let recovery = OnboardWriteRecovery {
         output_preexisted: false,
@@ -3290,7 +1611,7 @@ fn rollback_failure_produces_compound_error_message() {
         "loongclaw-compound-rollback-{}.toml",
         std::process::id()
     ));
-    fs::write(&output_path, "original = true\n").expect("write original config");
+    std::fs::write(&output_path, "original = true\n").expect("write original config");
 
     // Point backup to a non-existent directory so rollback copy fails.
     let recovery = OnboardWriteRecovery {
@@ -3316,19 +1637,19 @@ fn rollback_failure_produces_compound_error_message() {
     );
 
     // Cleanup
-    let _ = fs::remove_file(&output_path);
+    let _ = std::fs::remove_file(&output_path);
 }
 
 #[test]
 fn rollback_success_returns_original_failure_only() {
     let dir =
         std::env::temp_dir().join(format!("loongclaw-rollback-success-{}", std::process::id()));
-    fs::create_dir_all(&dir).expect("create temp dir");
+    std::fs::create_dir_all(&dir).expect("create temp dir");
 
     let output_path = dir.join("config.toml");
     let backup_path = dir.join("config.toml.bak");
-    fs::write(&output_path, "modified = true\n").expect("write modified config");
-    fs::write(&backup_path, "original = true\n").expect("write backup config");
+    std::fs::write(&output_path, "modified = true\n").expect("write modified config");
+    std::fs::write(&backup_path, "original = true\n").expect("write backup config");
 
     let recovery = OnboardWriteRecovery {
         output_preexisted: true,
@@ -3343,11 +1664,33 @@ fn rollback_success_returns_original_failure_only() {
         "when rollback succeeds, only the original failure should be returned"
     );
     assert_eq!(
-        fs::read_to_string(&output_path).unwrap(),
+        std::fs::read_to_string(&output_path).unwrap(),
         "original = true\n",
         "rollback should restore the original config"
     );
 
     // Cleanup
-    let _ = fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn prompt_addendum_screen_mentions_single_line_terminal_input() {
+    let lines =
+        render_prompt_addendum_selection_screen_lines(&mvp::config::LoongClawConfig::default(), 80);
+
+    assert!(
+        lines.iter().any(|line| line == "- single-line input only"),
+        "prompt addendum screen should keep the terminal input note concise: {lines:#?}"
+    );
+}
+
+#[test]
+fn system_prompt_screen_mentions_single_line_terminal_input() {
+    let lines =
+        render_system_prompt_selection_screen_lines(&mvp::config::LoongClawConfig::default(), 80);
+
+    assert!(
+        lines.iter().any(|line| line == "- single-line input only"),
+        "system prompt screen should keep the terminal input note concise: {lines:#?}"
+    );
 }
