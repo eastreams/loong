@@ -3975,8 +3975,8 @@ fn build_dingtalk_snapshots(
 fn build_whatsapp_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-whatsapp");
     let http_policy = super::http::outbound_http_policy_from_config(config);
@@ -4000,6 +4000,8 @@ fn build_whatsapp_snapshots(
                     is_default_account,
                     default_account_source,
                     http_policy,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_whatsapp_snapshot(
                     descriptor,
@@ -4766,6 +4768,8 @@ fn build_whatsapp_snapshot_for_account(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     http_policy: super::http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.access_token().is_none() {
@@ -4782,6 +4786,14 @@ fn build_whatsapp_snapshot_for_account(
         http_policy,
         &mut send_issues,
     );
+
+    let mut serve_issues = send_issues.clone();
+    if resolved.verify_token().is_none() {
+        serve_issues.push("verify_token is missing".to_owned());
+    }
+    if resolved.app_secret().is_none() {
+        serve_issues.push("app_secret is missing".to_owned());
+    }
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4804,12 +4816,34 @@ fn build_whatsapp_snapshot_for_account(
             WHATSAPP_SERVE_OPERATION,
             "binary built without feature `channel-whatsapp`".to_owned(),
         )
-    } else {
-        unsupported_operation(
+    } else if !resolved.enabled {
+        disabled_operation(
             WHATSAPP_SERVE_OPERATION,
-            "whatsapp serve runtime is not implemented yet".to_owned(),
+            "disabled by whatsapp account configuration".to_owned(),
         )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(WHATSAPP_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(WHATSAPP_SERVE_OPERATION)
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::WhatsApp,
+        WHATSAPP_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
+        ChannelPlatform::WhatsApp,
+        WHATSAPP_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={}", resolved.configured_account_id),
@@ -6687,10 +6721,7 @@ fn build_invalid_whatsapp_snapshot(
             "binary built without feature `channel-whatsapp`".to_owned(),
         )
     } else {
-        unsupported_operation(
-            WHATSAPP_SERVE_OPERATION,
-            "whatsapp serve runtime is not implemented yet".to_owned(),
-        )
+        misconfigured_operation(WHATSAPP_SERVE_OPERATION, vec![error.clone()])
     };
 
     let mut notes = vec![
