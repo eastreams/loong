@@ -732,10 +732,6 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 #[cfg(feature = "memory-sqlite")]
                 {
                     let is_preapproved = self.is_tool_call_preapproved(&approval_key);
-                    if is_preapproved {
-                        return Ok(ToolPreflightOutcome::Allow);
-                    }
-
                     let is_predenied = self.is_tool_call_predenied(&approval_key);
                     if is_predenied {
                         return Err(format!(
@@ -743,28 +739,29 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                         ));
                     }
 
-                    if self.has_approval_grant(session_context, approval_key.as_str())? {
-                        return Ok(ToolPreflightOutcome::Allow);
+                    let has_approval_grant =
+                        self.has_approval_grant(session_context, approval_key.as_str())?;
+                    let autonomy_approval_is_satisfied = is_preapproved || has_approval_grant;
+                    if !autonomy_approval_is_satisfied {
+                        let governance_snapshot_json = json!({
+                            "policy_source": AUTONOMY_POLICY_SOURCE,
+                            "autonomy_profile": policy_snapshot.profile.as_str(),
+                            "capability_action_class": action_class.as_str(),
+                            "rule_id": rule_id,
+                            "reason_code": reason_code,
+                            "reason": reason,
+                        });
+                        let requirement = self.persist_approval_request(
+                            session_context,
+                            intent,
+                            descriptor,
+                            approval_key.as_str(),
+                            reason.as_str(),
+                            rule_id,
+                            governance_snapshot_json,
+                        )?;
+                        return Ok(ToolPreflightOutcome::NeedsApproval(requirement));
                     }
-
-                    let governance_snapshot_json = json!({
-                        "policy_source": AUTONOMY_POLICY_SOURCE,
-                        "autonomy_profile": policy_snapshot.profile.as_str(),
-                        "capability_action_class": action_class.as_str(),
-                        "rule_id": rule_id,
-                        "reason_code": reason_code,
-                        "reason": reason,
-                    });
-                    let requirement = self.persist_approval_request(
-                        session_context,
-                        intent,
-                        descriptor,
-                        approval_key.as_str(),
-                        reason.as_str(),
-                        rule_id,
-                        governance_snapshot_json,
-                    )?;
-                    return Ok(ToolPreflightOutcome::NeedsApproval(requirement));
                 }
             }
             PolicyDecision::Deny {
@@ -3257,6 +3254,132 @@ mod tests {
             .list_approval_requests_for_session("root-session", None)
             .expect("list approval requests");
         assert!(requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("autonomy-allowlist-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+        let approved_calls = &mut tool_config.approval.approved_calls;
+        approved_calls.push("tool:external_skills.policy".to_owned());
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-allowlist-prompt");
+        let turn = external_skills_policy_get_turn(
+            "root-session",
+            "turn-autonomy-allowlist-prompt",
+            "call-autonomy-allowlist-prompt",
+        );
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("external_skills.policy")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tool_name, "external_skills.policy");
+        assert_eq!(requests[0].approval_key, "tool:external_skills.policy");
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("autonomy-grant-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.upsert_approval_grant(NewApprovalGrantRecord {
+            scope_session_id: "root-session".to_owned(),
+            approval_key: "tool:external_skills.policy".to_owned(),
+            created_by_session_id: Some("root-session".to_owned()),
+        })
+        .expect("persist approval grant");
+
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-grant-prompt");
+        let turn = external_skills_policy_get_turn(
+            "root-session",
+            "turn-autonomy-grant-prompt",
+            "call-autonomy-grant-prompt",
+        );
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("external_skills.policy")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tool_name, "external_skills.policy");
+        assert_eq!(requests[0].approval_key, "tool:external_skills.policy");
     }
 
     #[tokio::test]
