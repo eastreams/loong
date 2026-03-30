@@ -586,6 +586,24 @@ async fn main() {
             )
             .await
         }
+        Commands::WhatsappServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                WHATSAPP_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
+                },
+            )
+            .await
+        }
         Commands::DiscordSend {
             config,
             account,

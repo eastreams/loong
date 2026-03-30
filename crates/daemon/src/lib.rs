@@ -929,6 +929,17 @@ pub enum Commands {
         #[arg(long)]
         account: Option<String>,
     },
+    /// Run WhatsApp Cloud API webhook server and auto-reply via provider
+    WhatsappServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        account: Option<String>,
+        #[arg(long)]
+        bind: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+    },
     /// Send one Discord channel message
     DiscordSend {
         #[arg(long)]
@@ -4590,6 +4601,11 @@ pub const WECOM_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
     run: run_wecom_serve_cli_impl,
 };
 
+pub const WHATSAPP_SERVE_CLI_SPEC: ChannelServeCliSpec = ChannelServeCliSpec {
+    family: mvp::channel::WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+    run: run_whatsapp_serve_cli_impl,
+};
+
 pub async fn run_channel_send_cli(
     spec: ChannelSendCliSpec,
     args: ChannelSendCliArgs<'_>,
@@ -5212,6 +5228,19 @@ pub fn run_wecom_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliComm
         with_graceful_shutdown(mvp::channel::run_wecom_channel(
             args.config_path,
             args.account,
+        ))
+        .await
+    })
+}
+
+pub fn run_whatsapp_serve_cli_impl(args: ChannelServeCliArgs<'_>) -> ChannelCliCommandFuture<'_> {
+    Box::pin(async move {
+        let _ = args.once;
+        with_graceful_shutdown(mvp::channel::run_whatsapp_channel(
+            args.config_path,
+            args.account,
+            args.bind_override,
+            args.path_override,
         ))
         .await
     })
