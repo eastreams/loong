@@ -9,7 +9,7 @@ use loongclaw_app as mvp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -98,6 +98,23 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
             event_source,
             owns_tty: false,
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Terminal size guard
+    // -----------------------------------------------------------------------
+
+    /// Returns `true` when the terminal area is too small to render dialog
+    /// boxes without garbled output.
+    fn is_terminal_too_small(area: Rect) -> bool {
+        area.width < 30 || area.height < 8
+    }
+
+    /// Render a minimal "resize your terminal" fallback message.
+    fn render_too_small_fallback(frame: &mut ratatui::Frame<'_>) {
+        let msg = Paragraph::new("Terminal too small.\nResize to at least 30x8.")
+            .alignment(Alignment::Center);
+        frame.render_widget(msg, frame.area());
     }
 
     // -----------------------------------------------------------------------
@@ -191,6 +208,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
             let ver = version.clone();
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     let areas = layout::compute_layout(frame.area(), false);
 
                     // Header
@@ -293,6 +315,10 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
         default_index: usize,
         footer_hint: &str,
     ) -> CliResult<SelectionLoopResult> {
+        if items.is_empty() {
+            return Err("no items to select from".to_owned());
+        }
+
         let mut state = SelectionCardState::new(items.len());
         state.select(default_index);
 
@@ -303,6 +329,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     let areas = layout::compute_layout(frame.area(), false);
 
                     // Header
@@ -432,6 +463,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     let areas = layout::compute_layout(frame.area(), false);
 
                     // Header
@@ -753,6 +789,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     // No spine for pre/post screens — pass `false`.
                     let areas = layout::compute_layout(frame.area(), false);
 
@@ -825,6 +866,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     let areas = layout::compute_layout(frame.area(), false);
 
                     // Header
@@ -1219,6 +1265,10 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
         default_index: usize,
         footer_hint: &str,
     ) -> CliResult<StandaloneSelectionResult> {
+        if items.is_empty() {
+            return Err("no items to select from".to_owned());
+        }
+
         let mut state = SelectionCardState::new(items.len());
         state.select(default_index);
 
@@ -1228,6 +1278,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
             self.terminal
                 .draw(|frame| {
+                    if Self::is_terminal_too_small(frame.area()) {
+                        Self::render_too_small_fallback(frame);
+                        return;
+                    }
+
                     let areas = layout::compute_layout(frame.area(), false);
 
                     // Header
