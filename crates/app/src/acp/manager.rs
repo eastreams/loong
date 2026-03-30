@@ -117,11 +117,10 @@ impl AcpSessionManager {
         let selection = resolve_acp_backend_selection(config);
         tracing::debug!(
             target: "loongclaw.acp",
-            session_key = %bootstrap.session_key,
             backend_id = %selection.id,
-            conversation_id = ?bootstrap.conversation_id.as_deref(),
             mode = ?bootstrap.mode,
             binding = ?AcpSessionBindingScope::from_bootstrap(bootstrap),
+            has_conversation_id = bootstrap.conversation_id.is_some(),
             "ensuring ACP session"
         );
         if let Some(existing) =
@@ -129,7 +128,6 @@ impl AcpSessionManager {
         {
             tracing::debug!(
                 target: "loongclaw.acp",
-                session_key = %existing.session_key,
                 backend_id = %existing.backend_id,
                 state = ?existing.state,
                 "reused ACP session"
@@ -154,7 +152,6 @@ impl AcpSessionManager {
         self.store.upsert(metadata.clone())?;
         tracing::debug!(
             target: "loongclaw.acp",
-            session_key = %metadata.session_key,
             backend_id = %metadata.backend_id,
             activation_origin = ?metadata.activation_origin.map(AcpRoutingOrigin::as_str),
             "created ACP session"
@@ -191,11 +188,10 @@ impl AcpSessionManager {
             .map(String::as_str);
         tracing::debug!(
             target: "loongclaw.acp",
-            session_key = %bootstrap.session_key,
             backend_id = %metadata.backend_id,
-            trace_id = ?trace_id,
             input_len = request.input.chars().count(),
             sink_enabled = sink.is_some(),
+            has_trace_id = trace_id.is_some(),
             "starting ACP turn"
         );
         let backend = resolve_acp_backend(Some(metadata.backend_id.as_str()))?;
@@ -256,15 +252,14 @@ impl AcpSessionManager {
                 self.store.upsert(metadata)?;
                 tracing::debug!(
                     target: "loongclaw.acp",
-                    session_key = %bootstrap.session_key,
                     backend_id = %handle.backend_id,
-                    trace_id = ?trace_id,
                     state = ?result.state,
                     stop_reason = ?result.stop_reason,
                     reported_event_count,
                     streamed_event_count,
                     merged_event_count = result.events.len(),
                     duration_ms,
+                    has_trace_id = trace_id.is_some(),
                     "ACP turn completed"
                 );
                 Ok(result)
@@ -277,11 +272,10 @@ impl AcpSessionManager {
                 self.store.upsert(metadata)?;
                 tracing::warn!(
                     target: "loongclaw.acp",
-                    session_key = %bootstrap.session_key,
                     backend_id = %handle.backend_id,
-                    trace_id = ?trace_id,
                     duration_ms = started_at.elapsed().as_millis(),
                     error = %crate::observability::summarize_error(error.as_str()),
+                    has_trace_id = trace_id.is_some(),
                     "ACP turn failed"
                 );
                 Err(error)

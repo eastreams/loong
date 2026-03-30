@@ -1165,16 +1165,14 @@ fn build_tool_result_envelope(
 ) -> ToolResultEnvelope {
     let effective_tool_name = effective_result_tool_name(intent);
     let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
-    let effective_limit =
-        effective_payload_summary_limit(payload_semantics, payload_summary_limit_chars);
-    let normalized_limit = effective_limit.clamp(
+    let normalized_limit = payload_summary_limit_chars.clamp(
         MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
         MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
     );
     let payload_text = serde_json::to_string(&outcome.payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
-        truncate_by_chars(payload_text.as_str(), normalized_limit);
+        summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
 
     ToolResultEnvelope {
         status: outcome.status.clone(),
@@ -1187,14 +1185,18 @@ fn build_tool_result_envelope(
     }
 }
 
-fn effective_payload_summary_limit(
+fn summarize_tool_result_payload(
+    payload_text: &str,
     payload_semantics: Option<ToolResultPayloadSemantics>,
-    default_limit: usize,
-) -> usize {
+    payload_summary_limit_chars: usize,
+) -> (String, usize, bool) {
     if payload_semantics.is_some() {
-        return MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS;
+        let payload_chars = payload_text.chars().count();
+        let payload_summary = payload_text.to_owned();
+        return (payload_summary, payload_chars, false);
     }
-    default_limit
+
+    truncate_by_chars(payload_text, payload_summary_limit_chars)
 }
 
 fn detect_tool_result_payload_semantics(

@@ -120,9 +120,9 @@ pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
+pub use observability::{debug_variant_name, init_tracing, summarize_error};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
-pub use observability::init_tracing;
 
 #[allow(
     clippy::expect_used,

@@ -2520,14 +2520,14 @@ mod tests {
         );
 
         let prompt = build_tool_followup_user_prompt(
-            "查询 AI 新闻，聚合返回",
+            "find the latest ai news and summarize it",
             None,
             Some(tool_result.as_str()),
             None,
         );
 
         assert!(prompt.contains(DISCOVERY_RESULT_FOLLOWUP_PROMPT));
-        assert!(prompt.contains("Original request:\n查询 AI 新闻，聚合返回"));
+        assert!(prompt.contains("Original request:\nfind the latest ai news and summarize it"));
     }
 
     #[test]

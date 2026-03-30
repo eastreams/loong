@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 const MAX_LOGGED_JSON_KEYS: usize = 8;
+const MAX_LOGGED_JSON_KEY_CHARS: usize = 48;
 const MAX_ERROR_CHARS: usize = 240;
 
 pub(crate) fn json_value_kind(value: &Value) -> &'static str {
@@ -22,12 +23,23 @@ pub(crate) fn top_level_json_keys(value: &Value) -> Vec<String> {
     let mut keys = map
         .keys()
         .take(MAX_LOGGED_JSON_KEYS)
-        .cloned()
+        .map(|key| truncate_logged_json_key(key))
         .collect::<Vec<_>>();
     if map.len() > MAX_LOGGED_JSON_KEYS {
         keys.push(format!("+{}", map.len() - MAX_LOGGED_JSON_KEYS));
     }
     keys
+}
+
+fn truncate_logged_json_key(key: &str) -> String {
+    let key_chars = key.chars().count();
+    if key_chars <= MAX_LOGGED_JSON_KEY_CHARS {
+        return key.to_owned();
+    }
+
+    let visible_chars = MAX_LOGGED_JSON_KEY_CHARS.saturating_sub(3);
+    let truncated = key.chars().take(visible_chars).collect::<String>();
+    format!("{truncated}...")
 }
 
 pub(crate) fn summarize_error(error: &str) -> String {
@@ -45,7 +57,7 @@ pub(crate) fn summarize_error(error: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Map, Value, json};
 
     use super::{json_value_kind, summarize_error, top_level_json_keys};
 
@@ -87,6 +99,20 @@ mod tests {
                 "+1".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn top_level_json_keys_truncates_individual_key_length() {
+        let mut map = Map::new();
+        let long_key = "k".repeat(80);
+
+        map.insert(long_key, json!(1));
+
+        let value = Value::Object(map);
+        let keys = top_level_json_keys(&value);
+        let first_key = keys.first().expect("first key should exist");
+
+        assert!(first_key.chars().count() <= 48);
     }
 
     #[test]

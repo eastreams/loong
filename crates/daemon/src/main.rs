@@ -39,8 +39,14 @@ async fn main() {
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
     let cli = parse_cli();
-    tracing::debug!(target: "loongclaw.daemon", command = ?cli.command, "parsed CLI command");
-    let result = match cli.command.unwrap_or_else(resolve_default_entry_command) {
+    let command = cli.command.unwrap_or_else(resolve_default_entry_command);
+    let command_name = debug_variant_name(&command);
+    tracing::debug!(
+        target: "loongclaw.daemon",
+        command = %command_name,
+        "parsed CLI command"
+    );
+    let result = match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
