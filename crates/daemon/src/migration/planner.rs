@@ -269,10 +269,6 @@ fn supplement_provider_config(
     let mut source = source.clone();
     source.canonicalize_configured_auth_env_bindings();
     let default_provider = mvp::config::ProviderConfig::default();
-    let target_has_auth =
-        provider_credential_policy::provider_has_locally_available_credentials(target);
-    let source_has_auth =
-        provider_credential_policy::provider_has_locally_available_credentials(&source);
     let mut changed = false;
     if (target.model.trim().is_empty() || target.model.eq_ignore_ascii_case("auto"))
         && !source.model.trim().is_empty()
@@ -281,22 +277,31 @@ fn supplement_provider_config(
         changed = true;
     }
     changed |= provider_transport::supplement_provider_transport(target, &source);
-    if (target.api_key.is_none() || (!target_has_auth && source_has_auth))
+    let target_has_auth_header =
+        provider_credential_policy::provider_has_configured_auth_header(target);
+    let target_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(target);
+    let target_has_configured_auth =
+        target.api_key.is_some() || target.oauth_access_token.is_some() || target_has_auth_header;
+    let source_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(&source);
+    if !target_has_auth_header
+        && (target.api_key.is_none() || (!target_has_auth && source_has_auth))
         && source.api_key.is_some()
         && target.api_key != source.api_key
     {
         target.api_key = source.api_key.clone();
         changed = true;
     }
-    if (target.oauth_access_token.is_none() || (!target_has_auth && source_has_auth))
+    if !target_has_auth_header
+        && (target.oauth_access_token.is_none() || (!target_has_auth && source_has_auth))
         && source.oauth_access_token.is_some()
         && target.oauth_access_token != source.oauth_access_token
     {
         target.oauth_access_token = source.oauth_access_token.clone();
         changed = true;
     }
-    let target_missing_auth_config =
-        target.api_key.is_none() && target.oauth_access_token.is_none();
+    let target_missing_auth_config = !target_has_configured_auth;
     let should_materialize_source_env_binding = source_has_auth && target_missing_auth_config;
     if should_materialize_source_env_binding {
         let source_binding =
@@ -492,6 +497,30 @@ mod tests {
             })
         );
         assert_eq!(target.oauth_access_token, None);
+    }
+
+    #[test]
+    fn supplement_provider_config_preserves_target_auth_headers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "test-openai-key");
+
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        target.headers = std::collections::BTreeMap::from([(
+            "authorization".to_owned(),
+            "Bearer team-auth-header".to_owned(),
+        )]);
+
+        let source = mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+
+        let _changed = supplement_provider_config(&mut target, &source);
+
+        assert_eq!(target.api_key, None);
+        assert_eq!(target.oauth_access_token, None);
+        assert_eq!(
+            target.header_value("authorization"),
+            Some("Bearer team-auth-header")
+        );
     }
 }
 

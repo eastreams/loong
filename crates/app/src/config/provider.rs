@@ -35,7 +35,7 @@ impl ProviderProfile {
         let kind = self.kind;
         if kind == ProviderKind::Bedrock {
             return Some(
-                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with AWS_REGION or AWS_DEFAULT_REGION for SigV4",
+                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with BEDROCK_AWS_REGION, AWS_REGION, or AWS_DEFAULT_REGION for SigV4",
             );
         }
         if kind == ProviderKind::Custom {
@@ -159,7 +159,7 @@ impl ProviderFeatureFamily {
         match self {
             Self::Anthropic => "anthropic provider family",
             Self::Bedrock => "bedrock provider family",
-            Self::Volcengine => "volcengine provider",
+            Self::Volcengine => "volcengine provider family",
             Self::OpenAiCompatible => "openai-compatible provider family",
         }
     }
@@ -1403,7 +1403,9 @@ impl ProviderConfig {
         let protocol_family = self.kind.protocol_family().as_str().to_owned();
         let default_headers = provider_descriptor_headers(profile);
         let default_user_agent = self.kind.default_user_agent().map(str::to_owned);
-        let configuration_hint = self.kind.configuration_hint().map(str::to_owned);
+        let configuration_hint = self
+            .configuration_hint()
+            .or_else(|| self.kind.configuration_hint().map(str::to_owned));
         let default_model = self.kind.default_model().map(str::to_owned);
         let recommended_onboarding_model =
             self.kind.recommended_onboarding_model().map(str::to_owned);
@@ -2746,7 +2748,7 @@ impl ProviderKind {
     pub fn configuration_hint(self) -> Option<&'static str> {
         if self == ProviderKind::Bedrock {
             Some(
-                "set `AWS_REGION`/`AWS_DEFAULT_REGION` or replace `<region>` in `provider.base_url` with your Bedrock runtime region",
+                "set `BEDROCK_AWS_REGION`/`AWS_REGION`/`AWS_DEFAULT_REGION` or replace `<region>` in `provider.base_url` with your Bedrock runtime region",
             )
         } else if self == ProviderKind::CloudflareAiGateway {
             Some(
@@ -4225,7 +4227,7 @@ mod tests {
         );
         assert_eq!(
             volcengine_message,
-            "volcengine provider is disabled (enable feature `provider-volcengine`)"
+            "volcengine provider family is disabled (enable feature `provider-volcengine`)"
         );
         assert_eq!(
             openai_message,
@@ -4262,6 +4264,7 @@ mod tests {
 
         assert!(bedrock_hint.contains("AWS_ACCESS_KEY_ID"));
         assert!(bedrock_hint.contains("AWS_SECRET_ACCESS_KEY"));
+        assert!(bedrock_hint.contains("BEDROCK_AWS_REGION"));
         assert!(bedrock_hint.contains("AWS_REGION"));
 
         assert!(custom_hint.contains("Authorization"));
@@ -4281,7 +4284,7 @@ mod tests {
         );
         assert_eq!(
             facts.disabled_message,
-            "volcengine provider is disabled (enable feature `provider-volcengine`)"
+            "volcengine provider family is disabled (enable feature `provider-volcengine`)"
         );
     }
 
@@ -4442,6 +4445,24 @@ mod tests {
         );
         assert_eq!(encoded["auth"]["hint_env_names"], json!([]));
         assert_eq!(encoded["region_endpoint"]["variants"], json!([]));
+    }
+
+    #[test]
+    fn provider_descriptor_document_prefers_dynamic_configuration_hint() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Custom,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let configuration_hint = encoded["configuration_hint"]
+            .as_str()
+            .expect("custom descriptor should expose a configuration hint");
+
+        assert!(configuration_hint.contains("tenant-scoped base_url configuration"));
+        assert!(configuration_hint.contains("current template"));
+        assert!(configuration_hint.contains("https://<openai-compatible-host>/v1"));
     }
 
     #[test]

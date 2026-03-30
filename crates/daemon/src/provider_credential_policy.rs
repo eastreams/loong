@@ -122,15 +122,7 @@ pub(crate) fn provider_has_locally_available_credentials(
         return true;
     }
 
-    for header_name in ["authorization", "x-api-key"] {
-        let header_value = provider.header_value(header_name);
-        let has_value = header_value.is_some_and(|value| !value.trim().is_empty());
-        if has_value {
-            return true;
-        }
-    }
-
-    false
+    provider_has_configured_auth_header(provider)
 }
 
 pub(crate) fn provider_is_credential_ready(provider: &mvp::config::ProviderConfig) -> bool {
@@ -196,6 +188,18 @@ fn binding_for_env_name(
 ) -> Option<ProviderCredentialEnvBinding> {
     let env_name = raw_env_name.and_then(normalize_provider_credential_env_name)?;
     Some(ProviderCredentialEnvBinding { field, env_name })
+}
+
+pub(crate) fn provider_has_configured_auth_header(provider: &mvp::config::ProviderConfig) -> bool {
+    for header_name in ["authorization", "x-api-key"] {
+        let header_value = provider.header_value(header_name);
+        let has_value = header_value.is_some_and(|value| !value.trim().is_empty());
+        if has_value {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn env_name_matches_oauth_binding(provider: &mvp::config::ProviderConfig, env_name: &str) -> bool {
@@ -341,6 +345,20 @@ mod tests {
         let has_credentials = provider_has_locally_available_credentials(&provider);
 
         assert!(has_credentials);
+    }
+
+    #[test]
+    fn provider_has_configured_auth_header_accepts_header_only_auth() {
+        let mut provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Custom);
+        provider.headers.insert(
+            "authorization".to_owned(),
+            "Bearer test-custom-token".to_owned(),
+        );
+
+        let has_configured_auth = provider_has_configured_auth_header(&provider);
+
+        assert!(has_configured_auth);
     }
 
     #[test]
