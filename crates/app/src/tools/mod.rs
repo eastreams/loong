@@ -4894,6 +4894,40 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn provider_tool_definitions_with_config_exposes_bitable_search_sort_as_array() {
+        let defs = feishu::feishu_provider_tool_definitions();
+        let search = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "feishu_bitable_record_search")
+            .expect("bitable search definition should exist");
+
+        assert_eq!(
+            search["function"]["parameters"]["properties"]["sort"]["type"],
+            "array"
+        );
+        assert_eq!(
+            search["function"]["parameters"]["properties"]["sort"]["items"]["type"],
+            "object"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn provider_tool_definitions_with_config_caps_bitable_list_page_size_at_100() {
+        let defs = feishu::feishu_provider_tool_definitions();
+        let list = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "feishu_bitable_list")
+            .expect("bitable list definition should exist");
+
+        assert_eq!(
+            list["function"]["parameters"]["properties"]["page_size"]["maximum"],
+            100
+        );
+    }
+
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct FeishuToolMockRequest {

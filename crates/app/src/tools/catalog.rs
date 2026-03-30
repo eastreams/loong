@@ -793,6 +793,27 @@ fn build_tool_catalog() -> ToolCatalog {
     {
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.bitable.list",
+            "feishu_bitable_list",
+            "List data tables in a Feishu Bitable app with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.create",
+            "feishu_bitable_record_create",
+            "Create a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.search",
+            "feishu_bitable_record_search",
+            "Search or list records in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.calendar.freebusy",
             "feishu_calendar_freebusy",
             "Query Feishu calendar free/busy for the selected account grant",
@@ -2911,6 +2932,15 @@ fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
 
 fn tool_argument_hint(name: &str) -> &'static str {
     match name {
+        "feishu.bitable.list" => {
+            "account_id?:string,open_id?:string,app_token:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.record.create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,fields:object"
+        }
+        "feishu.bitable.record.search" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],page_size?:integer,page_token?:string"
+        }
         "feishu.calendar.freebusy" => {
             "account_id?:string,open_id?:string,time_min:string,time_max:string,user_id?:string,room_id?:string"
         }
@@ -2991,6 +3021,32 @@ fn tool_argument_hint(name: &str) -> &'static str {
 
 fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
     match name {
+        "feishu.bitable.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.record.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("fields", "object"),
+        ],
+        "feishu.bitable.record.search" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+            ("filter", "object"),
+            ("sort", "array"),
+            ("field_names", "array"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
         "feishu.calendar.freebusy" => &[
             ("account_id", "string"),
             ("open_id", "string"),
@@ -3190,6 +3246,9 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.list" => &["app_token"],
+        "feishu.bitable.record.create" => &["app_token", "table_id", "fields"],
+        "feishu.bitable.record.search" => &["app_token", "table_id"],
         "feishu.calendar.freebusy" => &["time_min", "time_max"],
         "feishu.doc.append" | "feishu.doc.read" => &["url"],
         "feishu.messages.get" => &["message_id"],
@@ -3230,6 +3289,8 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
 
 fn tool_tags(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.list" | "feishu.bitable.record.search" => &["feishu", "bitable", "read"],
+        "feishu.bitable.record.create" => &["feishu", "bitable", "write"],
         "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
         "feishu.card.update" => &["feishu", "card", "update", "callback"],
         "feishu.doc.read" => &["feishu", "docs", "read"],

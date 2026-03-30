@@ -53,6 +53,11 @@ pub enum FeishuCommand {
         #[command(subcommand)]
         command: FeishuCalendarCommand,
     },
+    /// Inspect and write Feishu Bitable resources
+    Bitable {
+        #[command(subcommand)]
+        command: FeishuBitableCommand,
+    },
     /// Send one Feishu text, post, image, file, or card message
     Send(FeishuSendArgs),
     /// Reply to one Feishu message or thread with text, post, image, file, or card content
@@ -113,6 +118,16 @@ pub enum FeishuCalendarCommand {
     List(FeishuCalendarListArgs),
     /// Fetch free/busy data for a user or room
     Freebusy(FeishuCalendarFreebusyArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum FeishuBitableCommand {
+    /// List data tables in a Bitable app
+    ListTables(FeishuBitableListTablesArgs),
+    /// Create a record in a Bitable table
+    CreateRecord(FeishuBitableCreateRecordArgs),
+    /// Search records in a Bitable table
+    SearchRecords(FeishuBitableSearchRecordsArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -344,6 +359,52 @@ pub struct FeishuCalendarFreebusyArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct FeishuBitableListTablesArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub page_size: Option<usize>,
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableCreateRecordArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub fields: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableSearchRecordsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub view_id: Option<String>,
+    #[arg(long = "field-name")]
+    pub field_names: Vec<String>,
+    #[arg(long)]
+    pub filter: Option<String>,
+    #[arg(long)]
+    pub sort: Option<String>,
+    #[arg(long)]
+    pub page_size: Option<usize>,
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct FeishuSendArgs {
     #[command(flatten)]
     pub grant: FeishuGrantArgs,
@@ -500,6 +561,32 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
                     &payload,
                     args.grant.common.json,
                     render_calendar_freebusy_text,
+                )?;
+            }
+        },
+        FeishuCommand::Bitable { command } => match command {
+            FeishuBitableCommand::ListTables(args) => {
+                let payload = execute_feishu_bitable_list_tables(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_list_tables_text,
+                )?;
+            }
+            FeishuBitableCommand::CreateRecord(args) => {
+                let payload = execute_feishu_bitable_create_record(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_create_record_text,
+                )?;
+            }
+            FeishuBitableCommand::SearchRecords(args) => {
+                let payload = execute_feishu_bitable_search_records(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_search_records_text,
                 )?;
             }
         },
@@ -1255,6 +1342,102 @@ pub async fn execute_feishu_calendar_freebusy(
         "configured_account": context.resolved.configured_account_label,
         "principal": grant.principal,
         "result": page,
+    }))
+}
+
+pub async fn execute_feishu_bitable_list_tables(
+    args: &FeishuBitableListTablesArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::list_bitable_tables(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        args.page_token.as_deref(),
+        args.page_size,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_create_record(
+    args: &FeishuBitableCreateRecordArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:create"],
+        "loongclaw feishu bitable create-record",
+    )?;
+    let client = context.build_client()?;
+    let fields = serde_json::from_str::<Value>(&args.fields)
+        .map_err(|error| format!("invalid --fields JSON: {error}"))?;
+    if !fields.is_object() {
+        return Err("--fields must be a JSON object (e.g. '{\"Name\": \"value\"}')".to_owned());
+    }
+    let record = mvp::channel::feishu::api::resources::bitable::create_bitable_record(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        fields,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "record": record,
+    }))
+}
+
+pub async fn execute_feishu_bitable_search_records(
+    args: &FeishuBitableSearchRecordsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    let client = context.build_client()?;
+    let filter = args
+        .filter
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(|error| format!("invalid --filter JSON: {error}"))?;
+    let sort = args
+        .sort
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(|error| format!("invalid --sort JSON: {error}"))?;
+    let result = mvp::channel::feishu::api::resources::bitable::search_bitable_records(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &mvp::channel::feishu::api::resources::bitable::BitableRecordSearchQuery {
+            page_token: args.page_token.clone(),
+            page_size: args.page_size,
+            view_id: args.view_id.clone(),
+            filter,
+            sort,
+            field_names: (!args.field_names.is_empty()).then(|| args.field_names.clone()),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
     }))
 }
 
@@ -2656,6 +2839,110 @@ fn render_calendar_freebusy_text(payload: &Value) -> CliResult<String> {
             .and_then(Value::as_array)
             .map_or(0, std::vec::Vec::len)
     ));
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_list_tables_text(payload: &Value) -> CliResult<String> {
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "feishu bitable list payload missing result".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable list-tables".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "tables: {}",
+            result
+                .get("items")
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len)
+        ),
+        format!(
+            "has_more: {}",
+            result
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+        format!(
+            "page_token: {}",
+            result
+                .get("page_token")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_create_record_text(payload: &Value) -> CliResult<String> {
+    let record = payload
+        .get("record")
+        .ok_or_else(|| "feishu bitable create payload missing record".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable create-record".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "record_id: {}",
+            record
+                .get("record_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+        format!(
+            "fields: {}",
+            record
+                .get("fields")
+                .and_then(Value::as_object)
+                .map_or(0, serde_json::Map::len)
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_search_records_text(payload: &Value) -> CliResult<String> {
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "feishu bitable search payload missing result".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable search-records".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "records: {}",
+            result
+                .get("items")
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len)
+        ),
+        format!(
+            "has_more: {}",
+            result
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+        format!(
+            "page_token: {}",
+            result
+                .get("page_token")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+    ]);
     Ok(lines.join("\n"))
 }
 

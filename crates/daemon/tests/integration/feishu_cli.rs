@@ -297,6 +297,26 @@ fn feishu_resource_subcommands_parse() {
     try_parse_cli([
         "loongclaw",
         "feishu",
+        "bitable",
+        "search-records",
+        "--app-token",
+        "bascnDemoAppToken",
+        "--table-id",
+        "tblDemo",
+        "--view-id",
+        "vewDemo",
+        "--field-name",
+        "Name",
+        "--sort",
+        r#"[{"field_name":"Name","desc":true}]"#,
+        "--filter",
+        r#"{"conjunction":"and","conditions":[{"field_name":"Name","operator":"is","value":["demo"]}]}"#,
+    ])
+    .expect("bitable search records command should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
         "messages",
         "resource",
         "--message-id",
@@ -557,6 +577,76 @@ async fn feishu_send_command_requires_confirmed_write_scope() {
     );
     assert!(
         error.contains("loong feishu auth start --account feishu_main --capability message-write"),
+        "error={error}"
+    );
+    assert!(requests.lock().await.is_empty());
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn feishu_bitable_create_record_requires_confirmed_write_scope() {
+    let temp_dir = temp_feishu_cli_dir("bitable-create-scope");
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new().route(
+        "/open-apis/bitable/v1/apps/bascn_demo/tables/tbl_demo/records",
+        post({
+            let state = state.clone();
+            move |request| {
+                let state = state.clone();
+                async move {
+                    record_request(State(state), request).await;
+                    Json(json!({
+                        "code": 0,
+                        "data": {
+                            "record": {
+                                "record_id": "rec_should_not_happen",
+                                "fields": {}
+                            }
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let mut grant = sample_grant("feishu_main", "ou_123", "u-token-1", "r-token-1", now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(["offline_access"]);
+    store.save_grant(&grant).expect("seed bitable create grant");
+    store
+        .set_selected_grant("feishu_main", "ou_123", now_s + 1)
+        .expect("select bitable create grant");
+
+    let error = loongclaw_daemon::feishu_cli::execute_feishu_bitable_create_record(
+        &loongclaw_daemon::feishu_cli::FeishuBitableCreateRecordArgs {
+            grant: loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: true,
+                },
+                open_id: None,
+            },
+            app_token: "bascn_demo".to_owned(),
+            table_id: "tbl_demo".to_owned(),
+            fields: r#"{"Name":"demo"}"#.to_owned(),
+        },
+    )
+    .await
+    .expect_err("bitable create should reject grants without create scope");
+
+    assert!(
+        error.contains("loongclaw feishu bitable create-record requires at least one Feishu scope [base:record:create]"),
+        "error={error}"
+    );
+    assert!(
+        error.contains("loong feishu auth start --account feishu_main"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());
