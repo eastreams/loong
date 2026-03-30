@@ -19,6 +19,7 @@ use crate::KernelContext;
 use crate::channel::{
     ChannelDelivery, ChannelInboundMessage, ChannelOutboundTarget, ChannelOutboundTargetKind,
     ChannelPlatform, ChannelSession, ChannelTurnFeedbackPolicy, process_inbound_with_provider,
+    http::{build_outbound_http_client, validate_outbound_http_target, outbound_http_policy_from_config},
     runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedWhatsappChannelConfig};
@@ -141,7 +142,7 @@ impl WhatsappWebhookState {
             phone_number_id,
             api_base_url: resolved.resolved_api_base_url(),
             allowed_phone_numbers: BTreeSet::new(),
-            seen_messages: Arc::new(Mutex::new(RecentIdCache::new(512))),
+            seen_messages: Arc::new(Mutex::new(RecentIdCache::new(2_048))),
             config,
             resolved_path: Some(resolved_path),
             kernel_ctx: Arc::new(kernel_ctx),
@@ -154,11 +155,51 @@ impl WhatsappWebhookState {
 // GET handler — Meta webhook verification challenge
 // ---------------------------------------------------------------------------
 
-fn extract_query_param<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+fn extract_query_param(query: &str, key: &str) -> Option<String> {
     query.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
-        if k == key { Some(v) } else { None }
+        if k == key {
+            Some(percent_decode(v))
+        } else {
+            None
+        }
     })
+}
+
+fn percent_decode(input: &str) -> String {
+    let mut output = Vec::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let current = match bytes.get(i) {
+            Some(&b) => b,
+            None => break,
+        };
+        if current == b'%'
+            && let (Some(&hi_byte), Some(&lo_byte)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(hi), Some(lo)) = (hex_digit(hi_byte), hex_digit(lo_byte))
+        {
+            output.push(hi << 4 | lo);
+            i += 3;
+            continue;
+        }
+        if current == b'+' {
+            output.push(b' ');
+        } else {
+            output.push(current);
+        }
+        i += 1;
+    }
+    String::from_utf8(output).unwrap_or_else(|_| input.to_owned())
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub(super) async fn whatsapp_verify_handler(
@@ -177,12 +218,14 @@ pub(super) async fn whatsapp_verify_handler(
 
     let expected = state.verify_token.as_deref().unwrap_or_default();
     let provided = extract_query_param(raw_query, "hub.verify_token").unwrap_or_default();
-    if expected.is_empty() || provided != expected {
+    if expected.is_empty()
+        || !crate::crypto::timing_safe_eq(expected.as_bytes(), provided.as_bytes())
+    {
         return (StatusCode::FORBIDDEN, "verify token mismatch".to_owned()).into_response();
     }
 
     let challenge = extract_query_param(raw_query, "hub.challenge").unwrap_or_default();
-    (StatusCode::OK, challenge.to_owned()).into_response()
+    (StatusCode::OK, challenge).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +252,11 @@ pub(super) async fn whatsapp_webhook_handler(
             )
                 .into_response();
         }
+    } else {
+        log_whatsapp_warning(
+            "signature verification skipped",
+            "app_secret is not configured; set whatsapp.app_secret for production use",
+        );
     }
 
     let payload: Value = match serde_json::from_slice(&body) {
@@ -222,14 +270,11 @@ pub(super) async fn whatsapp_webhook_handler(
         }
     };
 
-    // Process webhook entries
-    tokio::spawn(async move {
-        if let Err(error) = process_whatsapp_webhook(&state, &payload).await {
-            log_whatsapp_warning("webhook processing error", &error);
-        }
-    });
+    // Process webhook entries synchronously (integrates with graceful shutdown)
+    if let Err(error) = process_whatsapp_webhook(&state, &payload).await {
+        log_whatsapp_warning("webhook processing error", &error);
+    }
 
-    // Always return 200 quickly to Meta
     (StatusCode::OK, Json(json!({"status": "ok"}))).into_response()
 }
 
@@ -238,6 +283,14 @@ pub(super) async fn whatsapp_webhook_handler(
 // ---------------------------------------------------------------------------
 
 async fn process_whatsapp_webhook(state: &WhatsappWebhookState, payload: &Value) -> CliResult<()> {
+    let object = payload
+        .get("object")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if object != "whatsapp_business_account" {
+        return Ok(());
+    }
+
     let entries = payload
         .get("entry")
         .and_then(Value::as_array)
@@ -273,9 +326,19 @@ async fn process_whatsapp_webhook(state: &WhatsappWebhookState, payload: &Value)
 
 async fn handle_whatsapp_inbound_message(
     state: &WhatsappWebhookState,
-    _value: &Value,
+    value: &Value,
     message: &Value,
 ) -> CliResult<()> {
+    // Validate that this message is for our phone number
+    let metadata_phone_number_id = value
+        .get("metadata")
+        .and_then(|m| m.get("phone_number_id"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if metadata_phone_number_id != state.phone_number_id {
+        return Ok(());
+    }
+
     let message_id = message
         .get("id")
         .and_then(Value::as_str)
@@ -412,11 +475,13 @@ async fn send_whatsapp_text_reply(
     recipient: &str,
     text: &str,
 ) -> CliResult<()> {
-    let url = format!(
+    let policy = outbound_http_policy_from_config(&state.config);
+    let raw_url = format!(
         "{}/{}/messages",
         state.api_base_url.trim_end_matches('/'),
         state.phone_number_id.trim()
     );
+    let url = validate_outbound_http_target("whatsapp api_base_url", &raw_url, policy)?;
     let body = json!({
         "messaging_product": "whatsapp",
         "recipient_type": "individual",
@@ -427,9 +492,9 @@ async fn send_whatsapp_text_reply(
             "body": text,
         },
     });
-    let client = reqwest::Client::new();
+    let client = build_outbound_http_client("whatsapp reply", policy)?;
     let response = client
-        .post(&url)
+        .post(url)
         .bearer_auth(&state.access_token)
         .json(&body)
         .send()
