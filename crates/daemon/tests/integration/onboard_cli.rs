@@ -1898,7 +1898,7 @@ fn provider_credential_check_mentions_active_profile_id_when_saved_profiles_exis
             default_for_kind: true,
             provider: mvp::config::ProviderConfig {
                 kind: mvp::config::ProviderKind::VolcengineCoding,
-                model: "ark-code-latest".to_owned(),
+                model: "volcengine-coding-plan/doubao-seed-2.0-code".to_owned(),
                 api_key: Some(loongclaw_contracts::SecretRef::Inline(
                     "inline-secret".to_owned(),
                 )),

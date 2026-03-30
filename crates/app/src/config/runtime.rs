@@ -2585,7 +2585,7 @@ api_key = "${DEEPSEEK_API_KEY}"
         let raw = r#"
 [provider]
 kind = "volcengine_coding"
-model = "ark-code-latest"
+model = "volcengine-coding-plan/doubao-seed-2.0-code"
 base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
 wire_api = "chat_completions"
 chat_completions_path = "/chat/completions"
@@ -2603,7 +2603,10 @@ chat_completions_path = "/api/v1/chat/completions"
 
         assert_eq!(config.active_provider_id(), Some("volcengine_coding"));
         assert_eq!(config.provider.kind, ProviderKind::VolcengineCoding);
-        assert_eq!(config.provider.model, "ark-code-latest");
+        assert_eq!(
+            config.provider.model,
+            "volcengine-coding-plan/doubao-seed-2.0-code"
+        );
         assert!(
             config.providers.contains_key("volcengine_coding"),
             "legacy provider intent should be preserved as a normalized saved profile: {config:#?}"
@@ -2621,7 +2624,7 @@ chat_completions_path = "/api/v1/chat/completions"
         let raw = r#"
 [provider]
 kind = "volcengine_coding"
-model = "ark-code-latest"
+model = "volcengine-coding-plan/doubao-seed-2.0-code"
 base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
 wire_api = "chat_completions"
 chat_completions_path = "/chat/completions"
@@ -2658,7 +2661,7 @@ active_provider = "missing-profile"
 
 [provider]
 kind = "volcengine_coding"
-model = "ark-code-latest"
+model = "volcengine-coding-plan/doubao-seed-2.0-code"
 base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
 wire_api = "chat_completions"
 chat_completions_path = "/chat/completions"
@@ -2676,7 +2679,10 @@ chat_completions_path = "/api/v1/chat/completions"
 
         assert_eq!(config.active_provider_id(), Some("volcengine_coding"));
         assert_eq!(config.provider.kind, ProviderKind::VolcengineCoding);
-        assert_eq!(config.provider.model, "ark-code-latest");
+        assert_eq!(
+            config.provider.model,
+            "volcengine-coding-plan/doubao-seed-2.0-code"
+        );
     }
 
     #[test]
@@ -2688,7 +2694,7 @@ active_provider = "missing-profile"
 
 [provider]
 kind = "volcengine_coding"
-model = "ark-code-latest"
+model = "volcengine-coding-plan/doubao-seed-2.0-code"
 base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
 wire_api = "chat_completions"
 chat_completions_path = "/chat/completions"
@@ -2726,7 +2732,7 @@ active_provider = "openrouter"
 
 [provider]
 kind = "volcengine_coding"
-model = "ark-code-latest"
+model = "volcengine-coding-plan/doubao-seed-2.0-code"
 api_key_env = "$VOLCENGINE_CODING_API_KEY"
 base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
 wire_api = "chat_completions"
