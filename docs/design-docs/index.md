@@ -100,5 +100,5 @@ All decisions from the research repository. Status reflects implementation reali
 | D-026 | OCI artifact distribution | Research |
 | D-027 | WIT plugin contracts | Research |
 | D-028 | WASI 0.3 async target | Research |
-| D-029 | Epoch interruption for production, fuel metering for testing | Not started (TD-013) |
+| D-029 | Epoch interruption for production, fuel metering for testing | Partial — runtime timeout lane uses epoch interruption; broader policy rollout remains |
 | D-030 | Zero-capability-default WASI injection | Research |
