@@ -21,8 +21,7 @@ pub(super) struct Pane {
     pub(super) agent_running: bool,
     pub(super) loop_state: String,
     pub(super) loop_iteration: u32,
-    pub(super) streaming_text: String,
-    pub(super) is_thinking: bool,
+    pub(super) streaming_active: bool,
     pub(super) spinner_frame: usize,
     pub(super) dots_frame: usize,
     pub(super) last_spinner_tick: Instant,
@@ -43,8 +42,7 @@ impl Pane {
             agent_running: false,
             loop_state: String::new(),
             loop_iteration: 0,
-            streaming_text: String::new(),
-            is_thinking: false,
+            streaming_active: false,
             spinner_frame: 0,
             dots_frame: 0,
             last_spinner_tick: Instant::now(),
@@ -53,31 +51,31 @@ impl Pane {
         }
     }
 
-    /// Accumulates streaming text. When `is_thinking` changes, flushes the
-    /// previous chunk first so think-blocks and text are kept separate.
     pub(super) fn append_token(&mut self, content: &str, is_thinking: bool) {
-        if is_thinking != self.is_thinking && !self.streaming_text.is_empty() {
-            self.flush_streaming();
-        }
-        self.is_thinking = is_thinking;
-        self.streaming_text.push_str(content);
-    }
-
-    /// Converts the accumulated `streaming_text` into a [`MessagePart`] and
-    /// appends it to the last assistant message. Creates an assistant message
-    /// if none exists yet.
-    pub(super) fn flush_streaming(&mut self) {
-        if self.streaming_text.is_empty() {
-            return;
-        }
-        let text = std::mem::take(&mut self.streaming_text);
-        let part = if self.is_thinking {
-            MessagePart::ThinkBlock(text)
-        } else {
-            MessagePart::Text(text)
-        };
+        self.streaming_active = true;
         self.ensure_assistant_message();
-        if let Some(msg) = self.messages.last_mut() {
+        let msg = match self.messages.last_mut() {
+            Some(m) => m,
+            None => return,
+        };
+        let extend_existing = match msg.parts.last() {
+            Some(MessagePart::ThinkBlock(_)) if is_thinking => true,
+            Some(MessagePart::Text(_)) if !is_thinking => true,
+            _ => false,
+        };
+        if extend_existing {
+            match msg.parts.last_mut() {
+                Some(MessagePart::ThinkBlock(text)) | Some(MessagePart::Text(text)) => {
+                    text.push_str(content);
+                }
+                _ => {}
+            }
+        } else {
+            let part = if is_thinking {
+                MessagePart::ThinkBlock(content.to_string())
+            } else {
+                MessagePart::Text(content.to_string())
+            };
             msg.parts.push(part);
         }
     }
@@ -85,7 +83,6 @@ impl Pane {
     /// Adds a `ToolCall` part with `ToolStatus::Running` to the last assistant
     /// message.
     pub(super) fn start_tool_call(&mut self, tool_id: &str, tool_name: &str, args_preview: &str) {
-        self.flush_streaming();
         self.ensure_assistant_message();
         if let Some(msg) = self.messages.last_mut() {
             msg.parts.push(MessagePart::ToolCall {
@@ -129,9 +126,8 @@ impl Pane {
         }
     }
 
-    /// Flushes any remaining streaming text and updates token counters.
     pub(super) fn finalize_response(&mut self, input_tokens: u32, output_tokens: u32) {
-        self.flush_streaming();
+        self.streaming_active = false;
         self.input_tokens = self.input_tokens.saturating_add(input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(output_tokens);
         self.agent_running = false;
@@ -300,23 +296,27 @@ mod tests {
         let mut pane = Pane::new("sess-1");
         pane.append_token("hello ", false);
         pane.append_token("world", false);
-        assert_eq!(pane.streaming_text, "hello world");
-
-        pane.flush_streaming();
-        assert!(pane.streaming_text.is_empty());
+        assert!(pane.streaming_active);
         assert_eq!(pane.messages.len(), 1);
         assert_eq!(pane.messages[0].parts.len(), 1);
+        match &pane.messages[0].parts[0] {
+            MessagePart::Text(text) => assert_eq!(text, "hello world"),
+            other @ MessagePart::ThinkBlock(_) | other @ MessagePart::ToolCall { .. } => {
+                panic!("expected Text, got {:?}", other)
+            }
+        }
     }
 
     #[test]
-    fn thinking_toggle_flushes() {
+    fn thinking_toggle_creates_separate_parts() {
         let mut pane = Pane::new("sess-1");
         pane.append_token("thought", true);
         pane.append_token("visible", false);
-        // Switching from thinking to non-thinking should have auto-flushed
-        assert_eq!(pane.streaming_text, "visible");
         assert_eq!(pane.messages.len(), 1);
-        assert_eq!(pane.messages[0].parts.len(), 1);
+        let parts = &pane.messages[0].parts;
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], MessagePart::ThinkBlock(t) if t == "thought"));
+        assert!(matches!(&parts[1], MessagePart::Text(t) if t == "visible"));
     }
 
     #[test]

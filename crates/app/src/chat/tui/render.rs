@@ -306,8 +306,7 @@ mod tests {
     struct TestPane {
         messages: Vec<Message>,
         scroll_offset: u16,
-        streaming_text: String,
-        is_thinking: bool,
+        streaming_active: bool,
         agent_running: bool,
         spinner_frame: usize,
         dots_frame: usize,
@@ -326,8 +325,7 @@ mod tests {
             Self {
                 messages: Vec::new(),
                 scroll_offset: 0,
-                streaming_text: String::new(),
-                is_thinking: false,
+                streaming_active: false,
                 agent_running: false,
                 spinner_frame: 0,
                 dots_frame: 0,
@@ -350,11 +348,8 @@ mod tests {
         fn scroll_offset(&self) -> u16 {
             self.scroll_offset
         }
-        fn streaming_text(&self) -> &str {
-            &self.streaming_text
-        }
-        fn is_thinking(&self) -> bool {
-            self.is_thinking
+        fn streaming_active(&self) -> bool {
+            self.streaming_active
         }
     }
 

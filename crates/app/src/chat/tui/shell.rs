@@ -43,11 +43,8 @@ impl PaneView for state::Pane {
     fn scroll_offset(&self) -> u16 {
         self.scroll_offset
     }
-    fn streaming_text(&self) -> &str {
-        &self.streaming_text
-    }
-    fn is_thinking(&self) -> bool {
-        self.is_thinking
+    fn streaming_active(&self) -> bool {
+        self.streaming_active
     }
 }
 

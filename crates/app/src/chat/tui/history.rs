@@ -16,8 +16,7 @@ use super::theme::Palette;
 pub(super) trait PaneView {
     fn messages(&self) -> &[Message];
     fn scroll_offset(&self) -> u16;
-    fn streaming_text(&self) -> &str;
-    fn is_thinking(&self) -> bool;
+    fn streaming_active(&self) -> bool;
 }
 
 // ---------------------------------------------------------------------------
@@ -43,19 +42,19 @@ pub(super) fn render_history(
         lines.push(Line::default()); // gap between messages
     }
 
-    // Streaming text (not yet finalized into a message)
-    let streaming = pane.streaming_text();
-    if !streaming.is_empty() {
-        let style = if pane.is_thinking() {
+    // Show cursor indicator on the last part of the current assistant message
+    // when streaming is active.
+    if pane.streaming_active()
+        && let Some(last_msg) = pane.messages().last()
+        && last_msg.role == Role::Assistant
+        && let Some(last_line) = lines.last_mut()
+    {
+        last_line.spans.push(Span::styled(
+            "\u{2588}",
             Style::default()
-                .fg(palette.think_block)
-                .add_modifier(Modifier::ITALIC | Modifier::DIM)
-        } else {
-            Style::default().fg(palette.text)
-        };
-        for line_str in streaming.lines() {
-            lines.push(Line::styled(line_str.to_string(), style));
-        }
+                .fg(palette.brand)
+                .add_modifier(Modifier::SLOW_BLINK),
+        ));
     }
 
     // Count wrapped visual rows for scroll math.
@@ -356,8 +355,7 @@ mod tests {
     struct TestPane {
         messages: Vec<Message>,
         scroll_offset: u16,
-        streaming_text: String,
-        is_thinking: bool,
+        streaming_active: bool,
     }
 
     impl TestPane {
@@ -365,8 +363,7 @@ mod tests {
             Self {
                 messages: Vec::new(),
                 scroll_offset: 0,
-                streaming_text: String::new(),
-                is_thinking: false,
+                streaming_active: false,
             }
         }
     }
@@ -378,11 +375,8 @@ mod tests {
         fn scroll_offset(&self) -> u16 {
             self.scroll_offset
         }
-        fn streaming_text(&self) -> &str {
-            &self.streaming_text
-        }
-        fn is_thinking(&self) -> bool {
-            self.is_thinking
+        fn streaming_active(&self) -> bool {
+            self.streaming_active
         }
     }
 
