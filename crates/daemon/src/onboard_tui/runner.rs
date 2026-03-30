@@ -1525,6 +1525,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::widgets::StatefulWidget;
 
     use super::*;
     use crate::onboard_flow::OnboardFlowStepAction;
@@ -1928,5 +1929,286 @@ mod tests {
         let candidates = vec![("codex config".to_owned(), "~/.codex/config.json".to_owned())];
         let result = runner.run_import_candidate_screen(&candidates, 0).unwrap();
         assert_eq!(result, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration-level tests: end-to-end guided flow through multiple screens
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guided_flow_completes_with_scripted_events() {
+        use crate::onboard_flow::{OnboardFlowController, run_guided_onboard_flow};
+
+        // The sample draft has acp.enabled = false (default), so Protocols
+        // presents "Disabled" as the pre-selected choice (idx 1).  A single
+        // Enter on that screen therefore picks "Disabled" and returns Next.
+        //
+        // Event sequence per step:
+        //   Welcome:         Enter
+        //   Auth sub0:       Enter  (provider confirmation)
+        //   Auth sub1:       Enter  (model, accept default)
+        //   Auth sub2:       Enter  (api key env, accept default)
+        //   RuntimeDefaults: Enter  (memory profile, accept default)
+        //   Workspace sub0:  Enter  (sqlite path, accept default)
+        //   Workspace sub1:  Enter  (file root, accept default)
+        //   Protocols sub0:  Enter  (ACP Disabled selected by default)
+        let events: Vec<Event> = vec![key(KeyCode::Enter); 8];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+
+        let draft = sample_draft();
+        let controller = OnboardFlowController::new(draft);
+        let controller = run_guided_onboard_flow(controller, &mut runner)
+            .await
+            .expect("guided flow should complete");
+
+        assert_eq!(
+            controller.current_step(),
+            OnboardWizardStep::EnvironmentCheck,
+            "flow should stop at EnvironmentCheck boundary"
+        );
+        // Protocols was accepted as Disabled
+        assert!(
+            !controller.draft().protocols.acp_enabled,
+            "ACP should remain disabled when user accepted default"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guided_flow_with_acp_enabled_completes() {
+        use crate::onboard_flow::{OnboardFlowController, run_guided_onboard_flow};
+
+        // Same as above, but start with acp.enabled = true so the Protocols
+        // step requires two selections (toggle + backend).
+        //
+        //   Welcome:         Enter
+        //   Auth sub0-2:     Enter x3
+        //   RuntimeDefaults: Enter
+        //   Workspace sub0-1:Enter x2
+        //   Protocols sub0:  Enter  (Enabled, pre-selected)
+        //   Protocols sub1:  Down + Enter  (select jsonrpc backend)
+        let mut events: Vec<Event> = vec![key(KeyCode::Enter); 8];
+        events.push(key(KeyCode::Down));
+        events.push(key(KeyCode::Enter));
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+
+        let mut draft = sample_draft();
+        draft.set_acp_enabled(true);
+        let controller = OnboardFlowController::new(draft);
+        let controller = run_guided_onboard_flow(controller, &mut runner)
+            .await
+            .expect("guided flow with ACP enabled should complete");
+
+        assert_eq!(
+            controller.current_step(),
+            OnboardWizardStep::EnvironmentCheck
+        );
+        assert!(controller.draft().protocols.acp_enabled);
+        assert_eq!(
+            controller.draft().protocols.acp_backend.as_deref(),
+            Some("jsonrpc"),
+            "second backend option should be jsonrpc"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn guided_flow_back_from_auth_returns_to_welcome() {
+        use crate::onboard_flow::{OnboardFlowController, run_guided_onboard_flow};
+
+        // Press Enter on Welcome, then Esc on Auth sub-step 0 (provider),
+        // which makes Auth return Back.  The flow should revisit Welcome,
+        // then proceed normally with Enter through all remaining steps.
+        let events = vec![
+            key(KeyCode::Enter), // Welcome -> Next
+            key(KeyCode::Esc),   // Auth sub0 -> Back -> revisit Welcome
+            key(KeyCode::Enter), // Welcome (replay) -> Next
+            key(KeyCode::Enter), // Auth sub0
+            key(KeyCode::Enter), // Auth sub1
+            key(KeyCode::Enter), // Auth sub2
+            key(KeyCode::Enter), // RuntimeDefaults
+            key(KeyCode::Enter), // Workspace sub0
+            key(KeyCode::Enter), // Workspace sub1
+            key(KeyCode::Enter), // Protocols (Disabled)
+        ];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+
+        let controller = OnboardFlowController::new(sample_draft());
+        let controller = run_guided_onboard_flow(controller, &mut runner)
+            .await
+            .expect("flow with back from auth should complete");
+
+        assert_eq!(
+            controller.current_step(),
+            OnboardWizardStep::EnvironmentCheck,
+            "flow should still reach EnvironmentCheck after back-navigation"
+        );
+    }
+
+    #[test]
+    fn auth_step_back_from_model_returns_to_provider() {
+        // Within the Authentication step, navigate into model (sub-step 1),
+        // press Esc to go back to provider (sub-step 0), then proceed through
+        // all sub-steps with Enter.
+        let events = vec![
+            key(KeyCode::Enter), // sub0: provider -> sub1
+            key(KeyCode::Esc),   // sub1: model -> back to sub0
+            key(KeyCode::Enter), // sub0: provider (replay) -> sub1
+            key(KeyCode::Enter), // sub1: model -> sub2
+            key(KeyCode::Enter), // sub2: api key env -> Next
+        ];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let mut draft = sample_draft();
+        let result = runner.run_authentication_step(&mut draft).unwrap();
+        assert_eq!(
+            result,
+            OnboardFlowStepAction::Next,
+            "auth step should complete successfully after sub-step back-nav"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_welcome_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let err = runner.run_welcome_step().unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_auth_returns_interrupted_error() {
+        // Ctrl-C on provider selection sub-step
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let mut draft = sample_draft();
+        let err = runner.run_authentication_step(&mut draft).unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_runtime_defaults_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let mut draft = sample_draft();
+        let err = runner.run_runtime_defaults_step(&mut draft).unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_workspace_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let mut draft = sample_draft();
+        let err = runner.run_workspace_step(&mut draft).unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_protocols_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let mut draft = sample_draft();
+        let err = runner.run_protocols_step(&mut draft).unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_risk_screen_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let err = runner.run_risk_screen().unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn ctrl_c_on_entry_choice_returns_interrupted_error() {
+        let events = vec![ctrl_c()];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let options = vec![("A".to_owned(), "option a".to_owned())];
+        let err = runner.run_entry_choice_screen(&options, 0).unwrap_err();
+        assert!(
+            err.contains("interrupted"),
+            "error should mention interrupted: {err}"
+        );
+    }
+
+    #[test]
+    fn resize_events_are_handled_gracefully() {
+        // Inject a resize event before the Enter that completes the welcome step.
+        // The resize should be silently consumed (triggering a redraw) without panic.
+        let events = vec![Event::Resize(120, 40), key(KeyCode::Enter)];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let result = runner.run_welcome_step();
+        assert_eq!(
+            result.unwrap(),
+            OnboardFlowStepAction::Next,
+            "resize events should be consumed gracefully"
+        );
+    }
+
+    #[test]
+    fn resize_during_selection_loop_is_handled() {
+        let events = vec![
+            Event::Resize(100, 50),
+            key(KeyCode::Down),
+            Event::Resize(80, 24),
+            key(KeyCode::Enter),
+        ];
+        let source = ScriptedEventSource::new(events);
+        let mut runner = RatatuiOnboardRunner::headless(source).unwrap();
+        let items = vec![
+            SelectionItem::new("A", None::<&str>),
+            SelectionItem::new("B", None::<&str>),
+        ];
+        let result = runner
+            .run_selection_loop(OnboardWizardStep::RuntimeDefaults, "Test", items, 0, "hint")
+            .unwrap();
+        assert!(
+            matches!(result, SelectionLoopResult::Selected(1)),
+            "selection should complete normally despite resize events"
+        );
+    }
+
+    #[test]
+    fn selection_card_state_with_zero_items_does_not_panic() {
+        // SelectionCardState with zero items: next/previous should be no-ops.
+        let mut state = SelectionCardState::new(0);
+        state.next();
+        state.previous();
+        assert_eq!(state.selected(), 0, "selected index should remain 0");
+
+        // SelectionCardWidget with empty items renders without panic.
+        let widget = SelectionCardWidget::new(vec![]);
+        let area = Rect::new(0, 0, 80, 24);
+        let mut buf = Buffer::empty(area);
+        widget.render(area, &mut buf, &mut state);
     }
 }
