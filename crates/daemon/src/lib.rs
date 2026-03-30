@@ -100,6 +100,7 @@ pub mod onboard_flow;
 mod onboard_preflight;
 pub mod onboard_presentation;
 pub mod onboard_state;
+pub(crate) mod onboard_tui;
 mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
