@@ -97,6 +97,13 @@ pub const WECOM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         serve_bootstrap_agent_id: "channel-wecom",
     };
 
+pub const WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "whatsapp",
+        platform: ChannelPlatform::WhatsApp,
+        serve_bootstrap_agent_id: "channel-whatsapp",
+    };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelCommandFamilyDescriptor {
     pub runtime: ChannelRuntimeCommandDescriptor,
@@ -1416,7 +1423,7 @@ const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "cloud webhook service",
     command: "whatsapp-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1428,6 +1435,13 @@ pub const WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamil
         send: WHATSAPP_SEND_OPERATION,
         serve: WHATSAPP_SERVE_OPERATION,
     };
+
+pub const WHATSAPP_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
 const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
@@ -1435,12 +1449,22 @@ const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
     ChannelRegistryOperationDescriptor {
         operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
-        doctor_checks: &[],
+        doctor_checks: &[ChannelDoctorCheckSpec {
+            name: "whatsapp serve runtime",
+            trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+        }],
     },
+];
+const WHATSAPP_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
 ];
 const WHATSAPP_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure whatsapp cloud api credentials in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; outbound business send is shipped, while inbound webhook serve support remains planned",
+    setup_hint: "configure whatsapp cloud api credentials (access_token, phone_number_id, verify_token, app_secret) in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; both outbound business send and inbound webhook serve are shipped",
     status_command: "loong doctor",
     repair_command: Some("loong doctor --fix"),
 };
@@ -2937,13 +2961,15 @@ pub(crate) const LINE_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(crate) const WHATSAPP_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "whatsapp",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_whatsapp_snapshots),
         selection_order: 90,
         selection_label: "business messaging app",
-        blurb: "Shipped WhatsApp Cloud API outbound surface with config-backed business sends; inbound webhook support remains planned.",
-        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
-        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        blurb: "Shipped WhatsApp Cloud API surface with business send and webhook serve runtime support.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: WHATSAPP_CAPABILITIES,
         label: "WhatsApp",
         aliases: &["wa", "whatsapp-cloud"],
         transport: "whatsapp_cloud_api",
