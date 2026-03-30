@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(whatsapp.id, "whatsapp");
         assert_eq!(whatsapp.surface_label, "whatsapp channel");
         assert_eq!(whatsapp.runtime_kind, ChannelRuntimeKind::Service);
-        assert_eq!(whatsapp.serve_subcommand, None);
+        assert_eq!(whatsapp.serve_subcommand, Some("whatsapp-serve"));
 
         let email = channel_descriptor("email").expect("email descriptor");
         assert_eq!(email.id, "email");

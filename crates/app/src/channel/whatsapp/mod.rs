@@ -3,16 +3,16 @@ mod webhook;
 use std::path::Path;
 use std::sync::Arc;
 
-use axum::{Router, routing::{get, post}};
+use axum::{Router, routing::get};
 use serde_json::{Value, json};
 
-use crate::{CliResult, KernelContext, config::ResolvedWhatsappChannelConfig};
 use super::{
     ChannelOutboundTargetKind, ChannelServeStopHandle,
     http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
     runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{ChannelDefaultAccountSelectionSource, LoongClawConfig};
+use crate::{CliResult, KernelContext, config::ResolvedWhatsappChannelConfig};
 use webhook::{WhatsappWebhookState, whatsapp_verify_handler, whatsapp_webhook_handler};
 
 pub(super) async fn run_whatsapp_send(
@@ -118,7 +118,10 @@ pub(super) async fn run_whatsapp_channel(
         runtime,
     )?;
     let app = Router::new()
-        .route(path.as_str(), get(whatsapp_verify_handler).post(whatsapp_webhook_handler))
+        .route(
+            path.as_str(),
+            get(whatsapp_verify_handler).post(whatsapp_webhook_handler),
+        )
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(bind.as_str())

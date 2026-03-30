@@ -7470,7 +7470,7 @@ mod tests {
                 .iter()
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "wecom"]
+            vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
         );
         assert!(
             runtime_backed
@@ -9410,7 +9410,7 @@ mod tests {
             .expect("whatsapp serve operation");
 
         assert_eq!(send.health, ChannelOperationHealth::Ready);
-        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
         assert_eq!(
             whatsapp.api_base_url.as_deref(),
             Some("https://graph.facebook.com/v25.0")
@@ -9423,7 +9423,7 @@ mod tests {
             "status notes should expose the resolved phone number id"
         );
         assert!(send.runtime.is_none());
-        assert!(serve.runtime.is_none());
+        assert!(serve.runtime.is_some());
     }
 
     #[test]

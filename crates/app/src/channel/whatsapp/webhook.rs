@@ -225,7 +225,7 @@ pub(super) async fn whatsapp_webhook_handler(
     // Process webhook entries
     tokio::spawn(async move {
         if let Err(error) = process_whatsapp_webhook(&state, &payload).await {
-            eprintln!("whatsapp webhook processing error: {error}");
+            log_whatsapp_warning("webhook processing error", &error);
         }
     });
 
@@ -237,10 +237,7 @@ pub(super) async fn whatsapp_webhook_handler(
 // Webhook payload processing
 // ---------------------------------------------------------------------------
 
-async fn process_whatsapp_webhook(
-    state: &WhatsappWebhookState,
-    payload: &Value,
-) -> CliResult<()> {
+async fn process_whatsapp_webhook(state: &WhatsappWebhookState, payload: &Value) -> CliResult<()> {
     let entries = payload
         .get("entry")
         .and_then(Value::as_array)
@@ -264,10 +261,8 @@ async fn process_whatsapp_webhook(
                 .cloned()
                 .unwrap_or_default();
             for message in &messages {
-                if let Err(error) =
-                    handle_whatsapp_inbound_message(state, value, message).await
-                {
-                    eprintln!("whatsapp inbound message error: {error}");
+                if let Err(error) = handle_whatsapp_inbound_message(state, value, message).await {
+                    log_whatsapp_warning("inbound message error", &error);
                 }
             }
         }
@@ -314,8 +309,7 @@ async fn handle_whatsapp_inbound_message(
         }
 
         // Check allowlist if configured
-        if !state.allowed_phone_numbers.is_empty()
-            && !state.allowed_phone_numbers.contains(sender)
+        if !state.allowed_phone_numbers.is_empty() && !state.allowed_phone_numbers.contains(sender)
         {
             return Ok(());
         }
@@ -340,9 +334,11 @@ async fn handle_whatsapp_inbound_message(
             return Ok(());
         }
 
-        state.runtime.mark_run_start().await.map_err(|error| {
-            format!("whatsapp runtime start failed: {error}")
-        })?;
+        state
+            .runtime
+            .mark_run_start()
+            .await
+            .map_err(|error| format!("whatsapp runtime start failed: {error}"))?;
 
         let process_result = async {
             let session = ChannelSession::with_account(
@@ -390,7 +386,7 @@ async fn handle_whatsapp_inbound_message(
         .await;
 
         if let Err(error) = state.runtime.mark_run_end().await {
-            eprintln!("whatsapp runtime end failed: {error}");
+            log_whatsapp_warning("runtime end failed", &error);
         }
 
         process_result
@@ -453,4 +449,11 @@ async fn send_whatsapp_text_reply(
     }
 
     Ok(())
+}
+
+fn log_whatsapp_warning(context: &str, error: &str) {
+    #[allow(clippy::print_stderr)]
+    {
+        eprintln!("warning: whatsapp {context}: {error}");
+    }
 }
