@@ -532,6 +532,74 @@ async fn gateway_owner_state_localhost_control_surface_requires_auth_and_stops_r
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy() {
+    let runtime_dir = unique_runtime_dir("turn-policy-disabled");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(headless_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let port = running_status
+        .port
+        .expect("gateway control surface port should be persisted");
+    let token_path = PathBuf::from(
+        running_status
+            .token_path
+            .clone()
+            .expect("control surface token path should be persisted"),
+    );
+    let token = fs::read_to_string(token_path.as_path()).expect("read gateway control token file");
+    let token = token.trim().to_owned();
+    assert!(!token.is_empty());
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://127.0.0.1:{port}/v1/turn"))
+        .bearer_auth(token.as_str())
+        .json(&serde_json::json!({
+            "session_key": "gateway-policy-disabled",
+            "input": "hello",
+        }))
+        .send()
+        .await
+        .expect("send gateway turn request");
+
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let response_json: Value = response.json().await.expect("decode gateway turn response");
+    assert_eq!(
+        response_json["error"],
+        "ACP is disabled by policy (`acp.enabled=false`)"
+    );
+
+    request_gateway_stop(runtime_dir.as_path()).expect("request gateway stop");
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop")
+        .expect("join gateway run")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stops_runtime() {
     let runtime_dir = unique_runtime_dir("local-client");
     let hooks = SupervisorRuntimeHooks {
