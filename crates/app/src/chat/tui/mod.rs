@@ -1,71 +1,84 @@
 #![allow(dead_code)]
 
-#[cfg(test)]
 pub(super) mod app_shell;
-#[cfg(test)]
-pub(super) mod composer;
-#[cfg(test)]
+pub(super) mod commands;
+pub(super) mod dialog;
 pub(super) mod events;
-#[cfg(test)]
-pub(super) mod execution_band;
-#[cfg(test)]
-pub(super) mod execution_drawer;
-#[cfg(test)]
 pub(super) mod focus;
-#[cfg(test)]
+pub(super) mod history;
+pub(super) mod input;
 pub(super) mod layout;
-#[cfg(test)]
-pub(super) mod reducer;
-#[cfg(test)]
+pub(super) mod message;
+pub(super) mod observer;
+pub(super) mod render;
+pub(crate) mod runtime;
+pub(super) mod shell;
+pub(super) mod spinner;
 pub(super) mod state;
+pub(super) mod status_bar;
 pub(super) mod terminal;
-#[cfg(test)]
 pub(super) mod theme;
-#[cfg(test)]
-pub(super) mod transcript;
 
 use crate::CliResult;
 
-const PLACEHOLDER_TUI_FALLBACK_REASON: &str =
-    "interactive tui runtime is not wired yet in this build";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CliTuiLaunchResult {
+    Entered,
     FallbackToText { reason: String },
 }
 
+/// Legacy bridge called from `run_cli_chat` when `--ui tui` is requested
+/// through the existing CLI path.  Delegates to the self-contained TUI
+/// runtime so that `chat.rs` internals are not leaked into the TUI module.
 pub(super) async fn run_tui_chat(
-    _runtime: &super::CliTurnRuntime,
+    runtime: &super::CliTurnRuntime,
     _options: &super::CliChatOptions,
 ) -> CliResult<CliTuiLaunchResult> {
-    let launch =
-        terminal::resolve_terminal_policy(terminal::TerminalSupportSnapshot::capture_current())
-            .launch;
-    Ok(resolve_tui_launch_result(launch))
-}
+    let snapshot = terminal::TerminalSupportSnapshot::capture_current();
+    let policy = terminal::resolve_terminal_policy(snapshot);
 
-fn resolve_tui_launch_result(launch: terminal::TerminalLaunch) -> CliTuiLaunchResult {
-    match launch {
-        terminal::TerminalLaunch::Tui => CliTuiLaunchResult::FallbackToText {
-            reason: PLACEHOLDER_TUI_FALLBACK_REASON.to_owned(),
-        },
+    match policy.launch {
+        terminal::TerminalLaunch::Tui => {
+            // Bootstrap a self-contained TuiRuntime from the already-loaded
+            // CliTurnRuntime fields so shell::run only depends on our own type.
+            let tui_rt = runtime::TuiRuntime {
+                resolved_path: runtime.resolved_path.clone(),
+                config: runtime.config.clone(),
+                session_id: runtime.session_id.clone(),
+                session_address: runtime.session_address.clone(),
+                turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+                kernel_ctx: runtime.kernel_ctx.clone(),
+                model_label: runtime
+                    .config
+                    .provider
+                    .resolved_model()
+                    .filter(|m| !m.trim().is_empty())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            };
+            shell::run(&tui_rt, policy.use_plain_palette).await?;
+            Ok(CliTuiLaunchResult::Entered)
+        }
         terminal::TerminalLaunch::FallbackToText { reason } => {
-            CliTuiLaunchResult::FallbackToText { reason }
+            Ok(CliTuiLaunchResult::FallbackToText { reason })
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// Public entry point for the standalone `loong tui` command.
+///
+/// Initializes its own runtime from config without importing any private
+/// types from `chat.rs`.
+pub async fn run_tui(config_path: Option<&str>, session_hint: Option<&str>) -> CliResult<()> {
+    let snapshot = terminal::TerminalSupportSnapshot::capture_current();
+    let policy = terminal::resolve_terminal_policy(snapshot);
 
-    #[test]
-    fn supported_terminal_still_falls_back_until_runtime_is_wired() {
-        let result = resolve_tui_launch_result(terminal::TerminalLaunch::Tui);
-
-        assert!(
-            matches!(result, CliTuiLaunchResult::FallbackToText { ref reason } if reason.contains("not wired")),
-            "supported TUI terminals should still fall back until the turn runtime is connected: {result:?}"
-        );
+    match policy.launch {
+        terminal::TerminalLaunch::Tui => {}
+        terminal::TerminalLaunch::FallbackToText { reason } => {
+            return Err(reason);
+        }
     }
+
+    let rt = runtime::initialize(config_path, session_hint)?;
+    shell::run(&rt, policy.use_plain_palette).await
 }

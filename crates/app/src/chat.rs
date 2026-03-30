@@ -25,6 +25,8 @@ mod live_surface;
 mod text_surface;
 #[cfg(feature = "channel-cli")]
 mod tui;
+#[cfg(feature = "channel-cli")]
+pub use self::tui::run_tui;
 mod ui_mode;
 
 use self::cli_input::ConcurrentCliInputReader;
@@ -298,6 +300,7 @@ pub async fn run_cli_chat(
         #[cfg(feature = "channel-cli")]
         {
             match tui::run_tui_chat(&runtime, options).await? {
+                tui::CliTuiLaunchResult::Entered => return Ok(()),
                 tui::CliTuiLaunchResult::FallbackToText { reason } => {
                     #[allow(clippy::print_stderr)]
                     {

@@ -89,7 +89,9 @@ path = "src/main.rs"
 
 [dev-dependencies]
 loongclaw-spec = { path = "../spec", features = ["test-hooks"] }
+portable-pty = "0.9"
 sha2.workspace = true
+strip-ansi-escapes = "0.2"
 tower = { version = "0.5", features = ["util"] }
 wat = "1"
 

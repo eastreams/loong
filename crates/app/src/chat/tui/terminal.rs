@@ -1,5 +1,9 @@
 use std::io::IsTerminal;
 
+// ---------------------------------------------------------------------------
+// Snapshot-based terminal detection
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalSupportSnapshot {
     pub(crate) stdin_is_terminal: bool,
@@ -21,6 +25,10 @@ impl TerminalSupportSnapshot {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Launch decision
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TerminalLaunch {
     Tui,
@@ -33,6 +41,9 @@ pub(crate) struct TerminalPolicy {
     pub(crate) use_plain_palette: bool,
 }
 
+/// Pure-function launch-mode resolver.  Operates on an explicit snapshot so
+/// callers (including tests) can evaluate the decision deterministically
+/// without probing the live environment.
 pub(crate) fn resolve_launch_mode(snapshot: TerminalSupportSnapshot) -> TerminalLaunch {
     if !snapshot.stdin_is_terminal || !snapshot.stdout_is_terminal {
         return TerminalLaunch::FallbackToText {
@@ -53,6 +64,7 @@ pub(crate) fn resolve_launch_mode(snapshot: TerminalSupportSnapshot) -> Terminal
     TerminalLaunch::Tui
 }
 
+/// Combines launch-mode resolution with palette selection.
 pub(crate) fn resolve_terminal_policy(snapshot: TerminalSupportSnapshot) -> TerminalPolicy {
     let use_plain_palette = !snapshot.color_support;
     let launch = resolve_launch_mode(snapshot);
@@ -62,6 +74,10 @@ pub(crate) fn resolve_terminal_policy(snapshot: TerminalSupportSnapshot) -> Term
         use_plain_palette,
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -94,6 +110,60 @@ mod tests {
             policy.launch,
             TerminalLaunch::FallbackToText { .. }
         ));
+        assert!(policy.use_plain_palette);
+    }
+
+    #[test]
+    fn terminal_policy_chooses_tui_when_all_conditions_met() {
+        let policy = resolve_terminal_policy(TerminalSupportSnapshot {
+            stdin_is_terminal: true,
+            stdout_is_terminal: true,
+            stderr_is_terminal: true,
+            term: Some("xterm-256color".to_owned()),
+            color_support: true,
+        });
+
+        assert!(matches!(policy.launch, TerminalLaunch::Tui));
+        assert!(!policy.use_plain_palette);
+    }
+
+    #[test]
+    fn dumb_terminal_falls_back() {
+        let launch = resolve_launch_mode(TerminalSupportSnapshot {
+            stdin_is_terminal: true,
+            stdout_is_terminal: true,
+            stderr_is_terminal: true,
+            term: Some("dumb".to_owned()),
+            color_support: false,
+        });
+
+        assert!(matches!(launch, TerminalLaunch::FallbackToText { .. }));
+    }
+
+    #[test]
+    fn missing_term_env_does_not_block_launch() {
+        let launch = resolve_launch_mode(TerminalSupportSnapshot {
+            stdin_is_terminal: true,
+            stdout_is_terminal: true,
+            stderr_is_terminal: true,
+            term: None,
+            color_support: true,
+        });
+
+        assert!(matches!(launch, TerminalLaunch::Tui));
+    }
+
+    #[test]
+    fn no_color_support_still_launches_with_plain_palette() {
+        let policy = resolve_terminal_policy(TerminalSupportSnapshot {
+            stdin_is_terminal: true,
+            stdout_is_terminal: true,
+            stderr_is_terminal: true,
+            term: Some("xterm".to_owned()),
+            color_support: false,
+        });
+
+        assert!(matches!(policy.launch, TerminalLaunch::Tui));
         assert!(policy.use_plain_palette);
     }
 }

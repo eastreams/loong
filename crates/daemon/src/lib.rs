@@ -114,6 +114,8 @@ pub mod source_presentation;
 pub mod supervisor;
 pub mod tasks_cli;
 mod tlon_cli;
+#[cfg(feature = "channel-cli")]
+pub mod tui_cli;
 
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{
@@ -818,6 +820,18 @@ pub enum Commands {
         acp_bootstrap_mcp_server: Vec<String>,
         #[arg(long = "acp-cwd")]
         acp_cwd: Option<String>,
+    },
+    /// Launch the full-screen interactive TUI chat shell
+    #[command(
+        long_about = "Start an interactive full-screen TUI chat session.\n\nThe TUI provides a rich terminal interface with live execution display,\ntool call visualization, and streaming token rendering.\n\nRequires a terminal-attached stdin/stdout. Falls back with an error\nif terminal requirements are not met."
+    )]
+    Tui {
+        /// Path to configuration file
+        #[arg(long)]
+        config: Option<String>,
+        /// Session ID to use or resume
+        #[arg(long)]
+        session: Option<String>,
     },
     /// Print safe-lane runtime event summary for a session
     SafeLaneSummary {

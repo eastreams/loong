@@ -42,6 +42,7 @@ bech32 = "0.11"
 crossterm = "0.29"
 ed25519-dalek = "2.2"
 ratatui = "0.29"
+tui-textarea = { version = "0.7", default-features = false, features = ["crossterm"] }
 secp256k1 = "0.31"
 supports-color = "3.0"
 wasmtime = { version = "43.0.0", default-features = false, features = ["std", "runtime", "cranelift"] }

@@ -109,6 +109,7 @@ mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
 mod tasks_cli;
+mod tui_pty;
 
 #[test]
 fn cli_uses_loong_program_name() {
