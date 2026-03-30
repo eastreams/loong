@@ -399,6 +399,9 @@ mod tests {
         fn agent_running(&self) -> bool {
             self.agent_running
         }
+        fn has_staged_message(&self) -> bool {
+            false
+        }
     }
 
     struct TestShell {

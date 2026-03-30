@@ -554,7 +554,7 @@ fn build_cli_chat_live_surface_message_spec(
     }
 
     TuiMessageSpec {
-        role: "loongclaw".to_owned(),
+        role: crate::config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("live".to_owned()),
         sections,
         footer_lines: Vec::new(),

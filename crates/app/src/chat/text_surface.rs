@@ -362,7 +362,7 @@ fn build_cli_chat_assistant_message_spec(assistant_text: &str) -> TuiMessageSpec
     let sections = parse_cli_chat_markdown_sections(assistant_text);
 
     TuiMessageSpec {
-        role: "loongclaw".to_owned(),
+        role: crate::config::CLI_COMMAND_NAME.to_owned(),
         caption: Some("reply".to_owned()),
         sections,
         footer_lines: Vec::new(),
