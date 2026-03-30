@@ -116,7 +116,12 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
     #[cfg(test)]
     fn headless(event_source: E, mode: OnboardTuiMode) -> io::Result<Self> {
         let backend = CrosstermBackend::new(io::stdout());
-        let terminal = Terminal::new(backend)?;
+        let terminal = Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
+            },
+        )?;
         Ok(Self {
             terminal,
             event_source,
