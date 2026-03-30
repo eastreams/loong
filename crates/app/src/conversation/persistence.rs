@@ -52,7 +52,6 @@ pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Size
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_decision"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
 pub(super) async fn persist_tool_decision<R, D>(
     runtime: &R,
     session_id: &str,
@@ -78,7 +77,6 @@ where
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_outcome"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
 pub(super) async fn persist_tool_outcome<R, O>(
     runtime: &R,
     session_id: &str,

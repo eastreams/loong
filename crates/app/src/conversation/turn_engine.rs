@@ -1601,7 +1601,7 @@ fn build_success_tool_outcome_trace_record(
     let outcome = ToolOutcomeTelemetry {
         tool_name,
         status: outcome.status.clone(),
-        payload: outcome.payload.clone(),
+        payload: build_bounded_tool_outcome_payload(intent, outcome),
         error_code: None,
         human_reason: None,
         audit_event_id: None,
@@ -1611,6 +1611,31 @@ fn build_success_tool_outcome_trace_record(
         tool_call_id: intent.tool_call_id.clone(),
         outcome,
     }
+}
+
+fn build_bounded_tool_outcome_payload(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> serde_json::Value {
+    let normalized_limit =
+        effective_payload_summary_limit(intent, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS).clamp(
+            MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+            MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        );
+    let payload_text = serde_json::to_string(&outcome.payload)
+        .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
+    let (payload_summary, payload_chars, payload_truncated) =
+        truncate_by_chars(payload_text.as_str(), normalized_limit);
+
+    if !payload_truncated {
+        return outcome.payload.clone();
+    }
+
+    json!({
+        "payload_summary": payload_summary,
+        "payload_chars": payload_chars,
+        "payload_truncated": true,
+    })
 }
 
 fn build_failure_tool_outcome_trace_record(
@@ -2245,7 +2270,6 @@ impl TurnEngine {
                     binding,
                     &autonomy_budget_state,
                     ingress,
-                    &mut trace,
                 )
                 .await
             {
@@ -2589,7 +2613,6 @@ impl TurnEngine {
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
         ingress: Option<&ConversationIngressContext>,
-        _trace: &mut ToolBatchExecutionTrace,
     ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
         let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
             let reason = format!("tool_not_found: {}", intent.tool_name);
@@ -4480,6 +4503,48 @@ mod tests {
                 .is_some_and(|detail| detail.contains("simulated observed tool failure")),
             "expected failure detail in trace, got {:?}",
             trace.intent_outcomes[1].detail
+        );
+    }
+
+    #[test]
+    fn success_outcome_trace_record_bounds_large_payloads() {
+        let intent = provider_app_tool_intent(
+            "file.read",
+            json!({"path": "note.md"}),
+            "session-bounded-payload",
+            "turn-bounded-payload",
+            "call-bounded-payload",
+        );
+        let large_payload = json!({
+            "contents": "x".repeat(TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS + 128),
+        });
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: large_payload,
+        };
+
+        let record = build_success_tool_outcome_trace_record(&intent, &outcome);
+
+        assert_eq!(record.outcome.tool_name, "file.read");
+        assert_eq!(record.outcome.status, "ok");
+        assert_eq!(record.turn_id, "turn-bounded-payload");
+        assert_eq!(record.tool_call_id, "call-bounded-payload");
+        assert_eq!(record.outcome.payload["payload_truncated"], json!(true));
+        let payload_summary = record.outcome.payload["payload_summary"]
+            .as_str()
+            .expect("expected truncated payload summary");
+        let payload_chars = record.outcome.payload["payload_chars"]
+            .as_u64()
+            .expect("expected original payload char count");
+        assert!(
+            payload_summary.len() < payload_chars as usize,
+            "expected bounded payload summary, got {:?}",
+            record.outcome.payload
+        );
+        assert!(
+            payload_chars > TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS as u64,
+            "expected original payload char count, got {:?}",
+            record.outcome.payload
         );
     }
 
