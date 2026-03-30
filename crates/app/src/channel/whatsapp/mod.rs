@@ -1,15 +1,17 @@
 mod webhook;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use axum::{Router, routing::get};
 use serde_json::{Value, json};
 
 use super::{
-    ChannelOutboundTargetKind, ChannelServeStopHandle,
+    ChannelCommandContext, ChannelOutboundTargetKind, ChannelResolvedRuntimeAccount,
+    ChannelServeCommandSpec, ChannelServeStopHandle, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+    build_whatsapp_command_context,
     http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},
-    runtime_state::ChannelOperationRuntimeTracker,
+    run_channel_serve_command_with_stop, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{ChannelDefaultAccountSelectionSource, LoongClawConfig};
 use crate::{CliResult, KernelContext, config::ResolvedWhatsappChannelConfig};
@@ -180,4 +182,84 @@ async fn read_whatsapp_json_response(response: reqwest::Response) -> CliResult<V
         "whatsapp send failed with status {}: {detail}",
         status.as_u16()
     ))
+}
+
+impl ChannelResolvedRuntimeAccount for ResolvedWhatsappChannelConfig {
+    fn runtime_account_id(&self) -> &str {
+        self.account.id.as_str()
+    }
+
+    fn runtime_account_label(&self) -> &str {
+        self.account.label.as_str()
+    }
+}
+
+pub(super) async fn run_whatsapp_channel_with_context(
+    context: ChannelCommandContext<ResolvedWhatsappChannelConfig>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let bind_override = bind_override.map(str::to_owned);
+    let path_override = path_override.map(str::to_owned);
+    run_channel_serve_command_with_stop(
+        context,
+        ChannelServeCommandSpec {
+            family: WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+        },
+        validate_whatsapp_security_config,
+        stop,
+        initialize_runtime_environment,
+        move |context, kernel_ctx, runtime, stop| {
+            Box::pin(async move {
+                let route = context.route.clone();
+                let resolved_path = context.resolved_path.clone();
+                let resolved = context.resolved.clone();
+                let config = context.config.clone();
+                run_whatsapp_channel(
+                    &config,
+                    &resolved,
+                    &resolved_path,
+                    route.selected_by_default(),
+                    route.default_account_source,
+                    bind_override.as_deref(),
+                    path_override.as_deref(),
+                    kernel_ctx,
+                    runtime,
+                    stop,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+pub(super) async fn run_whatsapp_channel_with_stop(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let context = build_whatsapp_command_context(resolved_path, config, account_id)?;
+    run_whatsapp_channel_with_context(context, None, None, stop, initialize_runtime_environment)
+        .await
+}
+
+fn validate_whatsapp_security_config(config: &ResolvedWhatsappChannelConfig) -> CliResult<()> {
+    if config.verify_token().is_none() {
+        return Err(
+            "whatsapp verify_token is required for webhook verification (set whatsapp.verify_token or env)"
+                .to_owned(),
+        );
+    }
+    if config.app_secret().is_none() {
+        return Err(
+            "whatsapp app_secret is required for payload signature verification (set whatsapp.app_secret or env)"
+                .to_owned(),
+        );
+    }
+    Ok(())
 }

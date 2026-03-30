@@ -1403,6 +1403,10 @@ pub struct ResolvedWhatsappChannelConfig {
     pub webhook_path: Option<String>,
 }
 
+fn resolve_trimmed_or_default(value: Option<&str>, default: fn() -> String) -> String {
+    value.map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned).unwrap_or_else(default)
+}
+
 impl ResolvedWhatsappChannelConfig {
     pub fn access_token(&self) -> Option<String> {
         resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
@@ -1433,21 +1437,11 @@ impl ResolvedWhatsappChannelConfig {
     }
 
     pub fn resolved_webhook_bind(&self) -> String {
-        self.webhook_bind
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(default_whatsapp_webhook_bind)
+        resolve_trimmed_or_default(self.webhook_bind.as_deref(), default_whatsapp_webhook_bind)
     }
 
     pub fn resolved_webhook_path(&self) -> String {
-        self.webhook_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(default_whatsapp_webhook_path)
+        resolve_trimmed_or_default(self.webhook_path.as_deref(), default_whatsapp_webhook_path)
     }
 }
 
