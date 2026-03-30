@@ -215,6 +215,8 @@ pub(crate) fn is_explicitly_accepted_non_interactive_warning(
 pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> OnboardCheck {
     let provider = &config.provider;
     let provider_prefix = provider_check_detail_prefix(config);
+    let support_facts = provider.support_facts();
+    let auth_support = support_facts.auth;
     let inline_oauth = secret_ref_has_inline_literal(provider.oauth_access_token.as_ref());
 
     if inline_oauth {
@@ -237,7 +239,20 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
         };
     }
 
-    if provider.authorization_header().is_some() {
+    if !auth_support.requires_explicit_configuration {
+        return OnboardCheck {
+            name: "provider credentials",
+            level: OnboardCheckLevel::Pass,
+            detail: format!(
+                "{provider_prefix}: provider credentials are optional for this provider"
+            ),
+            non_interactive_warning_policy: OnboardNonInteractiveWarningPolicy::Block,
+        };
+    }
+
+    let has_local_credentials =
+        crate::provider_credential_policy::provider_has_locally_available_credentials(provider);
+    if has_local_credentials {
         let detail = crate::provider_credential_policy::provider_credential_env_hint(provider)
             .map(|env_name| format!("{env_name} is available"))
             .unwrap_or_else(|| "provider credentials are available".to_owned());
@@ -250,14 +265,7 @@ pub fn provider_credential_check(config: &mvp::config::LoongClawConfig) -> Onboa
         };
     }
 
-    let mut detail = crate::provider_credential_policy::provider_credential_env_hint(provider)
-        .map(|env_name| format!("{env_name} is not set"))
-        .unwrap_or_else(|| "provider credentials are not configured".to_owned());
-
-    if let Some(hint) = provider.auth_guidance_hint() {
-        detail.push(' ');
-        detail.push_str(hint.as_str());
-    }
+    let detail = auth_support.missing_configuration_message;
 
     OnboardCheck {
         name: "provider credentials",

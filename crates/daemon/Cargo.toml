@@ -54,6 +54,7 @@ libc = "0.2"
 
 
 [dependencies]
+axum.workspace = true
 clap.workspace = true
 clap_complete = "4.5"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm"] }
@@ -77,6 +78,7 @@ sha2.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
 dunce = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 [[bin]]
 name = "loong"
@@ -87,9 +89,9 @@ name = "loongclaw"
 path = "src/main.rs"
 
 [dev-dependencies]
-axum.workspace = true
 loongclaw-spec = { path = "../spec", features = ["test-hooks"] }
 sha2.workspace = true
+tower = { version = "0.5", features = ["util"] }
 wat = "1"
 
 [lints]

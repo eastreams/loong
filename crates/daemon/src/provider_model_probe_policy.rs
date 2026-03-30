@@ -207,7 +207,9 @@ fn append_region_hint(
         return detail;
     }
 
-    let Some(hint) = config.provider.region_endpoint_failure_hint() else {
+    let support_facts = config.provider.support_facts();
+    let region_endpoint_support = support_facts.region_endpoint;
+    let Some(hint) = region_endpoint_support.catalog_failure_hint else {
         return detail;
     };
 
@@ -225,7 +227,10 @@ fn provider_model_probe_region_endpoint_hint(
         return None;
     }
 
-    config.provider.region_endpoint_failure_hint()
+    let support_facts = config.provider.support_facts();
+    let region_endpoint_support = support_facts.region_endpoint;
+
+    region_endpoint_support.catalog_failure_hint
 }
 
 #[cfg(test)]

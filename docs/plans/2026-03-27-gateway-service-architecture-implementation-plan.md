@@ -40,10 +40,13 @@ clippy, `task verify`
   the long-term architecture
 - keep current slice boundaries accurate, but describe them as incremental
   delivery steps toward a gateway service layer
-- update Web UI wording so it remains "not a second runtime" while no longer
-  implying that the local-only posture is the strategic endpoint
+- update Web UI wording so it remains "not a second runtime" while clearly
+  stating that localhost-only default binding is a security posture for the
+  current slice rather than the strategic endpoint
 - update browser companion wording so it remains optional while clearly pointing
   toward a future gateway-managed node model
+- keep "not publicly exposed by default" explicit so future service-mode work
+  is framed as governed expansion rather than a reversal of product direction
 
 **Step 2: Verify documentation consistency**
 
@@ -217,6 +220,9 @@ Initial routes should be read-only or tightly scoped:
 - `GET /v1/events`
 
 These should render the same gateway read models as the CLI.
+
+The first bind policy should remain loopback-only by default unless explicit
+gateway auth, operator controls, and product docs are widened together.
 
 **Step 2: Add a first event stream**
 

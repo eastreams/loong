@@ -1,4 +1,5 @@
 pub mod analytics;
+mod autonomy_policy;
 mod compaction;
 mod context_engine;
 mod context_engine_registry;

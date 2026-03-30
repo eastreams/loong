@@ -30,6 +30,43 @@ pub struct ProviderProfile {
     pub feature_family: ProviderFeatureFamily,
 }
 
+impl ProviderProfile {
+    pub fn alternative_auth_configuration_hint(self) -> Option<&'static str> {
+        let kind = self.kind;
+        if kind == ProviderKind::Bedrock {
+            return Some(
+                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with BEDROCK_AWS_REGION, AWS_REGION, or AWS_DEFAULT_REGION for SigV4",
+            );
+        }
+        if kind == ProviderKind::Custom {
+            return Some("add `Authorization` / `X-API-Key` in `provider.headers`");
+        }
+        None
+    }
+
+    pub fn auth_guidance_hint(self) -> Option<String> {
+        let feature_family = self.feature_family;
+        if feature_family != ProviderFeatureFamily::Volcengine {
+            return None;
+        }
+
+        let provider_label = self.auth_guidance_provider_label();
+        let env_name = self.default_api_key_env.unwrap_or("PROVIDER_API_KEY");
+        let hint = format!(
+            "LoongClaw's {provider_label} OpenAI-compatible path uses `provider.api_key` / `{env_name}` and sends `Authorization: Bearer <{env_name}>`; AK/SK request signing is not used on this path"
+        );
+        Some(hint)
+    }
+
+    fn auth_guidance_provider_label(self) -> &'static str {
+        let kind = self.kind;
+        if matches!(kind, ProviderKind::Byteplus | ProviderKind::ByteplusCoding) {
+            return "BytePlus";
+        }
+        "Volcengine"
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderProtocolFamily {
     OpenAiChatCompletions,
@@ -53,12 +90,79 @@ pub enum ProviderAuthScheme {
     XApiKey,
 }
 
+impl ProviderAuthScheme {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bearer => "bearer",
+            Self::XApiKey => "x_api_key",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderFeatureFamily {
     OpenAiCompatible,
     Anthropic,
     Bedrock,
     Volcengine,
+}
+
+impl ProviderFeatureFamily {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenAiCompatible => "openai_compatible",
+            Self::Anthropic => "anthropic",
+            Self::Bedrock => "bedrock",
+            Self::Volcengine => "volcengine",
+        }
+    }
+
+    pub fn support_facts(self) -> ProviderFeatureSupportFacts {
+        let gate_name = self.feature_gate_name();
+        let enabled_in_build = self.is_enabled_in_build();
+        let disabled_message = self.disabled_message();
+
+        ProviderFeatureSupportFacts {
+            family: self,
+            gate_name,
+            enabled_in_build,
+            disabled_message,
+        }
+    }
+
+    pub fn feature_gate_name(self) -> &'static str {
+        match self {
+            Self::Anthropic => "provider-anthropic",
+            Self::Bedrock => "provider-bedrock",
+            Self::Volcengine => "provider-volcengine",
+            Self::OpenAiCompatible => "provider-openai",
+        }
+    }
+
+    pub fn disabled_message(self) -> String {
+        let subject = self.disabled_message_subject();
+        let feature_name = self.feature_gate_name();
+        let message = format!("{subject} is disabled (enable feature `{feature_name}`)");
+        message
+    }
+
+    pub fn is_enabled_in_build(self) -> bool {
+        match self {
+            Self::Anthropic => cfg!(feature = "provider-anthropic"),
+            Self::Bedrock => cfg!(feature = "provider-bedrock"),
+            Self::Volcengine => cfg!(feature = "provider-volcengine"),
+            Self::OpenAiCompatible => cfg!(feature = "provider-openai"),
+        }
+    }
+
+    fn disabled_message_subject(self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic provider family",
+            Self::Bedrock => "bedrock provider family",
+            Self::Volcengine => "volcengine provider family",
+            Self::OpenAiCompatible => "openai-compatible provider family",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -115,6 +219,108 @@ pub struct ProviderTransportPolicy {
     pub models_endpoint: String,
     pub readiness: ProviderTransportReadiness,
     pub fallback: Option<ProviderTransportFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFeatureSupportFacts {
+    pub family: ProviderFeatureFamily,
+    pub gate_name: &'static str,
+    pub enabled_in_build: bool,
+    pub disabled_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderAuthSupportFacts {
+    pub hint_env_names: Vec<String>,
+    pub requires_explicit_configuration: bool,
+    pub guidance_hint: Option<String>,
+    pub alternative_configuration_hint: Option<String>,
+    pub missing_configuration_message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRegionEndpointSupportFacts {
+    pub note: Option<String>,
+    pub catalog_failure_hint: Option<String>,
+    pub request_failure_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSupportFacts {
+    pub feature: ProviderFeatureSupportFacts,
+    pub auth: ProviderAuthSupportFacts,
+    pub region_endpoint: ProviderRegionEndpointSupportFacts,
+}
+
+pub const PROVIDER_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorSchema {
+    pub version: u32,
+    pub surface: &'static str,
+    pub purpose: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorHeader {
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorFeature {
+    pub family: String,
+    pub gate_name: String,
+    pub enabled_in_build: bool,
+    pub disabled_message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorAuth {
+    pub scheme: String,
+    pub auth_optional: bool,
+    pub model_probe_auth_optional: bool,
+    pub default_api_key_env: Option<String>,
+    pub api_key_env_aliases: Vec<String>,
+    pub default_oauth_access_token_env: Option<String>,
+    pub oauth_access_token_env_aliases: Vec<String>,
+    pub hint_env_names: Vec<String>,
+    pub requires_explicit_configuration: bool,
+    pub guidance_hint: Option<String>,
+    pub alternative_configuration_hint: Option<String>,
+    pub missing_configuration_message: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorRegionVariant {
+    pub label: String,
+    pub base_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorRegionEndpoint {
+    pub family_label: Option<String>,
+    pub variants: Vec<ProviderDescriptorRegionVariant>,
+    pub note: Option<String>,
+    pub catalog_failure_hint: Option<String>,
+    pub request_failure_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProviderDescriptorDocument {
+    pub schema: ProviderDescriptorSchema,
+    pub kind: String,
+    pub display_name: String,
+    pub aliases: Vec<String>,
+    pub protocol_family: String,
+    pub default_headers: Vec<ProviderDescriptorHeader>,
+    pub default_user_agent: Option<String>,
+    pub configuration_hint: Option<String>,
+    pub default_model: Option<String>,
+    pub recommended_onboarding_model: Option<String>,
+    pub feature: ProviderDescriptorFeature,
+    pub auth: ProviderDescriptorAuth,
+    pub region_endpoint: ProviderDescriptorRegionEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,7 +595,8 @@ pub enum ProviderKind {
         alias = "cloudflare_ai",
         alias = "cloudflare-ai",
         alias = "cloudflare_ai_gateway",
-        alias = "cloudflare-ai-gateway"
+        alias = "cloudflare-ai-gateway",
+        alias = "cloudflare"
     )]
     CloudflareAiGateway,
     #[serde(alias = "cohere_compatible")]
@@ -410,7 +617,7 @@ pub enum ProviderKind {
     KimiCoding,
     #[serde(alias = "groq_compatible")]
     Groq,
-    #[serde(alias = "fireworks_compatible")]
+    #[serde(alias = "fireworks_compatible", alias = "fireworks-ai")]
     Fireworks,
     #[serde(alias = "mistral_compatible")]
     Mistral,
@@ -418,7 +625,12 @@ pub enum ProviderKind {
     Minimax,
     #[serde(alias = "novita_compatible")]
     Novita,
-    #[serde(alias = "nvidia_compatible", alias = "nvidia_nim")]
+    #[serde(
+        alias = "nvidia_compatible",
+        alias = "nvidia_nim",
+        alias = "nvidia-nim",
+        alias = "build.nvidia.com"
+    )]
     Nvidia,
     #[serde(alias = "llama.cpp", alias = "llama_cpp")]
     Llamacpp,
@@ -449,7 +661,11 @@ pub enum ProviderKind {
     Stepfun,
     #[serde(alias = "stepfun_step_plan", alias = "step_plan")]
     StepPlan,
-    #[serde(alias = "together_compatible", alias = "together_ai")]
+    #[serde(
+        alias = "together_compatible",
+        alias = "together_ai",
+        alias = "together-ai"
+    )]
     Together,
     #[serde(alias = "venice_compatible")]
     Venice,
@@ -457,18 +673,24 @@ pub enum ProviderKind {
         alias = "vercel_ai",
         alias = "vercel-ai",
         alias = "vercel_ai_gateway",
-        alias = "vercel-ai-gateway"
+        alias = "vercel-ai-gateway",
+        alias = "vercel"
     )]
     VercelAiGateway,
-    #[serde(alias = "volcengine_custom", alias = "volcengine_compatible")]
+    #[serde(
+        alias = "volcengine_custom",
+        alias = "volcengine_compatible",
+        alias = "doubao",
+        alias = "ark"
+    )]
     Volcengine,
     #[serde(alias = "volcengine_coding_compatible")]
     VolcengineCoding,
-    #[serde(alias = "xai_compatible")]
+    #[serde(alias = "xai_compatible", alias = "grok")]
     Xai,
-    #[serde(alias = "zai_compatible")]
+    #[serde(alias = "zai_compatible", alias = "z.ai")]
     Zai,
-    #[serde(alias = "zhipu_compatible")]
+    #[serde(alias = "zhipu_compatible", alias = "glm", alias = "bigmodel")]
     Zhipu,
     #[serde(alias = "deepseek_compatible")]
     Deepseek,
@@ -1143,48 +1365,156 @@ impl ProviderConfig {
 
     pub fn auth_hint_env_names(&self) -> Vec<String> {
         let mut env_names = Vec::new();
-        push_secret_ref_env_name(&mut env_names, self.oauth_access_token.as_ref());
-        push_secret_ref_env_name(&mut env_names, self.api_key.as_ref());
-        for env_name in self.credential_env_names() {
-            push_unique_env_key(&mut env_names, Some(env_name.as_str()));
+        match self.kind.auth_scheme() {
+            ProviderAuthScheme::Bearer => {
+                self.push_oauth_access_token_hint_env_names(&mut env_names);
+                self.push_api_key_hint_env_names(&mut env_names);
+            }
+            ProviderAuthScheme::XApiKey => {
+                self.push_api_key_hint_env_names(&mut env_names);
+            }
         }
         env_names
     }
 
-    pub fn requires_explicit_auth_configuration(&self) -> bool {
-        !self.auth_hint_env_names().is_empty()
-    }
+    pub fn support_facts(&self) -> ProviderSupportFacts {
+        let feature = self.kind.feature_family().support_facts();
+        let auth = self.build_auth_support_facts();
+        let region_endpoint = self.build_region_endpoint_support_facts();
 
-    pub fn auth_guidance_hint(&self) -> Option<String> {
-        if self.kind.feature_family() == ProviderFeatureFamily::Volcengine {
-            let provider_label = if matches!(
-                self.kind,
-                ProviderKind::Byteplus | ProviderKind::ByteplusCoding
-            ) {
-                "BytePlus"
-            } else {
-                "Volcengine"
-            };
-            let env_name = self
-                .kind
-                .default_api_key_env()
-                .unwrap_or("PROVIDER_API_KEY");
-            Some(format!(
-                "LoongClaw's {provider_label} OpenAI-compatible path uses `provider.api_key` / `{env_name}` and sends `Authorization: Bearer <{env_name}>`; AK/SK request signing is not used on this path"
-            ))
-        } else {
-            None
+        ProviderSupportFacts {
+            feature,
+            auth,
+            region_endpoint,
         }
     }
 
+    pub fn descriptor_document(&self) -> ProviderDescriptorDocument {
+        let profile = self.kind.profile();
+        let support_facts = self.support_facts();
+        let schema = ProviderDescriptorSchema {
+            version: PROVIDER_DESCRIPTOR_SCHEMA_VERSION,
+            surface: "provider_descriptor",
+            purpose: "internal_sdk_contract",
+        };
+        let kind = self.kind.as_str().to_owned();
+        let display_name = self.kind.display_name().to_owned();
+        let aliases = provider_descriptor_aliases(profile);
+        let protocol_family = self.kind.protocol_family().as_str().to_owned();
+        let default_headers = provider_descriptor_headers(profile);
+        let default_user_agent = self.kind.default_user_agent().map(str::to_owned);
+        let configuration_hint = self
+            .configuration_hint()
+            .or_else(|| self.kind.configuration_hint().map(str::to_owned));
+        let default_model = self.kind.default_model().map(str::to_owned);
+        let recommended_onboarding_model =
+            self.kind.recommended_onboarding_model().map(str::to_owned);
+        let feature = build_provider_descriptor_feature(&support_facts.feature);
+        let auth = self.build_provider_descriptor_auth(&support_facts.auth);
+        let region_endpoint =
+            self.build_provider_descriptor_region_endpoint(&support_facts.region_endpoint);
+
+        ProviderDescriptorDocument {
+            schema,
+            kind,
+            display_name,
+            aliases,
+            protocol_family,
+            default_headers,
+            default_user_agent,
+            configuration_hint,
+            default_model,
+            recommended_onboarding_model,
+            feature,
+            auth,
+            region_endpoint,
+        }
+    }
+
+    pub fn requires_explicit_auth_configuration(&self) -> bool {
+        let support_facts = self.support_facts();
+        support_facts.auth.requires_explicit_configuration
+    }
+
+    pub fn auth_guidance_hint(&self) -> Option<String> {
+        let support_facts = self.support_facts();
+        support_facts.auth.guidance_hint
+    }
+
     pub fn missing_auth_configuration_message(&self) -> String {
+        let support_facts = self.support_facts();
+        support_facts.auth.missing_configuration_message
+    }
+
+    fn build_auth_support_facts(&self) -> ProviderAuthSupportFacts {
         let env_names = self.auth_hint_env_names();
+        let requires_explicit_configuration = !env_names.is_empty();
+        let guidance_hint = self.build_auth_guidance_hint();
+        let alternative_configuration_hint = self.build_alternative_auth_configuration_hint();
+        let missing_configuration_message = self.build_missing_auth_configuration_message(
+            &env_names,
+            guidance_hint.as_deref(),
+            alternative_configuration_hint.as_deref(),
+        );
+
+        ProviderAuthSupportFacts {
+            hint_env_names: env_names,
+            requires_explicit_configuration,
+            guidance_hint,
+            alternative_configuration_hint,
+            missing_configuration_message,
+        }
+    }
+
+    fn build_provider_descriptor_auth(
+        &self,
+        auth_support: &ProviderAuthSupportFacts,
+    ) -> ProviderDescriptorAuth {
+        let scheme = self.kind.auth_scheme().as_str().to_owned();
+        let auth_optional = self.kind.auth_optional();
+        let model_probe_auth_optional = self.kind.model_probe_auth_optional();
+        let default_api_key_env = self.kind.default_api_key_env().map(str::to_owned);
+        let api_key_env_aliases = provider_descriptor_env_aliases(self.kind.api_key_env_aliases());
+        let default_oauth_access_token_env = self
+            .kind
+            .default_oauth_access_token_env()
+            .map(str::to_owned);
+        let oauth_access_token_env_aliases =
+            provider_descriptor_env_aliases(self.kind.oauth_access_token_env_aliases());
+        let hint_env_names = auth_support.hint_env_names.clone();
+        let requires_explicit_configuration = auth_support.requires_explicit_configuration;
+        let guidance_hint = auth_support.guidance_hint.clone();
+        let alternative_configuration_hint = auth_support.alternative_configuration_hint.clone();
+        let missing_configuration_message = auth_support.missing_configuration_message.clone();
+
+        ProviderDescriptorAuth {
+            scheme,
+            auth_optional,
+            model_probe_auth_optional,
+            default_api_key_env,
+            api_key_env_aliases,
+            default_oauth_access_token_env,
+            oauth_access_token_env_aliases,
+            hint_env_names,
+            requires_explicit_configuration,
+            guidance_hint,
+            alternative_configuration_hint,
+            missing_configuration_message,
+        }
+    }
+
+    fn build_missing_auth_configuration_message(
+        &self,
+        env_names: &[String],
+        guidance_hint: Option<&str>,
+        alternative_configuration_hint: Option<&str>,
+    ) -> String {
         let mut configuration_paths = vec!["configure provider credentials".to_owned()];
         if !env_names.is_empty() {
             configuration_paths.push(format!("set {} in env", env_names.join(", ")));
         }
-        if let Some(hint) = self.alternative_auth_configuration_hint() {
-            configuration_paths.push(hint);
+        if let Some(hint) = alternative_configuration_hint {
+            configuration_paths.push(hint.to_owned());
         }
         let mut message = "provider credentials are missing".to_owned();
         if let Some(detail) = self.missing_auth_runtime_detail() {
@@ -1193,24 +1523,46 @@ impl ProviderConfig {
         }
         message.push_str("; ");
         message.push_str(join_guidance_options(&configuration_paths).as_str());
-        if let Some(hint) = self.auth_guidance_hint() {
+        if let Some(hint) = guidance_hint {
             message.push(' ');
-            message.push_str(hint.as_str());
+            message.push_str(hint);
         }
         message
     }
 
-    fn alternative_auth_configuration_hint(&self) -> Option<String> {
-        if self.kind == ProviderKind::Bedrock {
-            Some(
-                "configure AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY with AWS_REGION or AWS_DEFAULT_REGION for SigV4"
-                    .to_owned(),
-            )
-        } else if self.kind == ProviderKind::Custom {
-            Some("add `Authorization` / `X-API-Key` in `provider.headers`".to_owned())
-        } else {
-            None
+    fn build_auth_guidance_hint(&self) -> Option<String> {
+        let profile = self.kind.profile();
+        profile.auth_guidance_hint()
+    }
+
+    fn push_oauth_access_token_hint_env_names(&self, env_names: &mut Vec<String>) {
+        push_secret_ref_env_name(env_names, self.oauth_access_token.as_ref());
+        if has_configured_secret_ref(self.oauth_access_token.as_ref()) {
+            return;
         }
+
+        let oauth_env_names = self.oauth_access_token_env_names();
+        for oauth_env_name in oauth_env_names {
+            push_unique_env_key(env_names, Some(oauth_env_name.as_str()));
+        }
+    }
+
+    fn push_api_key_hint_env_names(&self, env_names: &mut Vec<String>) {
+        push_secret_ref_env_name(env_names, self.api_key.as_ref());
+        if has_configured_secret_ref(self.api_key.as_ref()) {
+            return;
+        }
+
+        let api_key_env_names = self.api_key_env_names();
+        for api_key_env_name in api_key_env_names {
+            push_unique_env_key(env_names, Some(api_key_env_name.as_str()));
+        }
+    }
+
+    fn build_alternative_auth_configuration_hint(&self) -> Option<String> {
+        let profile = self.kind.profile();
+        let hint = profile.alternative_auth_configuration_hint();
+        hint.map(str::to_owned)
     }
 
     pub fn transport_policy(&self) -> ProviderTransportPolicy {
@@ -1675,20 +2027,54 @@ impl ProviderConfig {
         None
     }
 
+    fn build_region_endpoint_support_facts(&self) -> ProviderRegionEndpointSupportFacts {
+        let guide = self.kind.region_endpoint_guide();
+        let note = guide.map(|value| value.note(self));
+        let catalog_failure_hint = guide.map(|value| value.failure_hint(self));
+        let request_failure_hint = guide.map(|value| value.request_failure_hint(self));
+
+        ProviderRegionEndpointSupportFacts {
+            note,
+            catalog_failure_hint,
+            request_failure_hint,
+        }
+    }
+
+    fn build_provider_descriptor_region_endpoint(
+        &self,
+        region_endpoint_support: &ProviderRegionEndpointSupportFacts,
+    ) -> ProviderDescriptorRegionEndpoint {
+        let region_endpoint_info = self.kind.region_endpoint_info();
+        let family_label = region_endpoint_info
+            .as_ref()
+            .map(|info| info.family_label.to_owned());
+        let variants = provider_descriptor_region_variants(region_endpoint_info);
+        let note = region_endpoint_support.note.clone();
+        let catalog_failure_hint = region_endpoint_support.catalog_failure_hint.clone();
+        let request_failure_hint = region_endpoint_support.request_failure_hint.clone();
+
+        ProviderDescriptorRegionEndpoint {
+            family_label,
+            variants,
+            note,
+            catalog_failure_hint,
+            request_failure_hint,
+        }
+    }
+
     pub fn region_endpoint_note(&self) -> Option<String> {
-        Some(self.kind.region_endpoint_guide()?.note(self))
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.note
     }
 
     pub fn region_endpoint_failure_hint(&self) -> Option<String> {
-        Some(self.kind.region_endpoint_guide()?.failure_hint(self))
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.catalog_failure_hint
     }
 
     pub fn request_region_endpoint_failure_hint(&self) -> Option<String> {
-        Some(
-            self.kind
-                .region_endpoint_guide()?
-                .request_failure_hint(self),
-        )
+        let support_facts = self.support_facts();
+        support_facts.region_endpoint.request_failure_hint
     }
 
     fn uses_byteplus_coding_plan_path(&self) -> bool {
@@ -2362,7 +2748,7 @@ impl ProviderKind {
     pub fn configuration_hint(self) -> Option<&'static str> {
         if self == ProviderKind::Bedrock {
             Some(
-                "set `AWS_REGION`/`AWS_DEFAULT_REGION` or replace `<region>` in `provider.base_url` with your Bedrock runtime region",
+                "set `BEDROCK_AWS_REGION`/`AWS_REGION`/`AWS_DEFAULT_REGION` or replace `<region>` in `provider.base_url` with your Bedrock runtime region",
             )
         } else if self == ProviderKind::CloudflareAiGateway {
             Some(
@@ -2514,6 +2900,78 @@ impl ProviderKind {
             variants,
         })
     }
+}
+
+fn provider_descriptor_aliases(profile: &ProviderProfile) -> Vec<String> {
+    let mut aliases = Vec::new();
+
+    for alias in profile.aliases {
+        let alias = (*alias).to_owned();
+        aliases.push(alias);
+    }
+
+    aliases
+}
+
+fn provider_descriptor_headers(profile: &ProviderProfile) -> Vec<ProviderDescriptorHeader> {
+    let mut headers = Vec::new();
+
+    for (name, value) in profile.default_headers {
+        let header = ProviderDescriptorHeader {
+            name: (*name).to_owned(),
+            value: (*value).to_owned(),
+        };
+        headers.push(header);
+    }
+
+    headers
+}
+
+fn provider_descriptor_env_aliases(raw_aliases: &[&str]) -> Vec<String> {
+    let mut aliases = Vec::new();
+
+    for raw_alias in raw_aliases {
+        let alias = (*raw_alias).to_owned();
+        aliases.push(alias);
+    }
+
+    aliases
+}
+
+fn build_provider_descriptor_feature(
+    feature_support: &ProviderFeatureSupportFacts,
+) -> ProviderDescriptorFeature {
+    let family = feature_support.family.as_str().to_owned();
+    let gate_name = feature_support.gate_name.to_owned();
+    let enabled_in_build = feature_support.enabled_in_build;
+    let disabled_message = feature_support.disabled_message.clone();
+
+    ProviderDescriptorFeature {
+        family,
+        gate_name,
+        enabled_in_build,
+        disabled_message,
+    }
+}
+
+fn provider_descriptor_region_variants(
+    region_endpoint_info: Option<ProviderRegionEndpointInfo>,
+) -> Vec<ProviderDescriptorRegionVariant> {
+    let mut variants = Vec::new();
+
+    let Some(region_endpoint_info) = region_endpoint_info else {
+        return variants;
+    };
+
+    for variant in region_endpoint_info.variants {
+        let descriptor_variant = ProviderDescriptorRegionVariant {
+            label: variant.label.to_owned(),
+            base_url: variant.base_url.to_owned(),
+        };
+        variants.push(descriptor_variant);
+    }
+
+    variants
 }
 
 pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
@@ -3124,7 +3582,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
     ProviderProfile {
         kind: ProviderKind::StepPlan,
         id: "step_plan",
-        aliases: &["stepfun_step_plan", "step_plan"],
+        aliases: &["stepfun_step_plan"],
         base_url: "https://api.stepfun.ai",
         chat_completions_path: "/step_plan/v1/chat/completions",
         models_path: Some("/step_plan/v1/models"),
@@ -3672,14 +4130,382 @@ fn derive_responses_path(chat_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
+    use std::collections::{BTreeMap, BTreeSet};
+
     use crate::test_support::ScopedEnv;
     use loongclaw_contracts::SecretRef;
+
+    fn encode_provider_descriptor(descriptor: &ProviderDescriptorDocument) -> Value {
+        serde_json::to_value(descriptor).expect("serialize provider descriptor document")
+    }
 
     #[test]
     fn provider_profile_lookup_matches_kind() {
         for kind in ProviderKind::all_sorted() {
             assert_eq!(kind.profile().kind, *kind);
         }
+    }
+
+    #[test]
+    fn provider_profile_aliases_are_unique_and_do_not_shadow_ids() {
+        let mut provider_ids = BTreeSet::new();
+        for kind in ProviderKind::all_sorted() {
+            let profile = kind.profile();
+            let provider_id = profile.id;
+            let inserted = provider_ids.insert(provider_id);
+            assert!(inserted, "duplicate provider id detected: {provider_id}");
+        }
+
+        let mut alias_owners = BTreeMap::new();
+        for kind in ProviderKind::all_sorted() {
+            let profile = kind.profile();
+            let provider_id = profile.id;
+            for alias in profile.aliases {
+                let normalized_alias = alias.trim();
+                assert!(
+                    !normalized_alias.is_empty(),
+                    "provider `{provider_id}` contains an empty alias"
+                );
+                assert_ne!(
+                    normalized_alias, provider_id,
+                    "provider `{provider_id}` repeats its canonical id as an alias"
+                );
+                assert!(
+                    !provider_ids.contains(normalized_alias),
+                    "provider alias `{normalized_alias}` collides with a canonical provider id"
+                );
+
+                let previous_owner = alias_owners.insert(normalized_alias.to_owned(), provider_id);
+                assert!(
+                    previous_owner.is_none(),
+                    "provider alias `{normalized_alias}` is shared by `{}` and `{provider_id}`",
+                    previous_owner.unwrap_or_default()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn provider_profile_aliases_round_trip_through_provider_kind_deserialization() {
+        for kind in ProviderKind::all_sorted() {
+            let profile = kind.profile();
+            let canonical_id = format!("\"{}\"", profile.id);
+            let parsed_canonical = serde_json::from_str::<ProviderKind>(canonical_id.as_str())
+                .expect("canonical provider id should deserialize");
+            assert_eq!(
+                parsed_canonical, *kind,
+                "canonical provider id should deserialize to its matching provider kind"
+            );
+
+            for alias in profile.aliases {
+                let raw_alias = format!("\"{alias}\"");
+                let parsed_alias = serde_json::from_str::<ProviderKind>(raw_alias.as_str())
+                    .expect("provider alias should deserialize");
+                assert_eq!(
+                    parsed_alias, *kind,
+                    "provider alias `{alias}` should deserialize to the same provider kind as parse_provider_kind_id"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn provider_feature_family_gate_messages_are_stable() {
+        let anthropic_message = ProviderFeatureFamily::Anthropic.disabled_message();
+        let bedrock_message = ProviderFeatureFamily::Bedrock.disabled_message();
+        let volcengine_message = ProviderFeatureFamily::Volcengine.disabled_message();
+        let openai_message = ProviderFeatureFamily::OpenAiCompatible.disabled_message();
+
+        assert_eq!(
+            anthropic_message,
+            "anthropic provider family is disabled (enable feature `provider-anthropic`)"
+        );
+        assert_eq!(
+            bedrock_message,
+            "bedrock provider family is disabled (enable feature `provider-bedrock`)"
+        );
+        assert_eq!(
+            volcengine_message,
+            "volcengine provider family is disabled (enable feature `provider-volcengine`)"
+        );
+        assert_eq!(
+            openai_message,
+            "openai-compatible provider family is disabled (enable feature `provider-openai`)"
+        );
+    }
+
+    #[test]
+    fn provider_profile_static_auth_hints_are_stable() {
+        let byteplus_hint = ProviderKind::ByteplusCoding
+            .profile()
+            .auth_guidance_hint()
+            .expect("byteplus coding should expose auth guidance");
+        let volcengine_hint = ProviderKind::Volcengine
+            .profile()
+            .auth_guidance_hint()
+            .expect("volcengine should expose auth guidance");
+        let bedrock_hint = ProviderKind::Bedrock
+            .profile()
+            .alternative_auth_configuration_hint()
+            .expect("bedrock should expose a SigV4 fallback hint");
+        let custom_hint = ProviderKind::Custom
+            .profile()
+            .alternative_auth_configuration_hint()
+            .expect("custom provider should expose header guidance");
+
+        assert!(byteplus_hint.contains("BytePlus"));
+        assert!(byteplus_hint.contains("BYTEPLUS_API_KEY"));
+        assert!(byteplus_hint.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
+
+        assert!(volcengine_hint.contains("Volcengine"));
+        assert!(volcengine_hint.contains("ARK_API_KEY"));
+        assert!(volcengine_hint.contains("AK/SK request signing is not used"));
+
+        assert!(bedrock_hint.contains("AWS_ACCESS_KEY_ID"));
+        assert!(bedrock_hint.contains("AWS_SECRET_ACCESS_KEY"));
+        assert!(bedrock_hint.contains("BEDROCK_AWS_REGION"));
+        assert!(bedrock_hint.contains("AWS_REGION"));
+
+        assert!(custom_hint.contains("Authorization"));
+        assert!(custom_hint.contains("X-API-Key"));
+        assert!(custom_hint.contains("provider.headers"));
+    }
+
+    #[test]
+    fn provider_feature_support_facts_are_stable() {
+        let facts = ProviderFeatureFamily::Volcengine.support_facts();
+
+        assert_eq!(facts.family, ProviderFeatureFamily::Volcengine);
+        assert_eq!(facts.gate_name, "provider-volcengine");
+        assert_eq!(
+            facts.enabled_in_build,
+            ProviderFeatureFamily::Volcengine.is_enabled_in_build()
+        );
+        assert_eq!(
+            facts.disabled_message,
+            "volcengine provider family is disabled (enable feature `provider-volcengine`)"
+        );
+    }
+
+    #[test]
+    fn provider_support_facts_preserve_auth_guidance_and_missing_auth_message() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::ByteplusCoding,
+            ..ProviderConfig::default()
+        };
+
+        let support_facts = provider.support_facts();
+        let auth_support = support_facts.auth;
+        let guidance_hint = auth_support
+            .guidance_hint
+            .expect("byteplus coding should expose auth guidance");
+
+        assert!(auth_support.requires_explicit_configuration);
+        assert!(
+            auth_support
+                .hint_env_names
+                .contains(&"BYTEPLUS_API_KEY".to_owned())
+        );
+        assert!(guidance_hint.contains("BytePlus"));
+        assert!(guidance_hint.contains("BYTEPLUS_API_KEY"));
+        assert!(guidance_hint.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
+        assert!(
+            auth_support
+                .missing_configuration_message
+                .contains("BYTEPLUS_API_KEY")
+        );
+        assert!(
+            auth_support
+                .missing_configuration_message
+                .contains("BytePlus")
+        );
+    }
+
+    #[test]
+    fn auth_hint_env_names_respect_explicit_api_key_env_binding_precedence() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Openai,
+            api_key: Some(SecretRef::Env {
+                env: "TEAM_OPENAI_KEY".to_owned(),
+            }),
+            ..ProviderConfig::default()
+        };
+
+        let env_names = provider.auth_hint_env_names();
+
+        assert_eq!(env_names, vec!["TEAM_OPENAI_KEY".to_owned()]);
+    }
+
+    #[test]
+    fn auth_hint_env_names_keep_api_key_fallback_after_explicit_oauth_env_binding() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Openai,
+            oauth_access_token: Some(SecretRef::Env {
+                env: "TEAM_OPENAI_OAUTH".to_owned(),
+            }),
+            ..ProviderConfig::default()
+        };
+
+        let env_names = provider.auth_hint_env_names();
+
+        assert_eq!(
+            env_names,
+            vec!["TEAM_OPENAI_OAUTH".to_owned(), "OPENAI_API_KEY".to_owned(),]
+        );
+    }
+
+    #[test]
+    fn provider_support_facts_preserve_region_endpoint_hints() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let support_facts = provider.support_facts();
+        let region_endpoint_support = support_facts.region_endpoint;
+        let note = region_endpoint_support
+            .note
+            .expect("minimax should expose a region endpoint note");
+        let catalog_failure_hint = region_endpoint_support
+            .catalog_failure_hint
+            .expect("minimax should expose a catalog failure hint");
+        let request_failure_hint = region_endpoint_support
+            .request_failure_hint
+            .expect("minimax should expose a request failure hint");
+
+        assert!(note.contains("MiniMax region endpoint"));
+        assert!(note.contains("https://api.minimaxi.com"));
+        assert!(note.contains("https://api.minimax.io"));
+        assert!(catalog_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(catalog_failure_hint.contains("https://api.minimax.io"));
+        assert!(request_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(request_failure_hint.contains("https://api.minimax.io"));
+    }
+
+    #[test]
+    fn provider_descriptor_document_preserves_x_api_key_contract_facts() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Anthropic,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let hint_env_names = encoded["auth"]["hint_env_names"]
+            .as_array()
+            .expect("hint env names should be an array");
+
+        assert_eq!(
+            encoded["schema"]["version"],
+            json!(PROVIDER_DESCRIPTOR_SCHEMA_VERSION)
+        );
+        assert_eq!(encoded["schema"]["surface"], json!("provider_descriptor"));
+        assert_eq!(encoded["schema"]["purpose"], json!("internal_sdk_contract"));
+        assert_eq!(encoded["kind"], json!("anthropic"));
+        assert_eq!(encoded["display_name"], json!("Anthropic"));
+        assert_eq!(encoded["protocol_family"], json!("anthropic_messages"));
+        assert_eq!(encoded["feature"]["family"], json!("anthropic"));
+        assert_eq!(encoded["auth"]["scheme"], json!("x_api_key"));
+        assert_eq!(
+            encoded["auth"]["default_api_key_env"],
+            json!("ANTHROPIC_API_KEY")
+        );
+        assert_eq!(
+            encoded["auth"]["requires_explicit_configuration"],
+            json!(true)
+        );
+        assert!(
+            hint_env_names.contains(&json!("ANTHROPIC_API_KEY")),
+            "anthropic descriptor should surface the canonical x-api-key env hint"
+        );
+        assert_eq!(
+            encoded["default_headers"][0]["name"],
+            json!("anthropic-version")
+        );
+    }
+
+    #[test]
+    fn provider_descriptor_document_marks_auth_optional_profiles_without_required_envs() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Ollama,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+
+        assert_eq!(encoded["kind"], json!("ollama"));
+        assert_eq!(encoded["auth"]["scheme"], json!("bearer"));
+        assert_eq!(encoded["auth"]["auth_optional"], json!(true));
+        assert_eq!(encoded["auth"]["model_probe_auth_optional"], json!(true));
+        assert_eq!(
+            encoded["auth"]["requires_explicit_configuration"],
+            json!(false)
+        );
+        assert_eq!(encoded["auth"]["hint_env_names"], json!([]));
+        assert_eq!(encoded["region_endpoint"]["variants"], json!([]));
+    }
+
+    #[test]
+    fn provider_descriptor_document_prefers_dynamic_configuration_hint() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Custom,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let configuration_hint = encoded["configuration_hint"]
+            .as_str()
+            .expect("custom descriptor should expose a configuration hint");
+
+        assert!(configuration_hint.contains("tenant-scoped base_url configuration"));
+        assert!(configuration_hint.contains("current template"));
+        assert!(configuration_hint.contains("https://<openai-compatible-host>/v1"));
+    }
+
+    #[test]
+    fn provider_descriptor_document_preserves_region_endpoint_variants_and_hints() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let note = encoded["region_endpoint"]["note"]
+            .as_str()
+            .expect("minimax descriptor should expose a region note");
+        let catalog_failure_hint = encoded["region_endpoint"]["catalog_failure_hint"]
+            .as_str()
+            .expect("minimax descriptor should expose a catalog failure hint");
+        let request_failure_hint = encoded["region_endpoint"]["request_failure_hint"]
+            .as_str()
+            .expect("minimax descriptor should expose a request failure hint");
+
+        assert_eq!(encoded["region_endpoint"]["family_label"], json!("MiniMax"));
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][0]["label"],
+            json!("CN")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][0]["base_url"],
+            json!("https://api.minimaxi.com")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][1]["label"],
+            json!("Global")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][1]["base_url"],
+            json!("https://api.minimax.io")
+        );
+        assert!(note.contains("MiniMax region endpoint"));
+        assert!(catalog_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(catalog_failure_hint.contains("https://api.minimax.io"));
+        assert!(request_failure_hint.contains("https://api.minimaxi.com"));
+        assert!(request_failure_hint.contains("https://api.minimax.io"));
     }
 
     #[test]

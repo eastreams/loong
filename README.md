@@ -417,10 +417,11 @@ contract for automation or support tooling.
    - dashboard
    - onboarding
 
-   The initial product mode stays same-origin and local by default.
+   The initial product mode stays same-origin and localhost-bound by default.
 
-   That local-first boundary is the current operating slice, not the long-term
-   architecture endpoint.
+   That default bind policy is a security boundary for the current operating
+   slice, not a statement that future gateway/service expansion is out of
+   scope or the long-term architecture endpoint.
 
    The long-term direction is to keep Web UI attached to the same daemon-owned
    gateway/service runtime rather than creating a second assistant runtime.
@@ -557,15 +558,49 @@ By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs ofte
 
 ### Multi-Channel Serve
 
-Use `multi-channel-serve` when you want one process to keep an interactive CLI
-session in the foreground while supervising every enabled runtime-backed
-service channel in the same runtime.
+Use `gateway run` when you want LoongClaw to claim the explicit gateway owner
+slot and supervise the enabled runtime-backed service-channel subset.
 
-Today this command is the attached runtime-owner precursor to a broader
-daemon-owned gateway service surface. The current slice keeps CLI in the
-foreground, but the longer-term direction is to decouple CLI lifecycle from
-service lifecycle and let one service host own routes, status, logs, pairing,
-and richer channel runtimes.
+The current gateway slice now includes:
+
+- `loongclaw gateway run` for the owner lifecycle
+- `loongclaw gateway status` for cross-process owner inspection
+- `loongclaw gateway stop` for cooperative shutdown
+- a localhost-only authenticated control surface that publishes status,
+  channel inventory, runtime snapshot, operator summary, and cooperative stop
+  endpoints from the same `gateway run` owner
+
+`gateway run` starts headless by default. Pass `--session` when you want the
+concurrent CLI host attached to the same runtime owner.
+
+When `gateway run` is active, it also binds a loopback-only control endpoint on
+an ephemeral localhost port and writes the actual `bind_address`, `port`, and
+`token_path` into `loongclaw gateway status --json`. Local clients such as the
+future Web UI can discover the running owner through that persisted state
+without introducing a second service lifecycle.
+
+The daemon now also carries a reusable localhost gateway client/discovery layer
+that centralizes loopback validation, bearer-token loading, and route helpers
+for `status`, `channels`, `runtime-snapshot`, `operator-summary`, and `stop`.
+That keeps dashboard and Web UI bootstrap logic out of ad-hoc file reads.
+
+```bash
+loongclaw gateway run --config ~/.loongclaw/config.toml
+```
+
+```bash
+loongclaw gateway status --json
+```
+
+```bash
+loongclaw gateway stop
+```
+
+`multi-channel-serve` still works as the attached compatibility wrapper when
+you want one process to keep an interactive CLI session in the foreground while
+supervising every enabled runtime-backed service channel in the same runtime.
+It now rides on the same gateway owner contract rather than remaining the
+long-term product noun.
 
 ```bash
 loong multi-channel-serve \
@@ -578,6 +613,10 @@ loong multi-channel-serve \
 ```
 
 `--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
+
+The longer-term direction remains to let one gateway-owned service host
+decouple CLI lifecycle from service lifecycle and own routes, status, logs,
+pairing, and richer channel runtimes.
 
 `loong channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
 
@@ -764,6 +803,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [Architecture](ARCHITECTURE.md)                             | Crate map and layered execution overview                                                                    |
 | [Core Beliefs](docs/design-docs/core-beliefs.md)            | Core engineering principles                                                                                 |
+| [SDK Docs](docs/sdk/index.md)                               | Capability authoring, internal integration seams, validator meaning, and promotion-oriented SDK references  |
 | [Roadmap](docs/ROADMAP.md)                                  | Stage-based milestones and direction                                                                        |
 | [Product Sense](docs/PRODUCT_SENSE.md)                      | Current product contract and user journey                                                                   |
 | [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, and memory                                  |

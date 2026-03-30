@@ -116,15 +116,18 @@ fn render_status_failure_message(
     max_attempts: usize,
     response_body: &Value,
 ) -> String {
+    let support_facts = provider.support_facts();
+    let auth_support = support_facts.auth;
+    let region_endpoint_support = support_facts.region_endpoint;
     let mut message = format!(
         "provider returned status {status_code} for model `{model}` on attempt {attempt}/{max_attempts}: {response_body}"
     );
     if matches!(reason, ProviderFailoverReason::AuthRejected) {
-        if let Some(hint) = provider.auth_guidance_hint() {
+        if let Some(hint) = auth_support.guidance_hint {
             message.push(' ');
             message.push_str(hint.as_str());
         }
-        if let Some(hint) = provider.request_region_endpoint_failure_hint() {
+        if let Some(hint) = region_endpoint_support.request_failure_hint {
             message.push(' ');
             message.push_str(hint.as_str());
         }
@@ -1233,6 +1236,32 @@ mod tests {
                 case.status_code, case.attempt, case.auto_model_mode, case.api_error
             );
         }
+    }
+
+    #[test]
+    fn render_status_failure_message_includes_auth_guidance_for_auth_rejection() {
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::ByteplusCoding,
+            ..ProviderConfig::default()
+        };
+
+        let message = render_status_failure_message(
+            &provider,
+            ProviderFailoverReason::AuthRejected,
+            401,
+            "doubao-seed-1-6-thinking-250715",
+            1,
+            3,
+            &json!({
+                "error": {
+                    "message": "invalid api key"
+                }
+            }),
+        );
+
+        assert!(message.contains("BytePlus"));
+        assert!(message.contains("BYTEPLUS_API_KEY"));
+        assert!(message.contains("Authorization: Bearer <BYTEPLUS_API_KEY>"));
     }
 
     #[test]

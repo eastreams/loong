@@ -4021,6 +4021,25 @@ impl<R> AppToolDispatcher for CoordinatorAppToolDispatcher<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
+    async fn preflight_tool_intent_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+        budget_state: &super::autonomy_policy::AutonomyTurnBudgetState,
+    ) -> Result<super::turn_engine::ToolPreflightOutcome, String> {
+        self.fallback
+            .preflight_tool_intent_with_binding(
+                session_context,
+                intent,
+                descriptor,
+                binding,
+                budget_state,
+            )
+            .await
+    }
+
     async fn maybe_require_approval(
         &self,
         session_context: &SessionContext,

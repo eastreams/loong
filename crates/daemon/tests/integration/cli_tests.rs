@@ -2383,6 +2383,97 @@ fn multi_channel_serve_cli_help_mentions_session_and_channel_account_flags() {
 }
 
 #[test]
+fn gateway_run_cli_accepts_optional_session_and_channel_account_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "gateway",
+        "run",
+        "--session",
+        "cli-gateway",
+        "--channel-account",
+        "telegram=bot_123456",
+        "--channel-account",
+        "matrix=bridge-sync",
+    ])
+    .expect("gateway run should parse");
+
+    match cli.command {
+        Some(Commands::Gateway { command }) => match command {
+            loongclaw_daemon::gateway::service::GatewayCommand::Run {
+                session,
+                channel_account,
+                ..
+            } => {
+                assert_eq!(session.as_deref(), Some("cli-gateway"));
+                assert_eq!(channel_account.len(), 2);
+                assert_eq!(channel_account[0].channel_id, "telegram");
+                assert_eq!(channel_account[0].account_id, "bot_123456");
+                assert_eq!(channel_account[1].channel_id, "matrix");
+                assert_eq!(channel_account[1].account_id, "bridge-sync");
+            }
+            other @ loongclaw_daemon::gateway::service::GatewayCommand::Status { .. }
+            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
+                panic!("unexpected gateway subcommand: {other:?}")
+            }
+        },
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn gateway_run_cli_allows_headless_mode_without_session() {
+    let cli = try_parse_cli(["loongclaw", "gateway", "run"])
+        .expect("gateway run should allow headless mode");
+
+    match cli.command {
+        Some(Commands::Gateway { command }) => match command {
+            loongclaw_daemon::gateway::service::GatewayCommand::Run { session, .. } => {
+                assert_eq!(session, None);
+            }
+            other @ loongclaw_daemon::gateway::service::GatewayCommand::Status { .. }
+            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
+                panic!("unexpected gateway subcommand: {other:?}")
+            }
+        },
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn gateway_status_cli_parses_json_flag() {
+    let cli = try_parse_cli(["loongclaw", "gateway", "status", "--json"])
+        .expect("gateway status should parse");
+
+    match cli.command {
+        Some(Commands::Gateway { command }) => match command {
+            loongclaw_daemon::gateway::service::GatewayCommand::Status { json } => {
+                assert!(json);
+            }
+            other @ loongclaw_daemon::gateway::service::GatewayCommand::Run { .. }
+            | other @ loongclaw_daemon::gateway::service::GatewayCommand::Stop => {
+                panic!("unexpected gateway subcommand: {other:?}")
+            }
+        },
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn gateway_cli_help_mentions_run_status_stop_and_optional_session() {
+    let help = render_cli_help(["gateway"]);
+    let run_help = render_cli_help(["gateway", "run"]);
+
+    assert!(help.contains("run"), "help: {help}");
+    assert!(help.contains("status"), "help: {help}");
+    assert!(help.contains("stop"), "help: {help}");
+    assert!(run_help.contains("--session <SESSION>"), "help: {run_help}");
+    assert!(
+        run_help.contains("--channel-account <CHANNEL=ACCOUNT>"),
+        "help: {run_help}"
+    );
+}
+
+#[test]
 fn default_channel_send_target_kind_uses_command_family_send_metadata() {
     assert_eq!(
         default_channel_send_target_kind(ChannelSendCliSpec {

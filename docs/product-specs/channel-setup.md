@@ -20,9 +20,10 @@ needs.
       surfaces such as Zalo, Zalo Personal, and WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel today.
-- [ ] Product docs describe `multi-channel-serve` as the current attached
-      runtime owner for shipped runtime-backed surfaces and as the precursor to
-      a broader gateway service layer rather than the long-term product noun.
+- [ ] Product docs describe `gateway run/status/stop` as the current explicit
+      gateway owner contract and `multi-channel-serve` as the attached
+      compatibility wrapper for shipped runtime-backed surfaces rather than the
+      long-term product noun.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
       never presents webhook callback mode as a supported LoongClaw integration path.
 - [ ] Channel setup never implies a channel is ready until its required
@@ -81,8 +82,12 @@ do not overclaim runtime support:
   status, and direct sends without pretending they also own a long-running
   serve runtime
 - runtime-backed service channels are a strict shipped subset of the catalog
-- `multi-channel-serve` is the current attached runtime-owner precursor and
-  only supervises enabled runtime-backed channels while using repeatable
+- `gateway run` is the current explicit runtime-owner contract and can run
+  headless or with an attached CLI session
+- `gateway status` and `gateway stop` provide the first cross-process owner
+  inspection and cooperative shutdown surfaces
+- `multi-channel-serve` is the attached compatibility wrapper and only
+  supervises enabled runtime-backed channels while using repeatable
   `--channel-account <channel=account>` selectors instead of channel-specific
   flags
 - the longer-term direction is an explicit gateway service that will own
@@ -370,11 +375,19 @@ Nostr is shipped as a signed relay-publish surface:
 
 ### Multi-Channel Serve And Gateway Direction
 
-`multi-channel-serve` is the current attached runtime owner for the shipped
-service-channel subset. It is also the first precursor to the planned explicit
-gateway service rather than the long-term product noun:
+`gateway run/status/stop` is the current explicit owner contract for the
+shipped runtime-backed service-channel subset. `multi-channel-serve` remains
+the attached compatibility wrapper rather than the long-term product noun:
 
-- it keeps the concurrent CLI host in the foreground
+- `gateway run` can claim the persisted owner slot headless or attach a CLI
+  host when `--session` is provided
+- `gateway status` can inspect the persisted owner snapshot from another CLI
+  process
+- `gateway stop` can request cooperative shutdown from another CLI process
+- `multi-channel-serve` uses the same gateway owner contract while preserving
+  the attached CLI-first workflow for operators who want one foreground session
+
+- `multi-channel-serve` keeps the concurrent CLI host in the foreground
 - it supervises every enabled runtime-backed surface from the loaded config
 - it accepts repeatable `--channel-account <channel=account>` selectors to pin
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
@@ -386,7 +399,8 @@ gateway service rather than the long-term product noun:
 - it never promotes catalog-only planned surfaces such as Twitch, Zalo, Zalo
   Personal, or WebChat into runtime supervision until those adapters are
   implemented
-- the later gateway service should absorb this runtime ownership model, then
+- the gateway service should continue to absorb this runtime ownership model,
+  then
   add detached service lifecycle, route mounting, status/log surfaces, pairing,
   and richer gateway-native channel runtimes on top of the same registry-driven
   inventory contract

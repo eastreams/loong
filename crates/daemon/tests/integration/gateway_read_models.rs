@@ -90,7 +90,6 @@ fn legacy_acp_dispatch_payload_json(
         "dispatch": acp_dispatch_decision_json(session_id, decision),
     })
 }
-
 #[test]
 fn gateway_read_model_channel_inventory_matches_channel_cli_contract() {
     let config = mvp::config::LoongClawConfig::default();
@@ -333,6 +332,88 @@ fn gateway_read_model_runtime_snapshot_embeds_inventory_and_tool_summary() {
             .as_u64()
             .is_some_and(|value| value > 0),
         "runtime snapshot should advertise at least one visible tool"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn gateway_read_model_operator_summary_keeps_owner_control_and_runtime_rollups() {
+    let root = unique_temp_dir("loongclaw-gateway-operator-summary");
+    let config_path = write_gateway_test_config(&root);
+    let config_path_text = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(config_path_text))
+        .expect("collect runtime snapshot");
+    let inventory = gateway::read_models::build_channel_inventory_read_model(
+        config_path_text,
+        &snapshot.channels,
+    );
+    let runtime_snapshot = gateway::read_models::build_runtime_snapshot_read_model(&snapshot);
+    let owner_status = gateway::state::GatewayOwnerStatus {
+        runtime_dir: "/tmp/loongclaw-gateway-runtime".to_owned(),
+        phase: "running".to_owned(),
+        running: true,
+        stale: false,
+        pid: Some(42),
+        mode: gateway::state::GatewayOwnerMode::GatewayHeadless,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        config_path: config_path_text.to_owned(),
+        attached_cli_session: None,
+        started_at_ms: 100,
+        last_heartbeat_at: 200,
+        stopped_at_ms: None,
+        shutdown_reason: None,
+        last_error: None,
+        configured_surface_count: 0,
+        running_surface_count: 0,
+        bind_address: Some("127.0.0.1".to_owned()),
+        port: Some(7777),
+        token_path: Some("/tmp/loongclaw-gateway-runtime/control-token".to_owned()),
+    };
+
+    let summary = gateway::read_models::build_operator_summary_read_model(
+        &owner_status,
+        &inventory,
+        &runtime_snapshot,
+    );
+    let encoded = serde_json::to_value(&summary).expect("serialize operator summary read model");
+
+    assert_eq!(summary.owner.phase, "running");
+    assert_eq!(
+        summary.control_surface.base_url.as_deref(),
+        Some("http://127.0.0.1:7777")
+    );
+    assert!(summary.control_surface.loopback_only);
+    assert_eq!(
+        summary.channels.catalog_channel_count,
+        inventory.channel_catalog.len()
+    );
+    assert_eq!(
+        summary.channels.configured_account_count,
+        inventory.channels.len()
+    );
+    assert_eq!(
+        summary.channels.enabled_service_channel_count,
+        runtime_snapshot.channels.enabled_service_channel_ids.len()
+    );
+    assert_eq!(
+        summary.channels.surfaces.len(),
+        inventory.channel_surfaces.len()
+    );
+    assert_eq!(
+        summary.runtime.visible_tool_count,
+        runtime_snapshot.tools.visible_tool_count
+    );
+    assert_eq!(
+        summary.runtime.active_provider_profile_id.as_deref(),
+        runtime_snapshot.provider["active_profile_id"].as_str()
+    );
+    assert_eq!(
+        encoded["control_surface"]["base_url"],
+        "http://127.0.0.1:7777"
     );
 
     fs::remove_dir_all(&root).ok();

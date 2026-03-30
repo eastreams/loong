@@ -7,14 +7,20 @@ Catalog of design documents and architectural decisions.
 | Document | Scope | Status |
 |----------|-------|--------|
 | [Core Beliefs](core-beliefs.md) | Engineering principles and taste enforcement | Living |
+| [Capability Promotion Contract](capability-promotion-contract.md) | Governed codification path from runtime evidence to durable capability assets | Active |
 | [Local Product Control Plane](local-product-control-plane.md) | Localhost-only platform layer above the runtime and below future HTTP/Web UI surfaces | Active |
 | [Discovery-First Tool Runtime Contract](discovery-first-tool-runtime-contract.md) | Provider-core tools, leases, parser rewrites, and follow-up turn contract | Active |
+| [External Authoring Contract](external-authoring-contract.md) | Public contract for capability packages and reusable capability assets | Active |
 | [Governance Simplification Classification](governance-simplification-classification.md) | Classifies governance surfaces as structural, transitional, cleanup-safe, or replacement-first | Active |
+| [Internal Integration SDK Contract](internal-integration-sdk-contract.md) | Maintainer-facing descriptor, registry, and projection contract for repository-owned surfaces | Active |
 | [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |
 | [Plugin Package Manifest Contract](plugin-package-manifest-contract.md) | Manifest-first plugin metadata, setup surface, and slot ownership contract | Active |
 | [OpenClaw Plugin Compatibility Contract](openclaw-plugin-compatibility-contract.md) | Foreign dialect normalization, compatibility-mode gating, and polyglot plugin strategy | Active |
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
 | [Reference Runtime Comparison](reference-runtime-comparison.md) | Productization gap analysis and convergence order for tasks, skills, and memory | Active |
+| [SDK Stability Policy](sdk-stability-policy.md) | Stability boundaries across product vocabulary, public contracts, internal seams, and promotion artifacts | Active |
+| [SDK Strategy](sdk-strategy.md) | Product-governed capability authoring, acquisition, and promotion strategy | Active |
+| [SDK Validator Contract](sdk-validator-contract.md) | Public validation semantics for capability artifacts, package contracts, and promotion inputs | Active |
 | [ACP/ACPX Pre-Embed](acp-acpx-preembed.md) | Advanced cryptographic primitives | Active |
 | [Harness Engineering](harness-engineering.md) | Environment design for agent-driven development | Active |
 

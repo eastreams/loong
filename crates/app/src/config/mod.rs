@@ -71,12 +71,14 @@ pub use memory::{
 pub use outbound_http::OutboundHttpConfig;
 #[allow(unused_imports)]
 pub use provider::{
-    ModelCatalogProbeRecovery, ProviderAuthScheme, ProviderConfig, ProviderFeatureFamily,
-    ProviderKind, ProviderProfileConfig, ProviderProfileHealthModeConfig,
-    ProviderProfileStateBackendKind, ProviderProtocolFamily, ProviderReasoningExtraBodyModeConfig,
-    ProviderToolSchemaModeConfig, ProviderTransportFallback, ProviderTransportPolicy,
-    ProviderTransportReadiness, ProviderTransportReadinessLevel, ProviderWireApi, ReasoningEffort,
-    parse_provider_kind_id,
+    ModelCatalogProbeRecovery, PROVIDER_DESCRIPTOR_SCHEMA_VERSION, ProviderAuthScheme,
+    ProviderConfig, ProviderDescriptorAuth, ProviderDescriptorDocument, ProviderDescriptorFeature,
+    ProviderDescriptorHeader, ProviderDescriptorRegionEndpoint, ProviderDescriptorRegionVariant,
+    ProviderDescriptorSchema, ProviderFeatureFamily, ProviderKind, ProviderProfileConfig,
+    ProviderProfileHealthModeConfig, ProviderProfileStateBackendKind, ProviderProtocolFamily,
+    ProviderReasoningExtraBodyModeConfig, ProviderToolSchemaModeConfig, ProviderTransportFallback,
+    ProviderTransportPolicy, ProviderTransportReadiness, ProviderTransportReadinessLevel,
+    ProviderWireApi, ReasoningEffort, parse_provider_kind_id,
 };
 #[allow(unused_imports)]
 pub use runtime::{
