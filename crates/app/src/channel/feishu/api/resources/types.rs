@@ -110,7 +110,7 @@ pub struct FeishuDownloadedMessageResource {
 pub struct FeishuMessageHistoryPage {
     pub has_more: bool,
     pub page_token: Option<String>,
-    pub items: Vec<FeishuMessageSummary>,
+    pub items: Vec<FeishuMessageDetail>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

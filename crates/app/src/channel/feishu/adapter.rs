@@ -1,14 +1,26 @@
 use async_trait::async_trait;
+use chrono::Utc;
 
 use crate::CliResult;
 use crate::channel::feishu::api::FeishuClient;
-use crate::channel::feishu::api::resources::messages::{self, FeishuOutboundMessageBody};
+use crate::channel::feishu::api::messaging_api::{
+    convert_cli_result, convert_feishu_message_to_generic, convert_message_content_to_feishu,
+    convert_string_error_to_api_error, extract_receive_params, generate_idempotency_key,
+};
+use crate::channel::feishu::api::resources::messages::{
+    self, FeishuMessageHistoryQuery, FeishuOutboundMessageBody, fetch_message_detail,
+    fetch_message_history, reply_outbound_message, send_outbound_message, update_card,
+};
 use crate::channel::feishu::api::{
     FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body,
 };
+use crate::channel::traits::error::{ApiError, ApiResult};
+use crate::channel::traits::messaging::{
+    Message, MessageContent, MessagingApi, PaginatedResult, Pagination, SendOptions,
+};
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundMessage, ChannelOutboundTarget,
-    ChannelOutboundTargetKind, ChannelPlatform,
+    ChannelOutboundTargetKind, ChannelPlatform, ChannelSession,
 };
 use crate::config::{FeishuIntegrationConfig, ResolvedFeishuChannelConfig};
 
@@ -192,6 +204,14 @@ fn channel_outbound_message_from_body(body: FeishuOutboundMessageBody) -> Channe
         FeishuOutboundMessageBody::Post(post) => ChannelOutboundMessage::Post(post),
         FeishuOutboundMessageBody::Image(image_key) => ChannelOutboundMessage::Image { image_key },
         FeishuOutboundMessageBody::File(file_key) => ChannelOutboundMessage::File { file_key },
+        FeishuOutboundMessageBody::Audio(_)
+        | FeishuOutboundMessageBody::Media { .. }
+        | FeishuOutboundMessageBody::ShareChat(_)
+        | FeishuOutboundMessageBody::ShareUser(_) => {
+            // These types don't have corresponding ChannelOutboundMessage variants
+            // Convert to text representation for now
+            ChannelOutboundMessage::Text("[Unsupported message type]".to_owned())
+        }
     }
 }
 
@@ -237,6 +257,309 @@ impl ChannelAdapter for FeishuAdapter {
     ) -> CliResult<()> {
         let body = Self::feishu_body(message)?;
         self.send_feishu_message(target, &body).await
+    }
+}
+
+#[async_trait]
+impl MessagingApi for FeishuAdapter {
+    async fn send_message(
+        &self,
+        target: &ChannelOutboundTarget,
+        content: &MessageContent,
+        _options: Option<SendOptions>,
+    ) -> ApiResult<Message> {
+        // Validate platform
+        if target.platform != ChannelPlatform::Feishu {
+            return Err(ApiError::InvalidRequest(
+                "Target platform must be Feishu".to_owned(),
+            ));
+        }
+
+        // Convert content to Feishu format
+        let body = convert_message_content_to_feishu(content)?;
+
+        // Get tenant access token
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        // Extract receive parameters
+        let (receive_id, receive_id_type) = extract_receive_params(target)?;
+
+        // Use caller-provided idempotency key or generate one
+        let uuid = target
+            .idempotency_key()
+            .filter(|key| !key.is_empty())
+            .map(|key| key.to_owned())
+            .or_else(|| Some(generate_idempotency_key()));
+
+        // Send the message
+        let receipt = convert_cli_result(
+            send_outbound_message(
+                &self.client,
+                &token,
+                &receive_id_type,
+                &receive_id,
+                &body,
+                uuid.as_deref(),
+            )
+            .await,
+        )?;
+
+        // Build message from receipt data directly
+        Ok(Message {
+            id: receipt.message_id,
+            session: ChannelSession::new(ChannelPlatform::Feishu, receive_id),
+            sender_id: String::new(),
+            content: content.clone(),
+            timestamp: Utc::now(),
+            parent_id: None,
+            raw: None,
+        })
+    }
+
+    async fn reply(
+        &self,
+        target: &ChannelOutboundTarget,
+        content: &MessageContent,
+        options: Option<SendOptions>,
+    ) -> ApiResult<Message> {
+        // Validate platform
+        if target.platform != ChannelPlatform::Feishu {
+            return Err(ApiError::InvalidRequest(
+                "Target platform must be Feishu".to_owned(),
+            ));
+        }
+
+        // For replies, the target ID should be the message_id
+        let message_id = target.id.trim();
+        if message_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Message ID is required for reply".to_owned(),
+            ));
+        }
+
+        // Get tenant access token
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        // Fetch parent message to get session info
+        let parent_detail =
+            convert_cli_result(fetch_message_detail(&self.client, &token, message_id).await)?;
+        let parent_session = ChannelSession::new(
+            ChannelPlatform::Feishu,
+            parent_detail.chat_id.unwrap_or_default(),
+        );
+
+        // Convert content to Feishu format
+        let body = convert_message_content_to_feishu(content)?;
+
+        // Determine if we should reply in thread
+        // Priority: SendOptions.reply_in_thread > target.feishu_reply_in_thread()
+        let reply_in_thread = options
+            .as_ref()
+            .map(|o| o.reply_in_thread)
+            .unwrap_or_else(|| target.feishu_reply_in_thread().unwrap_or(false));
+
+        // Use caller-provided idempotency key or generate one
+        let uuid = target
+            .idempotency_key()
+            .filter(|key| !key.is_empty())
+            .map(|key| key.to_owned())
+            .or_else(|| Some(generate_idempotency_key()));
+
+        // Send the reply
+        let receipt = convert_cli_result(
+            reply_outbound_message(
+                &self.client,
+                &token,
+                message_id,
+                &body,
+                reply_in_thread,
+                uuid.as_deref(),
+            )
+            .await,
+        )?;
+
+        // Build the reply message
+        Ok(Message {
+            id: receipt.message_id,
+            session: parent_session,
+            sender_id: String::new(),
+            content: content.clone(),
+            timestamp: Utc::now(),
+            parent_id: Some(message_id.to_owned()),
+            raw: None,
+        })
+    }
+
+    async fn get_message(&self, id: &str) -> ApiResult<Option<Message>> {
+        let message_id = id.trim();
+        if message_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Message ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        match fetch_message_detail(&self.client, &token, message_id).await {
+            Ok(detail) => {
+                let message = convert_feishu_message_to_generic(detail)?;
+                Ok(Some(message))
+            }
+            Err(err) => {
+                let api_err = convert_string_error_to_api_error(&err);
+                match api_err {
+                    ApiError::NotFound(_) => Ok(None),
+                    ApiError::Auth(_)
+                    | ApiError::RateLimited { .. }
+                    | ApiError::InvalidRequest(_)
+                    | ApiError::Network(_)
+                    | ApiError::Server(_)
+                    | ApiError::NotSupported(_)
+                    | ApiError::Platform { .. }
+                    | ApiError::Other(_) => Err(api_err),
+                }
+            }
+        }
+    }
+
+    async fn list_messages(
+        &self,
+        session: &ChannelSession,
+        pagination: Option<Pagination>,
+    ) -> ApiResult<PaginatedResult<Message>> {
+        // Validate platform
+        if session.platform != ChannelPlatform::Feishu {
+            return Err(ApiError::InvalidRequest(
+                "Session platform must be Feishu".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        // Build the query
+        let page_size = pagination
+            .as_ref()
+            .and_then(|p| p.limit)
+            .map(|l| l.min(50))
+            .unwrap_or(20);
+
+        let query = FeishuMessageHistoryQuery {
+            container_id_type: "chat".to_owned(),
+            container_id: session.conversation_id.clone(),
+            start_time: None,
+            end_time: None,
+            sort_type: Some("ByCreateTimeDesc".to_owned()),
+            page_size: Some(page_size),
+            page_token: pagination.and_then(|p| p.cursor),
+        };
+
+        let page = convert_cli_result(fetch_message_history(&self.client, &token, &query).await)?;
+
+        // Convert directly from history items — no individual detail fetches needed
+        let messages: Vec<Message> = page
+            .items
+            .into_iter()
+            .filter_map(|detail| convert_feishu_message_to_generic(detail).ok())
+            .collect();
+
+        Ok(PaginatedResult {
+            items: messages,
+            has_more: page.has_more,
+            next_cursor: page.page_token,
+        })
+    }
+
+    async fn search_messages(
+        &self,
+        query: &str,
+        _pagination: Option<Pagination>,
+    ) -> ApiResult<PaginatedResult<Message>> {
+        let search_query = query.trim();
+        if search_query.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Search query cannot be empty".to_owned(),
+            ));
+        }
+
+        // Note: Feishu message search requires user access token
+        // This is a limitation - we need a user grant to search messages
+        Err(ApiError::NotSupported(
+            "Message search requires user access token (not yet implemented)".to_owned(),
+        ))
+    }
+
+    async fn edit_message(&self, id: &str, content: &MessageContent) -> ApiResult<Message> {
+        let message_id = id.trim();
+        if message_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Message ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        match content {
+            MessageContent::Text { text } => {
+                // Edit text message using PUT API
+                let body = serde_json::json!({ "text": text });
+                convert_cli_result(
+                    messages::edit_message(&self.client, &token, message_id, "text", body).await,
+                )?;
+            }
+            MessageContent::Markdown { text } => {
+                // Update interactive card using PATCH API
+                let card_content = serde_json::json!({
+                    "config": { "wide_screen_mode": true },
+                    "elements": [
+                        {
+                            "tag": "div",
+                            "text": {
+                                "tag": "lark_md",
+                                "content": text
+                            }
+                        }
+                    ]
+                });
+                convert_cli_result(
+                    update_card(&self.client, &token, message_id, &card_content).await,
+                )?;
+            }
+            MessageContent::Rich { .. }
+            | MessageContent::File { .. }
+            | MessageContent::Image { .. }
+            | MessageContent::Audio { .. }
+            | MessageContent::Media { .. }
+            | MessageContent::ShareChat { .. }
+            | MessageContent::ShareUser { .. } => {
+                return Err(ApiError::NotSupported(
+                    "Only text and markdown messages can be edited".to_owned(),
+                ));
+            }
+        }
+
+        // Return message with updated content
+        Ok(Message {
+            id: message_id.to_owned(),
+            session: ChannelSession::new(ChannelPlatform::Feishu, String::new()),
+            sender_id: String::new(),
+            content: content.clone(),
+            timestamp: Utc::now(),
+            parent_id: None,
+            raw: None,
+        })
+    }
+
+    async fn delete_message(&self, id: &str) -> ApiResult<()> {
+        let message_id = id.trim();
+        if message_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Message ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        convert_cli_result(messages::delete_message(&self.client, &token, message_id).await)
     }
 }
 
