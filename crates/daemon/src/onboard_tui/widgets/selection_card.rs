@@ -77,18 +77,27 @@ impl StatefulWidget for SelectionCardWidget {
     type State = SelectionCardState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // Each item takes 2 lines (label + hint) + 1 blank separator.
+        // Last item has no trailing blank.
+        let lines_per_item: u16 = 3;
+        let total_lines =
+            (self.items.len() as u16) * lines_per_item - self.items.len().min(1) as u16;
+
+        // Vertically center the block in the content area.
+        let top_pad = area.height.saturating_sub(total_lines) / 2;
+
         for (i, item) in self.items.iter().enumerate() {
-            let y = area.y + (i as u16) * 2;
-            if y + 1 >= area.y + area.height {
+            let y = area.y + top_pad + (i as u16) * lines_per_item;
+            if y >= area.y + area.height {
                 break;
             }
             let is_selected = i == state.selected();
-            let border_style = if is_selected {
+            let indicator = if is_selected { "\u{25b8}" } else { " " };
+            let indicator_style = if is_selected {
                 Style::default().fg(Color::Cyan)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
-            let indicator = if is_selected { "\u{25b8}" } else { " " };
             let label_style = if is_selected {
                 Style::default()
                     .fg(Color::White)
@@ -97,25 +106,21 @@ impl StatefulWidget for SelectionCardWidget {
                 Style::default().fg(Color::Gray)
             };
 
-            // Top border
-            let border = "\u{2500}".repeat((area.width as usize).saturating_sub(3));
-            let top = format!(" \u{250c}{border}\u{2510}");
-            let max_byte = top.len().min(area.width as usize);
-            let truncated_end = top.floor_char_boundary(max_byte);
-            let top_truncated = &top[..truncated_end];
-            buf.set_string(area.x, y, top_truncated, border_style);
-
-            // Content line
-            let mut spans = vec![
-                Span::styled(format!(" {indicator} "), border_style),
+            // Label line: ▸ Label
+            let label_line = Line::from(vec![
+                Span::styled(format!("  {indicator} "), indicator_style),
                 Span::styled(&item.label, label_style),
-            ];
-            if let Some(hint) = &item.hint {
-                let pad = (area.width as usize).saturating_sub(item.label.len() + hint.len() + 6);
-                spans.push(Span::raw(" ".repeat(pad)));
-                spans.push(Span::styled(hint, Style::default().fg(Color::Green)));
+            ]);
+            buf.set_line(area.x, y, &label_line, area.width);
+
+            // Hint line (indented under label)
+            if let Some(hint) = &item.hint
+                && y + 1 < area.y + area.height
+            {
+                let hint_style = Style::default().fg(Color::DarkGray);
+                let hint_line = Line::from(Span::styled(format!("      {hint}"), hint_style));
+                buf.set_line(area.x, y + 1, &hint_line, area.width);
             }
-            buf.set_line(area.x, y + 1, &Line::from(spans), area.width);
         }
     }
 }
