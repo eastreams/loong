@@ -228,6 +228,49 @@ fn chat_ui_tui_degrades_without_tty() {
 }
 
 #[test]
+fn tui_subcommand_rejects_non_tty_with_terminal_error() {
+    let fixture = ChatCliFixture::new("tui-subcommand-non-tty");
+    let config_path = fixture.write_default_config("loongclaw.toml");
+
+    // Run `loong tui` instead of `loong chat` — uses a dedicated method
+    // that invokes the `tui` subcommand directly.
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"));
+    command
+        .arg("tui")
+        .arg("--config")
+        .arg(&config_path)
+        .current_dir(&fixture.root)
+        .env("HOME", &fixture.home_dir)
+        .env_remove("LOONGCLAW_CONFIG_PATH")
+        .env_remove("USERPROFILE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = command.spawn().expect("spawn tui subcommand");
+    drop(child.stdin.take());
+    let output = child.wait_with_output().expect("wait for tui output");
+    let stderr = render_output(&output.stderr);
+
+    // The `loong tui` command should fail because stdin is piped (not a TTY).
+    // Critically, the error should be about terminal requirements, NOT about
+    // the channel-cli feature being missing — that would mean the feature gate
+    // is broken.
+    assert!(
+        !output.status.success(),
+        "loong tui with piped stdin should exit with error"
+    );
+    assert!(
+        !stderr.contains("channel-cli"),
+        "feature gate should not fire with default features: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("terminal") || stderr.contains("TUI requires") || stderr.contains("stdin"),
+        "error should mention terminal/TTY requirements, not feature gates: {stderr:?}"
+    );
+}
+
+#[test]
 fn chat_without_config_runs_onboard_for_explicit_yes() {
     let fixture = ChatCliFixture::new("explicit-yes");
     let output = fixture.run_chat_command_with_fake_onboard(None, Some(b"yes\n"), Some(0));
