@@ -1024,14 +1024,14 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
-        "WhatsApp [whatsapp] implementation_status=config_backed selection_order=90 selection_label=\"business messaging app\" capabilities=multi_account,send aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "WhatsApp [whatsapp] implementation_status=runtime_backed selection_order=90 selection_label=\"business messaging app\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
         channel_send_command("whatsapp")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) unsupported: whatsapp serve runtime is not implemented yet target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
+        "op serve ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
         channel_serve_command("whatsapp")
     )));
     assert!(rendered.contains(
@@ -1547,7 +1547,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("config_backed")
+                        == Some("runtime_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)
