@@ -86,6 +86,12 @@ pub(crate) async fn handle_turn(
             Json(json!({"error": "ACP session manager not available"})),
         );
     };
+    if !config.acp.enabled {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": "ACP is disabled by policy (`acp.enabled=false`)"})),
+        );
+    }
 
     let bootstrap = AcpSessionBootstrap {
         session_key: turn_request.session_key.clone(),
