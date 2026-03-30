@@ -1,8 +1,8 @@
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget};
+use ratatui::widgets::Widget;
 
 #[allow(dead_code)] // consumed by runner/layout in later tasks
 pub(crate) struct WelcomeScreen {
@@ -39,11 +39,15 @@ impl Widget for WelcomeScreen {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "This wizard will configure authentication, runtime defaults,",
+                "This wizard will configure authentication,",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                "workspace paths, protocols, and environment readiness.",
+                "runtime defaults, workspace paths, protocols,",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(Span::styled(
+                "and environment readiness.",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),
@@ -53,8 +57,59 @@ impl Widget for WelcomeScreen {
             )),
         ];
 
-        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
-        paragraph.render(area, buf);
+        // Render inside a centered dialog box with rounded border
+        let content_lines = lines.len() as u16;
+        let max_inner_width = (area.width.saturating_sub(4)).min(60);
+        let box_height = content_lines + 2;
+        let box_width = max_inner_width + 2;
+
+        let x = area.x + (area.width.saturating_sub(box_width)) / 2;
+        let y = area.y + (area.height.saturating_sub(box_height)) / 2;
+
+        let outer = Rect::new(x, y, box_width.min(area.width), box_height.min(area.height));
+
+        if outer.width >= 2 && outer.height >= 2 {
+            let border_style = Style::default().fg(Color::Cyan);
+            // Top: ╭───╮
+            buf.set_string(outer.x, outer.y, "\u{256d}", border_style);
+            for bx in (outer.x + 1)..(outer.x + outer.width - 1) {
+                buf.set_string(bx, outer.y, "\u{2500}", border_style);
+            }
+            buf.set_string(outer.x + outer.width - 1, outer.y, "\u{256e}", border_style);
+            // Sides: │ │
+            for by in (outer.y + 1)..(outer.y + outer.height - 1) {
+                buf.set_string(outer.x, by, "\u{2502}", border_style);
+                buf.set_string(outer.x + outer.width - 1, by, "\u{2502}", border_style);
+            }
+            // Bottom: ╰───╯
+            buf.set_string(
+                outer.x,
+                outer.y + outer.height - 1,
+                "\u{2570}",
+                border_style,
+            );
+            for bx in (outer.x + 1)..(outer.x + outer.width - 1) {
+                buf.set_string(bx, outer.y + outer.height - 1, "\u{2500}", border_style);
+            }
+            buf.set_string(
+                outer.x + outer.width - 1,
+                outer.y + outer.height - 1,
+                "\u{256f}",
+                border_style,
+            );
+        }
+
+        // Render lines inside the border with left padding
+        let inner_x = x + 3;
+        let inner_y = y + 1;
+        let inner_width = max_inner_width.saturating_sub(2);
+        for (i, line) in lines.iter().enumerate() {
+            let ly = inner_y + i as u16;
+            if ly >= inner_y + content_lines.min(area.height.saturating_sub(2)) {
+                break;
+            }
+            buf.set_line(inner_x, ly, line, inner_width);
+        }
     }
 }
 
@@ -65,7 +120,7 @@ mod tests {
     #[test]
     fn welcome_renders_brand_and_version() {
         let widget = WelcomeScreen::new("v0.1.0-alpha.2");
-        let area = Rect::new(0, 0, 60, 12);
+        let area = Rect::new(0, 0, 66, 15);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
 

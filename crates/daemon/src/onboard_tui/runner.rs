@@ -9,6 +9,8 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use loongclaw_app as mvp;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
@@ -136,6 +138,87 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
     }
 
     // -----------------------------------------------------------------------
+    // Dialog box helpers
+    // -----------------------------------------------------------------------
+
+    /// Compute a centered dialog box rect within the given area.
+    /// Returns `(outer_rect, inner_rect)` where inner_rect has 2-char left
+    /// padding inside the border.
+    fn dialog_box_rect(area: Rect, content_lines: u16) -> (Rect, Rect) {
+        let max_inner_width = (area.width.saturating_sub(4)).min(60);
+        let box_height = content_lines + 2; // +2 for top/bottom border
+        let box_width = max_inner_width + 2; // +2 for left/right border
+
+        let x = area.x + (area.width.saturating_sub(box_width)) / 2;
+        let y = area.y + (area.height.saturating_sub(box_height)) / 2;
+
+        let outer = Rect::new(x, y, box_width.min(area.width), box_height.min(area.height));
+        let inner = Rect::new(
+            x + 3,
+            y + 1,
+            max_inner_width.saturating_sub(2),
+            content_lines.min(area.height.saturating_sub(2)),
+        );
+        (outer, inner)
+    }
+
+    /// Draw the rounded border of a dialog box.
+    fn draw_dialog_border(buf: &mut Buffer, rect: Rect, border_color: Color) {
+        if rect.width < 2 || rect.height < 2 {
+            return;
+        }
+        let style = Style::default().fg(border_color);
+        // Top border: ╭───╮
+        buf.set_string(rect.x, rect.y, "\u{256d}", style);
+        for x in (rect.x + 1)..(rect.x + rect.width - 1) {
+            buf.set_string(x, rect.y, "\u{2500}", style);
+        }
+        buf.set_string(rect.x + rect.width - 1, rect.y, "\u{256e}", style);
+
+        // Side borders: │ ... │
+        for y in (rect.y + 1)..(rect.y + rect.height - 1) {
+            buf.set_string(rect.x, y, "\u{2502}", style);
+            buf.set_string(rect.x + rect.width - 1, y, "\u{2502}", style);
+        }
+
+        // Bottom border: ╰───╯
+        buf.set_string(rect.x, rect.y + rect.height - 1, "\u{2570}", style);
+        for x in (rect.x + 1)..(rect.x + rect.width - 1) {
+            buf.set_string(x, rect.y + rect.height - 1, "\u{2500}", style);
+        }
+        buf.set_string(
+            rect.x + rect.width - 1,
+            rect.y + rect.height - 1,
+            "\u{256f}",
+            style,
+        );
+    }
+
+    /// Render body lines inside a centered dialog box. Returns the inner rect
+    /// used for content, which callers can use for stateful widgets.
+    fn render_dialog(
+        buf: &mut Buffer,
+        area: Rect,
+        lines: &[Line<'_>],
+        border_color: Color,
+    ) -> Rect {
+        let content_lines = lines.len() as u16;
+        let (outer, inner) = Self::dialog_box_rect(area, content_lines);
+        Self::draw_dialog_border(buf, outer, border_color);
+
+        // Render each line inside the inner rect
+        for (i, line) in lines.iter().enumerate() {
+            let y = inner.y + i as u16;
+            if y >= inner.y + inner.height {
+                break;
+            }
+            buf.set_line(inner.x, y, line, inner.width);
+        }
+
+        inner
+    }
+
+    // -----------------------------------------------------------------------
     // Chrome (header + spine + footer)
     // -----------------------------------------------------------------------
 
@@ -225,9 +308,46 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                         frame.render_widget(spine, areas.spine);
                     }
 
-                    // Welcome content
-                    let welcome = WelcomeScreen::new(&ver);
-                    frame.render_widget(welcome, areas.content);
+                    // Welcome content inside dialog box
+                    let dialog_lines: Vec<Line<'_>> = vec![
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "LOONGCLAW",
+                            Style::default()
+                                .fg(Color::Rgb(245, 169, 127))
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Line::from(Span::styled(&ver, Style::default().fg(Color::DarkGray))),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "Setup Wizard",
+                            Style::default().fg(Color::White),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "This wizard will configure authentication,",
+                            Style::default().fg(Color::Gray),
+                        )),
+                        Line::from(Span::styled(
+                            "runtime defaults, workspace paths, protocols,",
+                            Style::default().fg(Color::Gray),
+                        )),
+                        Line::from(Span::styled(
+                            "and environment readiness.",
+                            Style::default().fg(Color::Gray),
+                        )),
+                        Line::from(""),
+                        Line::from(Span::styled(
+                            "Safe to rerun. Press Enter to begin.",
+                            Style::default().fg(Color::DarkGray),
+                        )),
+                    ];
+                    Self::render_dialog(
+                        frame.buffer_mut(),
+                        areas.content,
+                        &dialog_lines,
+                        Color::Cyan,
+                    );
 
                     // Footer
                     let footer_line = Line::from(vec![
@@ -306,14 +426,45 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                         frame.render_widget(ProgressSpineWidget::new(step), areas.spine);
                     }
 
-                    // Content: selection cards
+                    // Content: title line + selection cards inside dialog box
+                    // Compute dialog box for selection items
+                    let lines_per_item: u16 = 3;
+                    let item_count = items.len() as u16;
+                    // title line + blank + items + title-prefix blank
+                    let dialog_content_lines = 2 + item_count * lines_per_item - item_count.min(1);
+                    let (outer, inner) = Self::dialog_box_rect(areas.content, dialog_content_lines);
+                    Self::draw_dialog_border(frame.buffer_mut(), outer, Color::Cyan);
+
+                    // Render title inside dialog
+                    if inner.height > 0 {
+                        let title_line = Line::from(vec![
+                            Span::styled("? ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                &title_owned,
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]);
+                        frame
+                            .buffer_mut()
+                            .set_line(inner.x, inner.y, &title_line, inner.width);
+                    }
+
+                    // Render selection widget in the remaining inner area
+                    let sel_area = Rect::new(
+                        inner.x,
+                        inner.y + 2,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
                     let widget = SelectionCardWidget::new(
                         items
                             .iter()
                             .map(|i| SelectionItem::new(i.label.as_str(), i.hint.as_deref()))
                             .collect(),
                     );
-                    frame.render_stateful_widget(widget, areas.content, &mut state);
+                    frame.render_stateful_widget(widget, sel_area, &mut state);
 
                     // Footer
                     let footer_line = Line::from(vec![
@@ -407,9 +558,37 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                         frame.render_widget(ProgressSpineWidget::new(step), areas.spine);
                     }
 
-                    // Content: text input
+                    // Content: text input inside dialog box
+                    // Dialog: title + blank + input + error = 4 lines
+                    let dialog_content_lines: u16 = 5;
+                    let (outer, inner) = Self::dialog_box_rect(areas.content, dialog_content_lines);
+                    Self::draw_dialog_border(frame.buffer_mut(), outer, Color::Cyan);
+
+                    // Render title inside dialog
+                    if inner.height > 0 {
+                        let title_line = Line::from(vec![
+                            Span::styled("? ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                &label_owned,
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]);
+                        frame
+                            .buffer_mut()
+                            .set_line(inner.x, inner.y, &title_line, inner.width);
+                    }
+
+                    // Render text input widget below the title
+                    let input_area = Rect::new(
+                        inner.x,
+                        inner.y + 2,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
                     let widget = TextInputWidget::new(&label_owned);
-                    widget.render_with_state(areas.content, frame.buffer_mut(), &input_state);
+                    widget.render_with_state(input_area, frame.buffer_mut(), &input_state);
 
                     // Footer
                     let footer_line = Line::from(vec![
@@ -644,11 +823,10 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                     frame.render_widget(Paragraph::new(header_line), areas.header);
 
                     // No spine for pre/post screens.
-                    // Even if `wide` is true, we already passed `false` above.
                     let _ = wide;
 
-                    // Content
-                    frame.render_widget(Paragraph::new(lines), areas.content);
+                    // Content inside dialog box
+                    Self::render_dialog(frame.buffer_mut(), areas.content, &lines, Color::DarkGray);
 
                     // Footer
                     let footer_line = Line::from(vec![Span::styled(
@@ -720,9 +898,21 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
 
                     let _ = wide;
 
-                    // Content (scrollable)
-                    let paragraph = Paragraph::new(lines).scroll((offset, 0));
-                    frame.render_widget(paragraph, areas.content);
+                    // Content inside dialog box (scrollable)
+                    let max_dialog_height = areas.content.height.saturating_sub(2);
+                    let visible_lines = total_lines.min(max_dialog_height);
+                    let (outer, inner) = Self::dialog_box_rect(areas.content, visible_lines);
+                    Self::draw_dialog_border(frame.buffer_mut(), outer, Color::DarkGray);
+
+                    // Render visible slice of lines
+                    let start = offset as usize;
+                    for (i, line) in lines.iter().skip(start).enumerate() {
+                        let y = inner.y + i as u16;
+                        if y >= inner.y + inner.height {
+                            break;
+                        }
+                        frame.buffer_mut().set_line(inner.x, y, line, inner.width);
+                    }
 
                     // Footer
                     let footer_line = Line::from(vec![Span::styled(
@@ -775,49 +965,56 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
     pub fn run_risk_screen(&mut self) -> CliResult<bool> {
         let body_lines = vec![
             Line::from(""),
+            Line::from(vec![
+                Span::styled("\u{26a0}  ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "Security Check",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
             Line::from(Span::styled(
-                "  SECURITY CHECK",
+                "Review the trust boundary before writing",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                "any config.",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "What onboarding can do:",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(""),
             Line::from(Span::styled(
-                "  Review the trust boundary before writing any config.",
+                "\u{2022} Invoke tools and read local files.",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                "\u{2022} Keep credentials in env vars, not prompts.",
+                Style::default().fg(Color::White),
+            )),
+            Line::from(Span::styled(
+                "\u{2022} Prefer allowlist-style tool policy.",
                 Style::default().fg(Color::White),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  What onboarding can do:",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                "  \u{2022} LoongClaw can invoke tools and read local files when enabled.",
-                Style::default().fg(Color::White),
-            )),
-            Line::from(Span::styled(
-                "  \u{2022} Keep credentials in environment variables, not in prompts.",
-                Style::default().fg(Color::White),
-            )),
-            Line::from(Span::styled(
-                "  \u{2022} Prefer allowlist-style tool policy for shared environments.",
-                Style::default().fg(Color::White),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  Recommended baseline:",
+                "Recommended baseline:",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                "  Start with the narrowest tool scope that lets you verify first success.",
+                "Start with the narrowest tool scope that",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                "  You can widen channels, models, and local automation after doctor and review.",
+                "lets you verify first success.",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(""),
@@ -898,15 +1095,15 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
         primary_label: &str,
         snapshot_lines: &[String],
     ) -> CliResult<bool> {
-        let mut body_lines: Vec<Line<'static>> = Vec::new();
-        body_lines.push(Line::from(""));
+        let mut _body_lines: Vec<Line<'static>> = Vec::new();
+        _body_lines.push(Line::from(""));
         for line in snapshot_lines {
-            body_lines.push(Line::from(Span::styled(
-                format!("  {line}"),
+            _body_lines.push(Line::from(Span::styled(
+                line.to_owned(),
                 Style::default().fg(Color::Gray),
             )));
         }
-        body_lines.push(Line::from(""));
+        _body_lines.push(Line::from(""));
 
         let items = vec![
             SelectionItem::new(primary_label, Some("skip detailed edits")),
@@ -938,7 +1135,7 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
         let mut body_lines: Vec<Line<'static>> = Vec::new();
         body_lines.push(Line::from(""));
         body_lines.push(Line::from(Span::styled(
-            "  Preflight checks:",
+            "Preflight checks:",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -956,7 +1153,7 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                 crate::onboard_preflight::OnboardCheckLevel::Fail => ("\u{2717}", Color::Red),
             };
             body_lines.push(Line::from(vec![
-                Span::styled(format!("  {icon} "), Style::default().fg(color)),
+                Span::styled(format!("{icon} "), Style::default().fg(color)),
                 Span::styled(
                     check.name.to_owned(),
                     Style::default()
@@ -993,7 +1190,7 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
             .iter()
             .map(|line| {
                 Line::from(Span::styled(
-                    format!("  {line}"),
+                    line.to_owned(),
                     Style::default().fg(Color::Gray),
                 ))
             })
@@ -1023,11 +1220,11 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
         let body_lines = vec![
             Line::from(""),
             Line::from(Span::styled(
-                format!("  Config path: {config_path}"),
+                format!("Config path: {config_path}"),
                 Style::default().fg(Color::White),
             )),
             Line::from(Span::styled(
-                format!("  Status: {status}"),
+                format!("Status: {status}"),
                 Style::default().fg(if warnings_kept {
                     Color::Yellow
                 } else {
@@ -1036,7 +1233,7 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "  Write this configuration?",
+                "Write this configuration?",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -1054,16 +1251,19 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
     pub fn run_success_screen(&mut self, summary_lines: &[String]) -> CliResult<()> {
         let mut body_lines: Vec<Line<'static>> = Vec::new();
         body_lines.push(Line::from(""));
-        body_lines.push(Line::from(Span::styled(
-            "  Setup complete!",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )));
+        body_lines.push(Line::from(vec![
+            Span::styled("\u{2713}  ", Style::default().fg(Color::Green)),
+            Span::styled(
+                "Setup complete!",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
         body_lines.push(Line::from(""));
         for line in summary_lines {
             body_lines.push(Line::from(Span::styled(
-                format!("  {line}"),
+                line.to_owned(),
                 Style::default().fg(Color::Gray),
             )));
         }
@@ -1110,14 +1310,43 @@ impl<E: OnboardEventSource> RatatuiOnboardRunner<E> {
                     ]);
                     frame.render_widget(Paragraph::new(header_line), areas.header);
 
-                    // Content: selection cards
+                    // Content: selection cards inside dialog box
+                    let lines_per_item: u16 = 3;
+                    let item_count = items.len() as u16;
+                    let dialog_content_lines = 2 + item_count * lines_per_item - item_count.min(1);
+                    let (outer, inner) = Self::dialog_box_rect(areas.content, dialog_content_lines);
+                    Self::draw_dialog_border(frame.buffer_mut(), outer, Color::Cyan);
+
+                    // Render title inside dialog
+                    if inner.height > 0 {
+                        let dialog_title = Line::from(vec![
+                            Span::styled("? ", Style::default().fg(Color::Cyan)),
+                            Span::styled(
+                                &title_owned,
+                                Style::default()
+                                    .fg(Color::White)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]);
+                        frame
+                            .buffer_mut()
+                            .set_line(inner.x, inner.y, &dialog_title, inner.width);
+                    }
+
+                    // Render selection widget below the title
+                    let sel_area = Rect::new(
+                        inner.x,
+                        inner.y + 2,
+                        inner.width,
+                        inner.height.saturating_sub(2),
+                    );
                     let widget = SelectionCardWidget::new(
                         items
                             .iter()
                             .map(|i| SelectionItem::new(i.label.as_str(), i.hint.as_deref()))
                             .collect(),
                     );
-                    frame.render_stateful_widget(widget, areas.content, &mut state);
+                    frame.render_stateful_widget(widget, sel_area, &mut state);
 
                     // Footer
                     let footer_line = Line::from(vec![Span::styled(

@@ -92,7 +92,7 @@ impl StatefulWidget for SelectionCardWidget {
                 break;
             }
             let is_selected = i == state.selected();
-            let indicator = if is_selected { "\u{25b8}" } else { " " };
+            let indicator = if is_selected { "\u{25cf}" } else { "\u{25cb}" };
             let indicator_style = if is_selected {
                 Style::default().fg(Color::Cyan)
             } else {
@@ -100,13 +100,13 @@ impl StatefulWidget for SelectionCardWidget {
             };
             let label_style = if is_selected {
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
 
-            // Label line: ▸ Label
+            // Label line: ● Label  or  ○ Label
             let label_line = Line::from(vec![
                 Span::styled(format!("  {indicator} "), indicator_style),
                 Span::styled(&item.label, label_style),
