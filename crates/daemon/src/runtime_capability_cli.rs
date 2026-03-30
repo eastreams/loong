@@ -12,6 +12,7 @@ use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -1525,19 +1526,25 @@ fn persist_runtime_capability_apply_artifact(
     output_path: &Path,
     artifact: &RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument,
 ) -> CliResult<RuntimeCapabilityApplyOutcome> {
-    if output_path.exists() {
-        let existing_artifact = load_runtime_capability_apply_artifact(output_path)?;
-        if existing_artifact == *artifact {
-            return Ok(RuntimeCapabilityApplyOutcome::AlreadyApplied);
+    match write_pretty_json_file_create_new(output_path, artifact) {
+        Ok(()) => Ok(RuntimeCapabilityApplyOutcome::Applied),
+        Err(error) if error.contains("already exists") => {
+            let existing_artifact = load_runtime_capability_apply_artifact(output_path)?;
+            if existing_artifact == *artifact {
+                Ok(RuntimeCapabilityApplyOutcome::AlreadyApplied)
+            } else {
+                Err(format!(
+                    "runtime capability apply output {} already exists with different content",
+                    output_path.display()
+                ))
+            }
         }
-
-        return Err(format!(
-            "runtime capability apply output {} already exists with different content",
-            output_path.display()
-        ));
+        Err(error) => Err(error),
     }
+}
 
-    if let Some(parent) = output_path.parent()
+fn write_pretty_json_file_create_new(path: &Path, value: &impl Serialize) -> CliResult<()> {
+    if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         fs::create_dir_all(parent).map_err(|error| {
@@ -1547,15 +1554,33 @@ fn persist_runtime_capability_apply_artifact(
             )
         })?;
     }
-    let encoded = serde_json::to_string_pretty(artifact)
+
+    let encoded = serde_json::to_vec_pretty(value)
         .map_err(|error| format!("serialize runtime capability apply artifact failed: {error}"))?;
-    fs::write(output_path, encoded).map_err(|error| {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                format!(
+                    "runtime capability apply artifact {} already exists",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "write runtime capability apply artifact {} failed: {error}",
+                    path.display()
+                )
+            }
+        })?;
+    file.write_all(&encoded).map_err(|error| {
         format!(
             "write runtime capability apply artifact {} failed: {error}",
-            output_path.display()
+            path.display()
         )
     })?;
-    Ok(RuntimeCapabilityApplyOutcome::Applied)
+    Ok(())
 }
 
 fn canonicalize_existing_path(path: &Path) -> CliResult<String> {
@@ -2163,5 +2188,44 @@ fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessChec
             .map(render_family_readiness_check)
             .collect::<Vec<_>>()
             .join(" | ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    #[test]
+    fn write_pretty_json_file_create_new_rejects_existing_path() {
+        let root = unique_temp_dir("loongclaw-runtime-capability-atomic-create");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let output_path = root.join("memory_stage_profiles/profile.json");
+        fs::create_dir_all(output_path.parent().expect("parent directory"))
+            .expect("create output parent");
+        fs::write(&output_path, "{\"existing\":true}\n").expect("write existing file");
+
+        let error = write_pretty_json_file_create_new(&output_path, &json!({"new": true}))
+            .expect_err("atomic create should reject an existing path");
+
+        assert!(
+            error.contains("already exists"),
+            "expected already-exists error, got: {error}"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }
