@@ -1090,18 +1090,12 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         bridge_kind.as_str(),
     );
 
-    fs::write(&manifest_path, rendered_manifest).map_err(|error| {
-        format!(
-            "write scaffold manifest `{}` failed: {error}",
-            manifest_path.display()
-        )
-    })?;
-    fs::write(&readme_path, rendered_readme).map_err(|error| {
-        format!(
-            "write scaffold readme `{}` failed: {error}",
-            readme_path.display()
-        )
-    })?;
+    write_plugin_scaffold_files(
+        &manifest_path,
+        rendered_manifest.as_str(),
+        &readme_path,
+        rendered_readme.as_str(),
+    )?;
 
     let manifest_path_string = manifest_path.display().to_string();
     let readme_path_string = readme_path.display().to_string();
@@ -1133,6 +1127,40 @@ fn normalize_required_cli_value(field_name: &str, raw: &str) -> CliResult<String
     }
 
     Ok(trimmed.to_owned())
+}
+
+fn write_plugin_scaffold_files(
+    manifest_path: &Path,
+    rendered_manifest: &str,
+    readme_path: &Path,
+    rendered_readme: &str,
+) -> CliResult<()> {
+    let manifest_write_result = fs::write(manifest_path, rendered_manifest);
+    if let Err(error) = manifest_write_result {
+        return Err(format!(
+            "write scaffold manifest `{}` failed: {error}",
+            manifest_path.display()
+        ));
+    }
+
+    let readme_write_result = fs::write(readme_path, rendered_readme);
+    if let Err(error) = readme_write_result {
+        let manifest_cleanup_result = fs::remove_file(manifest_path);
+        if let Err(cleanup_error) = manifest_cleanup_result {
+            return Err(format!(
+                "write scaffold readme `{}` failed: {error}; cleanup scaffold manifest `{}` failed: {cleanup_error}",
+                readme_path.display(),
+                manifest_path.display()
+            ));
+        }
+
+        return Err(format!(
+            "write scaffold readme `{}` failed: {error}",
+            readme_path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn normalize_optional_cli_value(raw: Option<&str>) -> Option<String> {
@@ -4107,6 +4135,7 @@ mod tests {
             manifest.metadata.get("entrypoint").map(String::as_str),
             Some("https://localhost/invoke")
         );
+        let expected_host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
         assert_eq!(
             manifest
                 .compatibility
@@ -4119,7 +4148,7 @@ mod tests {
                 .compatibility
                 .as_ref()
                 .and_then(|compatibility| compatibility.host_version_req.as_deref()),
-            Some(">=0.1.0-alpha.2")
+            Some(expected_host_version_req.as_str())
         );
 
         let rendered_readme =
@@ -4259,6 +4288,39 @@ mod tests {
         );
         assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
         assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    #[test]
+    fn write_plugin_scaffold_files_rolls_back_manifest_when_readme_write_fails() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-rollback");
+        let package_root = Path::new(temp_root.as_str());
+        let manifest_path = package_root.join(PACKAGE_MANIFEST_FILE_NAME);
+        let readme_path = package_root.join(PLUGINS_INIT_README_FILE_NAME);
+        let expected_host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
+
+        fs::create_dir_all(package_root).expect("create package root");
+        fs::create_dir(&readme_path).expect("create readme directory");
+
+        let manifest_contents = format!(
+            "{{\"compatibility\":{{\"host_version_req\":\"{expected_host_version_req}\"}}}}"
+        );
+        let error = write_plugin_scaffold_files(
+            &manifest_path,
+            manifest_contents.as_str(),
+            &readme_path,
+            "# scaffold",
+        )
+        .expect_err("readme directory should force scaffold rollback");
+
+        assert!(error.contains("write scaffold readme"));
+        assert!(
+            !manifest_path.exists(),
+            "manifest should be removed after readme write failure"
+        );
+        assert!(
+            readme_path.is_dir(),
+            "readme test fixture directory should remain in place"
+        );
     }
 
     #[tokio::test]

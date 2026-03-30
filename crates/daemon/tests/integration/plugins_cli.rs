@@ -361,10 +361,15 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
 #[test]
 fn plugins_help_mentions_preflight_and_action_plan() {
     let help = render_cli_help(["plugins"]);
+    let help_lists_init_subcommand = help.lines().any(|line| {
+        let trimmed_line = line.trim();
+        let first_token = trimmed_line.split_whitespace().next();
+        first_token == Some("init")
+    });
 
     assert!(help.contains("plugin preflight"), "help: {help}");
     assert!(help.contains("doctor"), "help: {help}");
-    assert!(help.contains("init"), "help: {help}");
+    assert!(help_lists_init_subcommand, "help: {help}");
     assert!(help.contains("inventory"), "help: {help}");
     assert!(help.contains("bridge-profiles"), "help: {help}");
     assert!(help.contains("bridge-template"), "help: {help}");
