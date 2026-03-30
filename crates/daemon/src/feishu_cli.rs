@@ -1380,6 +1380,9 @@ pub async fn execute_feishu_bitable_create_record(
     let client = context.build_client()?;
     let fields = serde_json::from_str::<Value>(&args.fields)
         .map_err(|error| format!("invalid --fields JSON: {error}"))?;
+    if !fields.is_object() {
+        return Err("--fields must be a JSON object (e.g. '{\"Name\": \"value\"}')".to_owned());
+    }
     let record = mvp::channel::feishu::api::resources::bitable::create_bitable_record(
         &client,
         &grant.access_token,

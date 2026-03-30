@@ -646,7 +646,7 @@ async fn feishu_bitable_create_record_requires_confirmed_write_scope() {
         "error={error}"
     );
     assert!(
-        error.contains("loongclaw feishu auth start --account feishu_main"),
+        error.contains("loong feishu auth start --account feishu_main"),
         "error={error}"
     );
     assert!(requests.lock().await.is_empty());

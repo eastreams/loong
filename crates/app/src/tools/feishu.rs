@@ -1904,6 +1904,12 @@ fn execute_feishu_bitable_record_create_tool_with_config(
         "table_id",
         &payload.table_id,
     )?;
+    if !payload.fields.is_object() {
+        return Err(format!(
+            "feishu.bitable.record.create: `fields` must be a JSON object, got {}",
+            payload.fields
+        ));
+    }
     let fields = payload.fields;
     let tool_name = request.tool_name;
 
