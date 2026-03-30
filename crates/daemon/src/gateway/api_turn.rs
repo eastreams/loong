@@ -11,14 +11,22 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::mvp::acp::{AcpSessionBootstrap, AcpTurnRequest, AcpTurnResult, AcpTurnStopReason};
+use crate::mvp::acp::{AcpConversationTurnOptions, AcpTurnResult, AcpTurnStopReason};
 
 use super::control::{GatewayControlAppState, authorize_request_from_state};
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct GatewayTurnRequest {
-    pub session_key: String,
+    pub session_id: String,
     pub input: String,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub working_directory: Option<String>,
     #[serde(default)]
@@ -36,12 +44,10 @@ pub(crate) struct GatewayTurnResponse {
 
 impl GatewayTurnResponse {
     fn from_acp_result(result: &AcpTurnResult) -> Self {
+        let state = crate::acp_session_state_label(result.state).to_owned();
         Self {
             output_text: result.output_text.clone(),
-            state: serde_json::to_value(result.state)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_else(|| "unknown".to_string()),
+            state,
             stop_reason: result.stop_reason.as_ref().map(|r| match r {
                 AcpTurnStopReason::Completed => "completed".to_string(),
                 AcpTurnStopReason::Cancelled => "cancelled".to_string(),
@@ -53,6 +59,23 @@ impl GatewayTurnResponse {
 }
 
 type TurnJsonResponse = (StatusCode, Json<Value>);
+
+fn extend_turn_metadata(target: &mut BTreeMap<String, String>, extra: &BTreeMap<String, String>) {
+    for (key, value) in extra {
+        let normalized_key = key.trim();
+        let normalized_value = value.trim();
+        if normalized_key.is_empty() {
+            continue;
+        }
+        if normalized_value.is_empty() {
+            continue;
+        }
+
+        let normalized_key = normalized_key.to_owned();
+        let normalized_value = normalized_value.to_owned();
+        target.entry(normalized_key).or_insert(normalized_value);
+    }
+}
 
 pub(crate) async fn handle_turn(
     headers: HeaderMap,
@@ -80,6 +103,23 @@ pub(crate) async fn handle_turn(
         );
     }
 
+    let turn_address = match crate::build_acp_dispatch_address(
+        turn_request.session_id.as_str(),
+        turn_request.channel_id.as_deref(),
+        turn_request.conversation_id.as_deref(),
+        turn_request.account_id.as_deref(),
+        turn_request.thread_id.as_deref(),
+    ) {
+        Ok(turn_address) => turn_address,
+        Err(error) => {
+            let error_message = format!("invalid turn target: {error}");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": error_message})),
+            );
+        }
+    };
+
     let (Some(acp_manager), Some(config)) = (&app_state.acp_manager, &app_state.config) else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -93,23 +133,29 @@ pub(crate) async fn handle_turn(
         );
     }
 
-    let bootstrap = AcpSessionBootstrap {
-        session_key: turn_request.session_key.clone(),
-        conversation_id: None,
-        binding: None,
-        working_directory: turn_request.working_directory.as_deref().map(PathBuf::from),
-        initial_prompt: None,
-        mode: None,
-        mcp_servers: vec![],
-        metadata: turn_request.metadata.clone(),
+    let working_directory = turn_request.working_directory.as_deref().map(PathBuf::from);
+    let turn_options = AcpConversationTurnOptions::explicit();
+    let turn_options = turn_options.with_working_directory(working_directory.as_deref());
+    let prepared_turn = crate::mvp::acp::prepare_acp_conversation_turn_for_address(
+        config,
+        &turn_address,
+        turn_request.input.as_str(),
+        &turn_options,
+    );
+    let prepared_turn = match prepared_turn {
+        Ok(prepared_turn) => prepared_turn,
+        Err(error) => {
+            let error_message = format!("unable to prepare turn target: {error}");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": error_message})),
+            );
+        }
     };
-
-    let acp_request = AcpTurnRequest {
-        session_key: turn_request.session_key,
-        input: turn_request.input,
-        working_directory: turn_request.working_directory.as_deref().map(PathBuf::from),
-        metadata: turn_request.metadata,
-    };
+    let mut bootstrap = prepared_turn.bootstrap;
+    let mut acp_request = prepared_turn.request;
+    extend_turn_metadata(&mut bootstrap.metadata, &turn_request.metadata);
+    extend_turn_metadata(&mut acp_request.metadata, &turn_request.metadata);
 
     let event_sink = app_state.event_bus.as_ref().map(|bus| bus.sink());
     let sink_ref = event_sink
@@ -123,10 +169,16 @@ pub(crate) async fn handle_turn(
     match result {
         Ok(turn_result) => {
             let response = GatewayTurnResponse::from_acp_result(&turn_result);
-            (
-                StatusCode::OK,
-                Json(serde_json::to_value(response).unwrap_or(json!({}))),
-            )
+            match serde_json::to_value(response) {
+                Ok(value) => (StatusCode::OK, Json(value)),
+                Err(error) => {
+                    let error_message = format!("response serialization failed: {error}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": error_message})),
+                    )
+                }
+            }
         }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,

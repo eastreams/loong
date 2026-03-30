@@ -144,10 +144,10 @@ impl GatewayLocalClient {
         parse_json_response(response).await
     }
 
-    pub async fn turn(&self, session_key: &str, input: &str) -> CliResult<Value> {
+    pub async fn turn(&self, session_id: &str, input: &str) -> CliResult<Value> {
         let url = format!("{}/v1/turn", self.discovery.base_url);
         let body = serde_json::json!({
-            "session_key": session_key,
+            "session_id": session_id,
             "input": input,
         });
         let response = self

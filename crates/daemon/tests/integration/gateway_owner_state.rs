@@ -576,7 +576,7 @@ async fn gateway_owner_state_turn_endpoint_rejects_when_acp_disabled_by_policy()
         .post(format!("http://127.0.0.1:{port}/v1/turn"))
         .bearer_auth(token.as_str())
         .json(&serde_json::json!({
-            "session_key": "gateway-policy-disabled",
+            "session_id": "gateway-policy-disabled",
             "input": "hello",
         }))
         .send()
