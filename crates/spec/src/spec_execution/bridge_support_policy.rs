@@ -930,6 +930,7 @@ fn canonical_security_scan_runtime_value(runtime: &SecurityRuntimeExecutionSpec)
         "max_component_bytes": runtime.max_component_bytes,
         "fuel_limit": runtime.fuel_limit,
         "bridge_circuit_breaker": bridge_circuit_breaker,
+        "timeout_ms": runtime.timeout_ms,
     })
 }
 

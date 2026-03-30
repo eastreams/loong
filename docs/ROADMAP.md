@@ -94,8 +94,11 @@ Delivered in current baseline:
   - required `allowed_path_prefixes` when `execute_wasm_component=true` (fail closed)
   - `max_component_bytes`
   - optional `fuel_limit`
+  - optional `timeout_ms` enforced through Wasmtime epoch interruption
 - Runtime isolation tests for:
   - successful wasm execution
+  - timeout-guarded execution without cache reuse
+  - timeout-triggered termination for non-returning modules
   - runtime prefix denial
   - runtime size-limit denial
   - invalid runtime policy denial
@@ -105,7 +108,6 @@ Remaining deliverables:
 - WASM runtime lane with enforced resource limits:
   - CPU budget refinement
   - memory limits
-  - timeout/termination policy
 - process bridge sandbox profile tiers (`restricted`, `balanced`, `trusted`) aligned with the
   shared execution-tier contract used by browser and WASM evidence surfaces
 - hot-reload lifecycle hooks:
