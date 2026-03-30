@@ -465,8 +465,8 @@ pub(crate) fn render_preflight_summary_screen_lines_with_progress(
 }
 
 pub fn render_preflight_summary_screen_lines(checks: &[OnboardCheck], width: usize) -> Vec<String> {
-    let progress_line = crate::onboard_presentation::review_flow_copy(
-        crate::onboard_presentation::ReviewFlowKind::Guided,
+    let progress_line = crate::onboard_cli::presentation::review_flow_copy(
+        crate::onboard_cli::presentation::ReviewFlowKind::Guided,
     )
     .progress_line;
 
@@ -477,8 +477,8 @@ pub fn render_current_setup_preflight_summary_screen_lines(
     checks: &[OnboardCheck],
     width: usize,
 ) -> Vec<String> {
-    let progress_line = crate::onboard_presentation::review_flow_copy(
-        crate::onboard_presentation::ReviewFlowKind::QuickCurrentSetup,
+    let progress_line = crate::onboard_cli::presentation::review_flow_copy(
+        crate::onboard_cli::presentation::ReviewFlowKind::QuickCurrentSetup,
     )
     .progress_line;
 
@@ -489,8 +489,8 @@ pub fn render_detected_setup_preflight_summary_screen_lines(
     checks: &[OnboardCheck],
     width: usize,
 ) -> Vec<String> {
-    let progress_line = crate::onboard_presentation::review_flow_copy(
-        crate::onboard_presentation::ReviewFlowKind::QuickDetectedSetup,
+    let progress_line = crate::onboard_cli::presentation::review_flow_copy(
+        crate::onboard_cli::presentation::ReviewFlowKind::QuickDetectedSetup,
     )
     .progress_line;
 
@@ -751,13 +751,14 @@ fn build_preflight_summary_screen_spec(
 
     if has_attention {
         summary_lines
-            .push(crate::onboard_presentation::preflight_attention_summary_line().to_owned());
+            .push(crate::onboard_cli::presentation::preflight_attention_summary_line().to_owned());
 
         if let Some(hint) = preflight_attention_hint_line(checks) {
             summary_lines.push(hint.to_owned());
         }
     } else {
-        summary_lines.push(crate::onboard_presentation::preflight_green_summary_line().to_owned());
+        summary_lines
+            .push(crate::onboard_cli::presentation::preflight_green_summary_line().to_owned());
     }
 
     let mut sections = Vec::new();
@@ -778,17 +779,17 @@ fn build_preflight_summary_screen_spec(
         vec![
             TuiChoiceSpec {
                 key: "y".to_owned(),
-                label: crate::onboard_presentation::preflight_continue_label().to_owned(),
+                label: crate::onboard_cli::presentation::preflight_continue_label().to_owned(),
                 detail_lines: vec![
-                    crate::onboard_presentation::preflight_continue_detail().to_owned(),
+                    crate::onboard_cli::presentation::preflight_continue_detail().to_owned(),
                 ],
                 recommended: false,
             },
             TuiChoiceSpec {
                 key: "n".to_owned(),
-                label: crate::onboard_presentation::preflight_cancel_label().to_owned(),
+                label: crate::onboard_cli::presentation::preflight_cancel_label().to_owned(),
                 detail_lines: vec![
-                    crate::onboard_presentation::preflight_cancel_detail().to_owned(),
+                    crate::onboard_cli::presentation::preflight_cancel_detail().to_owned(),
                 ],
                 recommended: false,
             },
@@ -801,7 +802,7 @@ fn build_preflight_summary_screen_spec(
         crate::onboard_cli::append_escape_cancel_hint(vec![
             crate::onboard_cli::render_default_choice_footer_line(
                 "n",
-                crate::onboard_presentation::preflight_default_choice_description(),
+                crate::onboard_cli::presentation::preflight_default_choice_description(),
             ),
         ])
     } else {
@@ -810,8 +811,8 @@ fn build_preflight_summary_screen_spec(
 
     TuiScreenSpec {
         header_style: TuiHeaderStyle::Compact,
-        subtitle: Some(crate::onboard_presentation::preflight_header_title().to_owned()),
-        title: Some(crate::onboard_presentation::preflight_section_title().to_owned()),
+        subtitle: Some(crate::onboard_cli::presentation::preflight_header_title().to_owned()),
+        title: Some(crate::onboard_cli::presentation::preflight_section_title().to_owned()),
         progress_line: Some(progress_line.to_owned()),
         intro_lines: summary_lines,
         sections,
@@ -846,7 +847,7 @@ fn preflight_attention_hint_line(checks: &[OnboardCheck]) -> Option<&'static str
             OnboardNonInteractiveWarningPolicy::RequiresExplicitModel
         )
     }) {
-        return Some(crate::onboard_presentation::preflight_explicit_model_rerun_hint());
+        return Some(crate::onboard_cli::presentation::preflight_explicit_model_rerun_hint());
     }
 
     if checks.iter().any(|check| {
@@ -855,7 +856,7 @@ fn preflight_attention_hint_line(checks: &[OnboardCheck]) -> Option<&'static str
             OnboardNonInteractiveWarningPolicy::RequiresExplicitModelWithoutReviewedDefault
         )
     }) {
-        return Some(crate::onboard_presentation::preflight_explicit_model_only_rerun_hint());
+        return Some(crate::onboard_cli::presentation::preflight_explicit_model_only_rerun_hint());
     }
 
     None

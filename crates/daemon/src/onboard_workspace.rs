@@ -1,3 +1,5 @@
+// Functions here are temporarily unused after removing GuidedOnboardUiRunner.
+#![allow(dead_code)]
 use std::fs;
 use std::path::{Path, PathBuf};
 

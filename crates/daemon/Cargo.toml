@@ -56,7 +56,6 @@ libc = "0.2"
 [dependencies]
 clap.workspace = true
 clap_complete = "4.5"
-dialoguer.workspace = true
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 crossterm = "0.28"
 kernel = { package = "loongclaw-kernel", path = "../kernel" }

@@ -333,7 +333,7 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for WriteConfirmationGuardUi {
         message: &str,
         default: bool,
     ) -> loongclaw_daemon::CliResult<bool> {
-        if message == loongclaw_daemon::onboard_presentation::write_confirmation_prompt() {
+        if message == loongclaw_daemon::onboard_cli::presentation::write_confirmation_prompt() {
             let current_contents = std::fs::read_to_string(&self.output_path)
                 .expect("read config before write confirmation");
             if current_contents != self.baseline_contents {
@@ -2947,20 +2947,20 @@ fn onboard_entry_prefers_import_when_current_setup_is_repairable_and_sources_exi
 
 #[test]
 fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
-    let guided = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::Guided,
+    let guided = loongclaw_daemon::onboard_cli::presentation::review_flow_copy(
+        loongclaw_daemon::onboard_cli::presentation::ReviewFlowKind::Guided,
     );
     assert_eq!(guided.progress_line, "step 7 of 8 · review and write");
     assert_eq!(guided.header_subtitle, "review setup");
 
-    let quick_current = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::QuickCurrentSetup,
+    let quick_current = loongclaw_daemon::onboard_cli::presentation::review_flow_copy(
+        loongclaw_daemon::onboard_cli::presentation::ReviewFlowKind::QuickCurrentSetup,
     );
     assert_eq!(quick_current.progress_line, "quick review · current setup");
     assert_eq!(quick_current.header_subtitle, "review current setup");
 
-    let quick_detected = loongclaw_daemon::onboard_presentation::review_flow_copy(
-        loongclaw_daemon::onboard_presentation::ReviewFlowKind::QuickDetectedSetup,
+    let quick_detected = loongclaw_daemon::onboard_cli::presentation::review_flow_copy(
+        loongclaw_daemon::onboard_cli::presentation::ReviewFlowKind::QuickDetectedSetup,
     );
     assert_eq!(
         quick_detected.progress_line,
@@ -2971,8 +2971,8 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "review detected starting point"
     );
 
-    let current_shortcut = loongclaw_daemon::onboard_presentation::shortcut_copy(
-        loongclaw_daemon::onboard_presentation::ShortcutKind::CurrentSetup,
+    let current_shortcut = loongclaw_daemon::onboard_cli::presentation::shortcut_copy(
+        loongclaw_daemon::onboard_cli::presentation::ShortcutKind::CurrentSetup,
     );
     assert_eq!(
         current_shortcut.subtitle,
@@ -2989,8 +2989,8 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "keep current setup"
     );
 
-    let detected_shortcut = loongclaw_daemon::onboard_presentation::shortcut_copy(
-        loongclaw_daemon::onboard_presentation::ShortcutKind::DetectedSetup,
+    let detected_shortcut = loongclaw_daemon::onboard_cli::presentation::shortcut_copy(
+        loongclaw_daemon::onboard_cli::presentation::ShortcutKind::DetectedSetup,
     );
     assert_eq!(
         detected_shortcut.subtitle,
@@ -3013,15 +3013,16 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
         "the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_subtitle(),
+        loongclaw_daemon::onboard_cli::presentation::single_detected_starting_point_preview_subtitle(),
         "review the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_title(),
+        loongclaw_daemon::onboard_cli::presentation::single_detected_starting_point_preview_title(),
         "review detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::single_detected_starting_point_preview_footer(),
+        loongclaw_daemon::onboard_cli::presentation::single_detected_starting_point_preview_footer(
+        ),
         "continuing with the only detected starting point"
     );
 }
@@ -3029,120 +3030,120 @@ fn onboard_presentation_review_and_shortcut_copy_stays_canonical() {
 #[test]
 fn onboard_presentation_entry_and_digest_copy_stays_canonical() {
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_option_label(),
+        loongclaw_daemon::onboard_cli::presentation::current_setup_option_label(),
         "Continue current setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_setup_option_label(),
+        loongclaw_daemon::onboard_cli::presentation::detected_setup_option_label(),
         "Use detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::start_fresh_option_label(),
+        loongclaw_daemon::onboard_cli::presentation::start_fresh_option_label(),
         "Start fresh"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::start_fresh_option_detail(),
+        loongclaw_daemon::onboard_cli::presentation::start_fresh_option_detail(),
         "Configure provider, channels, and local behavior from scratch."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_state_label(
+        loongclaw_daemon::onboard_cli::presentation::current_setup_state_label(
             loongclaw_daemon::migration::types::CurrentSetupState::LegacyOrIncomplete,
         ),
         "legacy or incomplete"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::current_setup_option_detail(
+        loongclaw_daemon::onboard_cli::presentation::current_setup_option_detail(
             loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
         ),
         "Current config exists, but a few settings should be reviewed."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(true, true, 1),
+        loongclaw_daemon::onboard_cli::presentation::import_option_detail(true, true, 1),
         "A suggested starting point can supplement the current config with 1 reusable source."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, true, 2),
+        loongclaw_daemon::onboard_cli::presentation::import_option_detail(false, true, 2),
         "A suggested starting point is ready, built from 2 reusable sources."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 1),
+        loongclaw_daemon::onboard_cli::presentation::import_option_detail(false, false, 1),
         "1 reusable source was detected for provider, channels, or guidance."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::import_option_detail(false, false, 2),
+        loongclaw_daemon::onboard_cli::presentation::import_option_detail(false, false, 2),
         "2 reusable sources were detected for provider, channels, or guidance."
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_coverage_prefix(true),
+        loongclaw_daemon::onboard_cli::presentation::detected_coverage_prefix(true),
         "- suggested starting point covers: "
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_coverage_prefix(false),
+        loongclaw_daemon::onboard_cli::presentation::detected_coverage_prefix(false),
         "- detected coverage: "
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::suggested_starting_point_ready_line(),
+        loongclaw_daemon::onboard_cli::presentation::suggested_starting_point_ready_line(),
         "- suggested starting point: ready"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::CurrentSetup,
+        loongclaw_daemon::onboard_cli::presentation::entry_default_choice_description(
+            loongclaw_daemon::onboard_cli::presentation::EntryChoiceKind::CurrentSetup,
         ),
         "continue current setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::DetectedSetup,
+        loongclaw_daemon::onboard_cli::presentation::entry_default_choice_description(
+            loongclaw_daemon::onboard_cli::presentation::EntryChoiceKind::DetectedSetup,
         ),
         "the detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_default_choice_description(
-            loongclaw_daemon::onboard_presentation::EntryChoiceKind::StartFresh,
+        loongclaw_daemon::onboard_cli::presentation::entry_default_choice_description(
+            loongclaw_daemon::onboard_cli::presentation::EntryChoiceKind::StartFresh,
         ),
         "start fresh"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_footer_description(
+        loongclaw_daemon::onboard_cli::presentation::starting_point_footer_description(
             loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan,
         ),
         "the suggested starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_footer_description(
+        loongclaw_daemon::onboard_cli::presentation::starting_point_footer_description(
             loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
         ),
         "the first starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_subtitle(),
+        loongclaw_daemon::onboard_cli::presentation::starting_point_selection_subtitle(),
         "choose the starting point for this setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_title(),
+        loongclaw_daemon::onboard_cli::presentation::starting_point_selection_title(),
         "choose detected starting point"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::starting_point_selection_hint(),
+        loongclaw_daemon::onboard_cli::presentation::starting_point_selection_hint(),
         "detected settings can still supplement the chosen starting point when they do not conflict"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::detected_settings_section_heading(),
+        loongclaw_daemon::onboard_cli::presentation::detected_settings_section_heading(),
         "Detected settings"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::entry_choice_section_heading(),
+        loongclaw_daemon::onboard_cli::presentation::entry_choice_section_heading(),
         "Choose how to start"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::adjust_settings_label(),
+        loongclaw_daemon::onboard_cli::presentation::adjust_settings_label(),
         "Adjust settings"
     );
 }
 
 #[test]
 fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
-    let risk = loongclaw_daemon::onboard_presentation::risk_screen_copy();
+    let risk = loongclaw_daemon::onboard_cli::presentation::risk_screen_copy();
     assert_eq!(risk.subtitle, "security check before setup");
     assert_eq!(risk.title, "security check");
     assert_eq!(risk.continue_label, "Continue onboarding");
@@ -3159,92 +3160,93 @@ fn onboard_presentation_risk_preflight_and_write_copy_stays_canonical() {
     assert_eq!(risk.confirm_prompt, "Continue");
 
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_header_title(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_header_title(),
         "verify before write"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_section_title(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_section_title(),
         "preflight checks"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_attention_summary_line(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_attention_summary_line(),
         "- some checks need attention before write"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_green_summary_line(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_green_summary_line(),
         "- all checks are green for this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_probe_rerun_hint(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_probe_rerun_hint(),
         "- rerun with --skip-model-probe if your provider blocks model listing during setup"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_explicit_model_rerun_hint(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_explicit_model_rerun_hint(),
         "- rerun onboarding to choose a reviewed model, or set provider.model / preferred_models explicitly"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_explicit_model_only_rerun_hint(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_explicit_model_only_rerun_hint(),
         "- set provider.model / preferred_models explicitly before retrying"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_continue_label(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_continue_label(),
         "Continue anyway"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_continue_detail(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_continue_detail(),
         "accept the remaining warnings and continue with this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_cancel_label(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_cancel_label(),
         "Cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_cancel_detail(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_cancel_detail(),
         "stop here and return without writing any config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_default_choice_description(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_default_choice_description(),
         "cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::preflight_confirm_prompt(),
+        loongclaw_daemon::onboard_cli::presentation::preflight_confirm_prompt(),
         "Continue anyway"
     );
 
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_title(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_title(),
         "ready to write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_status_line(true),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_status_line(true),
         "- warnings were kept by choice"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_status_line(false),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_status_line(false),
         "- preflight is green for this draft"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_label(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_label(),
         "Write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_detail(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_detail(),
         "persist this onboarding draft to the target path"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_cancel_label(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_cancel_label(),
         "Cancel"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_cancel_detail(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_cancel_detail(),
         "return without writing any config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_default_choice_description(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_default_choice_description(
+        ),
         "write config"
     );
     assert_eq!(
-        loongclaw_daemon::onboard_presentation::write_confirmation_prompt(),
+        loongclaw_daemon::onboard_cli::presentation::write_confirmation_prompt(),
         "Write config"
     );
 }

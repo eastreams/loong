@@ -1,3 +1,5 @@
+// Functions here are temporarily unused after removing GuidedOnboardUiRunner.
+#![allow(dead_code)]
 use loongclaw_app as mvp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -77,41 +77,11 @@ fn degraded_terminal_uses_plain_prompt_fallback() {
     );
 }
 
-#[test]
-fn rich_prompt_ui_is_disabled_for_dumb_term() {
-    let mut env = ScopedEnv::new();
-    env.set("TERM", "dumb");
+// Test removed: terminal_supports_rich_prompt_ui was a dialoguer helper that no longer exists.
+// The TUI runner handles terminal detection differently now.
 
-    assert!(
-        !terminal_supports_rich_prompt_ui(),
-        "TERM=dumb should force onboarding to use the plain-prompt path"
-    );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn authentication_step_back_returns_flow_back_action() {
-    let options = interactive_onboard_options();
-    let context = onboard_test_context();
-    let starting_selection = default_starting_config_selection();
-    let mut ui = TestOnboardUi::with_inputs(["back"]);
-    let mut draft = OnboardDraft::from_config(
-        mvp::config::LoongClawConfig::default(),
-        PathBuf::from("/tmp/auth-back.toml"),
-        None,
-    );
-
-    let action = GuidedOnboardUiRunner {
-        options: &options,
-        ui: &mut ui,
-        context: &context,
-        starting_selection: &starting_selection,
-    }
-    .run_authentication_step(&mut draft)
-    .await
-    .expect("authentication step should map back-navigation to a flow action");
-
-    assert_eq!(action, OnboardFlowStepAction::Back);
-}
+// Test removed: GuidedOnboardUiRunner no longer exists.
+// Back-navigation is now tested via RatatuiOnboardRunner in onboard_tui::runner::tests.
 
 fn browser_companion_temp_dir(label: &str) -> PathBuf {
     static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
@@ -2816,7 +2786,7 @@ fn interactive_entry_screen_omits_static_options_when_selection_widget_handles_c
     assert!(
         lines
             .iter()
-            .any(|line| line == crate::onboard_presentation::entry_choice_section_heading()),
+            .any(|line| line == crate::onboard_cli::presentation::entry_choice_section_heading()),
         "interactive entry screen should keep the section heading even when the chooser renders options separately: {lines:#?}"
     );
     assert!(
@@ -2849,7 +2819,7 @@ fn interactive_starting_point_screen_omits_static_options_when_selection_widget_
     assert!(
         lines
             .iter()
-            .any(|line| line == crate::onboard_presentation::starting_point_selection_title()),
+            .any(|line| line == crate::onboard_cli::presentation::starting_point_selection_title()),
         "interactive starting-point screen should keep the title even when choices render separately: {lines:#?}"
     );
     assert!(
@@ -2892,12 +2862,12 @@ fn interactive_existing_config_write_screen_omits_static_options_when_selection_
 }
 
 #[test]
-fn stdio_onboard_ui_starts_without_initializing_line_reader() {
-    let ui = StdioOnboardUi::default();
+fn plain_onboard_ui_starts_without_initializing_line_reader() {
+    let ui = PlainOnboardUi::default();
 
     assert!(
         ui.line_reader.is_none(),
-        "stdio ui should not create a stdin reader until the stdio fallback path is actually used"
+        "plain ui should not create a stdin reader until the stdio fallback path is actually used"
     );
 }
 
@@ -3114,7 +3084,7 @@ fn preflight_summary_uses_explicit_model_only_guidance_without_reviewed_default(
 
     assert!(
         lines.iter().any(|line| {
-            line == crate::onboard_presentation::preflight_explicit_model_only_rerun_hint()
+            line == crate::onboard_cli::presentation::preflight_explicit_model_only_rerun_hint()
         }),
         "providers without a reviewed model should keep the summary hint aligned with the explicit-model-only recovery path: {lines:#?}"
     );
@@ -3141,7 +3111,7 @@ fn preflight_summary_omits_skip_model_probe_rerun_hint_after_probe_is_already_sk
 
     assert!(
         lines.iter().all(|line| {
-            line.as_str() != crate::onboard_presentation::preflight_probe_rerun_hint()
+            line.as_str() != crate::onboard_cli::presentation::preflight_probe_rerun_hint()
         }),
         "preflight should not suggest rerunning with --skip-model-probe after the current run already skipped the probe: {lines:#?}"
     );

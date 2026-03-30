@@ -1,3 +1,5 @@
+// Functions here are temporarily unused after removing GuidedOnboardUiRunner.
+#![allow(dead_code)]
 use std::env;
 
 use loongclaw_app as mvp;

@@ -1,3 +1,6 @@
+// Functions here are temporarily unused after removing GuidedOnboardUiRunner;
+// will be reconnected in later tasks.
+#![allow(dead_code)]
 use loongclaw_app as mvp;
 
 use crate::CliResult;

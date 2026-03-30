@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use crate::migration::{CurrentSetupState, ImportSourceKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
