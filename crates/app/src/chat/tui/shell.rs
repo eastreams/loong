@@ -92,6 +92,9 @@ impl InputView for state::Pane {
     fn agent_running(&self) -> bool {
         self.agent_running
     }
+    fn has_staged_message(&self) -> bool {
+        self.staged_message.is_some()
+    }
 }
 
 impl ShellView for state::Shell {
@@ -355,17 +358,22 @@ fn apply_terminal_event(
         _ => {}
     }
 
-    // --- Enter to submit ----------------------------------------------
-    if key.code == KeyCode::Enter
-        && !key.modifiers.contains(KeyModifiers::SHIFT)
-        && !shell.pane.agent_running
-    {
+    // --- Escape to clear staged message --------------------------------
+    if key.code == KeyCode::Esc && shell.pane.agent_running && shell.pane.staged_message.is_some() {
+        shell.pane.staged_message = None;
+        shell.pane.set_status("Staged message cleared".into());
+        return;
+    }
+
+    // --- Enter to submit (or stage if agent is running) ---------------
+    if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
         let text: String = textarea.lines().join("\n");
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return;
         }
 
+        // Slash commands are handled immediately regardless of agent state.
         if let Some(cmd) = commands::parse(trimmed) {
             textarea.select_all();
             textarea.delete_str(usize::MAX);
@@ -375,9 +383,18 @@ fn apply_terminal_event(
 
         textarea.select_all();
         textarea.delete_str(usize::MAX);
-        shell.pane.add_user_message(trimmed);
-        shell.pane.scroll_offset = 0;
-        *submit_text = Some(trimmed.to_owned());
+
+        if shell.pane.agent_running {
+            // Agent is busy — stage the message (depth-1, last-wins).
+            shell.pane.staged_message = Some(trimmed.to_owned());
+            shell.pane.add_user_message(trimmed);
+            shell.pane.scroll_offset = 0;
+        } else {
+            // Agent is idle — submit immediately.
+            shell.pane.add_user_message(trimmed);
+            shell.pane.scroll_offset = 0;
+            *submit_text = Some(trimmed.to_owned());
+        }
         return;
     }
 
@@ -466,6 +483,7 @@ pub(super) async fn run(
 
     let mut shell = state::Shell::new(&runtime.session_id);
     shell.pane.model = runtime.model_label.clone();
+    shell.pane.context_length = state::context_length_for_model(&runtime.model_label);
     shell
         .pane
         .add_system_message("Welcome to LoongClaw TUI. Type a message and press Enter.");
@@ -526,6 +544,10 @@ pub(super) async fn run(
                 turn_future = Box::pin(std::future::pending());
                 shell.pane.agent_running = false;
                 shell.dirty = true;
+                // Auto-submit staged message if one was queued.
+                if let Some(staged) = shell.pane.staged_message.take() {
+                    submit_text = Some(staged);
+                }
             }
         }
 
@@ -608,6 +630,10 @@ pub(super) async fn run(
                 turn_future = Box::pin(std::future::pending());
                 shell.pane.agent_running = false;
                 shell.dirty = true;
+                // Auto-submit staged message if one was queued.
+                if let Some(staged) = shell.pane.staged_message.take() {
+                    submit_text = Some(staged);
+                }
             }
 
             _ = tick.tick() => {

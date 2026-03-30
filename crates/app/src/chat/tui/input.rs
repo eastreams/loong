@@ -14,6 +14,7 @@ use super::theme::Palette;
 
 pub(super) trait InputView {
     fn agent_running(&self) -> bool;
+    fn has_staged_message(&self) -> bool;
 }
 
 pub(super) fn render_input(
@@ -26,8 +27,10 @@ pub(super) fn render_input(
     let border_color = palette.brand;
     let border_style = Style::default().fg(border_color);
 
-    let prompt_hint = if pane.agent_running() {
-        " Enter to interrupt "
+    let prompt_hint = if pane.agent_running() && pane.has_staged_message() {
+        " Queued: 1 message | Esc to clear "
+    } else if pane.agent_running() {
+        " Enter to queue | Esc to cancel queue "
     } else {
         " Enter to send | /help for commands "
     };
@@ -57,11 +60,15 @@ mod tests {
 
     struct TestInput {
         running: bool,
+        staged: bool,
     }
 
     impl InputView for TestInput {
         fn agent_running(&self) -> bool {
             self.running
+        }
+        fn has_staged_message(&self) -> bool {
+            self.staged
         }
     }
 
@@ -83,7 +90,10 @@ mod tests {
     fn idle_input_shows_send_hint() {
         let backend = TestBackend::new(60, 5);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        let pane = TestInput { running: false };
+        let pane = TestInput {
+            running: false,
+            staged: false,
+        };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();
 
@@ -101,10 +111,13 @@ mod tests {
     }
 
     #[test]
-    fn running_input_shows_interrupt_hint() {
+    fn running_input_shows_queue_hint() {
         let backend = TestBackend::new(60, 5);
         let mut terminal = Terminal::new(backend).expect("terminal");
-        let pane = TestInput { running: true };
+        let pane = TestInput {
+            running: true,
+            staged: false,
+        };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();
 
@@ -116,8 +129,32 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Enter to interrupt"),
-            "running hint should mention interrupt"
+            text.contains("Enter to queue"),
+            "running hint should mention queue"
+        );
+    }
+
+    #[test]
+    fn running_with_staged_shows_queued_hint() {
+        let backend = TestBackend::new(60, 5);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let pane = TestInput {
+            running: true,
+            staged: true,
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                render_input(f, f.area(), &textarea, &pane, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Queued: 1 message"),
+            "staged hint should mention queued message"
         );
     }
 }

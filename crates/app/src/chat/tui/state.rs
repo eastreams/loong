@@ -27,6 +27,9 @@ pub(super) struct Pane {
     pub(super) last_spinner_tick: Instant,
     pub(super) status_message: Option<(String, Instant)>,
     pub(super) clarify_dialog: Option<ClarifyDialog>,
+    /// Depth-1 staged message queue: holds the next user message to submit
+    /// once the current agent turn completes.
+    pub(super) staged_message: Option<String>,
 }
 
 impl Pane {
@@ -48,6 +51,7 @@ impl Pane {
             last_spinner_tick: Instant::now(),
             status_message: None,
             clarify_dialog: None,
+            staged_message: None,
         }
     }
 
@@ -239,6 +243,59 @@ impl UiState {
     }
 }
 
+/// Infer the context window size (in tokens) from a model name string.
+///
+/// Uses well-known model-name prefixes/substrings to return the advertised
+/// context window.  Falls back to `0` for unrecognised models so that the
+/// percentage display degrades gracefully (shows 0%).
+pub(super) fn context_length_for_model(model: &str) -> u32 {
+    let m = model.to_ascii_lowercase();
+
+    // --- Anthropic Claude ---------------------------------------------------
+    // Claude 3.x / 4.x: 200k
+    // Claude 2.x / Instant: 100k
+    if m.contains("claude") {
+        if m.contains("claude-3") || m.contains("claude-4") {
+            return 200_000;
+        }
+        return 100_000;
+    }
+
+    // --- OpenAI reasoning models (o1, o3, o4-mini) --------------------------
+    if m.starts_with("o1") || m.starts_with("o3") || m.starts_with("o4") {
+        return 200_000;
+    }
+
+    // --- OpenAI GPT ---------------------------------------------------------
+    if m.contains("gpt-4o") || m.contains("gpt-4-turbo") || m.contains("gpt-4-1") {
+        return 128_000;
+    }
+    if m.contains("gpt-4") {
+        return 8_192;
+    }
+    if m.contains("gpt-3.5") {
+        return 16_385;
+    }
+
+    // --- Google Gemini (1.5 / 2.x) -----------------------------------------
+    if m.contains("gemini") {
+        return 1_048_576;
+    }
+
+    // --- Mistral / Mixtral --------------------------------------------------
+    if m.contains("mistral") || m.contains("mixtral") {
+        return 32_768;
+    }
+
+    // --- DeepSeek -----------------------------------------------------------
+    if m.contains("deepseek") {
+        return 64_000;
+    }
+
+    // Unknown model — 0 keeps the percentage at 0%.
+    0
+}
+
 /// Truncates a string to at most `max_chars` characters.
 fn truncate_preview(s: &str, max_chars: usize) -> String {
     let end = s.char_indices().nth(max_chars).map_or(s.len(), |(i, _)| i);
@@ -365,5 +422,79 @@ mod tests {
         assert!(shell.dirty);
         assert_eq!(shell.focus.top(), super::super::focus::FocusLayer::Composer);
         assert_eq!(shell.pane.session_id, "s1");
+    }
+
+    #[test]
+    fn staged_message_defaults_to_none() {
+        let pane = Pane::new("sess-1");
+        assert!(pane.staged_message.is_none());
+    }
+
+    #[test]
+    fn staged_message_last_wins() {
+        let mut pane = Pane::new("sess-1");
+        pane.staged_message = Some("first".to_string());
+        pane.staged_message = Some("second".to_string());
+        assert_eq!(pane.staged_message.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn staged_message_take_clears() {
+        let mut pane = Pane::new("sess-1");
+        pane.staged_message = Some("queued".to_string());
+        let taken = pane.staged_message.take();
+        assert_eq!(taken.as_deref(), Some("queued"));
+        assert!(pane.staged_message.is_none());
+    }
+
+    // -- context_length_for_model tests --
+
+    #[test]
+    fn context_length_claude_3_models() {
+        assert_eq!(context_length_for_model("claude-3-opus-20240229"), 200_000);
+        assert_eq!(context_length_for_model("claude-3.5-sonnet"), 200_000);
+        assert_eq!(context_length_for_model("claude-3-haiku"), 200_000);
+    }
+
+    #[test]
+    fn context_length_claude_4_models() {
+        assert_eq!(context_length_for_model("claude-4-opus"), 200_000);
+    }
+
+    #[test]
+    fn context_length_claude_2_models() {
+        assert_eq!(context_length_for_model("claude-2.1"), 100_000);
+        assert_eq!(context_length_for_model("claude-instant-1.2"), 100_000);
+    }
+
+    #[test]
+    fn context_length_openai_gpt4o() {
+        assert_eq!(context_length_for_model("gpt-4o"), 128_000);
+        assert_eq!(context_length_for_model("gpt-4o-mini"), 128_000);
+        assert_eq!(context_length_for_model("gpt-4-turbo"), 128_000);
+    }
+
+    #[test]
+    fn context_length_openai_gpt4_base() {
+        assert_eq!(context_length_for_model("gpt-4"), 8_192);
+    }
+
+    #[test]
+    fn context_length_openai_reasoning() {
+        assert_eq!(context_length_for_model("o1-preview"), 200_000);
+        assert_eq!(context_length_for_model("o3-mini"), 200_000);
+    }
+
+    #[test]
+    fn context_length_gemini() {
+        assert_eq!(context_length_for_model("gemini-1.5-pro"), 1_048_576);
+        assert_eq!(context_length_for_model("gemini-2.0-flash"), 1_048_576);
+    }
+
+    #[test]
+    fn context_length_unknown_model() {
+        assert_eq!(context_length_for_model("some-custom-model"), 0);
+        assert_eq!(context_length_for_model("auto"), 0);
+        assert_eq!(context_length_for_model(""), 0);
     }
 }
