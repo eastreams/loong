@@ -94,20 +94,30 @@ pub(super) async fn run_whatsapp_channel(
     resolved_path: &Path,
     selected_by_default: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
     kernel_ctx: KernelContext,
     runtime: Arc<ChannelOperationRuntimeTracker>,
     stop: ChannelServeStopHandle,
 ) -> CliResult<()> {
-    let bind = resolved.resolved_webhook_bind();
+    let bind = bind_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| resolved.resolved_webhook_bind());
     if bind.is_empty() {
         return Err("whatsapp webhook bind address is empty".to_owned());
     }
 
-    let path = resolved.resolved_webhook_path();
-    let path = if path.starts_with('/') {
-        path
+    let path_raw = path_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| resolved.resolved_webhook_path());
+    let path = if path_raw.starts_with('/') {
+        path_raw
     } else {
-        format!("/{path}")
+        format!("/{path_raw}")
     };
 
     let state = WhatsappWebhookState::new(
