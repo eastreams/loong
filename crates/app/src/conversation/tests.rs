@@ -11454,6 +11454,124 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_allows_capability_instal
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budget() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-policy", "bounded-install-budget");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let skill_one_path = "source/demo-skill-1";
+    let skill_two_path = "source/demo-skill-2";
+    let skill_three_path = "source/demo-skill-3";
+
+    write_test_external_skill(&workspace_root, skill_one_path);
+    write_test_external_skill(&workspace_root, skill_two_path);
+    write_test_external_skill(&workspace_root, skill_three_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-budget");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-bounded-install-budget",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-bounded-install-budget";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+
+    let first_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_one_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-1",
+    );
+    let second_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_two_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-2",
+    );
+    let third_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_three_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-3",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![first_intent, second_intent, third_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(
+                failure.code,
+                "autonomy_policy_capability_acquisition_budget_exceeded"
+            );
+            assert!(
+                failure
+                    .reason
+                    .contains("capability acquisition budget exceeded"),
+                "unexpected denial reason: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {other:?}");
+        }
+    }
+
+    let installed_skill_root = workspace_root.join("external-skills-installed");
+    let installed_one = installed_skill_root.join("demo-skill-1").join("SKILL.md");
+    let installed_two = installed_skill_root.join("demo-skill-2").join("SKILL.md");
+    let installed_three = installed_skill_root.join("demo-skill-3").join("SKILL.md");
+
+    assert!(
+        !installed_one.exists(),
+        "budget denial should abort execution before the first install runs"
+    );
+    assert!(
+        !installed_two.exists(),
+        "budget denial should abort execution before the second install runs"
+    );
+    assert!(
+        !installed_three.exists(),
+        "budget denial should abort execution before the third install runs"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
 async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_provider_switch() {
     use crate::conversation::turn_engine::{
         DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
@@ -11558,8 +11676,16 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_pr
         .expect("load approval request")
         .expect("approval request should exist");
     let governance_snapshot = stored_request.governance_snapshot_json;
+    let (_, reloaded_config) =
+        crate::config::load(Some(config_path.to_str().expect("utf8 config path")))
+            .expect("reload provider switch config");
     assert_eq!(stored_request.tool_name, "provider.switch");
     assert_eq!(stored_request.approval_key, "tool:provider.switch");
+    assert_eq!(
+        reloaded_config.active_provider_id(),
+        Some("openai-gpt-5"),
+        "provider should remain unchanged before approval is granted"
+    );
     assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
     assert_eq!(
         governance_snapshot["autonomy_profile"],
@@ -11663,7 +11789,10 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_po
     let tool_intent = provider_tool_intent(
         "external_skills.policy",
         json!({
-            "action": "get"
+            "action": "set",
+            "policy_update_approved": true,
+            "enabled": true,
+            "allowed_domains": ["skills.sh"]
         }),
         session_id,
         "turn-autonomy-guided-policy-mutation",
@@ -11753,8 +11882,7 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_se
     let tool_intent = provider_tool_intent(
         "session_archive",
         json!({
-            "session_id": "child-session",
-            "dry_run": true
+            "session_id": "child-session"
         }),
         session_id,
         "turn-autonomy-bounded-session-mutation",

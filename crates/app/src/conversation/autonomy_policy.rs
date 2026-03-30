@@ -311,13 +311,13 @@ pub fn render_reason(
             snapshot.profile.as_str()
         ),
         SESSION_MUTATION_BUDGET_EXCEEDED_CODE => format!(
-            "autonomy policy denied `{tool_name}`: topology mutation budget exceeded for `{}`",
+            "autonomy policy denied `{tool_name}`: session mutation budget exceeded for `{}`",
             snapshot.profile.as_str()
         ),
         BINDING_MISSING_CODE => format!(
-            "autonomy policy denied `{tool_name}`: `{}` requires kernel-bound execution for {:?}",
+            "autonomy policy denied `{tool_name}`: `{}` requires kernel-bound execution for `{}`",
             snapshot.profile.as_str(),
-            action_class
+            action_class.as_str()
         ),
         _ => format!(
             "autonomy policy denied `{tool_name}` with reason `{reason_code}` under `{}`",
