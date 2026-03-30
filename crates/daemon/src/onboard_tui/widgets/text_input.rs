@@ -184,7 +184,12 @@ impl TextInputWidget {
         };
         let value_span = Span::styled(state.display_value(), value_style);
         let cursor_span = Span::styled("\u{258f}", Style::default().fg(Color::Cyan));
-        let line = Line::from(vec![label_span, Span::raw(" "), value_span, cursor_span]);
+        let line = if state.default_active {
+            // Show cursor before placeholder to indicate "start typing to replace"
+            Line::from(vec![label_span, Span::raw(" "), cursor_span, value_span])
+        } else {
+            Line::from(vec![label_span, Span::raw(" "), value_span, cursor_span])
+        };
         buf.set_line(area.x, area.y, &line, area.width);
 
         if let Some(error) = &state.error
