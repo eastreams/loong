@@ -49,7 +49,8 @@ pub mod traits;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 mod turn_feedback;
 #[cfg(feature = "channel-twitch")]
@@ -89,7 +90,8 @@ pub use registry::{
     TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WEBHOOK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
-    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
+    WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, channel_inventory,
     channel_status_snapshots, list_channel_catalog, normalize_channel_catalog_id,
     normalize_channel_platform, resolve_channel_catalog_command_family_descriptor,
     resolve_channel_catalog_entry, resolve_channel_catalog_operation,
@@ -105,7 +107,8 @@ pub use tlon_command::run_tlon_send;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub use turn_feedback::ChannelTurnFeedbackPolicy;
 
@@ -135,6 +138,7 @@ use crate::conversation::ConversationIngressPrivateContext;
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 pub(crate) use dispatch::process_inbound_with_provider;
 #[cfg(any(
@@ -142,6 +146,7 @@ pub(crate) use dispatch::process_inbound_with_provider;
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 pub use dispatch::run_channel_serve_runtime_probe_for_test;
 #[cfg(feature = "channel-feishu")]
@@ -167,8 +172,11 @@ pub use dispatch::{
     run_google_chat_send, run_imessage_send, run_irc_send, run_line_send, run_matrix_channel,
     run_matrix_send, run_mattermost_send, run_nextcloud_talk_send, run_nostr_send, run_signal_send,
     run_slack_send, run_synology_chat_send, run_teams_send, run_telegram_channel,
-    run_telegram_send, run_webhook_send, run_wecom_channel, run_wecom_send, run_whatsapp_send,
+    run_telegram_send, run_webhook_send, run_wecom_channel, run_wecom_send,
+    run_whatsapp_channel, run_whatsapp_send,
 };
+#[cfg(feature = "channel-whatsapp")]
+pub use dispatch::run_whatsapp_channel_with_stop;
 #[cfg(test)]
 use serve_runtime::ChannelServeRuntimeSpec;
 #[cfg(test)]

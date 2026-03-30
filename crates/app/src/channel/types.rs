@@ -2,14 +2,16 @@
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use std::collections::BTreeSet;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use std::future::Future;
 use std::path::PathBuf;
@@ -17,7 +19,8 @@ use std::path::PathBuf;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use std::pin::Pin;
 use std::{fmt, str::FromStr};
@@ -37,7 +40,8 @@ use serde::Serialize;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use serde_json::Value;
 
@@ -45,14 +49,16 @@ use serde_json::Value;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use super::runtime_state::ChannelOperationRuntimeTracker;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use super::turn_feedback::ChannelTurnFeedbackPolicy;
 use crate::CliResult;
@@ -60,14 +66,16 @@ use crate::CliResult;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use crate::config::LoongClawConfig;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 use crate::config::normalize_channel_account_id;
 use crate::conversation::{
@@ -426,7 +434,8 @@ impl ChannelOutboundTarget {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone)]
 pub struct ChannelInboundMessage {
@@ -440,7 +449,8 @@ pub struct ChannelInboundMessage {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct ChannelResolvedAcpTurnHints {
@@ -452,7 +462,8 @@ pub(super) struct ChannelResolvedAcpTurnHints {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ChannelOutboundMessage {
@@ -468,7 +479,8 @@ pub enum ChannelOutboundMessage {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub enum ChannelStreamingMode {
     #[default]
@@ -495,7 +507,8 @@ pub struct FeishuChannelSendRequest {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[allow(dead_code)]
 #[async_trait]
@@ -537,7 +550,8 @@ pub trait ChannelAdapter {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) type ChannelProcessFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send>>;
 
@@ -570,7 +584,8 @@ pub(super) type ChannelCommandFuture<'a> = Pin<Box<dyn Future<Output = CliResult
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum KnownChannelSessionSendTarget {
@@ -599,7 +614,8 @@ pub(super) enum KnownChannelSessionSendTarget {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) fn parse_known_channel_session_send_target(
     config: &LoongClawConfig,
@@ -623,7 +639,8 @@ pub(super) fn parse_known_channel_session_send_target(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn parse_telegram_session_send_target(
     config: &LoongClawConfig,
@@ -668,7 +685,8 @@ fn parse_telegram_session_send_target(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn parse_feishu_session_send_target(
     config: &LoongClawConfig,
@@ -718,7 +736,8 @@ fn parse_feishu_session_send_target(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn parse_matrix_session_send_target(
     config: &LoongClawConfig,
@@ -758,7 +777,8 @@ fn parse_matrix_session_send_target(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn parse_wecom_session_send_target(
     config: &LoongClawConfig,
@@ -804,7 +824,8 @@ fn parse_wecom_session_send_target(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn configured_runtime_account_ids(
     configured_account_ids: &[String],
@@ -830,7 +851,8 @@ fn configured_runtime_account_ids(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn split_known_channel_account_and_scope<'a>(
     scope: &'a [String],
@@ -870,7 +892,8 @@ fn split_known_channel_account_and_scope<'a>(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn looks_like_feishu_message_id(value: &str) -> bool {
     let trimmed = value.trim();
@@ -881,7 +904,8 @@ fn looks_like_feishu_message_id(value: &str) -> bool {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) async fn process_channel_batch<A, F>(
     adapter: &mut A,

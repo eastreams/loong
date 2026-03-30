@@ -19,7 +19,8 @@ use crate::CliResult;
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ChannelServeRuntimeSpec<'a> {
@@ -33,7 +34,8 @@ pub(super) struct ChannelServeRuntimeSpec<'a> {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ChannelServeCommandSpec {
@@ -86,7 +88,8 @@ impl ChannelServeStopHandle {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) fn channel_runtime_now_ms() -> u64 {
     SystemTime::now()
@@ -99,7 +102,8 @@ pub(super) fn channel_runtime_now_ms() -> u64 {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) fn ensure_channel_operation_runtime_slot_available_in_dir(
     runtime_dir: &std::path::Path,
@@ -144,7 +148,8 @@ pub(super) fn ensure_channel_operation_runtime_slot_available_in_dir(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) async fn with_channel_serve_runtime<T, F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,
@@ -182,7 +187,8 @@ where
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) async fn with_channel_serve_runtime_with_stop<F, Fut>(
     spec: ChannelServeRuntimeSpec<'_>,

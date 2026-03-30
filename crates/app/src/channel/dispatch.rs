@@ -146,6 +146,7 @@ use crate::config::ResolvedWhatsappChannelConfig;
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 use crate::conversation::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
@@ -158,6 +159,7 @@ use crate::conversation::{
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
@@ -188,7 +190,7 @@ use super::nextcloud_talk;
 use super::nostr;
 use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_COMMAND_FAMILY_DESCRIPTOR,
+    WECOM_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
 };
 use super::runtime_state;
 use super::runtime_state::ChannelOperationRuntimeTracker;
@@ -213,6 +215,7 @@ use super::telegram;
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 use super::turn_feedback::ChannelTurnFeedbackCapture;
 #[cfg(any(
@@ -220,6 +223,7 @@ use super::turn_feedback::ChannelTurnFeedbackCapture;
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 use super::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(feature = "channel-webhook")]
@@ -240,6 +244,7 @@ use super::types::{
     feature = "channel-feishu",
     feature = "channel-matrix",
     feature = "channel-wecom",
+    feature = "channel-whatsapp",
 ))]
 use super::types::{
     ChannelCommandFuture, ChannelResolvedAcpTurnHints, KnownChannelSessionSendTarget,
@@ -319,7 +324,8 @@ impl<R> ChannelCommandContext<R> {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) trait ChannelResolvedRuntimeAccount {
     fn runtime_account_id(&self) -> &str;
@@ -1144,7 +1150,8 @@ pub(super) struct ChannelSendCommandSpec {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
@@ -1705,6 +1712,96 @@ pub async fn run_whatsapp_send(
         )
         .await
     }
+}
+
+#[allow(clippy::print_stdout)] // CLI startup banner
+pub async fn run_whatsapp_channel(
+    config_path: Option<&str>,
+    account_id: Option<&str>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+) -> CliResult<()> {
+    if !cfg!(feature = "channel-whatsapp") {
+        return Err("whatsapp channel is disabled (enable feature `channel-whatsapp`)".to_owned());
+    }
+
+    #[cfg(not(feature = "channel-whatsapp"))]
+    {
+        let _ = (config_path, account_id, bind_override, path_override);
+        return Err("whatsapp channel is disabled (enable feature `channel-whatsapp`)".to_owned());
+    }
+
+    #[cfg(feature = "channel-whatsapp")]
+    {
+        let context = load_whatsapp_command_context(config_path, account_id)?;
+        run_whatsapp_channel_with_context(
+            context,
+            bind_override,
+            path_override,
+            ChannelServeStopHandle::new(),
+            true,
+        )
+        .await
+    }
+}
+
+#[cfg(feature = "channel-whatsapp")]
+#[allow(clippy::print_stdout)] // CLI startup banner
+async fn run_whatsapp_channel_with_context(
+    context: ChannelCommandContext<ResolvedWhatsappChannelConfig>,
+    bind_override: Option<&str>,
+    path_override: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let bind_override = bind_override.map(str::to_owned);
+    let path_override = path_override.map(str::to_owned);
+    run_channel_serve_command_with_stop(
+        context,
+        ChannelServeCommandSpec {
+            family: WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+        },
+        validate_whatsapp_security_config,
+        stop,
+        initialize_runtime_environment,
+        move |context, kernel_ctx, runtime, stop| {
+            Box::pin(async move {
+                let route = context.route.clone();
+                let resolved_path = context.resolved_path.clone();
+                let resolved = context.resolved.clone();
+                let config = context.config.clone();
+
+                let _ = bind_override.as_deref();
+                let _ = path_override.as_deref();
+
+                whatsapp::run_whatsapp_channel(
+                    &config,
+                    &resolved,
+                    &resolved_path,
+                    route.selected_by_default(),
+                    route.default_account_source,
+                    kernel_ctx,
+                    runtime,
+                    stop,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "channel-whatsapp")]
+pub async fn run_whatsapp_channel_with_stop(
+    resolved_path: PathBuf,
+    config: LoongClawConfig,
+    account_id: Option<&str>,
+    stop: ChannelServeStopHandle,
+    initialize_runtime_environment: bool,
+) -> CliResult<()> {
+    let context = build_whatsapp_command_context(resolved_path, config, account_id)?;
+    run_whatsapp_channel_with_context(context, None, None, stop, initialize_runtime_environment)
+        .await
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -2496,7 +2593,8 @@ pub async fn run_feishu_channel_with_stop(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub async fn run_channel_serve_runtime_probe_for_test(
     platform: ChannelPlatform,
@@ -2957,6 +3055,32 @@ pub async fn run_background_channel_with_stop(
                 return Err("wecom channel is disabled (enable feature `channel-wecom`)".to_owned());
             }
         }
+        "whatsapp" => {
+            #[cfg(feature = "channel-whatsapp")]
+            {
+                return run_whatsapp_channel_with_stop(
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "channel-whatsapp"))]
+            {
+                let _ = (
+                    resolved_path,
+                    config,
+                    account_id,
+                    stop,
+                    initialize_runtime_environment,
+                );
+                return Err(
+                    "whatsapp channel is disabled (enable feature `channel-whatsapp`)".to_owned(),
+                );
+            }
+        }
         _ => Err(format!("unsupported background channel `{channel_id}`")),
     }
 }
@@ -2965,7 +3089,8 @@ pub async fn run_background_channel_with_stop(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(crate) async fn send_text_to_known_session(
     config: &LoongClawConfig,
@@ -3180,7 +3305,8 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 )))]
 pub(crate) async fn send_text_to_known_session(
     _config: &crate::config::LoongClawConfig,
@@ -3194,7 +3320,8 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
@@ -3232,7 +3359,8 @@ pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRun
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(crate) async fn process_inbound_with_provider(
     config: &LoongClawConfig,
@@ -3292,7 +3420,8 @@ pub(crate) async fn process_inbound_with_provider(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) fn reload_channel_turn_config(
     config: &LoongClawConfig,
@@ -3308,7 +3437,8 @@ pub(super) fn reload_channel_turn_config(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn resolve_channel_acp_turn_hints(
     config: &LoongClawConfig,
@@ -3368,7 +3498,8 @@ fn resolve_channel_acp_turn_hints(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTurnProvenance<'_> {
     AcpTurnProvenance {
@@ -3382,7 +3513,8 @@ fn channel_message_acp_turn_provenance(message: &ChannelInboundMessage) -> AcpTu
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 pub(super) fn channel_message_ingress_context(
     message: &ChannelInboundMessage,
@@ -3438,7 +3570,8 @@ pub(super) fn channel_message_ingress_context(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     value
@@ -3451,7 +3584,8 @@ fn trimmed_non_empty(value: Option<&str>) -> Option<String> {
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn normalized_channel_delivery_resource(
     resource: &ChannelDeliveryResource,
@@ -3473,7 +3607,8 @@ fn normalized_channel_delivery_resource(
     feature = "channel-telegram",
     feature = "channel-feishu",
     feature = "channel-matrix",
-    feature = "channel-wecom"
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
 ))]
 fn normalized_feishu_callback_context(
     callback: Option<&ChannelDeliveryFeishuCallback>,
@@ -3662,6 +3797,35 @@ pub(super) fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig
         .unwrap_or(false);
     if !has_secret {
         return Err("wecom.secret is missing; configure secret or secret_env".to_owned());
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "channel-whatsapp")]
+pub(super) fn validate_whatsapp_security_config(
+    config: &ResolvedWhatsappChannelConfig,
+) -> CliResult<()> {
+    let has_verify_token = config
+        .verify_token()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_verify_token {
+        return Err(
+            "whatsapp verify_token is required for webhook verification (set whatsapp.verify_token or env)"
+                .to_owned(),
+        );
+    }
+
+    let has_app_secret = config
+        .app_secret()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !has_app_secret {
+        return Err(
+            "whatsapp app_secret is required for payload signature verification (set whatsapp.app_secret or env)"
+                .to_owned(),
+        );
     }
 
     Ok(())
