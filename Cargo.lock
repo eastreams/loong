@@ -2112,7 +2112,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "loongclaw-app"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "aes",
  "async-trait",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-bench"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "loongclaw-kernel",
  "loongclaw-spec",
@@ -2179,7 +2179,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-contracts"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "semver",
  "serde",
@@ -2191,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-daemon"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "axum",
  "base64",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-kernel"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "futures-util",
@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-protocol"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "serde",
@@ -2247,7 +2247,7 @@ dependencies = [
 
 [[package]]
 name = "loongclaw-spec"
-version = "0.1.0-alpha.2"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64",
