@@ -6,7 +6,8 @@ use crate::{
 use super::registry::{
     ChannelRuntimeCommandDescriptor, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     MATRIX_CATALOG_COMMAND_FAMILY_DESCRIPTOR, TELEGRAM_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
-    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, resolve_channel_selection_order,
+    WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR, WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    resolve_channel_selection_order,
 };
 
 #[cfg(feature = "channel-feishu")]
@@ -20,6 +21,9 @@ use super::registry::TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR;
 
 #[cfg(feature = "channel-wecom")]
 use super::registry::WECOM_RUNTIME_COMMAND_DESCRIPTOR;
+
+#[cfg(feature = "channel-whatsapp")]
+use super::registry::WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelRuntimeKind {
@@ -126,7 +130,7 @@ const WHATSAPP_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     label: "whatsapp",
     surface_label: "whatsapp channel",
     runtime_kind: ChannelRuntimeKind::Service,
-    serve_subcommand: None,
+    serve_subcommand: Some(WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
 };
 
 const EMAIL_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
@@ -333,12 +337,19 @@ const DINGTALK_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegr
     background_surface_is_enabled: None,
 };
 
+#[cfg(feature = "channel-whatsapp")]
+const WHATSAPP_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
+    Some(WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR);
+
+#[cfg(not(feature = "channel-whatsapp"))]
+const WHATSAPP_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
+
 const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &WHATSAPP_CHANNEL_DESCRIPTOR,
-    background_runtime: None,
+    background_runtime: WHATSAPP_BACKGROUND_RUNTIME,
     is_enabled: whatsapp_channel_is_enabled,
     collect_validation_issues: collect_whatsapp_channel_validation_issues,
-    background_surface_is_enabled: None,
+    background_surface_is_enabled: Some(whatsapp_background_surface_is_enabled),
 };
 
 const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
@@ -838,6 +849,17 @@ fn wecom_background_surface_is_enabled(
         return Ok(false);
     }
     let resolved = config.wecom.resolve_account(account_id)?;
+    Ok(resolved.enabled)
+}
+
+fn whatsapp_background_surface_is_enabled(
+    config: &LoongClawConfig,
+    account_id: Option<&str>,
+) -> CliResult<bool> {
+    if !config.whatsapp.enabled {
+        return Ok(false);
+    }
+    let resolved = config.whatsapp.resolve_account(account_id)?;
     Ok(resolved.enabled)
 }
 
