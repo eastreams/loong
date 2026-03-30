@@ -2101,19 +2101,21 @@ fn is_volcengine_coding_plan_domestic_static_catalog(
         return false;
     }
 
-    // Keep the heuristic centralized so we don't accidentally diverge the two onboarding decisions.
-    // Prefer host/path matching to tolerate proxy/tenant-shaped endpoints.
-    let base_url = provider.base_url.trim_end_matches('/');
+    let Ok(actual_url) = reqwest::Url::parse(provider.resolved_base_url().trim()) else {
+        return false;
+    };
+    let Ok(canonical_url) = reqwest::Url::parse(
+        mvp::config::ProviderKind::VolcengineCoding
+            .profile()
+            .base_url,
+    ) else {
+        return false;
+    };
 
-    if let Ok(url) = reqwest::Url::parse(base_url) {
-        let path = url.path().trim_end_matches('/');
-        if path == "/api/coding/v3" {
-            return true;
-        }
-    }
-
-    // Fallback for non-absolute base_url or unexpected formatting.
-    base_url.contains("ark.cn-beijing.volces.com/api/coding/v3")
+    actual_url.scheme() == canonical_url.scheme()
+        && actual_url.host_str() == canonical_url.host_str()
+        && actual_url.port_or_known_default() == canonical_url.port_or_known_default()
+        && actual_url.path().trim_end_matches('/') == canonical_url.path().trim_end_matches('/')
 }
 
 #[cfg(test)]
@@ -2145,15 +2147,16 @@ mod volcengine_coding_plan_catalog_tests {
     }
 
     #[test]
-    fn volcengine_coding_plan_domestic_static_catalog_matches_proxy_path() {
+    fn volcengine_coding_plan_domestic_static_catalog_rejects_proxy_path() {
         let provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::VolcengineCoding,
-            // Proxy host; path still targets Coding Plan.
             base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
             ..mvp::config::ProviderConfig::default()
         };
 
-        assert!(is_volcengine_coding_plan_domestic_static_catalog(&provider));
+        assert!(!is_volcengine_coding_plan_domestic_static_catalog(
+            &provider
+        ));
     }
 }
 
@@ -8369,6 +8372,86 @@ mod tests {
         assert_eq!(
             selected, "deepseek-reasoner",
             "interactive onboarding should use the probed model catalog instead of treating numeric selection input as a literal model id"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_keeps_auto_visible_for_noncanonical_volcengine_catalog() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+        config.provider.base_url =
+            "https://proxy.example.com/forward/ark.cn-beijing.volces.com/api/coding/v3".to_owned();
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(["1"]);
+        let context = onboard_test_context();
+        let available_models = vec![
+            "doubao-seed-2.0-code".to_owned(),
+            "doubao-seed-2.0-pro".to_owned(),
+        ];
+
+        let selected = resolve_model_selection(
+            &interactive_onboard_options(),
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &available_models,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert_eq!(
+            selected, "auto",
+            "noncanonical Volcengine endpoints should not hide the `auto` choice just because the returned models contain a static-catalog model id"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_onboarding_model_catalog_returns_static_list_for_canonical_volcengine_endpoint() {
+        let mut options = interactive_onboard_options();
+        options.skip_model_probe = true;
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+
+        let models = load_onboarding_model_catalog(&options, &config).await;
+
+        assert_eq!(
+            models,
+            vec![
+                "ark-code-latest".to_owned(),
+                "doubao-seed-2.0-code".to_owned(),
+                "doubao-seed-2.0-pro".to_owned(),
+                "doubao-seed-2.0-lite".to_owned(),
+                "doubao-seed-code".to_owned(),
+                "minimax-m2.5".to_owned(),
+                "glm-4.7".to_owned(),
+                "deepseek-v3.2".to_owned(),
+                "kimi-k2.5".to_owned(),
+            ],
+            "the canonical Volcengine Coding endpoint should still use the static onboarding catalog"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_onboarding_model_catalog_skips_static_list_for_noncanonical_volcengine_endpoint()
+    {
+        let mut options = interactive_onboard_options();
+        options.skip_model_probe = true;
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+        config.provider.base_url =
+            "https://proxy.example.com/forward/ark.cn-beijing.volces.com/api/coding/v3".to_owned();
+
+        let models = load_onboarding_model_catalog(&options, &config).await;
+
+        assert!(
+            models.is_empty(),
+            "noncanonical Volcengine endpoints should follow normal probe-skip behavior instead of forcing the hardcoded static catalog: {models:?}"
         );
     }
 
