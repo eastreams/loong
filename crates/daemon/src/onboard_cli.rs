@@ -2021,12 +2021,8 @@ fn resolve_model_selection(
         // When we render the model catalog choices from a static provider list,
         // we still compute `prompt_default` (often `auto`) for the prompt UI.
         // Hide `auto` from the selectable catalog to match operator expectations.
-        let is_static_volcengine_coding_plan_catalog = available_models
-            .iter()
-            .any(|m| m.ends_with("doubao-seed-2.0-code"));
-
         let hide_prompt_default_from_catalog = prompt_default.trim().eq_ignore_ascii_case("auto")
-            && is_static_volcengine_coding_plan_catalog;
+            && is_volcengine_coding_plan_domestic_static_catalog(&config.provider);
 
         let effective_prompt_default = if hide_prompt_default_from_catalog {
             ""
@@ -2072,22 +2068,19 @@ async fn load_onboarding_model_catalog(
 ) -> Vec<String> {
     // Volcano Engine "Coding Plan" domestic endpoint has a stable, operator-provided model list.
     // Using it avoids an interactive onboarding dependency on `GET /models`.
-    if config.provider.kind == mvp::config::ProviderKind::VolcengineCoding {
-        let base_url = config.provider.base_url.trim_end_matches('/');
-        if base_url.contains("ark.cn-beijing.volces.com/api/coding/v3") {
-            return vec![
-                // Keep the historical default model id as an explicit choice.
-                "ark-code-latest".to_owned(),
-                "doubao-seed-2.0-code".to_owned(),
-                "doubao-seed-2.0-pro".to_owned(),
-                "doubao-seed-2.0-lite".to_owned(),
-                "doubao-seed-code".to_owned(),
-                "minimax-m2.5".to_owned(),
-                "glm-4.7".to_owned(),
-                "deepseek-v3.2".to_owned(),
-                "kimi-k2.5".to_owned(),
-            ];
-        }
+    if is_volcengine_coding_plan_domestic_static_catalog(&config.provider) {
+        return vec![
+            // Keep the historical default model id as an explicit choice.
+            "ark-code-latest".to_owned(),
+            "doubao-seed-2.0-code".to_owned(),
+            "doubao-seed-2.0-pro".to_owned(),
+            "doubao-seed-2.0-lite".to_owned(),
+            "doubao-seed-code".to_owned(),
+            "minimax-m2.5".to_owned(),
+            "glm-4.7".to_owned(),
+            "deepseek-v3.2".to_owned(),
+            "kimi-k2.5".to_owned(),
+        ];
     }
 
     if options.non_interactive || options.skip_model_probe {
@@ -2099,6 +2092,69 @@ async fn load_onboarding_model_catalog(
     mvp::provider::fetch_available_models(config)
         .await
         .unwrap_or_default()
+}
+
+fn is_volcengine_coding_plan_domestic_static_catalog(
+    provider: &mvp::config::ProviderConfig,
+) -> bool {
+    if provider.kind != mvp::config::ProviderKind::VolcengineCoding {
+        return false;
+    }
+
+    // Keep the heuristic centralized so we don't accidentally diverge the two onboarding decisions.
+    // Prefer host/path matching to tolerate proxy/tenant-shaped endpoints.
+    let base_url = provider.base_url.trim_end_matches('/');
+
+    if let Ok(url) = reqwest::Url::parse(base_url) {
+        let path = url.path().trim_end_matches('/');
+        if path == "/api/coding/v3" {
+            return true;
+        }
+    }
+
+    // Fallback for non-absolute base_url or unexpected formatting.
+    base_url.contains("ark.cn-beijing.volces.com/api/coding/v3")
+}
+
+#[cfg(test)]
+mod volcengine_coding_plan_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_detects_cn_beijing_coding_v3() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            base_url: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(is_volcengine_coding_plan_domestic_static_catalog(&provider));
+    }
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_rejects_non_coding_plan_endpoints() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            base_url: "https://ark.cn-beijing.volces.com/api/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(!is_volcengine_coding_plan_domestic_static_catalog(
+            &provider
+        ));
+    }
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_matches_proxy_path() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            // Proxy host; path still targets Coding Plan.
+            base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(is_volcengine_coding_plan_domestic_static_catalog(&provider));
+    }
 }
 
 fn build_model_selection_options(
