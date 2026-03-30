@@ -1378,6 +1378,10 @@ pub struct WhatsappAccountConfig {
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub webhook_bind: Option<String>,
+    #[serde(default)]
+    pub webhook_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1395,6 +1399,8 @@ pub struct ResolvedWhatsappChannelConfig {
     pub app_secret: Option<SecretRef>,
     pub app_secret_env: Option<String>,
     pub api_base_url: Option<String>,
+    pub webhook_bind: Option<String>,
+    pub webhook_path: Option<String>,
 }
 
 impl ResolvedWhatsappChannelConfig {
@@ -1424,6 +1430,24 @@ impl ResolvedWhatsappChannelConfig {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(default_whatsapp_api_base_url)
+    }
+
+    pub fn resolved_webhook_bind(&self) -> String {
+        self.webhook_bind
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_whatsapp_webhook_bind)
+    }
+
+    pub fn resolved_webhook_path(&self) -> String {
+        self.webhook_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(default_whatsapp_webhook_path)
     }
 }
 
@@ -1842,6 +1866,10 @@ pub struct WhatsappChannelConfig {
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub webhook_bind: Option<String>,
+    #[serde(default)]
+    pub webhook_path: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, WhatsappAccountConfig>,
 }
@@ -2432,6 +2460,8 @@ impl Default for WhatsappChannelConfig {
             app_secret: None,
             app_secret_env: Some(WHATSAPP_APP_SECRET_ENV.to_owned()),
             api_base_url: Some(default_whatsapp_api_base_url()),
+            webhook_bind: None,
+            webhook_path: None,
             accounts: BTreeMap::new(),
         }
     }
@@ -6075,6 +6105,12 @@ impl WhatsappChannelConfig {
             api_base_url: account_override
                 .and_then(|account| account.api_base_url.clone())
                 .or_else(|| self.api_base_url.clone()),
+            webhook_bind: account_override
+                .and_then(|account| account.webhook_bind.clone())
+                .or_else(|| self.webhook_bind.clone()),
+            webhook_path: account_override
+                .and_then(|account| account.webhook_path.clone())
+                .or_else(|| self.webhook_path.clone()),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -6093,6 +6129,8 @@ impl WhatsappChannelConfig {
             app_secret: merged.app_secret,
             app_secret_env: merged.app_secret_env,
             api_base_url: merged.api_base_url,
+            webhook_bind: merged.webhook_bind,
+            webhook_path: merged.webhook_path,
         })
     }
 
@@ -6505,6 +6543,14 @@ fn default_slack_bot_token_env() -> Option<String> {
 
 fn default_whatsapp_api_base_url() -> String {
     "https://graph.facebook.com/v25.0".to_owned()
+}
+
+fn default_whatsapp_webhook_bind() -> String {
+    "127.0.0.1:8080".to_owned()
+}
+
+fn default_whatsapp_webhook_path() -> String {
+    "/webhook".to_owned()
 }
 
 fn default_whatsapp_access_token_env() -> Option<String> {
