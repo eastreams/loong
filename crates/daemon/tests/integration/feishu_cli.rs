@@ -1592,7 +1592,7 @@ async fn feishu_bitable_app_patch_sends_patch_body() {
     };
     let router = Router::new().route(
         "/open-apis/bitable/v1/apps/app_demo",
-        put({
+        patch({
             let state = state.clone();
             move |request| {
                 let state = state.clone();
@@ -1640,7 +1640,7 @@ async fn feishu_bitable_app_patch_sends_patch_body() {
     assert_eq!(payload["app"]["name"], "Renamed");
     let requests = requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(requests[0].method, "PATCH");
     assert_eq!(requests[0].path, "/open-apis/bitable/v1/apps/app_demo");
     assert!(requests[0].body.contains("\"name\":\"Renamed\""));
     assert!(requests[0].body.contains("\"is_advanced\":true"));
@@ -1873,7 +1873,7 @@ async fn feishu_bitable_patch_table_sends_patch_request() {
     };
     let router = Router::new().route(
         "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo",
-        put({
+        patch({
             let state = state.clone();
             move |request| {
                 let state = state.clone();
@@ -1916,7 +1916,7 @@ async fn feishu_bitable_patch_table_sends_patch_request() {
     assert_eq!(payload["result"]["name"], "Renamed Table");
     let requests = requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(requests[0].method, "PATCH");
     assert_eq!(
         requests[0].path,
         "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo"
