@@ -3147,7 +3147,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
             "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id:string,view_name:string"
         }
         "feishu.bitable.record.search" => {
-            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],page_size?:integer,page_token?:string"
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],automatic_fields?:boolean,page_size?:integer,page_token?:string"
         }
         "feishu.calendar.freebusy" => {
             "account_id?:string,open_id?:string,time_min:string,time_max:string,user_id?:string,room_id?:string"
@@ -3407,6 +3407,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("filter", "object"),
             ("sort", "array"),
             ("field_names", "array"),
+            ("automatic_fields", "boolean"),
             ("page_size", "integer"),
             ("page_token", "string"),
         ],
@@ -4228,5 +4229,19 @@ mod tests {
 
         assert!(description.contains("channel-backed"));
         assert!(description.contains("Matrix"));
+    }
+
+    #[test]
+    fn feishu_bitable_record_search_catalog_metadata_includes_automatic_fields() {
+        let descriptor = tool_catalog()
+            .descriptor("feishu.bitable.record.search")
+            .expect("feishu bitable record search descriptor");
+
+        assert!(descriptor.argument_hint().contains("automatic_fields?:boolean"));
+        assert!(
+            descriptor
+                .parameter_types()
+                .contains(&("automatic_fields", "boolean"))
+        );
     }
 }
