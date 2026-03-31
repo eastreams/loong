@@ -68,6 +68,7 @@ pub(super) struct SessionInspectionSnapshot {
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
     pub recent_events: Vec<SessionEventRecord>,
     pub delegate_events: Vec<SessionEventRecord>,
+    pub workflow: SessionWorkflowRecord,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -107,6 +108,23 @@ struct SessionDelegateCancellationRecord {
     reference: String,
     requested_at: i64,
     reason: String,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SessionWorkflowRecord {
+    task: Option<String>,
+    lineage_root_session_id: Option<String>,
+    lineage_depth: Option<usize>,
+    runtime_self_continuity: Option<SessionRuntimeSelfContinuityRecord>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionRuntimeSelfContinuityRecord {
+    present: bool,
+    resolved_identity_present: bool,
+    session_profile_projection_present: bool,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -429,6 +447,17 @@ fn execute_sessions_list(
         let _ = listed_sessions.pop();
     }
     let returned_count = listed_sessions.len();
+    let mut session_payloads = Vec::with_capacity(returned_count);
+    for (session, delegate_lifecycle) in listed_sessions {
+        let workflow = load_session_workflow_record(&repo, &session, None)?;
+        let payload = session_summary_json_with_delegate_lifecycle(
+            session,
+            workflow,
+            delegate_lifecycle,
+            include_delegate_lifecycle,
+        );
+        session_payloads.push(payload);
+    }
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -437,16 +466,7 @@ fn execute_sessions_list(
             "matched_count": matched_count,
             "returned_count": returned_count,
             "has_more": has_more,
-            "sessions": listed_sessions
-                .into_iter()
-                .map(|(session, delegate_lifecycle)| {
-                    session_summary_json_with_delegate_lifecycle(
-                        session,
-                        delegate_lifecycle,
-                        include_delegate_lifecycle,
-                    )
-                })
-                .collect::<Vec<_>>(),
+            "sessions": session_payloads,
         }),
     })
 }
@@ -1407,6 +1427,7 @@ pub(super) fn observe_visible_session_with_policies(
         )?
         .ok_or_else(|| format!("session_not_found: `{target_session_id}`"))?;
     let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
+    let workflow = load_session_workflow_record(&repo, &session, Some(delegate_events.as_slice()))?;
 
     Ok(SessionObservationSnapshot {
         inspection: SessionInspectionSnapshot {
@@ -1414,6 +1435,7 @@ pub(super) fn observe_visible_session_with_policies(
             terminal_outcome,
             recent_events,
             delegate_events,
+            workflow,
         },
         tail_events,
     })
@@ -1428,6 +1450,73 @@ fn load_delegate_lifecycle_events(
         return Ok(Vec::new());
     }
     repo.list_delegate_lifecycle_events(&session.session_id)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_session_workflow_record(
+    repo: &SessionRepository,
+    session: &SessionSummaryRecord,
+    delegate_events: Option<&[SessionEventRecord]>,
+) -> Result<SessionWorkflowRecord, String> {
+    let lineage_root_session_id = repo
+        .lineage_root_session_id(&session.session_id)
+        .ok()
+        .flatten();
+    let lineage_depth = repo.session_lineage_depth(&session.session_id).ok();
+
+    let loaded_delegate_events = match delegate_events {
+        Some(_) => None,
+        None if session.kind == SessionKind::DelegateChild => {
+            Some(repo.list_delegate_lifecycle_events(&session.session_id)?)
+        }
+        None => None,
+    };
+    let delegate_events = match delegate_events {
+        Some(events) => events,
+        None => loaded_delegate_events.as_deref().unwrap_or(&[]),
+    };
+    let task = delegate_events
+        .iter()
+        .rev()
+        .find_map(session_workflow_task_from_event);
+    let runtime_self_continuity = delegate_events
+        .iter()
+        .rev()
+        .find_map(session_runtime_self_continuity_from_event);
+
+    Ok(SessionWorkflowRecord {
+        task,
+        lineage_root_session_id,
+        lineage_depth,
+        runtime_self_continuity,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_task_from_event(event: &SessionEventRecord) -> Option<String> {
+    event
+        .payload_json
+        .get("task")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_runtime_self_continuity_from_event(
+    event: &SessionEventRecord,
+) -> Option<SessionRuntimeSelfContinuityRecord> {
+    let continuity = event.payload_json.get("runtime_self_continuity")?;
+    let resolved_identity = continuity.get("resolved_identity");
+    let session_profile_projection = continuity.get("session_profile_projection");
+    let resolved_identity_present = resolved_identity.is_some_and(Value::is_object);
+    let session_profile_projection_present =
+        session_profile_projection.and_then(Value::as_str).is_some();
+
+    Some(SessionRuntimeSelfContinuityRecord {
+        present: true,
+        resolved_identity_present,
+        session_profile_projection_present,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1469,8 +1558,11 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
             "updated_at": snapshot.session.updated_at,
             "archived": snapshot.session.archived_at.is_some(),
             "archived_at": snapshot.session.archived_at,
+            "turn_count": snapshot.session.turn_count,
+            "last_turn_at": snapshot.session.last_turn_at,
             "last_error": snapshot.session.last_error,
         },
+        "workflow": session_workflow_json(snapshot.workflow),
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
         "delegate_lifecycle": delegate_lifecycle.map(session_delegate_lifecycle_json),
@@ -3034,7 +3126,7 @@ fn sessions_list_filters_json(request: &SessionsListRequest) -> Value {
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_summary_json(session: SessionSummaryRecord) -> Value {
+fn session_summary_json(session: SessionSummaryRecord, workflow: SessionWorkflowRecord) -> Value {
     json!({
         "session_id": session.session_id,
         "kind": session.kind.as_str(),
@@ -3048,16 +3140,18 @@ fn session_summary_json(session: SessionSummaryRecord) -> Value {
         "turn_count": session.turn_count,
         "last_turn_at": session.last_turn_at,
         "last_error": session.last_error,
+        "workflow": session_workflow_json(workflow),
     })
 }
 
 #[cfg(feature = "memory-sqlite")]
 fn session_summary_json_with_delegate_lifecycle(
     session: SessionSummaryRecord,
+    workflow: SessionWorkflowRecord,
     delegate_lifecycle: Option<SessionDelegateLifecycleRecord>,
     include_delegate_lifecycle: bool,
 ) -> Value {
-    let mut payload = session_summary_json(session);
+    let mut payload = session_summary_json(session, workflow);
     if include_delegate_lifecycle && let Some(object) = payload.as_object_mut() {
         object.insert(
             "delegate_lifecycle".to_owned(),
@@ -3067,6 +3161,30 @@ fn session_summary_json_with_delegate_lifecycle(
         );
     }
     payload
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_workflow_json(workflow: SessionWorkflowRecord) -> Value {
+    json!({
+        "task": workflow.task,
+        "lineage_root_session_id": workflow.lineage_root_session_id,
+        "lineage_depth": workflow.lineage_depth,
+        "runtime_self_continuity": workflow
+            .runtime_self_continuity
+            .map(session_runtime_self_continuity_json),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_runtime_self_continuity_json(
+    runtime_self_continuity: SessionRuntimeSelfContinuityRecord,
+) -> Value {
+    json!({
+        "present": runtime_self_continuity.present,
+        "resolved_identity_present": runtime_self_continuity.resolved_identity_present,
+        "session_profile_projection_present": runtime_self_continuity
+            .session_profile_projection_present,
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -3713,6 +3831,72 @@ mod tests {
     }
 
     #[test]
+    fn sessions_list_includes_workflow_metadata_for_delegate_children() {
+        let config = isolated_memory_config("sessions-list-workflow");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Research Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research release readiness",
+                "label": "Research Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 120,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append queued");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "sessions_list".to_owned(),
+                payload: json!({
+                    "kind": "delegate_child"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("sessions_list outcome");
+
+        let child = outcome.payload["sessions"]
+            .as_array()
+            .expect("sessions array")
+            .iter()
+            .find(|item| item["session_id"] == "child-session")
+            .expect("child session");
+        assert_eq!(child["workflow"]["task"], "research release readiness");
+        assert_eq!(child["workflow"]["lineage_root_session_id"], "root-session");
+        assert_eq!(child["workflow"]["lineage_depth"], 1);
+    }
+
+    #[test]
     fn sessions_history_returns_transcript_without_control_events() {
         let config = isolated_memory_config("sessions-history");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -3836,6 +4020,100 @@ mod tests {
             .expect("recent_events array");
         assert_eq!(recent_events.len(), 1);
         assert_eq!(recent_events[0]["event_kind"], "delegate_failed");
+    }
+
+    #[test]
+    fn session_status_includes_workflow_metadata_for_delegate_child() {
+        let config = isolated_memory_config("session-status-workflow");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Continuity Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "task": "research continuity",
+                "label": "Continuity Child",
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 3,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 90,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                },
+                "runtime_self_continuity": {
+                    "runtime_self": {
+                        "standing_instructions": ["Stay concise."],
+                        "tool_usage_policy": ["Prefer visible evidence."],
+                        "soul_guidance": ["Keep continuity explicit."],
+                        "identity_context": ["# Identity\n- Name: Child"],
+                        "user_context": ["Operator prefers concise technical summaries."]
+                    },
+                    "resolved_identity": {
+                        "source": "workspace_self",
+                        "content": "# Identity\n- Name: Child"
+                    },
+                    "session_profile_projection": "## Session Profile\nOperator prefers concise technical summaries."
+                }
+            }),
+        })
+        .expect("append delegate_started");
+        append_turn_direct("child-session", "user", "hello", &config).expect("append user turn");
+        append_turn_direct("child-session", "assistant", "world", &config)
+            .expect("append assistant turn");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(outcome.payload["workflow"]["task"], "research continuity");
+        assert_eq!(
+            outcome.payload["workflow"]["lineage_root_session_id"],
+            "root-session"
+        );
+        assert_eq!(outcome.payload["workflow"]["lineage_depth"], 1);
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["resolved_identity_present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["session_profile_projection_present"],
+            true
+        );
+        assert_eq!(outcome.payload["session"]["turn_count"], 2);
+        assert!(outcome.payload["session"]["last_turn_at"].is_number());
     }
 
     #[test]

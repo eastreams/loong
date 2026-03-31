@@ -277,6 +277,20 @@ async fn main() {
             })
             .await
         }
+        Commands::Sessions {
+            config,
+            json,
+            session,
+            command,
+        } => {
+            sessions_cli::run_sessions_cli(sessions_cli::SessionsCommandOptions {
+                config,
+                json,
+                session,
+                command,
+            })
+            .await
+        }
         Commands::Plugins { json, command } => {
             plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
         }
