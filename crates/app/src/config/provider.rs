@@ -2810,11 +2810,11 @@ impl ProviderKind {
                     base_url: "https://api.z.ai",
                 },
             }),
-            ProviderKind::Stepfun => Some(ProviderRegionEndpointGuide {
+            ProviderKind::Stepfun | ProviderKind::StepPlan => Some(ProviderRegionEndpointGuide {
                 family_label: "Stepfun",
                 default_variant: ProviderRegionEndpointVariant {
                     label: "CN",
-                    base_url: "https://api.stepfun.com",
+                    base_url: profile.base_url,
                 },
                 alternate_variant: ProviderRegionEndpointVariant {
                     label: "Global",
@@ -2849,7 +2849,6 @@ impl ProviderKind {
             | ProviderKind::Sambanova
             | ProviderKind::Sglang
             | ProviderKind::Siliconflow
-            | ProviderKind::StepPlan
             | ProviderKind::Together
             | ProviderKind::Venice
             | ProviderKind::VercelAiGateway
@@ -4384,6 +4383,34 @@ mod tests {
     }
 
     #[test]
+    fn step_plan_provider_support_facts_expose_region_endpoint_variants() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::StepPlan,
+            ..ProviderConfig::default()
+        };
+
+        let support_facts = provider.support_facts();
+        let region_endpoint_support = support_facts.region_endpoint;
+        let note = region_endpoint_support
+            .note
+            .expect("step plan should expose a region endpoint note");
+        let catalog_failure_hint = region_endpoint_support
+            .catalog_failure_hint
+            .expect("step plan should expose a catalog failure hint");
+        let request_failure_hint = region_endpoint_support
+            .request_failure_hint
+            .expect("step plan should expose a request failure hint");
+
+        assert!(note.contains("Stepfun"));
+        assert!(note.contains("https://api.stepfun.com"));
+        assert!(note.contains("https://api.stepfun.ai"));
+        assert!(catalog_failure_hint.contains("https://api.stepfun.com"));
+        assert!(catalog_failure_hint.contains("https://api.stepfun.ai"));
+        assert!(request_failure_hint.contains("https://api.stepfun.com"));
+        assert!(request_failure_hint.contains("https://api.stepfun.ai"));
+    }
+
+    #[test]
     fn provider_descriptor_document_preserves_x_api_key_contract_facts() {
         let provider = ProviderConfig {
             kind: ProviderKind::Anthropic,
@@ -4506,6 +4533,50 @@ mod tests {
         assert!(catalog_failure_hint.contains("https://api.minimax.io"));
         assert!(request_failure_hint.contains("https://api.minimaxi.com"));
         assert!(request_failure_hint.contains("https://api.minimax.io"));
+    }
+
+    #[test]
+    fn step_plan_descriptor_document_preserves_region_endpoint_variants_and_hints() {
+        let provider = ProviderConfig {
+            kind: ProviderKind::StepPlan,
+            ..ProviderConfig::default()
+        };
+
+        let descriptor = provider.descriptor_document();
+        let encoded = encode_provider_descriptor(&descriptor);
+        let note = encoded["region_endpoint"]["note"]
+            .as_str()
+            .expect("step plan descriptor should expose a region note");
+        let catalog_failure_hint = encoded["region_endpoint"]["catalog_failure_hint"]
+            .as_str()
+            .expect("step plan descriptor should expose a catalog failure hint");
+        let request_failure_hint = encoded["region_endpoint"]["request_failure_hint"]
+            .as_str()
+            .expect("step plan descriptor should expose a request failure hint");
+
+        assert_eq!(encoded["region_endpoint"]["family_label"], json!("Stepfun"));
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][0]["label"],
+            json!("CN")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][0]["base_url"],
+            json!("https://api.stepfun.com")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][1]["label"],
+            json!("Global")
+        );
+        assert_eq!(
+            encoded["region_endpoint"]["variants"][1]["base_url"],
+            json!("https://api.stepfun.ai")
+        );
+        assert!(note.contains("https://api.stepfun.com"));
+        assert!(note.contains("https://api.stepfun.ai"));
+        assert!(catalog_failure_hint.contains("https://api.stepfun.com"));
+        assert!(catalog_failure_hint.contains("https://api.stepfun.ai"));
+        assert!(request_failure_hint.contains("https://api.stepfun.com"));
+        assert!(request_failure_hint.contains("https://api.stepfun.ai"));
     }
 
     #[test]

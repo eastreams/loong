@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-31T04:53:20Z
+- Generated at: 2026-03-31T08:05:51Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -25,11 +25,11 @@
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10773 | 11200 | 427 | 97 | 120 | 23 | 96.2% | TIGHT |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14256 | 15000 | 744 | 54 | 70 | 16 | 95.0% | TIGHT |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6295 | 6500 | 205 | 209 | 210 | 1 | 99.5% | TIGHT |
-| onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9494 | 9800 | 306 | 228 | 250 | 22 | 96.9% | TIGHT |
+| onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9519 | 9800 | 281 | 228 | 250 | 22 | 97.1% | TIGHT |
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_execution (95.8%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (99.5%), onboard_cli (96.9%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_execution (95.8%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (99.5%), onboard_cli (97.1%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): spec_runtime (90.8%), memory_mod (87.5%), acp_manager (94.0%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -70,7 +70,7 @@
 <!-- arch-hotspot key=turn_coordinator lines=10773 functions=97 -->
 <!-- arch-hotspot key=tools_mod lines=14256 functions=54 -->
 <!-- arch-hotspot key=daemon_lib lines=6295 functions=209 -->
-<!-- arch-hotspot key=onboard_cli lines=9494 functions=228 -->
+<!-- arch-hotspot key=onboard_cli lines=9519 functions=228 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
 <!-- arch-boundary key=conversation_provider_optional_binding_roundtrip status=PASS -->

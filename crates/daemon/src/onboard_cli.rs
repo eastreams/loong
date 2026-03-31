@@ -8146,6 +8146,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_selection_allows_switching_step_plan_region_endpoint() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(["", "", "2"]);
+
+        config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::StepPlan);
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("step plan region selection should accept the global endpoint");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::StepPlan);
+        assert_eq!(selected.base_url, "https://api.stepfun.ai");
+    }
+
+    #[test]
     fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
