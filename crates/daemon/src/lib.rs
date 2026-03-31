@@ -110,6 +110,7 @@ mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
@@ -611,6 +612,20 @@ pub enum Commands {
         session: String,
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
+    },
+    #[command(
+        about = "Inspect and manage persisted runtime sessions through an operator-facing session shell",
+        long_about = "Bounded operator-facing session shell for persisted runtime sessions.\n\nUse this surface to list visible sessions, inspect one session's workflow metadata, review lifecycle events, inspect transcript history, and apply bounded recover, cancel, or archive actions without inventing a second session model."
+    )]
+    Sessions {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: sessions_cli::SessionsCommands,
     },
     #[command(
         visible_alias = "plugin",

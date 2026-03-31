@@ -19,17 +19,17 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     canonical_temp_dir.join(format!("{prefix}-{nanos}"))
 }
 
-struct TempDirGuard {
+pub(super) struct TempDirGuard {
     path: PathBuf,
 }
 
 impl TempDirGuard {
-    fn new(prefix: &str) -> Self {
+    pub(super) fn new(prefix: &str) -> Self {
         let path = unique_temp_dir(prefix);
         Self { path }
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 }
@@ -40,7 +40,7 @@ impl Drop for TempDirGuard {
     }
 }
 
-struct TasksCliEnvironmentGuard {
+pub(super) struct TasksCliEnvironmentGuard {
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<OsString>)>,
 }
@@ -85,7 +85,7 @@ const TASKS_RUNTIME_ENV_KEYS: &[&str] = &[
 ];
 
 impl TasksCliEnvironmentGuard {
-    fn set(pairs: &[(&str, Option<&str>)]) -> Self {
+    pub(super) fn set(pairs: &[(&str, Option<&str>)]) -> Self {
         let lock = super::lock_daemon_test_environment();
         Self::set_with_lock(lock, &[], pairs)
     }
@@ -149,7 +149,7 @@ impl Drop for TasksCliEnvironmentGuard {
     }
 }
 
-fn write_tasks_config_with(
+pub(super) fn write_tasks_config_with(
     root: &Path,
     configure: impl FnOnce(&mut mvp::config::LoongClawConfig),
 ) -> PathBuf {
@@ -165,7 +165,7 @@ fn write_tasks_config_with(
     config_path
 }
 
-fn write_tasks_config(root: &Path) -> PathBuf {
+pub(super) fn write_tasks_config(root: &Path) -> PathBuf {
     write_tasks_config_with(root, |_| {})
 }
 
@@ -228,7 +228,10 @@ fn seed_background_task_record(
     .expect("upsert session tool policy");
 }
 
-fn ensure_root_session(repo: &mvp::session::repository::SessionRepository, root_session_id: &str) {
+pub(super) fn ensure_root_session(
+    repo: &mvp::session::repository::SessionRepository,
+    root_session_id: &str,
+) {
     let existing_root = repo
         .load_session(root_session_id)
         .expect("load root session");
@@ -246,7 +249,9 @@ fn ensure_root_session(repo: &mvp::session::repository::SessionRepository, root_
     .expect("create root session");
 }
 
-fn load_session_repository(config_path: &Path) -> mvp::session::repository::SessionRepository {
+pub(super) fn load_session_repository(
+    config_path: &Path,
+) -> mvp::session::repository::SessionRepository {
     let loaded =
         mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
     let config = loaded.1;
