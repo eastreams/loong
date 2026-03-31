@@ -621,6 +621,7 @@ pub fn parse_bitable_app_list_response(payload: &Value) -> CliResult<FeishuBitab
         has_more: data.get("has_more").and_then(Value::as_bool),
         page_token: data
             .get("page_token")
+            .or_else(|| data.get("next_page_token"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
     })
@@ -883,6 +884,30 @@ mod tests {
 
         let body = query.request_body();
         assert_eq!(body["automatic_fields"], json!(true));
+    }
+
+    #[test]
+    fn parse_bitable_app_list_response_accepts_next_page_token() {
+        let payload = json!({
+            "code": 0,
+            "data": {
+                "files": [
+                    {
+                        "token": "app_123",
+                        "name": "Roadmap",
+                        "type": "bitable"
+                    }
+                ],
+                "has_more": true,
+                "next_page_token": "next_drive_page"
+            }
+        });
+
+        let result =
+            parse_bitable_app_list_response(&payload).expect("app list response should parse");
+        assert_eq!(result.apps.len(), 1);
+        assert_eq!(result.page_token.as_deref(), Some("next_drive_page"));
+        assert_eq!(result.has_more, Some(true));
     }
 
     #[test]
