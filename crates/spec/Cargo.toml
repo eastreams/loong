@@ -28,6 +28,7 @@ semver.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
 

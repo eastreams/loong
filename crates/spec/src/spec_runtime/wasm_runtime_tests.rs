@@ -3,7 +3,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
@@ -22,6 +21,7 @@ use super::{
 };
 use kernel::{CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
+use tempfile::{Builder, TempDir};
 
 const EMPTY_WASM_MODULE: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
 
@@ -163,14 +163,12 @@ fn provider_with_metadata(metadata: BTreeMap<String, String>) -> kernel::Provide
     }
 }
 
-fn temp_wasm_fixture(prefix: &str, wat_source: &str) -> (PathBuf, PathBuf) {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    let root = std::env::temp_dir().join(format!("{prefix}-{unique}"));
-    fs::create_dir_all(&root).expect("create temp wasm root");
-    let wasm_path = root.join("fixture.wasm");
+fn temp_wasm_fixture(prefix: &str, wat_source: &str) -> (TempDir, PathBuf) {
+    let mut builder = Builder::new();
+    builder.prefix(prefix);
+    let root = builder.tempdir().expect("create temp wasm root");
+    let root_path = root.path();
+    let wasm_path = root_path.join("fixture.wasm");
     let wasm_bytes = wat::parse_str(wat_source).expect("compile wasm fixture");
     fs::write(&wasm_path, wasm_bytes).expect("write wasm fixture");
     (root, wasm_path)
@@ -243,7 +241,8 @@ fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
             "ok": true,
         },
     }));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
     let expected_request = super::wasm_bridge_request_payload(&provider, &channel, &command);
 
     let execution = super::execute_wasm_component_bridge(
@@ -264,7 +263,6 @@ fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
     assert_eq!(execution["runtime"]["guest_logs"], json!(["hello"]));
     assert_eq!(execution["runtime"]["guest_logs_truncated"], json!(false));
     assert_eq!(execution["runtime"]["output_json"], expected_request);
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -276,7 +274,8 @@ fn execute_wasm_component_bridge_preserves_legacy_unit_signature() {
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
 
     let execution = super::execute_wasm_component_bridge(
         json!({"status": "planned"}),
@@ -295,7 +294,6 @@ fn execute_wasm_component_bridge_preserves_legacy_unit_signature() {
     assert_eq!(execution["runtime"]["guest_exit_code"], Value::Null);
     assert_eq!(execution["runtime"]["guest_logs"], json!([]));
     assert_eq!(execution["runtime"]["output_json"], Value::Null);
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -314,7 +312,8 @@ fn execute_wasm_component_bridge_allows_scalar_host_abi_imports_without_memory()
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
 
     let execution = super::execute_wasm_component_bridge(
         json!({"status": "planned"}),
@@ -327,7 +326,6 @@ fn execute_wasm_component_bridge_allows_scalar_host_abi_imports_without_memory()
     assert_eq!(execution["status"], json!("executed"));
     assert_eq!(execution["runtime"]["guest_exit_code"], json!(0));
     assert_eq!(execution["runtime"]["host_abi_enabled"], json!(true));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -348,7 +346,8 @@ fn execute_wasm_component_bridge_fails_when_memory_backed_host_abi_is_missing_me
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
 
     let execution = super::execute_wasm_component_bridge(
         json!({"status": "planned"}),
@@ -364,7 +363,6 @@ fn execute_wasm_component_bridge_fails_when_memory_backed_host_abi_is_missing_me
         json!("wasm host ABI requires exported memory")
     );
     assert_eq!(execution["runtime"]["host_abi_enabled"], json!(true));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -384,7 +382,8 @@ fn execute_wasm_component_bridge_times_out_during_instantiation_start_function()
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let mut runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let mut runtime_policy = test_wasm_runtime_policy(root_path);
     runtime_policy.wasm_fuel_limit = None;
     runtime_policy.wasm_timeout_ms = Some(50);
 
@@ -403,7 +402,6 @@ fn execute_wasm_component_bridge_times_out_during_instantiation_start_function()
     );
     assert_eq!(execution["runtime"]["timeout_ms"], json!(50));
     assert_eq!(execution["runtime"]["timeout_triggered"], json!(true));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -426,7 +424,8 @@ fn execute_wasm_component_bridge_fails_when_guest_output_is_not_json() {
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
 
     let execution = super::execute_wasm_component_bridge(
         json!({"status": "planned"}),
@@ -444,7 +443,6 @@ fn execute_wasm_component_bridge_fails_when_guest_output_is_not_json() {
             .contains("wasm guest output is not valid JSON")
     );
     assert_eq!(execution["runtime"]["output_text"], json!("not-json"));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -467,7 +465,8 @@ fn execute_wasm_component_bridge_respects_configured_output_limit() {
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let mut runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let mut runtime_policy = test_wasm_runtime_policy(root_path);
     runtime_policy.wasm_max_output_bytes = Some(4);
 
     let execution = super::execute_wasm_component_bridge(
@@ -484,7 +483,6 @@ fn execute_wasm_component_bridge_respects_configured_output_limit() {
         json!("wasm guest output exceeds host ABI limit of 4 bytes")
     );
     assert_eq!(execution["runtime"]["max_output_bytes"], json!(4));
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -504,7 +502,8 @@ fn execute_wasm_component_bridge_reports_guest_abort_reason() {
         provider_with_metadata(BTreeMap::from([("component".to_owned(), component_path)]));
     let channel = test_wasm_channel(&provider);
     let command = test_wasm_command(json!({"input":"ping"}));
-    let runtime_policy = test_wasm_runtime_policy(&root);
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
 
     let execution = super::execute_wasm_component_bridge(
         json!({"status": "planned"}),
@@ -521,7 +520,6 @@ fn execute_wasm_component_bridge_reports_guest_abort_reason() {
         execution["runtime"]["entrypoint_signature"],
         json!("() -> i32")
     );
-    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -593,16 +591,11 @@ fn process_stdio_runtime_evidence_reports_balanced_execution_tier() {
 
 #[test]
 fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
-    let unique = format!(
-        "loongclaw-wasm-tier-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos()
-    );
-    let root = std::env::temp_dir().join(unique);
-    std::fs::create_dir_all(&root).expect("create temp wasm root");
-    let wasm_path = root.join("fixture.wasm");
+    let mut builder = Builder::new();
+    builder.prefix("loongclaw-wasm-tier-");
+    let root = builder.tempdir().expect("create temp wasm root");
+    let root_path = root.path();
+    let wasm_path = root_path.join("fixture.wasm");
     std::fs::write(&wasm_path, EMPTY_WASM_MODULE).expect("write wasm fixture");
 
     let provider = provider_with_metadata(BTreeMap::from([
@@ -624,7 +617,7 @@ fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
     };
     let runtime_policy = BridgeRuntimePolicy {
         execute_wasm_component: true,
-        wasm_allowed_path_prefixes: vec![root.clone()],
+        wasm_allowed_path_prefixes: vec![root_path.to_path_buf()],
         ..BridgeRuntimePolicy::default()
     };
 
@@ -637,8 +630,6 @@ fn execute_wasm_component_bridge_reports_restricted_execution_tier() {
     );
 
     assert_eq!(execution["runtime"]["execution_tier"], json!("restricted"));
-    let _ = std::fs::remove_file(&wasm_path);
-    let _ = std::fs::remove_dir(&root);
 }
 
 #[test]
@@ -779,14 +770,12 @@ fn wasm_module_cache_skips_single_module_larger_than_byte_budget() {
 #[cfg(unix)]
 #[test]
 fn wasm_artifact_file_identity_distinguishes_different_files() {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("clock should be monotonic")
-        .as_nanos();
-    let base = std::env::temp_dir().join(format!("loongclaw-wasm-file-identity-{unique}"));
-    fs::create_dir_all(&base).expect("create temp dir");
-    let file_a = base.join("a.wasm");
-    let file_b = base.join("b.wasm");
+    let mut builder = Builder::new();
+    builder.prefix("loongclaw-wasm-file-identity-");
+    let base = builder.tempdir().expect("create temp dir");
+    let base_path = base.path();
+    let file_a = base_path.join("a.wasm");
+    let file_b = base_path.join("b.wasm");
     fs::write(&file_a, b"(module)").expect("write file a");
     fs::write(&file_b, b"(module)").expect("write file b");
 
@@ -798,7 +787,6 @@ fn wasm_artifact_file_identity_distinguishes_different_files() {
         wasm_artifact_file_identity(&metadata_b).expect("file identity for file b exists");
 
     assert_ne!(identity_a, identity_b);
-    let _ = fs::remove_dir_all(base);
 }
 
 #[tokio::test]
