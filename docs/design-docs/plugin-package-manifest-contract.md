@@ -628,6 +628,120 @@ keep `setup.surface = "channel"`, and declare the stable
 `onebot:<account>:private:<user_id>` / `onebot:<account>:group:<group_id>`
 target contract in metadata.
 
+## Channel Bridge Conventions
+
+Bridge plugins for sanctioned channel surfaces should reuse the existing
+manifest seam instead of inventing per-channel side files or README-only setup
+contracts.
+
+### 1. Bind To Catalog-Owned Channel Ids
+
+For channel bridge plugins:
+
+- set `channel_id` to the canonical registry id such as `weixin`, `qqbot`, or
+  `onebot`
+- keep `setup.surface = "channel"` so onboarding and doctor can render the
+  setup as a channel surface without loading the runtime bridge
+- populate `setup.docs_urls` with operator-facing setup or migration docs
+- keep transport-family specifics in `metadata` rather than fragmenting the
+  manifest into per-channel custom sections
+
+The important rule is that `channel_id` carries the product identity, while the
+bridge implementation details remain additive metadata.
+
+### 2. Recommended Metadata Keys For Channel Bridges
+
+Channel bridge plugins should use the existing freeform `metadata` map for
+bridge-specific details such as:
+
+- `bridge_kind` for the execution lane such as `http_json`, `process_stdio`, or
+  `mcp_server`
+- `adapter_family` for the broad runtime family such as `channel-bridge`
+- `entrypoint` for the active bridge endpoint or runtime entry hint
+- `transport_family` for the product-facing transport label such as
+  `wechat_clawbot_ilink_bridge` or
+  `qq_official_bot_gateway_or_plugin_bridge`
+- `target_contract` for the stable route families the plugin agrees to honor
+- `account_scope` when the plugin needs to make multi-account behavior explicit
+
+This keeps bridge metadata expressive without forcing a second manifest schema
+for channel-specific cases.
+
+### 3. Example: Weixin ClawBot Bridge Plugin
+
+```json
+{
+  "plugin_id": "weixin-clawbot-bridge",
+  "provider_id": "weixin-bridge",
+  "connector_name": "weixin-clawbot-http",
+  "channel_id": "weixin",
+  "endpoint": "http://127.0.0.1:8091/bridge",
+  "summary": "ClawBot or iLink-compatible bridge for the LoongClaw weixin surface.",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "channel-bridge",
+    "entrypoint": "http://127.0.0.1:8091/bridge",
+    "transport_family": "wechat_clawbot_ilink_bridge",
+    "target_contract": "weixin:<account>:contact:<id> | weixin:<account>:room:<id>",
+    "account_scope": "multi_account"
+  },
+  "setup": {
+    "mode": "metadata_only",
+    "surface": "channel",
+    "required_env_vars": ["WEIXIN_BRIDGE_URL"],
+    "recommended_env_vars": ["WEIXIN_BRIDGE_ACCESS_TOKEN"],
+    "required_config_keys": [
+      "weixin.enabled",
+      "weixin.bridge_url",
+      "weixin.bridge_access_token"
+    ],
+    "default_env_var": "WEIXIN_BRIDGE_URL",
+    "docs_urls": ["https://docs.example.com/loongclaw/channels/weixin-bridge"]
+  },
+  "tags": ["channel", "weixin", "wechat", "bridge"]
+}
+```
+
+### 4. Example: QQBot Gateway Bridge Plugin
+
+```json
+{
+  "plugin_id": "qqbot-gateway-bridge",
+  "provider_id": "qqbot-bridge",
+  "connector_name": "qqbot-gateway-http",
+  "channel_id": "qqbot",
+  "endpoint": "http://127.0.0.1:8092/bridge",
+  "summary": "Official QQ Bot or compatible gateway bridge for the LoongClaw qqbot surface.",
+  "capabilities": ["InvokeConnector"],
+  "metadata": {
+    "bridge_kind": "http_json",
+    "adapter_family": "channel-bridge",
+    "entrypoint": "http://127.0.0.1:8092/bridge",
+    "transport_family": "qq_official_bot_gateway_or_plugin_bridge",
+    "target_contract": "qqbot:<account>:c2c:<openid> | qqbot:<account>:group:<openid> | qqbot:<account>:channel:<id>",
+    "account_scope": "multi_account"
+  },
+  "setup": {
+    "mode": "metadata_only",
+    "surface": "channel",
+    "required_env_vars": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"],
+    "required_config_keys": [
+      "qqbot.enabled",
+      "qqbot.app_id",
+      "qqbot.client_secret"
+    ],
+    "docs_urls": ["https://docs.example.com/loongclaw/channels/qqbot-bridge"]
+  },
+  "tags": ["channel", "qqbot", "qq", "bridge"]
+}
+```
+
+`onebot` plugins should follow the same pattern: bind to `channel_id = "onebot"`,
+keep `setup.surface = "channel"`, and declare the stable
+`onebot:<account>:private:<user_id>` / `onebot:<account>:group:<group_id>`
+target contract in metadata.
+
 ## Migration Plan
 
 ### Phase 1: File Contract Without Breaking Source Markers

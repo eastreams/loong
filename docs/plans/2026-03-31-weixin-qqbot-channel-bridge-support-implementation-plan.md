@@ -10,13 +10,11 @@
 
 ---
 
-## Tasks
-
 ### Task 1: Save the approved design and analysis artifacts
 
 **Files:**
 - Create: `docs/plans/2026-03-31-weixin-qqbot-channel-bridge-support-design.md`
-- Create: `{maintainer-knowledge-base}/projects/loongclaw/analysis/2026/2026-03-31-weixin-qqbot-channel-bridge-support-analysis.md`
+- Create: `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-03-31-weixin-qqbot-channel-bridge-support-analysis.md`
 
 **Step 1: Persist the public design**
 

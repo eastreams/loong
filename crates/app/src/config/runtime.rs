@@ -14,11 +14,11 @@ use super::{
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
-        FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, IrcChannelConfig,
-        LineChannelConfig, MatrixChannelConfig, MattermostChannelConfig,
-        NextcloudTalkChannelConfig, NostrChannelConfig, SignalChannelConfig, SlackChannelConfig,
-        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, TlonChannelConfig,
-        TwitchChannelConfig, WebhookChannelConfig, WecomChannelConfig, WhatsappChannelConfig,
+        FeishuChannelConfig, GoogleChatChannelConfig, ImessageChannelConfig, LineChannelConfig,
+        MatrixChannelConfig, MattermostChannelConfig, NextcloudTalkChannelConfig,
+        OnebotChannelConfig, QqbotChannelConfig, SignalChannelConfig, SlackChannelConfig,
+        SynologyChatChannelConfig, TeamsChannelConfig, TelegramChannelConfig, WebhookChannelConfig,
+        WecomChannelConfig, WeixinChannelConfig, WhatsappChannelConfig,
     },
     conversation::ConversationConfig,
     feishu_integration::FeishuIntegrationConfig,
@@ -3094,68 +3094,6 @@ model = "gpt-5"
         assert!(!raw.contains("verify_token = \"${WHATSAPP_VERIFY_TOKEN}\""));
         assert!(!raw.contains("app_secret = \"${WHATSAPP_APP_SECRET}\""));
 
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn write_canonicalizes_irc_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-irc-env");
-        let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
-        let mut ops_account = crate::config::channels::IrcAccountConfig::default();
-
-        config.irc.server_env = Some(" IRC_SERVER ".to_owned());
-        config.irc.nickname_env = Some(" IRC_NICKNAME ".to_owned());
-        ops_account.server_env = Some(" OPS_IRC_SERVER ".to_owned());
-        ops_account.nickname_env = Some(" OPS_IRC_NICKNAME ".to_owned());
-        config.irc.accounts.insert("ops".to_owned(), ops_account);
-
-        write(Some(&path_string), &config, true).expect("config write should pass");
-
-        let raw = fs::read_to_string(&path).expect("read written config");
-
-        assert!(raw.contains("server_env = \"IRC_SERVER\""));
-        assert!(raw.contains("nickname_env = \"IRC_NICKNAME\""));
-        assert!(raw.contains("server_env = \"OPS_IRC_SERVER\""));
-        assert!(raw.contains("nickname_env = \"OPS_IRC_NICKNAME\""));
-        assert!(!raw.contains("server_env = \" IRC_SERVER \""));
-        assert!(!raw.contains("nickname_env = \" IRC_NICKNAME \""));
-        assert!(!raw.contains("server_env = \" OPS_IRC_SERVER \""));
-        assert!(!raw.contains("nickname_env = \" OPS_IRC_NICKNAME \""));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn write_canonicalizes_twitch_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-twitch-env");
-        let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
-        let mut backup_account = crate::config::channels::TwitchAccountConfig::default();
-
-        config.twitch.access_token = Some(SecretRef::Inline("${TWITCH_ACCESS_TOKEN}".to_owned()));
-        config.twitch.access_token_env = Some(" TWITCH_ACCESS_TOKEN ".to_owned());
-        backup_account.access_token = Some(SecretRef::Inline(
-            "${BACKUP_TWITCH_ACCESS_TOKEN}".to_owned(),
-        ));
-        backup_account.access_token_env = Some(" BACKUP_TWITCH_ACCESS_TOKEN ".to_owned());
-        config
-            .twitch
-            .accounts
-            .insert("backup".to_owned(), backup_account);
-
-        write(Some(&path_string), &config, true).expect("config write should pass");
-
-        let raw = fs::read_to_string(&path).expect("read written config");
-
-        assert!(raw.contains("access_token_env = \"TWITCH_ACCESS_TOKEN\""));
-        assert!(raw.contains("access_token_env = \"BACKUP_TWITCH_ACCESS_TOKEN\""));
-        assert!(!raw.contains("access_token_env = \" TWITCH_ACCESS_TOKEN \""));
-        assert!(!raw.contains("access_token_env = \" BACKUP_TWITCH_ACCESS_TOKEN \""));
-        assert!(!raw.contains("access_token = \"${TWITCH_ACCESS_TOKEN}\""));
-        assert!(!raw.contains("access_token = \"${BACKUP_TWITCH_ACCESS_TOKEN}\""));
         let _ = fs::remove_file(path);
     }
 

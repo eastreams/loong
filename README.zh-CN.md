@@ -378,11 +378,7 @@ loong multi-channel-serve \
 
 `--session` 是必填项。通过重复传入 `--channel-account <CHANNEL=ACCOUNT>` 来固定具体的通道账号。LoongClaw 会把 `lark` 这类 runtime-backed alias 归一化到 canonical channel id，并且只监督当前配置里已启用的 runtime-backed 通道。
 
-更广义的 channel catalog 可以通过 `loong channels --json` 查看。这个
-catalog 现在会明确区分 config-backed outbound surface，以及像
-Weixin、QQBot、OneBot 这样的 plugin-backed bridge surface。只要
-bridge-backed surface 已经配置，输出里也会额外给出基于配置解析出的账号快照和桥接
-endpoint 摘要，同时仍然不会伪装成 LoongClaw 已经拥有原生 runtime。
+更广义的 channel catalog 可以通过 `loongclaw channels --json` 查看。这个 catalog 现在会明确区分 config-backed outbound surface，以及像 Weixin、QQBot、OneBot 这样的 plugin-backed bridge surface。只要 bridge-backed surface 已经配置，输出里也会额外给出基于配置解析出的账号快照和桥接 endpoint 摘要，同时仍然不会伪装成 LoongClaw 已经拥有原生 runtime。
 
 plugin-backed channel surface 的定位是刻意保持诚实的：
 
@@ -396,14 +392,7 @@ plugin-backed channel surface 的定位是刻意保持诚实的：
 - `qqbot:<account>:c2c:<openid>`、`qqbot:<account>:group:<openid>` 与 `qqbot:<account>:channel:<id>`
 - `onebot:<account>:private:<user_id>` 与 `onebot:<account>:group:<group_id>`
 
-而像 Discord、Slack、LINE、DingTalk、WhatsApp、Email、generic Webhook、
-Google Chat、Signal、Twitch、Tlon、Microsoft Teams、Mattermost、Nextcloud
-Talk、Synology Chat、IRC、iMessage / BlueBubbles、Nostr 这类
-config-backed outbound surface，则会暴露发送与 readiness 元数据，但不会假装已经拥有
-runtime-backed reply loop。
-
-像 Zalo、Zalo Personal、WebChat 这类纯 catalog-only planned surface，仍然不会在
-adapter 真正落地前宣称已经具备 runtime 支持。
+而像 Tlon、Nostr、Twitch、Zalo、WebChat 这类纯 catalog-only planned surface，仍然不会在 adapter 真正落地前宣称已经具备 runtime 支持。
 
 工具策略需要明确配置：
 

@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::channel::http;
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
@@ -14,7 +13,8 @@ use super::{
     ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelOnboardingDescriptor,
     ChannelOnboardingStrategy, ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor,
     ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation,
-    misconfigured_operation, unsupported_operation, validate_http_url, validate_websocket_url,
+    misconfigured_operation, redact_endpoint_status_url, unsupported_operation, validate_http_url,
+    validate_websocket_url,
 };
 
 const WEIXIN_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -372,7 +372,6 @@ fn build_weixin_snapshots(
     _now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = true;
-    let http_policy = http::outbound_http_policy_from_config(config);
     let default_selection = config.weixin.default_configured_account_selection();
     let default_configured_account_id = default_selection.id.clone();
     let default_account_source = default_selection.source;
@@ -393,7 +392,6 @@ fn build_weixin_snapshots(
                     resolved,
                     is_default_account,
                     default_account_source,
-                    http_policy,
                 ),
                 Err(error) => build_invalid_weixin_snapshot(
                     descriptor,
@@ -496,7 +494,6 @@ fn build_weixin_snapshot_for_account(
     resolved: ResolvedWeixinChannelConfig,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
-    http_policy: http::ChannelOutboundHttpPolicy,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
 
@@ -504,9 +501,9 @@ fn build_weixin_snapshot_for_account(
     if bridge_url.is_none() {
         send_issues.push("bridge_url is missing".to_owned());
     }
-    let validated_bridge_url = bridge_url
-        .as_deref()
-        .and_then(|url| validate_http_url("bridge_url", url, http_policy, &mut send_issues));
+    if let Some(bridge_url_value) = bridge_url.as_deref() {
+        validate_http_url("bridge_url", bridge_url_value, &mut send_issues);
+    }
 
     let bridge_access_token = resolved.bridge_access_token();
     if bridge_access_token.is_none() {
@@ -530,7 +527,7 @@ fn build_weixin_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             WEIXIN_SEND_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by weixin account configuration".to_owned(),
         )
     } else if !send_issues.is_empty() {
         misconfigured_operation(WEIXIN_SEND_OPERATION, send_issues)
@@ -549,7 +546,7 @@ fn build_weixin_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             WEIXIN_SERVE_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by weixin account configuration".to_owned(),
         )
     } else if !serve_issues.is_empty() {
         misconfigured_operation(WEIXIN_SERVE_OPERATION, serve_issues)
@@ -600,10 +597,7 @@ fn build_weixin_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: validated_bridge_url
-            .as_ref()
-            .and(bridge_url.as_deref())
-            .and_then(http::redact_endpoint_status_url),
+        api_base_url: redact_endpoint_status_url(bridge_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -645,7 +639,7 @@ fn build_qqbot_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             QQBOT_SEND_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by qqbot account configuration".to_owned(),
         )
     } else if !send_issues.is_empty() {
         misconfigured_operation(QQBOT_SEND_OPERATION, send_issues)
@@ -664,7 +658,7 @@ fn build_qqbot_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             QQBOT_SERVE_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by qqbot account configuration".to_owned(),
         )
     } else if !serve_issues.is_empty() {
         misconfigured_operation(QQBOT_SERVE_OPERATION, serve_issues)
@@ -761,7 +755,7 @@ fn build_onebot_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             ONEBOT_SEND_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by onebot account configuration".to_owned(),
         )
     } else if !send_issues.is_empty() {
         misconfigured_operation(ONEBOT_SEND_OPERATION, send_issues)
@@ -780,7 +774,7 @@ fn build_onebot_snapshot_for_account(
     } else if !resolved.enabled {
         disabled_operation(
             ONEBOT_SERVE_OPERATION,
-            "disabled by channel or account configuration".to_owned(),
+            "disabled by onebot account configuration".to_owned(),
         )
     } else if !serve_issues.is_empty() {
         misconfigured_operation(ONEBOT_SERVE_OPERATION, serve_issues)
@@ -829,9 +823,7 @@ fn build_onebot_snapshot_for_account(
         transport: descriptor.transport,
         compiled,
         enabled: resolved.enabled,
-        api_base_url: websocket_url
-            .as_deref()
-            .and_then(http::redact_endpoint_status_url),
+        api_base_url: redact_endpoint_status_url(websocket_url),
         notes,
         operations: vec![send_operation, serve_operation],
     }
@@ -1116,32 +1108,6 @@ mod tests {
     }
 
     #[test]
-    fn weixin_status_uses_neutral_disabled_detail() {
-        let config: LoongClawConfig = serde_json::from_value(json!({
-            "weixin": {
-                "enabled": false,
-                "bridge_url": "https://bridge.example.test/api",
-                "bridge_access_token": "bridge-token",
-                "allowed_contact_ids": ["wxid_alice"]
-            }
-        }))
-        .expect("deserialize disabled weixin config");
-
-        let snapshots = channel_status_snapshots(&config);
-        let weixin = snapshots
-            .iter()
-            .find(|snapshot| snapshot.id == "weixin")
-            .expect("weixin snapshot");
-        let send = weixin.operation("send").expect("weixin send operation");
-        let serve = weixin.operation("serve").expect("weixin serve operation");
-
-        assert_eq!(send.health, ChannelOperationHealth::Disabled);
-        assert_eq!(serve.health, ChannelOperationHealth::Disabled);
-        assert_eq!(send.detail, "disabled by channel or account configuration");
-        assert_eq!(serve.detail, "disabled by channel or account configuration");
-    }
-
-    #[test]
     fn qqbot_status_reports_configured_bridge_surface_without_native_runtime() {
         let config: LoongClawConfig = serde_json::from_value(json!({
             "qqbot": {
@@ -1219,7 +1185,7 @@ mod tests {
         let send = onebot.operation("send").expect("onebot send operation");
         let serve = onebot.operation("serve").expect("onebot serve operation");
 
-        assert_eq!(onebot.configured_account_id, "onebot_127-0-0-1-5700");
+        assert_eq!(onebot.configured_account_id, "default");
         assert_eq!(onebot.api_base_url.as_deref(), Some("ws://127.0.0.1:5700/"));
         assert_eq!(send.health, ChannelOperationHealth::Unsupported);
         assert_eq!(serve.health, ChannelOperationHealth::Unsupported);

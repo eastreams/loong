@@ -1005,8 +1005,33 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        let expected_ids = expected_service_channel_ids();
-        assert_eq!(ids, expected_ids);
+
+        assert_eq!(
+            ids,
+            vec![
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "weixin",
+                "qqbot",
+                "onebot",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "synology-chat",
+                "imessage",
+            ]
+        );
     }
 
     #[test]

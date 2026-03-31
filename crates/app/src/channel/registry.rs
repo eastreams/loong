@@ -38,15 +38,11 @@ use super::{
 
 #[path = "registry_bridge.rs"]
 mod bridge;
-#[path = "registry_nostr_impl.rs"]
-mod nostr_impl;
 
 use bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
     WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
 };
-pub use nostr_impl::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
-use nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
@@ -3542,6 +3538,28 @@ fn validate_http_url(
             None
         }
     }
+}
+
+fn validate_websocket_url(field: &str, value: &str, issues: &mut Vec<String>) {
+    let parsed_url = reqwest::Url::parse(value);
+    let url = match parsed_url {
+        Ok(url) => url,
+        Err(error) => {
+            let issue = format!("{field} is invalid: {error}");
+            issues.push(issue);
+            return;
+        }
+    };
+
+    let scheme = url.scheme();
+    let is_ws = scheme == "ws";
+    let is_wss = scheme == "wss";
+    if is_ws || is_wss {
+        return;
+    }
+
+    let issue = format!("{field} must use ws or wss, got {scheme}");
+    issues.push(issue);
 }
 
 fn validate_websocket_url(field: &str, value: &str, issues: &mut Vec<String>) {
@@ -8720,7 +8738,15 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["zalo", "zalo-personal", "webchat"]
+            vec![
+                "irc",
+                "nostr",
+                "twitch",
+                "tlon",
+                "zalo",
+                "zalo-personal",
+                "webchat"
+            ]
         );
         assert!(!catalog_only.iter().any(|entry| entry.id == "discord"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "slack"));
@@ -8742,11 +8768,10 @@ mod tests {
         );
         assert!(!catalog_only.iter().any(|entry| entry.id == "synology-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "imessage"));
-        assert!(!catalog_only.iter().any(|entry| entry.id == "nostr"));
-        assert!(!catalog_only.iter().any(|entry| entry.id == "tlon"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "weixin"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "qqbot"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "onebot"));
+        assert_eq!(tlon.operations[0].command, "tlon-send");
         assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
 
@@ -8795,7 +8820,15 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec!["zalo", "zalo-personal", "webchat"]
+            vec![
+                "irc",
+                "nostr",
+                "twitch",
+                "tlon",
+                "zalo",
+                "zalo-personal",
+                "webchat"
+            ]
         );
         assert_eq!(
             inventory

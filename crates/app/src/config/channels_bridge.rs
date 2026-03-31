@@ -6,22 +6,17 @@ use serde::{Deserialize, Serialize};
 use super::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelDefaultAccountSelection,
     ChannelResolvedAccountRoute, ConfigValidationIssue, EnvPointerValidationHint,
-    ResolvedConfiguredAccount, configured_account_ids, default_channel_account_identity,
-    normalize_channel_account_id, resolve_account_for_session_account_id,
-    resolve_channel_account_route, resolve_configured_account_identity,
-    resolve_configured_account_selection, resolve_default_configured_account_selection,
-    resolve_string_with_legacy_env, validate_channel_account_integrity, validate_env_pointer_field,
+    ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
+    ResolvedConfiguredAccount, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+    configured_account_ids, default_channel_account_identity, normalize_channel_account_id,
+    resolve_account_for_session_account_id, resolve_channel_account_route,
+    resolve_configured_account_identity, resolve_configured_account_selection,
+    resolve_default_configured_account_selection, resolve_string_with_legacy_env,
+    validate_channel_account_integrity, validate_env_pointer_field,
     validate_secret_ref_env_pointer_field,
 };
 use crate::CliResult;
 use crate::secrets::resolve_secret_with_legacy_env;
-
-pub(crate) const WEIXIN_BRIDGE_URL_ENV: &str = "WEIXIN_BRIDGE_URL";
-pub(crate) const WEIXIN_BRIDGE_ACCESS_TOKEN_ENV: &str = "WEIXIN_BRIDGE_ACCESS_TOKEN";
-pub(crate) const QQBOT_APP_ID_ENV: &str = "QQBOT_APP_ID";
-pub(crate) const QQBOT_CLIENT_SECRET_ENV: &str = "QQBOT_CLIENT_SECRET";
-pub(crate) const ONEBOT_WEBSOCKET_URL_ENV: &str = "ONEBOT_WEBSOCKET_URL";
-pub(crate) const ONEBOT_ACCESS_TOKEN_ENV: &str = "ONEBOT_ACCESS_TOKEN";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WeixinAccountConfig {
@@ -222,54 +217,6 @@ pub struct OnebotChannelConfig {
     pub allowed_group_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, OnebotAccountConfig>,
-}
-
-impl Default for WeixinChannelConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            account_id: None,
-            default_account: None,
-            bridge_url: None,
-            bridge_url_env: Some(WEIXIN_BRIDGE_URL_ENV.to_owned()),
-            bridge_access_token: None,
-            bridge_access_token_env: Some(WEIXIN_BRIDGE_ACCESS_TOKEN_ENV.to_owned()),
-            allowed_contact_ids: Vec::new(),
-            accounts: BTreeMap::new(),
-        }
-    }
-}
-
-impl Default for QqbotChannelConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            account_id: None,
-            default_account: None,
-            app_id: None,
-            app_id_env: Some(QQBOT_APP_ID_ENV.to_owned()),
-            client_secret: None,
-            client_secret_env: Some(QQBOT_CLIENT_SECRET_ENV.to_owned()),
-            allowed_peer_ids: Vec::new(),
-            accounts: BTreeMap::new(),
-        }
-    }
-}
-
-impl Default for OnebotChannelConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            account_id: None,
-            default_account: None,
-            websocket_url: None,
-            websocket_url_env: Some(ONEBOT_WEBSOCKET_URL_ENV.to_owned()),
-            access_token: None,
-            access_token_env: Some(ONEBOT_ACCESS_TOKEN_ENV.to_owned()),
-            allowed_group_ids: Vec::new(),
-            accounts: BTreeMap::new(),
-        }
-    }
 }
 
 impl WeixinChannelConfig {
@@ -759,11 +706,10 @@ impl OnebotChannelConfig {
     }
 
     pub fn default_configured_account_selection(&self) -> ChannelDefaultAccountSelection {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_default_configured_account_selection(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 
@@ -776,11 +722,10 @@ impl OnebotChannelConfig {
         requested_account_id: Option<&str>,
         selected_configured_account_id: &str,
     ) -> ChannelResolvedAccountRoute {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_channel_account_route(
             self.accounts.keys(),
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
             requested_account_id,
             selected_configured_account_id,
         )
@@ -880,12 +825,11 @@ impl OnebotChannelConfig {
         &self,
         requested_account_id: Option<&str>,
     ) -> CliResult<ResolvedConfiguredAccount> {
-        let fallback_account_id = self.resolved_account_identity().id;
         resolve_configured_account_selection(
             self.accounts.keys(),
             requested_account_id,
             self.default_account.as_deref(),
-            fallback_account_id.as_str(),
+            "default",
         )
     }
 }
@@ -1201,7 +1145,7 @@ mod tests {
             .expect("resolve onebot account from env pointer");
         let websocket_url = resolved.websocket_url();
 
-        assert_eq!(resolved.configured_account_id, "onebot_127-0-0-1-5700");
+        assert_eq!(resolved.configured_account_id, "default");
         assert_eq!(resolved.account.id, "onebot_127-0-0-1-5700");
         assert_eq!(resolved.account.label, "onebot:127.0.0.1:5700");
         assert_eq!(websocket_url.as_deref(), Some("ws://127.0.0.1:5700"));

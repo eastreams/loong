@@ -15,7 +15,7 @@ The immediate scope is:
 - define stable target and setup contracts that future adapters or plugins can
   reuse
 
-This slice does not add native QR-code login, a built-in Weixin runtime, or a built-in
+This slice does not add native扫码登录, a built-in Weixin runtime, or a built-in
 QQ gateway implementation.
 
 **Problem Statement**
@@ -73,7 +73,7 @@ conclusion is:
 
 **Chosen Design**
 
-## 1. Add a plugin-backed support tier to the channel model
+### 1. Add a plugin-backed support tier to the channel model
 
 LoongClaw should distinguish four implementation states:
 
@@ -85,7 +85,7 @@ LoongClaw should distinguish four implementation states:
 
 This is the smallest truthful expansion of the current product language.
 
-## 2. Add a plugin-bridge onboarding strategy
+### 2. Add a plugin-bridge onboarding strategy
 
 The onboarding contract should add a `plugin_bridge` strategy for surfaces where
 LoongClaw can describe:
@@ -99,7 +99,7 @@ while still not claiming native runtime ownership.
 
 `weixin`, `qqbot`, and `onebot` should use this strategy.
 
-## 3. Add first-class catalog surfaces for `weixin`, `qqbot`, and `onebot`
+### 3. Add first-class catalog surfaces for `weixin`, `qqbot`, and `onebot`
 
 These surfaces should appear in `loongclaw channels --json` and the broader
 catalog with stable ids, aliases, transports, and setup requirements.
@@ -116,7 +116,7 @@ Recommended identities:
   aliases: `onebot-v11`, `napcat`, `llonebot`
   transport label: `onebot_v11_bridge`
 
-## 4. Keep operations visible but explicitly non-native
+### 4. Keep operations visible but explicitly non-native
 
 Each new surface should declare `send` and `serve` operations in the catalog so
 the product shape is complete, but both operations remain `stub` until a
@@ -127,7 +127,7 @@ That preserves two truths at once:
 - LoongClaw knows what the surface wants to look like
 - LoongClaw does not yet ship those commands natively
 
-## 5. Publish stable target semantics now
+### 5. Publish stable target semantics now
 
 The target contract should be written down now so later plugins and future
 native adapters converge on one shape.
@@ -148,7 +148,7 @@ Recommended target families:
 LoongClaw does not need to parse these routes today to benefit from documenting
 them. The key is to prevent ecosystem drift before future adapter work starts.
 
-## 6. Use plugin metadata conventions instead of inventing a second plugin contract
+### 6. Use plugin metadata conventions instead of inventing a second plugin contract
 
 LoongClaw's existing plugin manifest already has the important identity seam:
 

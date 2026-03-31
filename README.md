@@ -612,16 +612,7 @@ loong multi-channel-serve \
 
 `--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
 
-The longer-term direction remains to let one gateway-owned service host
-decouple CLI lifecycle from service lifecycle and own routes, status, logs,
-pairing, and richer channel runtimes.
-
-`loong channels --json` exposes the broader channel catalog separately from
-shipped runtime-backed surfaces. That catalog now distinguishes config-backed
-outbound surfaces from plugin-backed bridge surfaces such as Weixin, QQBot,
-and OneBot. When a bridge-backed surface is configured, the same output now
-exposes config-derived account snapshots and bridge endpoint summaries without
-claiming native runtime ownership.
+`loongclaw channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. That catalog now distinguishes config-backed outbound surfaces from plugin-backed bridge surfaces such as Weixin, QQBot, and OneBot. When a bridge-backed surface is configured, the same output now exposes config-derived account snapshots and bridge endpoint summaries without claiming native runtime ownership.
 
 Plugin-backed channel surfaces are intentionally honest:
 
@@ -635,14 +626,7 @@ Current bridge-first target families include:
 - `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
 - `onebot:<account>:private:<user_id>` and `onebot:<account>:group:<group_id>`
 
-Config-backed outbound surfaces such as Discord, Slack, LINE, DingTalk,
-WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch, Tlon,
-Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
-iMessage / BlueBubbles, and Nostr expose send and readiness metadata without
-claiming runtime-backed reply-loop ownership.
-
-Pure catalog-only planned surfaces such as Zalo, Zalo Personal, and WebChat
-still do not claim runtime support until an adapter is actually shipped.
+Pure catalog-only planned surfaces such as Tlon, Nostr, Twitch, Zalo, and WebChat still do not claim runtime support until an adapter is actually shipped.
 
 Tool policy stays explicit:
 
