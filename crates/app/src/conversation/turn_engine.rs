@@ -2755,7 +2755,8 @@ impl TurnEngine {
             }
             Err(reason) if reason.starts_with("app_tool_denied:") => {
                 let human_reason = render_app_tool_denied_reason(reason.as_str());
-                let turn_result = TurnResult::policy_denied("app_tool_denied", human_reason.clone());
+                let turn_result =
+                    TurnResult::policy_denied("app_tool_denied", human_reason.clone());
                 let decision = ToolDecisionTelemetry::deny(
                     effective_tool_name.as_str(),
                     human_reason,
