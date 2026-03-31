@@ -134,6 +134,10 @@ use serve_runtime::{
 };
 
 mod dispatch;
+#[cfg(test)]
+use crate::CliResult;
+#[cfg(test)]
+use crate::conversation::ConversationIngressPrivateContext;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -161,9 +165,9 @@ use dispatch::{ChannelCommandContext, ChannelSendCommandSpec, run_channel_send_c
 #[cfg(test)]
 use dispatch::{
     build_feishu_command_context, build_telegram_command_context, channel_message_ingress_context,
-    reload_channel_turn_config, render_channel_route_notice, validate_feishu_security_config,
-    validate_matrix_security_config, validate_telegram_security_config,
-    validate_wecom_security_config,
+    process_inbound_with_runtime_and_feedback, reload_channel_turn_config,
+    render_channel_route_notice, validate_feishu_security_config, validate_matrix_security_config,
+    validate_telegram_security_config, validate_wecom_security_config,
 };
 pub use dispatch::{
     load_channel_operation_runtime_for_account_from_dir_for_test, run_background_channel_with_stop,
@@ -172,6 +176,12 @@ pub use dispatch::{
     run_matrix_send, run_mattermost_send, run_nextcloud_talk_send, run_nostr_send, run_signal_send,
     run_slack_send, run_synology_chat_send, run_teams_send, run_telegram_channel,
     run_telegram_send, run_webhook_send, run_wecom_channel, run_wecom_send, run_whatsapp_send,
+};
+#[cfg(test)]
+use serve_runtime::ChannelServeRuntimeSpec;
+#[cfg(test)]
+use types::{
+    KnownChannelSessionSendTarget, parse_known_channel_session_send_target, process_channel_batch,
 };
 
 #[cfg(test)]

@@ -3227,7 +3227,7 @@ pub(crate) async fn send_text_to_known_session(
     feature = "channel-matrix",
     feature = "channel-wecom"
 ))]
-async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
+pub(super) async fn process_inbound_with_runtime_and_feedback<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
     message: &ChannelInboundMessage,
