@@ -2946,6 +2946,7 @@ async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtim
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(200_000),
@@ -3130,6 +3131,211 @@ async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtim
 }
 
 #[tokio::test]
+async fn execute_spec_wasm_component_bridge_reads_allowlisted_guest_config_when_runtime_enabled() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-config-read-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    let config_key = "provider.region";
+    let config_key_len = config_key.len();
+    let wat_source = format!(
+        r#"
+            (module
+              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                (local $value_len i32)
+                i32.const 0
+                i32.const {config_key_len}
+                call $config_len
+                local.tee $value_len
+                i32.const 0
+                i32.lt_s
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 63
+                i32.const 34
+                i32.store8
+                i32.const 0
+                i32.const {config_key_len}
+                i32.const 64
+                local.get $value_len
+                call $read_config
+                local.get $value_len
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                local.get $value_len
+                i32.add
+                i32.const 34
+                i32.store8
+                i32.const 63
+                local.get $value_len
+                i32.const 2
+                i32.add
+                call $write_output
+                local.get $value_len
+                i32.const 2
+                i32.add
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 0)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{config_key}"))
+        "#
+    );
+    let wasm_bytes = wat::parse_str(wat_source.as_str()).expect("compile wasm");
+    let digest = Sha256::digest(&wasm_bytes);
+    let digest_hex = hex_lower(&digest);
+
+    let plugin_manifest = r#"
+// LOONGCLAW_PLUGIN_START
+// {
+//   "plugin_id": "wasm-runtime-config-read",
+//   "provider_id": "wasm-runtime-config-provider",
+//   "connector_name": "wasm-runtime-config-provider",
+//   "channel_id": "primary",
+//   "endpoint": "local://wasm-runtime-config-provider/invoke",
+//   "capabilities": ["InvokeConnector"],
+//   "metadata": {
+//     "bridge_kind":"wasm_component",
+//     "component":"plugin.wasm",
+//     "component_sha256":"__COMPONENT_SHA256__",
+//     "entrypoint":"run",
+//     "region":"us-east-1",
+//     "version":"1.0.0"
+//   }
+// }
+// LOONGCLAW_PLUGIN_END
+"#
+    .replace("__COMPONENT_SHA256__", digest_hex.as_str());
+    fs::write(plugin_root.join("plugin.rs"), plugin_manifest).expect("write wasm plugin manifest");
+    fs::write(plugin_root.join("plugin.wasm"), wasm_bytes).expect("write wasm module");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-wasm-runtime-config-read".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-wasm-runtime-config-read".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::WasmComponent],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: true,
+            security_scan: Some(SecurityScanSpec {
+                enabled: true,
+                block_on_high: true,
+                profile_path: None,
+                profile_sha256: None,
+                profile_signature: None,
+                siem_export: None,
+                runtime: SecurityRuntimeExecutionSpec {
+                    execute_wasm_component: true,
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: vec![config_key.to_owned()],
+                    max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
+                    fuel_limit: Some(200_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
+                },
+                high_risk_metadata_keywords: Vec::new(),
+                wasm: WasmSecurityScanSpec {
+                    enabled: true,
+                    max_module_bytes: 128 * 1024,
+                    allow_wasi: false,
+                    blocked_import_prefixes: vec!["wasi".to_owned()],
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    require_hash_pin: false,
+                    required_sha256_by_plugin: BTreeMap::new(),
+                },
+            }),
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(true),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(5),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "wasm-runtime-config-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            payload: json!({"input":"ping"}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "executed"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["host_abi_enabled"],
+        true
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["output_json"],
+        json!("us-east-1")
+    );
+}
+
+#[tokio::test]
 async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_cache() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3213,6 +3419,7 @@ async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_c
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(50_000),
@@ -3405,6 +3612,7 @@ async fn execute_spec_wasm_component_bridge_times_out_and_reports_timeout_eviden
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: None,
@@ -3568,6 +3776,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(200_000),
@@ -3711,6 +3920,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(200_000),
@@ -3856,6 +4066,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(200_000),
@@ -4003,6 +4214,7 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![disallowed_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(100_000),
@@ -4154,6 +4366,7 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(100_000),
@@ -4296,6 +4509,7 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(128 * 1024),
                     max_output_bytes: None,
                     fuel_limit: Some(100_000),
@@ -4439,6 +4653,7 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(8),
                     max_output_bytes: None,
                     fuel_limit: Some(100_000),
@@ -4550,6 +4765,7 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
                 runtime: SecurityRuntimeExecutionSpec {
                     execute_wasm_component: true,
                     allowed_path_prefixes: Vec::new(),
+                    guest_readable_config_keys: Vec::new(),
                     max_component_bytes: Some(1024),
                     max_output_bytes: None,
                     fuel_limit: Some(10_000),

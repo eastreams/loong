@@ -73,8 +73,12 @@ use wasm_cache::{
     insert_cached_wasm_module, lookup_cached_wasm_module, modified_unix_nanos,
     wasm_artifact_file_identity, wasm_module_cache_capacity, wasm_module_cache_max_bytes,
 };
+pub(crate) use wasm_host_abi::{
+    WASM_GUEST_CONFIG_CHANNEL_PREFIX, WASM_GUEST_CONFIG_PROVIDER_PREFIX,
+    wasm_guest_config_key_is_supported,
+};
 use wasm_host_abi::{
-    WasmHostAbiSnapshot, WasmHostAbiStoreData, link_wasm_host_abi,
+    WasmHostAbiSnapshot, WasmHostAbiStoreData, build_wasm_guest_config, link_wasm_host_abi,
     module_requires_wasm_host_abi_memory, module_uses_wasm_host_abi,
 };
 use wasm_runtime_policy::wasm_signals_based_traps_enabled_from_env;
@@ -1003,6 +1007,7 @@ pub struct BridgeRuntimePolicy {
     pub allowed_process_commands: BTreeSet<String>,
     pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
     pub wasm_allowed_path_prefixes: Vec<PathBuf>,
+    pub wasm_guest_readable_config_keys: BTreeSet<String>,
     pub wasm_max_component_bytes: Option<usize>,
     pub wasm_max_output_bytes: Option<usize>,
     pub wasm_fuel_limit: Option<u64>,
@@ -1540,6 +1545,8 @@ pub struct SecurityRuntimeExecutionSpec {
     pub execute_wasm_component: bool,
     #[serde(default)]
     pub allowed_path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub guest_readable_config_keys: Vec<String>,
     #[serde(default)]
     pub max_component_bytes: Option<usize>,
     #[serde(default)]
@@ -2698,11 +2705,19 @@ pub fn execute_wasm_component_bridge(
                 WasmRunEvidence::default(),
             )
         })?;
-        let store_data =
-            WasmHostAbiStoreData::try_new(input_bytes, runtime_policy.wasm_max_output_bytes)
-                .map_err(|reason| {
-                    boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
-                })?;
+        let guest_config = build_wasm_guest_config(
+            provider,
+            channel,
+            &runtime_policy.wasm_guest_readable_config_keys,
+        );
+        let store_data = WasmHostAbiStoreData::try_new(
+            input_bytes,
+            guest_config,
+            runtime_policy.wasm_max_output_bytes,
+        )
+        .map_err(|reason| {
+            boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
+        })?;
         let mut store = WasmtimeStore::new(&cached_module.engine, store_data);
         if let Some(limit) = runtime_policy.wasm_fuel_limit {
             store.set_fuel(limit).map_err(|error| {

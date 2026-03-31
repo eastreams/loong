@@ -203,6 +203,289 @@ fn test_wasm_runtime_policy(root: &Path) -> BridgeRuntimePolicy {
 }
 
 #[test]
+fn build_wasm_guest_config_includes_allowlisted_provider_and_channel_values() {
+    let provider = provider_with_metadata(BTreeMap::from([
+        ("region".to_owned(), "ap-southeast-1".to_owned()),
+        ("secret".to_owned(), "hidden".to_owned()),
+    ]));
+    let mut channel = test_wasm_channel(&provider);
+    channel
+        .metadata
+        .insert("mode".to_owned(), "strict".to_owned());
+    let guest_readable_config_keys = BTreeSet::from([
+        "channel.mode".to_owned(),
+        "provider.missing".to_owned(),
+        "provider.region".to_owned(),
+    ]);
+
+    let guest_config =
+        super::build_wasm_guest_config(&provider, &channel, &guest_readable_config_keys);
+
+    assert_eq!(
+        guest_config,
+        BTreeMap::from([
+            ("channel.mode".to_owned(), b"strict".to_vec()),
+            ("provider.region".to_owned(), b"ap-southeast-1".to_vec()),
+        ])
+    );
+}
+
+#[test]
+fn execute_wasm_component_bridge_reads_allowlisted_guest_config_value() {
+    let config_key = "provider.region";
+    let config_key_len = config_key.len();
+    let wat_source = format!(
+        r#"
+            (module
+              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                (local $value_len i32)
+                i32.const 0
+                i32.const {config_key_len}
+                call $config_len
+                local.tee $value_len
+                i32.const 0
+                i32.lt_s
+                if
+                  i32.const 1
+                  return
+                end
+                i32.const 63
+                i32.const 34
+                i32.store8
+                i32.const 0
+                i32.const {config_key_len}
+                i32.const 64
+                local.get $value_len
+                call $read_config
+                local.get $value_len
+                i32.ne
+                if
+                  i32.const 2
+                  return
+                end
+                i32.const 64
+                local.get $value_len
+                i32.add
+                i32.const 34
+                i32.store8
+                i32.const 63
+                local.get $value_len
+                i32.const 2
+                i32.add
+                call $write_output
+                local.get $value_len
+                i32.const 2
+                i32.add
+                i32.ne
+                if
+                  i32.const 3
+                  return
+                end
+                i32.const 0)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{config_key}"))
+        "#
+    );
+    let (root, wasm_path) = temp_wasm_fixture(
+        "loongclaw-wasm-host-abi-config-allowed",
+        wat_source.as_str(),
+    );
+    let component_path = wasm_path.display().to_string();
+    let provider = provider_with_metadata(BTreeMap::from([
+        ("component".to_owned(), component_path),
+        ("region".to_owned(), "us-east-1".to_owned()),
+    ]));
+    let channel = test_wasm_channel(&provider);
+    let command = test_wasm_command(json!({"input":"ping"}));
+    let root_path = root.path();
+    let mut runtime_policy = test_wasm_runtime_policy(root_path);
+    runtime_policy
+        .wasm_guest_readable_config_keys
+        .insert(config_key.to_owned());
+
+    let execution = super::execute_wasm_component_bridge(
+        json!({"status": "planned"}),
+        &provider,
+        &channel,
+        &command,
+        &runtime_policy,
+    );
+
+    assert_eq!(execution["status"], json!("executed"));
+    assert_eq!(execution["runtime"]["host_abi_enabled"], json!(true));
+    assert_eq!(execution["runtime"]["output_json"], json!("us-east-1"));
+}
+
+#[test]
+fn execute_wasm_component_bridge_fails_closed_for_missing_guest_config_key() {
+    let config_key = "provider.missing";
+    let config_key_len = config_key.len();
+    let wat_source = format!(
+        r#"
+            (module
+              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                i32.const 0
+                i32.const {config_key_len}
+                call $config_len
+                i32.const -2
+                i32.eq
+                if (result i32)
+                  i32.const 0
+                else
+                  i32.const 1
+                end)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{config_key}"))
+        "#
+    );
+    let (root, wasm_path) = temp_wasm_fixture(
+        "loongclaw-wasm-host-abi-config-missing",
+        wat_source.as_str(),
+    );
+    let component_path = wasm_path.display().to_string();
+    let provider = provider_with_metadata(BTreeMap::from([
+        ("component".to_owned(), component_path),
+        ("region".to_owned(), "us-east-1".to_owned()),
+    ]));
+    let channel = test_wasm_channel(&provider);
+    let command = test_wasm_command(json!({"input":"ping"}));
+    let root_path = root.path();
+    let mut runtime_policy = test_wasm_runtime_policy(root_path);
+    runtime_policy
+        .wasm_guest_readable_config_keys
+        .insert(config_key.to_owned());
+
+    let execution = super::execute_wasm_component_bridge(
+        json!({"status": "planned"}),
+        &provider,
+        &channel,
+        &command,
+        &runtime_policy,
+    );
+
+    assert_eq!(execution["status"], json!("executed"));
+    assert_eq!(execution["runtime"]["guest_exit_code"], json!(0));
+    assert_eq!(execution["runtime"]["output_json"], Value::Null);
+}
+
+#[test]
+fn execute_wasm_component_bridge_fails_closed_for_disallowed_guest_config_key() {
+    let config_key = "provider.region";
+    let config_key_len = config_key.len();
+    let wat_source = format!(
+        r#"
+            (module
+              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                i32.const 0
+                i32.const {config_key_len}
+                call $config_len
+                i32.const -2
+                i32.eq
+                if (result i32)
+                  i32.const 0
+                else
+                  i32.const 1
+                end)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{config_key}"))
+        "#
+    );
+    let (root, wasm_path) = temp_wasm_fixture(
+        "loongclaw-wasm-host-abi-config-disallowed",
+        wat_source.as_str(),
+    );
+    let component_path = wasm_path.display().to_string();
+    let provider = provider_with_metadata(BTreeMap::from([
+        ("component".to_owned(), component_path),
+        ("region".to_owned(), "us-east-1".to_owned()),
+    ]));
+    let channel = test_wasm_channel(&provider);
+    let command = test_wasm_command(json!({"input":"ping"}));
+    let root_path = root.path();
+    let runtime_policy = test_wasm_runtime_policy(root_path);
+
+    let execution = super::execute_wasm_component_bridge(
+        json!({"status": "planned"}),
+        &provider,
+        &channel,
+        &command,
+        &runtime_policy,
+    );
+
+    assert_eq!(execution["status"], json!("executed"));
+    assert_eq!(execution["runtime"]["guest_exit_code"], json!(0));
+    assert_eq!(execution["runtime"]["output_json"], Value::Null);
+}
+
+#[test]
+fn execute_wasm_component_bridge_reports_buffer_too_small_for_guest_config_read() {
+    let config_key = "provider.region";
+    let config_key_len = config_key.len();
+    let wat_source = format!(
+        r#"
+            (module
+              (import "loongclaw" "config_len" (func $config_len (param i32 i32) (result i32)))
+              (import "loongclaw" "read_config" (func $read_config (param i32 i32 i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                (local $value_len i32)
+                i32.const 0
+                i32.const {config_key_len}
+                call $config_len
+                local.set $value_len
+                i32.const 0
+                i32.const {config_key_len}
+                i32.const 64
+                local.get $value_len
+                i32.const 1
+                i32.sub
+                call $read_config
+                i32.const -3
+                i32.eq
+                if (result i32)
+                  i32.const 0
+                else
+                  i32.const 1
+                end)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "{config_key}"))
+        "#
+    );
+    let (root, wasm_path) = temp_wasm_fixture(
+        "loongclaw-wasm-host-abi-config-buffer-small",
+        wat_source.as_str(),
+    );
+    let component_path = wasm_path.display().to_string();
+    let provider = provider_with_metadata(BTreeMap::from([
+        ("component".to_owned(), component_path),
+        ("region".to_owned(), "us-east-1".to_owned()),
+    ]));
+    let channel = test_wasm_channel(&provider);
+    let command = test_wasm_command(json!({"input":"ping"}));
+    let root_path = root.path();
+    let mut runtime_policy = test_wasm_runtime_policy(root_path);
+    runtime_policy
+        .wasm_guest_readable_config_keys
+        .insert(config_key.to_owned());
+
+    let execution = super::execute_wasm_component_bridge(
+        json!({"status": "planned"}),
+        &provider,
+        &channel,
+        &command,
+        &runtime_policy,
+    );
+
+    assert_eq!(execution["status"], json!("executed"));
+    assert_eq!(execution["runtime"]["guest_exit_code"], json!(0));
+    assert_eq!(execution["runtime"]["output_json"], Value::Null);
+}
+
+#[test]
 fn execute_wasm_component_bridge_exchanges_request_output_and_logs() {
     let wat_source = r#"
             (module

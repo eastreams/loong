@@ -1,5 +1,9 @@
-use std::ops::Range;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Range,
+};
 
+use kernel::{ChannelConfig, ProviderConfig};
 use serde_json::Value;
 use wasmtime::{
     Caller, Extern, Linker as WasmtimeLinker, Module as WasmtimeModule, Result as WasmtimeResult,
@@ -8,15 +12,23 @@ use wasmtime::{
 const WASM_HOST_ABI_IMPORT_MODULE: &str = "loongclaw";
 const WASM_HOST_ABI_IMPORT_INPUT_LEN: &str = "input_len";
 const WASM_HOST_ABI_IMPORT_READ_INPUT: &str = "read_input";
+const WASM_HOST_ABI_IMPORT_CONFIG_LEN: &str = "config_len";
+const WASM_HOST_ABI_IMPORT_READ_CONFIG: &str = "read_config";
 const WASM_HOST_ABI_IMPORT_WRITE_OUTPUT: &str = "write_output";
 const WASM_HOST_ABI_IMPORT_LOG: &str = "log";
 const WASM_HOST_ABI_IMPORT_ABORT: &str = "abort";
 const WASM_HOST_ABI_ERROR_CODE: i32 = -1;
 const WASM_HOST_ABI_LOG_DROPPED_CODE: i32 = 0;
+const WASM_HOST_ABI_CONFIG_UNAVAILABLE_CODE: i32 = -2;
+const WASM_HOST_ABI_BUFFER_TOO_SMALL_CODE: i32 = -3;
 const DEFAULT_WASM_HOST_ABI_MAX_OUTPUT_BYTES: usize = 256 * 1024;
+const WASM_HOST_ABI_MAX_CONFIG_KEY_BYTES: usize = 1024;
 const WASM_HOST_ABI_MAX_LOG_ENTRY_BYTES: usize = 4 * 1024;
 const WASM_HOST_ABI_MAX_LOG_TOTAL_BYTES: usize = 16 * 1024;
 const WASM_HOST_ABI_MAX_LOG_ENTRIES: usize = 64;
+
+pub(crate) const WASM_GUEST_CONFIG_PROVIDER_PREFIX: &str = "provider.";
+pub(crate) const WASM_GUEST_CONFIG_CHANNEL_PREFIX: &str = "channel.";
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct WasmHostAbiSnapshot {
@@ -31,6 +43,7 @@ pub(super) struct WasmHostAbiSnapshot {
 #[derive(Debug, Clone)]
 pub(super) struct WasmHostAbiStoreData {
     input_bytes: Vec<u8>,
+    guest_config: BTreeMap<String, Vec<u8>>,
     guest_logs: Vec<String>,
     guest_logs_bytes: usize,
     guest_logs_truncated: bool,
@@ -43,6 +56,7 @@ pub(super) struct WasmHostAbiStoreData {
 impl WasmHostAbiStoreData {
     pub(super) fn try_new(
         input_bytes: Vec<u8>,
+        guest_config: BTreeMap<String, Vec<u8>>,
         max_output_bytes: Option<usize>,
     ) -> Result<Self, String> {
         let input_len = input_bytes.len();
@@ -53,10 +67,20 @@ impl WasmHostAbiStoreData {
             ));
         }
 
+        for (key, value_bytes) in &guest_config {
+            let value_len = value_bytes.len();
+            if value_len > max_len {
+                return Err(format!(
+                    "wasm guest config value exceeds supported length for key `{key}`: {value_len} bytes"
+                ));
+            }
+        }
+
         let resolved_max_output_bytes = resolve_wasm_host_abi_max_output_bytes(max_output_bytes)?;
 
         Ok(Self {
             input_bytes,
+            guest_config,
             guest_logs: Vec::new(),
             guest_logs_bytes: 0,
             guest_logs_truncated: false,
@@ -141,6 +165,20 @@ pub(super) fn link_wasm_host_abi(
     linker
         .func_wrap(
             WASM_HOST_ABI_IMPORT_MODULE,
+            WASM_HOST_ABI_IMPORT_CONFIG_LEN,
+            wasm_host_config_len,
+        )
+        .map_err(|error| format!("failed to define wasm host function config_len: {error}"))?;
+    linker
+        .func_wrap(
+            WASM_HOST_ABI_IMPORT_MODULE,
+            WASM_HOST_ABI_IMPORT_READ_CONFIG,
+            wasm_host_read_config,
+        )
+        .map_err(|error| format!("failed to define wasm host function read_config: {error}"))?;
+    linker
+        .func_wrap(
+            WASM_HOST_ABI_IMPORT_MODULE,
             WASM_HOST_ABI_IMPORT_WRITE_OUTPUT,
             wasm_host_write_output,
         )
@@ -167,6 +205,8 @@ fn wasm_host_abi_import_uses_guest_memory(import_name: &str) -> bool {
     matches!(
         import_name,
         WASM_HOST_ABI_IMPORT_READ_INPUT
+            | WASM_HOST_ABI_IMPORT_CONFIG_LEN
+            | WASM_HOST_ABI_IMPORT_READ_CONFIG
             | WASM_HOST_ABI_IMPORT_WRITE_OUTPUT
             | WASM_HOST_ABI_IMPORT_LOG
     )
@@ -223,6 +263,72 @@ fn wasm_host_read_input(mut caller: Caller<'_, WasmHostAbiStoreData>, ptr: i32, 
     };
     target_slice.copy_from_slice(input_slice);
     input_len as i32
+}
+
+fn wasm_host_config_len(
+    mut caller: Caller<'_, WasmHostAbiStoreData>,
+    key_ptr: i32,
+    key_len: i32,
+) -> i32 {
+    let config_key = match copy_guest_config_key(&mut caller, key_ptr, key_len) {
+        Ok(key) => key,
+        Err(_) => {
+            return WASM_HOST_ABI_ERROR_CODE;
+        }
+    };
+
+    let config_value = caller.data().guest_config.get(config_key.as_str());
+    let Some(config_value) = config_value else {
+        return WASM_HOST_ABI_CONFIG_UNAVAILABLE_CODE;
+    };
+
+    let config_len = config_value.len();
+    config_len as i32
+}
+
+fn wasm_host_read_config(
+    mut caller: Caller<'_, WasmHostAbiStoreData>,
+    key_ptr: i32,
+    key_len: i32,
+    ptr: i32,
+    len: i32,
+) -> i32 {
+    let config_key = match copy_guest_config_key(&mut caller, key_ptr, key_len) {
+        Ok(key) => key,
+        Err(_) => {
+            return WASM_HOST_ABI_ERROR_CODE;
+        }
+    };
+
+    let Some(requested_len) = checked_len(len) else {
+        return WASM_HOST_ABI_ERROR_CODE;
+    };
+
+    let Ok(memory) = guest_memory(&mut caller) else {
+        return WASM_HOST_ABI_ERROR_CODE;
+    };
+
+    let (memory_bytes, store_data) = memory.data_and_store_mut(caller);
+    let config_value = store_data.guest_config.get(config_key.as_str());
+    let Some(config_value) = config_value else {
+        return WASM_HOST_ABI_CONFIG_UNAVAILABLE_CODE;
+    };
+
+    let config_len = config_value.len();
+    if requested_len < config_len {
+        return WASM_HOST_ABI_BUFFER_TOO_SMALL_CODE;
+    }
+
+    let Some(memory_range) = checked_memory_range(memory_bytes.len(), ptr, config_len) else {
+        return WASM_HOST_ABI_ERROR_CODE;
+    };
+
+    let Some(target_slice) = memory_bytes.get_mut(memory_range) else {
+        return WASM_HOST_ABI_ERROR_CODE;
+    };
+
+    target_slice.copy_from_slice(config_value.as_slice());
+    config_len as i32
 }
 
 fn wasm_host_write_output(mut caller: Caller<'_, WasmHostAbiStoreData>, ptr: i32, len: i32) -> i32 {
@@ -317,6 +423,23 @@ fn guest_memory(caller: &mut Caller<'_, WasmHostAbiStoreData>) -> Result<wasmtim
     Ok(memory)
 }
 
+fn copy_guest_config_key(
+    caller: &mut Caller<'_, WasmHostAbiStoreData>,
+    ptr: i32,
+    len: i32,
+) -> Result<String, String> {
+    let key_bytes = copy_guest_bytes_with_limit(
+        caller,
+        ptr,
+        len,
+        WASM_HOST_ABI_MAX_CONFIG_KEY_BYTES,
+        "wasm guest config key exceeds host ABI limit of",
+    )?;
+
+    String::from_utf8(key_bytes)
+        .map_err(|_error| "wasm guest config key must be valid UTF-8".to_owned())
+}
+
 fn copy_guest_bytes(
     caller: &mut Caller<'_, WasmHostAbiStoreData>,
     ptr: i32,
@@ -370,4 +493,72 @@ fn checked_memory_range(memory_len: usize, ptr: i32, len: usize) -> Option<Range
     }
 
     Some(offset..end)
+}
+
+pub(crate) fn wasm_guest_config_key_is_supported(raw_key: &str) -> bool {
+    let provider_key =
+        prefixed_wasm_guest_config_metadata_key(raw_key, WASM_GUEST_CONFIG_PROVIDER_PREFIX);
+    if provider_key.is_some() {
+        return true;
+    }
+
+    let channel_key =
+        prefixed_wasm_guest_config_metadata_key(raw_key, WASM_GUEST_CONFIG_CHANNEL_PREFIX);
+    channel_key.is_some()
+}
+
+pub(super) fn build_wasm_guest_config(
+    provider: &ProviderConfig,
+    channel: &ChannelConfig,
+    guest_readable_config_keys: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<u8>> {
+    let mut guest_config = BTreeMap::new();
+
+    for key in guest_readable_config_keys {
+        let resolved_value = resolve_wasm_guest_config_value(provider, channel, key.as_str());
+        let Some(resolved_value) = resolved_value else {
+            continue;
+        };
+
+        let value_bytes = resolved_value.as_bytes().to_vec();
+        guest_config.insert(key.clone(), value_bytes);
+    }
+
+    guest_config
+}
+
+fn resolve_wasm_guest_config_value<'a>(
+    provider: &'a ProviderConfig,
+    channel: &'a ChannelConfig,
+    raw_key: &str,
+) -> Option<&'a str> {
+    let provider_key =
+        prefixed_wasm_guest_config_metadata_key(raw_key, WASM_GUEST_CONFIG_PROVIDER_PREFIX);
+    if let Some(provider_key) = provider_key {
+        let value = provider.metadata.get(provider_key)?;
+        return Some(value.as_str());
+    }
+
+    let channel_key =
+        prefixed_wasm_guest_config_metadata_key(raw_key, WASM_GUEST_CONFIG_CHANNEL_PREFIX);
+    if let Some(channel_key) = channel_key {
+        let value = channel.metadata.get(channel_key)?;
+        return Some(value.as_str());
+    }
+
+    None
+}
+
+fn prefixed_wasm_guest_config_metadata_key<'a>(raw_key: &'a str, prefix: &str) -> Option<&'a str> {
+    let metadata_key = raw_key.strip_prefix(prefix)?;
+    let trimmed_key = metadata_key.trim();
+    let has_outer_whitespace = trimmed_key.len() != metadata_key.len();
+    let has_inner_whitespace = trimmed_key
+        .chars()
+        .any(|character| character.is_whitespace());
+    if trimmed_key.is_empty() || has_outer_whitespace || has_inner_whitespace {
+        return None;
+    }
+
+    Some(trimmed_key)
 }

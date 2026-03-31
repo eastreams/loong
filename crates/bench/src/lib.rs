@@ -3223,6 +3223,7 @@ fn run_wasm_bridge_sample(wasm_artifact: &Path) -> CliResult<WasmBridgeSample> {
         allowed_process_commands: BTreeSet::new(),
         bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
         wasm_allowed_path_prefixes: vec![artifact_parent.to_path_buf()],
+        wasm_guest_readable_config_keys: BTreeSet::new(),
         wasm_max_component_bytes: Some(8 * 1024 * 1024),
         wasm_max_output_bytes: None,
         wasm_fuel_limit: Some(2_000_000),
