@@ -51,7 +51,7 @@
 - Test: `crates/app/src/config/tools.rs`
 - Test: `crates/app/src/tools/runtime_config.rs`
 
-- [ ] **Step 1: Add red tests for the non-nested `.loongclaw/rules` expectation**
+- [x] **Step 1: Add red tests for the non-nested `.loongclaw/rules` expectation**
 
 Add config-level resolution coverage in `crates/app/src/config/tools.rs`:
 
@@ -102,7 +102,7 @@ fn tool_runtime_config_uses_default_workspace_rules_dir_when_unset() {
 }
 ```
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -115,7 +115,7 @@ Expected:
 - FAIL because the current default helper returns `/home/test/.loongclaw/.loongclaw/rules`
 - PASS for the existing workspace-local expectation because configs outside `.loongclaw` should keep resolving to `<config-parent>/.loongclaw/rules`
 
-- [ ] **Step 3: Implement the minimal path-resolution fix**
+- [x] **Step 3: Implement the minimal path-resolution fix**
 
 In `crates/app/src/config/tools.rs`, keep explicit override handling unchanged and only refine the default branch. A minimal shape is:
 
@@ -131,7 +131,7 @@ fn default_bash_rules_dir(base_dir: &Path) -> PathBuf {
 
 Then use that helper from `BashToolConfig::resolved_rules_dir(...)` when `rules_dir` is unset.
 
-- [ ] **Step 4: Re-run the focused tests**
+- [x] **Step 4: Re-run the focused tests**
 
 Run the three commands from Step 2 again.
 

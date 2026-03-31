@@ -1742,6 +1742,19 @@ mod tests {
     }
 
     #[test]
+    fn tool_runtime_config_uses_loongclaw_home_rules_dir_when_config_lives_inside_loongclaw_dir() {
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(
+            &LoongClawConfig::default(),
+            Some(std::path::Path::new("/home/test/.loongclaw/config.toml")),
+        );
+
+        assert_eq!(
+            runtime.bash_exec.governance.rules_dir,
+            PathBuf::from("/home/test/.loongclaw/rules")
+        );
+    }
+
+    #[test]
     fn tool_runtime_config_projects_bash_rules_dir_override() {
         let config: crate::config::ToolConfig =
             toml::from_str("[bash]\nrules_dir = \"custom/rules\"\n").expect("bash tool config");

@@ -842,14 +842,16 @@ impl ToolConfig {
 
 impl BashToolConfig {
     pub fn resolved_rules_dir(&self, config_path: Option<&Path>) -> PathBuf {
-        let base_dir = config_path
+        let config_base_dir = config_path
             .and_then(Path::parent)
             .filter(|path| !path.as_os_str().is_empty())
-            .map(Path::to_path_buf)
+            .map(Path::to_path_buf);
+        let base_dir = config_base_dir
+            .clone()
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
         let Some(rules_dir) = self.rules_dir.as_deref() else {
-            return base_dir.join(".loongclaw").join("rules");
+            return default_bash_rules_dir(&base_dir, config_base_dir.is_some());
         };
 
         let expanded = expand_path(rules_dir);
@@ -858,6 +860,14 @@ impl BashToolConfig {
         } else {
             base_dir.join(expanded)
         }
+    }
+}
+
+fn default_bash_rules_dir(base_dir: &Path, from_config_path: bool) -> PathBuf {
+    if from_config_path && base_dir.file_name() == Some(std::ffi::OsStr::new(".loongclaw")) {
+        base_dir.join("rules")
+    } else {
+        base_dir.join(".loongclaw").join("rules")
     }
 }
 
@@ -1645,6 +1655,23 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
     #[test]
     fn bash_tool_config_defaults_to_no_explicit_rules_dir() {
         assert!(BashToolConfig::default().rules_dir.is_none());
+    }
+
+    #[test]
+    fn bash_tool_config_resolves_rules_dir_without_double_loongclaw_segment() {
+        assert_eq!(
+            BashToolConfig::default()
+                .resolved_rules_dir(Some(Path::new("/home/test/.loongclaw/config.toml"))),
+            PathBuf::from("/home/test/.loongclaw/rules")
+        );
+    }
+
+    #[test]
+    fn default_bash_rules_dir_keeps_cwd_fallback_semantics_for_loongclaw_named_dir() {
+        assert_eq!(
+            default_bash_rules_dir(Path::new("/home/test/.loongclaw"), false),
+            PathBuf::from("/home/test/.loongclaw/.loongclaw/rules")
+        );
     }
 
     #[test]
