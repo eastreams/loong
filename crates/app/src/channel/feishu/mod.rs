@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 #[cfg(feature = "channel-feishu")]
 use std::path::Path;
 #[cfg(feature = "channel-feishu")]
@@ -40,21 +39,30 @@ use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
 const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
 
-pub(in crate::channel) fn feishu_allowlist_allows_all(allowed_chat_ids: &BTreeSet<String>) -> bool {
+pub(in crate::channel) fn feishu_allowlist_allows_all<'a, I>(allowed_chat_ids: I) -> bool
+where
+    I: IntoIterator<Item = &'a String>,
+{
     allowed_chat_ids
-        .iter()
+        .into_iter()
         .any(|chat_id| chat_id.trim() == FEISHU_ALLOWLIST_ALL_SENTINEL)
 }
 
-pub(in crate::channel) fn feishu_allowlist_allows_chat(
-    allowed_chat_ids: &BTreeSet<String>,
+pub(in crate::channel) fn feishu_allowlist_allows_chat<'a, I>(
+    allowed_chat_ids: I,
     chat_id: &str,
-) -> bool {
+) -> bool
+where
+    I: IntoIterator<Item = &'a String> + Clone,
+{
     let chat_id = chat_id.trim();
     if chat_id.is_empty() {
         return false;
     }
-    feishu_allowlist_allows_all(allowed_chat_ids) || allowed_chat_ids.contains(chat_id)
+    feishu_allowlist_allows_all(allowed_chat_ids.clone())
+        || allowed_chat_ids
+            .into_iter()
+            .any(|allowed| allowed.trim() == chat_id)
 }
 
 #[cfg(feature = "channel-feishu")]
@@ -194,7 +202,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    fn set(ids: &[&str]) -> BTreeSet<String> {
+    fn set(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|value| value.to_string()).collect()
     }
 
