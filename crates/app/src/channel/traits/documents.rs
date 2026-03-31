@@ -17,23 +17,30 @@ pub enum DocumentContent {
     Json(serde_json::Value),
 }
 
+/// Document type enumeration
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocumentType {
+    /// Docx document (Feishu, Office 365, etc.)
+    Docx,
+}
+
 /// Document metadata
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Document {
     /// Platform-specific document ID
     pub id: String,
     /// Document title/name
-    pub title: String,
-    /// Document owner/creator ID
-    pub owner_id: String,
-    /// Creation timestamp
-    pub created_at: DateTime<Utc>,
-    /// Last modification timestamp
-    pub updated_at: DateTime<Utc>,
+    pub title: Option<String>,
+    /// Document owner/creator ID (None if not available)
+    pub owner_id: Option<String>,
+    /// Creation timestamp (None if not available)
+    pub created_at: Option<DateTime<Utc>>,
+    /// Last modification timestamp (None if not available)
+    pub updated_at: Option<DateTime<Utc>>,
     /// Document content (optional, for list operations)
     pub content: Option<DocumentContent>,
     /// Document type/format
-    pub doc_type: String,
+    pub doc_type: DocumentType,
     /// Platform-specific metadata
     pub metadata: Option<serde_json::Value>,
 }
@@ -64,10 +71,10 @@ pub trait DocumentsApi: Send + Sync {
     async fn get_document_content(&self, id: &str) -> ApiResult<Option<DocumentContent>>;
 
     /// Update document content
-    async fn update_document(&self, id: &str, content: &DocumentContent) -> ApiResult<Document>;
+    async fn update_document(&self, id: &str, content: &DocumentContent) -> ApiResult<()>;
 
     /// Append content to an existing document
-    async fn append_to_document(&self, id: &str, content: &DocumentContent) -> ApiResult<Document>;
+    async fn append_to_document(&self, id: &str, content: &DocumentContent) -> ApiResult<()>;
 
     /// List documents in a container
     async fn list_documents(

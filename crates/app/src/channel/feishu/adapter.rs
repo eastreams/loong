@@ -7,6 +7,10 @@ use crate::channel::feishu::api::messaging_api::{
     convert_cli_result, convert_feishu_message_to_generic, convert_message_content_to_feishu,
     convert_string_error_to_api_error, extract_receive_params, generate_idempotency_key,
 };
+use crate::channel::feishu::api::resources::docs::{
+    convert_content_to_blocks, create_document as create_feishu_document, create_nested_blocks,
+    fetch_document_content,
+};
 use crate::channel::feishu::api::resources::messages::{
     self, FeishuMessageHistoryQuery, FeishuOutboundMessageBody, fetch_message_detail,
     fetch_message_history, reply_outbound_message, send_outbound_message, update_card,
@@ -14,6 +18,7 @@ use crate::channel::feishu::api::resources::messages::{
 use crate::channel::feishu::api::{
     FeishuOperatorOutboundMessageInput, resolve_operator_outbound_message_body,
 };
+use crate::channel::traits::documents::{Document, DocumentContent, DocumentType, DocumentsApi};
 use crate::channel::traits::error::{ApiError, ApiResult};
 use crate::channel::traits::messaging::{
     Message, MessageContent, MessagingApi, PaginatedResult, Pagination, SendOptions,
@@ -560,6 +565,256 @@ impl MessagingApi for FeishuAdapter {
         let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
 
         convert_cli_result(messages::delete_message(&self.client, &token, message_id).await)
+    }
+}
+
+#[async_trait]
+impl DocumentsApi for FeishuAdapter {
+    /// Creates a new Feishu document.
+    ///
+    /// If content is provided, it will be appended to the document after creation.
+    async fn create_document(
+        &self,
+        title: &str,
+        content: Option<&DocumentContent>,
+        parent_id: Option<&str>,
+    ) -> ApiResult<Document> {
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        // Create empty document
+        let metadata = convert_cli_result(
+            create_feishu_document(&self.client, &token, Some(title), parent_id).await,
+        )?;
+
+        let document = convert_feishu_document_metadata_to_document(metadata)?;
+
+        // If content is provided, append it to the document
+        if let Some(content) = content {
+            self.append_to_document(&document.id, content).await?;
+        }
+
+        Ok(document)
+    }
+
+    /// Gets a Feishu document by ID.
+    ///
+    /// Returns the document with available fields. Some fields may be None
+    /// if not returned by Feishu API (e.g., owner_id, timestamps).
+    async fn get_document(&self, id: &str) -> ApiResult<Option<Document>> {
+        let document_id = id.trim();
+        if document_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Document ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        let metadata_result = fetch_document_content(&self.client, &token, document_id, None).await;
+
+        match metadata_result {
+            Ok(content) => {
+                let doc = convert_feishu_document_content_to_document(content);
+                Ok(Some(doc))
+            }
+            Err(err) => {
+                let api_err = convert_string_error_to_api_error(&err);
+                match api_err {
+                    ApiError::NotFound(_) => Ok(None),
+                    ApiError::Auth(_)
+                    | ApiError::RateLimited { .. }
+                    | ApiError::InvalidRequest(_)
+                    | ApiError::Network(_)
+                    | ApiError::Server(_)
+                    | ApiError::NotSupported(_)
+                    | ApiError::Platform { .. }
+                    | ApiError::Other(_) => Err(api_err),
+                }
+            }
+        }
+    }
+
+    /// Gets the content of a Feishu document.
+    async fn get_document_content(&self, id: &str) -> ApiResult<Option<DocumentContent>> {
+        let document_id = id.trim();
+        if document_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Document ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        match fetch_document_content(&self.client, &token, document_id, None).await {
+            Ok(content) => Ok(Some(DocumentContent::Text(content.content))),
+            Err(err) => {
+                let api_err = convert_string_error_to_api_error(&err);
+                match api_err {
+                    ApiError::NotFound(_) => Ok(None),
+                    ApiError::Auth(_)
+                    | ApiError::RateLimited { .. }
+                    | ApiError::InvalidRequest(_)
+                    | ApiError::Network(_)
+                    | ApiError::Server(_)
+                    | ApiError::NotSupported(_)
+                    | ApiError::Platform { .. }
+                    | ApiError::Other(_) => Err(api_err),
+                }
+            }
+        }
+    }
+
+    /// Updates document content.
+    ///
+    /// Not supported by Feishu; use append_to_document instead.
+    async fn update_document(&self, _id: &str, _content: &DocumentContent) -> ApiResult<()> {
+        // Feishu doesn't support updating entire document content
+        // Recommend using append_to_document instead
+        Err(ApiError::NotSupported(
+            "update_document not supported by Feishu; use append_to_document instead".to_owned(),
+        ))
+    }
+
+    /// Appends content blocks to a Feishu document.
+    ///
+    /// Converts the content to Feishu blocks and inserts them.
+    /// Supports Text and Markdown content types.
+    async fn append_to_document(&self, id: &str, content: &DocumentContent) -> ApiResult<()> {
+        let document_id = id.trim();
+        if document_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Document ID cannot be empty".to_owned(),
+            ));
+        }
+
+        // Validate content is not empty
+        let (content_type, content_str) = match content {
+            DocumentContent::Text(text) => {
+                if text.trim().is_empty() {
+                    return Err(ApiError::InvalidRequest(
+                        "Document content cannot be empty".to_owned(),
+                    ));
+                }
+                ("markdown", text.as_str())
+            }
+            DocumentContent::Markdown(text) => {
+                if text.trim().is_empty() {
+                    return Err(ApiError::InvalidRequest(
+                        "Document content cannot be empty".to_owned(),
+                    ));
+                }
+                ("markdown", text.as_str())
+            }
+            DocumentContent::Binary(_) => {
+                return Err(ApiError::NotSupported(
+                    "Binary content not supported by Feishu documents".to_owned(),
+                ));
+            }
+            DocumentContent::Json(_) => {
+                return Err(ApiError::NotSupported(
+                    "JSON content not supported by Feishu documents".to_owned(),
+                ));
+            }
+        };
+
+        let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
+
+        // Convert content to Feishu blocks
+        let blocks = convert_cli_result(
+            convert_content_to_blocks(&self.client, &token, content_type, content_str).await,
+        )?;
+
+        // Insert blocks into document
+        let _insert_result = convert_cli_result(
+            create_nested_blocks(&self.client, &token, document_id, &blocks).await,
+        )?;
+
+        Ok(())
+    }
+
+    /// Lists documents in a container.
+    ///
+    /// Not supported by Feishu.
+    async fn list_documents(
+        &self,
+        _parent_id: Option<&str>,
+        _pagination: Option<Pagination>,
+    ) -> ApiResult<Vec<Document>> {
+        Err(ApiError::NotSupported(
+            "list_documents not supported by Feishu".to_owned(),
+        ))
+    }
+
+    /// Searches documents.
+    ///
+    /// Not supported by Feishu.
+    async fn search_documents(
+        &self,
+        _query: &str,
+        _pagination: Option<Pagination>,
+    ) -> ApiResult<Vec<Document>> {
+        Err(ApiError::NotSupported(
+            "search_documents not supported by Feishu".to_owned(),
+        ))
+    }
+
+    /// Deletes a document.
+    ///
+    /// Not supported by Feishu.
+    async fn delete_document(&self, _id: &str) -> ApiResult<()> {
+        Err(ApiError::NotSupported(
+            "delete_document not supported by Feishu".to_owned(),
+        ))
+    }
+
+    /// Moves a document to a different parent.
+    ///
+    /// Not supported by Feishu.
+    async fn move_document(&self, _id: &str, _new_parent_id: &str) -> ApiResult<Document> {
+        Err(ApiError::NotSupported(
+            "move_document not supported by Feishu".to_owned(),
+        ))
+    }
+}
+
+/// Convert FeishuDocumentMetadata to generic Document
+///
+/// Note: Feishu's create API returns limited metadata (id, title, revision_id, url).
+/// owner_id, created_at, updated_at are not available from Feishu API.
+fn convert_feishu_document_metadata_to_document(
+    metadata: crate::channel::feishu::api::resources::types::FeishuDocumentMetadata,
+) -> ApiResult<Document> {
+    Ok(Document {
+        id: metadata.document_id,
+        title: metadata.title,
+        owner_id: None,   // Feishu doesn't return owner
+        created_at: None, // Feishu doesn't return create time
+        updated_at: None, // Feishu doesn't return update time
+        content: None,
+        doc_type: DocumentType::Docx,
+        metadata: Some(serde_json::json!({
+            "revision_id": metadata.revision_id,
+            "url": metadata.url,
+        })),
+    })
+}
+
+/// Convert FeishuDocumentContent to generic Document
+///
+/// Note: Feishu's raw_content API returns only content, document_id, and url.
+/// title, owner_id, timestamps are not available.
+fn convert_feishu_document_content_to_document(
+    content: crate::channel::feishu::api::resources::types::FeishuDocumentContent,
+) -> Document {
+    Document {
+        id: content.document_id,
+        title: None, // Raw content doesn't include title
+        owner_id: None,
+        created_at: None,
+        updated_at: None,
+        content: Some(DocumentContent::Text(content.content)),
+        doc_type: DocumentType::Docx,
+        metadata: content.url.map(|url| serde_json::json!({ "url": url })),
     }
 }
 
