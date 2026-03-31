@@ -1449,10 +1449,16 @@ const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
     ChannelRegistryOperationDescriptor {
         operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
-        doctor_checks: &[ChannelDoctorCheckSpec {
-            name: "whatsapp serve runtime",
-            trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
-        }],
+        doctor_checks: &[
+            ChannelDoctorCheckSpec {
+                name: "whatsapp serve health",
+                trigger: ChannelDoctorCheckTrigger::OperationHealth,
+            },
+            ChannelDoctorCheckSpec {
+                name: "whatsapp serve runtime",
+                trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+            },
+        ],
     },
 ];
 const WHATSAPP_CAPABILITIES: &[ChannelCapability] = &[

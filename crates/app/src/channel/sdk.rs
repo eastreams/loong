@@ -344,12 +344,19 @@ const WHATSAPP_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> =
 #[cfg(not(feature = "channel-whatsapp"))]
 const WHATSAPP_BACKGROUND_RUNTIME: Option<ChannelRuntimeCommandDescriptor> = None;
 
+#[cfg(feature = "channel-whatsapp")]
+const WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED: Option<BackgroundSurfaceEnabledFn> =
+    Some(whatsapp_background_surface_is_enabled);
+
+#[cfg(not(feature = "channel-whatsapp"))]
+const WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED: Option<BackgroundSurfaceEnabledFn> = None;
+
 const WHATSAPP_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &WHATSAPP_CHANNEL_DESCRIPTOR,
     background_runtime: WHATSAPP_BACKGROUND_RUNTIME,
     is_enabled: whatsapp_channel_is_enabled,
     collect_validation_issues: collect_whatsapp_channel_validation_issues,
-    background_surface_is_enabled: Some(whatsapp_background_surface_is_enabled),
+    background_surface_is_enabled: WHATSAPP_BACKGROUND_SURFACE_IS_ENABLED,
 };
 
 const EMAIL_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
