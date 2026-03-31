@@ -793,6 +793,41 @@ fn build_tool_catalog() -> ToolCatalog {
     {
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.bitable.app.create",
+            "feishu_bitable_app_create",
+            "Create a Feishu Bitable app with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.get",
+            "feishu_bitable_app_get",
+            "Fetch Feishu Bitable app metadata with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.list",
+            "feishu_bitable_app_list",
+            "List Feishu Bitable apps through the Drive API with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.patch",
+            "feishu_bitable_app_patch",
+            "Update Feishu Bitable app metadata with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.copy",
+            "feishu_bitable_app_copy",
+            "Copy a Feishu Bitable app with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.bitable.list",
             "feishu_bitable_list",
             "List data tables in a Feishu Bitable app with the selected account grant",
@@ -800,9 +835,121 @@ fn build_tool_catalog() -> ToolCatalog {
         );
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.bitable.table.create",
+            "feishu_bitable_table_create",
+            "Create a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.table.patch",
+            "feishu_bitable_table_patch",
+            "Rename a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.table.batch_create",
+            "feishu_bitable_table_batch_create",
+            "Batch create Feishu Bitable tables with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.bitable.record.create",
             "feishu_bitable_record_create",
             "Create a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.update",
+            "feishu_bitable_record_update",
+            "Update a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.delete",
+            "feishu_bitable_record_delete",
+            "Delete a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_create",
+            "feishu_bitable_record_batch_create",
+            "Batch create records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_update",
+            "feishu_bitable_record_batch_update",
+            "Batch update records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_delete",
+            "feishu_bitable_record_batch_delete",
+            "Batch delete records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.create",
+            "feishu_bitable_field_create",
+            "Create a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.list",
+            "feishu_bitable_field_list",
+            "List fields in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.update",
+            "feishu_bitable_field_update",
+            "Update a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.delete",
+            "feishu_bitable_field_delete",
+            "Delete a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.create",
+            "feishu_bitable_view_create",
+            "Create a view in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.get",
+            "feishu_bitable_view_get",
+            "Fetch a view in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.list",
+            "feishu_bitable_view_list",
+            "List views in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.patch",
+            "feishu_bitable_view_patch",
+            "Patch a view in a Feishu Bitable table with the selected account grant",
             ELEVATED_TOOL_POLICY_DESCRIPTOR,
         );
         push_feishu_tool_descriptor(
@@ -2932,11 +3079,72 @@ fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
 
 fn tool_argument_hint(name: &str) -> &'static str {
     match name {
+        "feishu.bitable.app.create" => {
+            "account_id?:string,open_id?:string,name:string,folder_token?:string"
+        }
+        "feishu.bitable.app.get" => "account_id?:string,open_id?:string,app_token:string",
+        "feishu.bitable.app.list" => {
+            "account_id?:string,open_id?:string,folder_token?:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.app.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,name?:string,is_advanced?:boolean"
+        }
+        "feishu.bitable.app.copy" => {
+            "account_id?:string,open_id?:string,app_token:string,name:string,folder_token?:string"
+        }
         "feishu.bitable.list" => {
             "account_id?:string,open_id?:string,app_token:string,page_size?:integer,page_token?:string"
         }
+        "feishu.bitable.table.create" => {
+            "account_id?:string,open_id?:string,app_token:string,name:string,default_view_name?:string,fields?:array"
+        }
+        "feishu.bitable.table.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,name:string"
+        }
+        "feishu.bitable.table.batch_create" => {
+            "account_id?:string,open_id?:string,app_token:string,tables:array"
+        }
         "feishu.bitable.record.create" => {
             "account_id?:string,open_id?:string,app_token:string,table_id:string,fields:object"
+        }
+        "feishu.bitable.record.update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,record_id:string,fields:object"
+        }
+        "feishu.bitable.record.delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,record_id:string"
+        }
+        "feishu.bitable.record.batch_create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.record.batch_update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.record.batch_delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.field.create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_name:string,type:integer,property?:object"
+        }
+        "feishu.bitable.field.list" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.field.update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_id:string,field_name:string,type:integer,property?:object"
+        }
+        "feishu.bitable.field.delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_id:string"
+        }
+        "feishu.bitable.view.create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_name:string,view_type?:string"
+        }
+        "feishu.bitable.view.get" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id:string"
+        }
+        "feishu.bitable.view.list" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.view.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id:string,view_name:string"
         }
         "feishu.bitable.record.search" => {
             "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],page_size?:integer,page_token?:string"
@@ -3021,6 +3229,38 @@ fn tool_argument_hint(name: &str) -> &'static str {
 
 fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
     match name {
+        "feishu.bitable.app.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("name", "string"),
+            ("folder_token", "string"),
+        ],
+        "feishu.bitable.app.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+        ],
+        "feishu.bitable.app.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("folder_token", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.app.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("is_advanced", "boolean"),
+        ],
+        "feishu.bitable.app.copy" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("folder_token", "string"),
+        ],
         "feishu.bitable.list" => &[
             ("account_id", "string"),
             ("open_id", "string"),
@@ -3028,12 +3268,135 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("page_size", "integer"),
             ("page_token", "string"),
         ],
+        "feishu.bitable.table.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("default_view_name", "string"),
+            ("fields", "array"),
+        ],
+        "feishu.bitable.table.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("name", "string"),
+        ],
+        "feishu.bitable.table.batch_create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("tables", "array"),
+        ],
         "feishu.bitable.record.create" => &[
             ("account_id", "string"),
             ("open_id", "string"),
             ("app_token", "string"),
             ("table_id", "string"),
             ("fields", "object"),
+        ],
+        "feishu.bitable.record.update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("record_id", "string"),
+            ("fields", "object"),
+        ],
+        "feishu.bitable.record.delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("record_id", "string"),
+        ],
+        "feishu.bitable.record.batch_create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.record.batch_update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.record.batch_delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.field.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_name", "string"),
+            ("type", "integer"),
+            ("property", "object"),
+        ],
+        "feishu.bitable.field.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.field.update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_id", "string"),
+            ("field_name", "string"),
+            ("type", "integer"),
+            ("property", "object"),
+        ],
+        "feishu.bitable.field.delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_id", "string"),
+        ],
+        "feishu.bitable.view.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_name", "string"),
+            ("view_type", "string"),
+        ],
+        "feishu.bitable.view.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+        ],
+        "feishu.bitable.view.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.view.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+            ("view_name", "string"),
         ],
         "feishu.bitable.record.search" => &[
             ("account_id", "string"),
@@ -3246,8 +3609,31 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.app.create" => &["name"],
+        "feishu.bitable.app.get" => &["app_token"],
+        "feishu.bitable.app.list" => &[],
+        "feishu.bitable.app.patch" => &["app_token"],
+        "feishu.bitable.app.copy" => &["app_token", "name"],
         "feishu.bitable.list" => &["app_token"],
+        "feishu.bitable.table.create" => &["app_token", "name"],
+        "feishu.bitable.table.patch" => &["app_token", "table_id", "name"],
+        "feishu.bitable.table.batch_create" => &["app_token", "tables"],
         "feishu.bitable.record.create" => &["app_token", "table_id", "fields"],
+        "feishu.bitable.record.update" => &["app_token", "table_id", "record_id", "fields"],
+        "feishu.bitable.record.delete" => &["app_token", "table_id", "record_id"],
+        "feishu.bitable.record.batch_create"
+        | "feishu.bitable.record.batch_update"
+        | "feishu.bitable.record.batch_delete" => &["app_token", "table_id", "records"],
+        "feishu.bitable.field.create" => &["app_token", "table_id", "field_name", "type"],
+        "feishu.bitable.field.list" => &["app_token", "table_id"],
+        "feishu.bitable.field.update" => {
+            &["app_token", "table_id", "field_id", "field_name", "type"]
+        }
+        "feishu.bitable.field.delete" => &["app_token", "table_id", "field_id"],
+        "feishu.bitable.view.create" => &["app_token", "table_id", "view_name"],
+        "feishu.bitable.view.get" => &["app_token", "table_id", "view_id"],
+        "feishu.bitable.view.list" => &["app_token", "table_id"],
+        "feishu.bitable.view.patch" => &["app_token", "table_id", "view_id", "view_name"],
         "feishu.bitable.record.search" => &["app_token", "table_id"],
         "feishu.calendar.freebusy" => &["time_min", "time_max"],
         "feishu.doc.append" | "feishu.doc.read" => &["url"],
@@ -3289,8 +3675,32 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
 
 fn tool_tags(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.app.get" | "feishu.bitable.app.list" => {
+            &["feishu", "bitable", "app", "read"]
+        }
+        "feishu.bitable.app.create" | "feishu.bitable.app.patch" | "feishu.bitable.app.copy" => {
+            &["feishu", "bitable", "app", "write"]
+        }
         "feishu.bitable.list" | "feishu.bitable.record.search" => &["feishu", "bitable", "read"],
-        "feishu.bitable.record.create" => &["feishu", "bitable", "write"],
+        "feishu.bitable.table.create"
+        | "feishu.bitable.table.patch"
+        | "feishu.bitable.table.batch_create" => &["feishu", "bitable", "table", "write"],
+        "feishu.bitable.record.create"
+        | "feishu.bitable.record.update"
+        | "feishu.bitable.record.delete"
+        | "feishu.bitable.record.batch_create"
+        | "feishu.bitable.record.batch_update"
+        | "feishu.bitable.record.batch_delete" => &["feishu", "bitable", "write"],
+        "feishu.bitable.field.list" => &["feishu", "bitable", "field", "read"],
+        "feishu.bitable.field.create"
+        | "feishu.bitable.field.update"
+        | "feishu.bitable.field.delete" => &["feishu", "bitable", "field", "write"],
+        "feishu.bitable.view.get" | "feishu.bitable.view.list" => {
+            &["feishu", "bitable", "view", "read"]
+        }
+        "feishu.bitable.view.create" | "feishu.bitable.view.patch" => {
+            &["feishu", "bitable", "view", "write"]
+        }
         "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
         "feishu.card.update" => &["feishu", "card", "update", "callback"],
         "feishu.doc.read" => &["feishu", "docs", "read"],
