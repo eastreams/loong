@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-31T08:28:06Z
+- Generated at: 2026-03-31T08:52:22Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -18,18 +18,18 @@
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 356 | 650 | 294 | 14 | 16 | 2 | 87.5% | WATCH |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3383 | 3600 | 217 | 8 | 12 | 4 | 94.0% | WATCH |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2698 | 2800 | 102 | 56 | 65 | 9 | 96.4% | TIGHT |
-| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9845 | 10500 | 655 | 88 | 90 | 2 | 97.8% | TIGHT |
-| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9759 | 9800 | 41 | 90 | 90 | 0 | 100.0% | TIGHT |
+| channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 9922 | 10500 | 578 | 88 | 90 | 2 | 97.8% | TIGHT |
+| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9796 | 9800 | 4 | 90 | 90 | 0 | 100.0% | TIGHT |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6936 | 7300 | 364 | 146 | 160 | 14 | 95.0% | TIGHT |
-| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1771 | 6400 | 4629 | 0 | 110 | 110 | 27.7% | HEALTHY |
+| channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1779 | 6400 | 4621 | 0 | 110 | 110 | 27.8% | HEALTHY |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10773 | 11200 | 427 | 97 | 120 | 23 | 96.2% | TIGHT |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14256 | 15000 | 744 | 54 | 70 | 16 | 95.0% | TIGHT |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6295 | 6500 | 205 | 209 | 210 | 1 | 99.5% | TIGHT |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6324 | 6500 | 176 | 210 | 210 | 0 | 100.0% | TIGHT |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9519 | 9800 | 281 | 228 | 250 | 22 | 97.1% | TIGHT |
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (95.9%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (99.5%), onboard_cli (97.1%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (95.9%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (100.0%), onboard_cli (97.1%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): memory_mod (87.5%), acp_manager (94.0%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -63,13 +63,13 @@
 <!-- arch-hotspot key=memory_mod lines=356 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3383 functions=8 -->
 <!-- arch-hotspot key=acpx_runtime lines=2698 functions=56 -->
-<!-- arch-hotspot key=channel_registry lines=9845 functions=88 -->
-<!-- arch-hotspot key=channel_config lines=9759 functions=90 -->
+<!-- arch-hotspot key=channel_registry lines=9922 functions=88 -->
+<!-- arch-hotspot key=channel_config lines=9796 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6936 functions=146 -->
-<!-- arch-hotspot key=channel_mod lines=1771 functions=0 -->
+<!-- arch-hotspot key=channel_mod lines=1779 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10773 functions=97 -->
 <!-- arch-hotspot key=tools_mod lines=14256 functions=54 -->
-<!-- arch-hotspot key=daemon_lib lines=6295 functions=209 -->
+<!-- arch-hotspot key=daemon_lib lines=6324 functions=210 -->
 <!-- arch-hotspot key=onboard_cli lines=9519 functions=228 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
