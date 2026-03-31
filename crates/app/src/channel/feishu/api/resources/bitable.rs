@@ -709,7 +709,6 @@ pub fn ensure_bitable_batch_limit(tool_name: &str, actual: usize) -> CliResult<(
     ))
 }
 
-#[allow(dead_code)]
 fn omit_field_property_for_unsupported_types(
     field_type: i64,
     property: Option<Value>,

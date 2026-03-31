@@ -3,7 +3,7 @@ use axum::{
     Json, Router,
     body::to_bytes,
     extract::{Request, State},
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -413,6 +413,20 @@ fn feishu_resource_subcommands_parse() {
         "fld_demo",
     ])
     .expect("bitable delete field command should parse");
+
+    try_parse_cli([
+        "loongclaw",
+        "feishu",
+        "bitable",
+        "create-record",
+        "--app-token",
+        "app_demo",
+        "--table-id",
+        "tbl_demo",
+        "--fields",
+        r#"{"Name":"one"}"#,
+    ])
+    .expect("bitable create record command should parse");
 
     try_parse_cli([
         "loongclaw",
@@ -946,6 +960,137 @@ async fn feishu_bitable_create_record_requires_confirmed_write_scope() {
 }
 
 #[tokio::test]
+async fn feishu_bitable_create_record_sends_post_with_open_id_query() {
+    let temp_dir = temp_feishu_cli_dir("bitable-create-record");
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new().route(
+        "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo/records",
+        post({
+            let state = state.clone();
+            move |request| {
+                let state = state.clone();
+                async move {
+                    record_request(State(state), request).await;
+                    Json(json!({
+                        "code": 0,
+                        "data": {
+                            "record": {
+                                "record_id": "rec_demo",
+                                "fields": {"Name": "one"}
+                            }
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let mut grant = sample_grant("feishu_main", "ou_123", "u-token", "r-token", now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "base:record:create",
+    ]);
+    store.save_grant(&grant).expect("seed create record grant");
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_bitable_create_record(
+        &loongclaw_daemon::feishu_cli::FeishuBitableCreateRecordArgs {
+            grant: loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: true,
+                },
+                open_id: Some("ou_123".to_owned()),
+            },
+            app_token: "app_demo".to_owned(),
+            table_id: "tbl_demo".to_owned(),
+            fields: r#"{"Name":"one"}"#.to_owned(),
+        },
+    )
+    .await
+    .expect("execute create record");
+
+    assert_eq!(payload["record"]["record_id"], "rec_demo");
+    let requests = requests.lock().await.clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(
+        requests[0].path,
+        "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo/records"
+    );
+    assert_eq!(requests[0].query.as_deref(), Some("user_id_type=open_id"));
+    assert!(requests[0].body.contains("\"Name\":\"one\""));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn feishu_bitable_create_record_surfaces_invalid_response_body() {
+    let temp_dir = temp_feishu_cli_dir("bitable-create-record-invalid-body");
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new().route(
+        "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo/records",
+        post({
+            let state = state.clone();
+            move |request| {
+                let state = state.clone();
+                async move {
+                    record_request(State(state), request).await;
+                    Json(json!({
+                        "code": 0,
+                        "data": {}
+                    }))
+                }
+            }
+        }),
+    );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+    let now_s = loongclaw_daemon::feishu_support::unix_ts_now();
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
+    let mut grant = sample_grant("feishu_main", "ou_123", "u-token", "r-token", now_s);
+    grant.scopes = mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+        "offline_access",
+        "base:record:create",
+    ]);
+    store
+        .save_grant(&grant)
+        .expect("seed invalid create record grant");
+
+    let error = loongclaw_daemon::feishu_cli::execute_feishu_bitable_create_record(
+        &loongclaw_daemon::feishu_cli::FeishuBitableCreateRecordArgs {
+            grant: loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: true,
+                },
+                open_id: Some("ou_123".to_owned()),
+            },
+            app_token: "app_demo".to_owned(),
+            table_id: "tbl_demo".to_owned(),
+            fields: r#"{"Name":"one"}"#.to_owned(),
+        },
+    )
+    .await
+    .expect_err("invalid create record response should fail");
+
+    assert!(error.contains("bitable record create: missing `data.record` in response"));
+    assert_eq!(requests.lock().await.len(), 1);
+
+    server.abort();
+}
+
+#[tokio::test]
 async fn feishu_bitable_search_records_requires_confirmed_retrieve_scope() {
     let temp_dir = temp_feishu_cli_dir("bitable-search-scope");
     let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
@@ -1447,7 +1592,7 @@ async fn feishu_bitable_app_patch_sends_patch_body() {
     };
     let router = Router::new().route(
         "/open-apis/bitable/v1/apps/app_demo",
-        patch({
+        put({
             let state = state.clone();
             move |request| {
                 let state = state.clone();
@@ -1495,7 +1640,7 @@ async fn feishu_bitable_app_patch_sends_patch_body() {
     assert_eq!(payload["app"]["name"], "Renamed");
     let requests = requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "PATCH");
+    assert_eq!(requests[0].method, "PUT");
     assert_eq!(requests[0].path, "/open-apis/bitable/v1/apps/app_demo");
     assert!(requests[0].body.contains("\"name\":\"Renamed\""));
     assert!(requests[0].body.contains("\"is_advanced\":true"));
@@ -1728,7 +1873,7 @@ async fn feishu_bitable_patch_table_sends_patch_request() {
     };
     let router = Router::new().route(
         "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo",
-        patch({
+        put({
             let state = state.clone();
             move |request| {
                 let state = state.clone();
@@ -1771,7 +1916,7 @@ async fn feishu_bitable_patch_table_sends_patch_request() {
     assert_eq!(payload["result"]["name"], "Renamed Table");
     let requests = requests.lock().await.clone();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].method, "PATCH");
+    assert_eq!(requests[0].method, "PUT");
     assert_eq!(
         requests[0].path,
         "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo"
@@ -2389,6 +2534,71 @@ async fn feishu_bitable_update_field_requires_field_name_and_type() {
         error.contains("--field-name and --type are required for field update"),
         "error={error}"
     );
+
+    let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+    let state = MockServerState {
+        requests: requests.clone(),
+    };
+    let router = Router::new().route(
+        "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo/fields/fld_demo",
+        put({
+            let state = state.clone();
+            move |request| {
+                let state = state.clone();
+                async move {
+                    record_request(State(state), request).await;
+                    Json(json!({
+                        "code": 0,
+                        "data": {
+                            "field": {
+                                "field_id": "fld_demo",
+                                "field_name": "Amount",
+                                "type": 2,
+                                "property": {"formatter": "currency"}
+                            }
+                        }
+                    }))
+                }
+            }
+        }),
+    );
+    let (base_url, server) = spawn_mock_feishu_server(router).await;
+    let config_path = write_sample_feishu_config_with_base_url(&temp_dir, &base_url);
+
+    let payload = loongclaw_daemon::feishu_cli::execute_feishu_bitable_update_field(
+        &loongclaw_daemon::feishu_cli::FeishuBitableUpdateFieldArgs {
+            grant: loongclaw_daemon::feishu_cli::FeishuGrantArgs {
+                common: loongclaw_daemon::feishu_cli::FeishuCommonArgs {
+                    config: Some(config_path.display().to_string()),
+                    account: Some("feishu_main".to_owned()),
+                    json: true,
+                },
+                open_id: Some("ou_123".to_owned()),
+            },
+            app_token: "app_demo".to_owned(),
+            table_id: "tbl_demo".to_owned(),
+            field_id: "fld_demo".to_owned(),
+            field_name: Some("Amount".to_owned()),
+            field_type: Some(2),
+            property: Some(r#"{"formatter":"currency"}"#.to_owned()),
+        },
+    )
+    .await
+    .expect("update field happy path should succeed");
+
+    assert_eq!(payload["field"]["field_id"], "fld_demo");
+    let requests = requests.lock().await.clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "PUT");
+    assert_eq!(
+        requests[0].path,
+        "/open-apis/bitable/v1/apps/app_demo/tables/tbl_demo/fields/fld_demo"
+    );
+    assert!(requests[0].body.contains("\"field_name\":\"Amount\""));
+    assert!(requests[0].body.contains("\"type\":2"));
+    assert!(requests[0].body.contains("\"formatter\":\"currency\""));
+
+    server.abort();
 }
 
 #[tokio::test]

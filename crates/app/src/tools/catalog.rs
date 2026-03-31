@@ -4231,6 +4231,7 @@ mod tests {
         assert!(description.contains("Matrix"));
     }
 
+    #[cfg(feature = "feishu-integration")]
     #[test]
     fn feishu_bitable_record_search_catalog_metadata_includes_automatic_fields() {
         let descriptor = tool_catalog()

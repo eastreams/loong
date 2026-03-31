@@ -3601,7 +3601,8 @@ fn execute_feishu_bitable_field_create_tool_with_config(
         "field_name",
         &payload.field_name,
     )?;
-    let field_type = payload.field_type;
+    let field_type =
+        require_positive_i64("feishu.bitable.field.create", "type", payload.field_type)?;
     let property = payload.property;
     let tool_name = request.tool_name;
 
@@ -3714,7 +3715,8 @@ fn execute_feishu_bitable_field_update_tool_with_config(
         "field_name",
         &payload.field_name,
     )?;
-    let field_type = payload.field_type;
+    let field_type =
+        require_positive_i64("feishu.bitable.field.update", "type", payload.field_type)?;
     let property = payload.property;
     let tool_name = request.tool_name;
 
@@ -5024,6 +5026,16 @@ fn require_non_empty(tool_name: &str, field: &str, value: &str) -> CliResult<Str
         return Err(format!("{tool_name} requires payload.{field}"));
     }
     Ok(trimmed.to_owned())
+}
+
+fn require_positive_i64(tool_name: &str, field: &str, value: i64) -> CliResult<i64> {
+    if value > 0 {
+        return Ok(value);
+    }
+
+    Err(format!(
+        "{tool_name} invalid payload.{field}: expected positive integer, got {value}"
+    ))
 }
 
 fn resolve_feishu_doc_content_type(

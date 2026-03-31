@@ -5034,6 +5034,58 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[test]
+    fn feishu_bitable_field_tools_require_positive_type() {
+        let temp_dir = unique_feishu_tool_temp_dir("bitable-field-type");
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-field-type",
+            &["offline_access", "bitable:app"],
+        );
+        let config =
+            build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
+
+        let create_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.field.create".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "field_name": "Amount",
+                    "type": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("field create should reject non-positive type");
+        assert!(
+            create_error.contains("feishu.bitable.field.create invalid payload.type"),
+            "error={create_error}"
+        );
+
+        let update_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.field.update".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "field_id": "fld_demo",
+                    "field_name": "Amount",
+                    "type": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("field update should reject non-positive type");
+        assert!(
+            update_error.contains("feishu.bitable.field.update invalid payload.type"),
+            "error={update_error}"
+        );
+    }
+
     #[cfg(feature = "feishu-integration")]
     #[test]
     fn provider_tool_definitions_with_config_caps_bitable_list_page_size_at_100() {
