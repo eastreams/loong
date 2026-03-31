@@ -1785,6 +1785,12 @@ pub async fn execute_feishu_bitable_list_tables(
     args: &FeishuBitableListTablesArgs,
 ) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:table:read"],
+        "loongclaw feishu bitable list-tables",
+    )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_tables(
         &client,
