@@ -3583,7 +3583,7 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         kind: ProviderKind::StepPlan,
         id: "step_plan",
         aliases: &["stepfun_step_plan"],
-        base_url: "https://api.stepfun.ai",
+        base_url: "https://api.stepfun.com",
         chat_completions_path: "/step_plan/v1/chat/completions",
         models_path: Some("/step_plan/v1/models"),
         protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
