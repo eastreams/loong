@@ -1301,7 +1301,7 @@ fn tool_search_entry_is_runtime_usable(
                     crate::tools::shell_policy_ext::ShellPolicyDefault::Allow
                 )
         }
-        "bash.exec" => config.bash_exec.is_runtime_ready(),
+        "bash.exec" => config.bash_exec.is_discoverable(),
         "external_skills.fetch"
         | "external_skills.install"
         | "external_skills.inspect"
@@ -2405,6 +2405,34 @@ mod tests {
 
         let results = outcome.payload["results"].as_array().expect("results");
         assert!(results.iter().all(|entry| entry["tool_id"] != "bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn tool_search_hides_bash_exec_when_governance_rules_failed_to_load() {
+        let root = unique_tool_temp_dir("loongclaw-bash-tool-search-broken-rules");
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let mut config = test_tool_runtime_config(root);
+        config.bash_exec = ready_bash_exec_runtime_policy();
+        config.bash_exec.governance.load_error = Some("broken rules".to_owned());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "bash command cwd timeout",
+                    "limit": 10
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(
+            results.iter().all(|entry| entry["tool_id"] != "bash.exec"),
+            "bash.exec should stay hidden when governance rules fail to load"
+        );
     }
 
     #[cfg(feature = "tool-shell")]

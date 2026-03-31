@@ -1613,7 +1613,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
-        ToolVisibilityGate::BashRuntime => config.bash_exec.is_runtime_ready(),
+        ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
         ToolVisibilityGate::MemoryFileRoot => {
             let has_file_root = config
@@ -4117,6 +4117,52 @@ mod tests {
         config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
 
         let child_view = delegate_child_tool_view_for_config(&config);
+
+        assert!(!child_view.contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_runtime_visibility_gate_hides_bash_exec_when_governance_rules_failed_to_load() {
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                governance: crate::tools::runtime_config::BashGovernanceRuntimePolicy {
+                    load_error: Some("broken rules".to_owned()),
+                    ..crate::tools::runtime_config::BashGovernanceRuntimePolicy::default()
+                },
+                ..crate::tools::runtime_config::BashExecRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::BashRuntime,
+            &runtime
+        ));
+        assert!(!runtime_tool_view_for_runtime_config(&runtime).contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_hides_allowlisted_bash_exec_when_governance_rules_failed_to_load() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                governance: crate::tools::runtime_config::BashGovernanceRuntimePolicy {
+                    load_error: Some("broken rules".to_owned()),
+                    ..crate::tools::runtime_config::BashGovernanceRuntimePolicy::default()
+                },
+                ..crate::tools::runtime_config::BashExecRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        let child_view = delegate_child_tool_view_for_runtime_config(&config, &runtime);
 
         assert!(!child_view.contains("bash.exec"));
     }

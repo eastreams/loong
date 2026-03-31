@@ -150,7 +150,7 @@ Expected:
 - Test: `crates/app/src/tools/mod.rs`
 - Test: `crates/app/src/tools/catalog.rs`
 
-- [ ] **Step 1: Add red tests for runtime discoverability vs execution readiness**
+- [x] **Step 1: Add red tests for runtime discoverability vs execution readiness**
 
 Add a focused unit test in `crates/app/src/tools/runtime_config.rs`:
 
@@ -257,7 +257,7 @@ fn delegate_child_tool_view_hides_allowlisted_bash_exec_when_governance_rules_fa
 }
 ```
 
-- [ ] **Step 2: Run the red tests**
+- [x] **Step 2: Run the red tests**
 
 Run:
 
@@ -271,7 +271,7 @@ Expected:
 - FAIL because `BashExecRuntimePolicy` does not yet distinguish discoverability from runtime readiness
 - FAIL because `tool.search` and `ToolVisibilityGate::BashRuntime` still only check `is_runtime_ready()`
 
-- [ ] **Step 3: Implement a separate discoverability helper and route visibility through it**
+- [x] **Step 3: Implement a separate discoverability helper and route visibility through it**
 
 In `crates/app/src/tools/runtime_config.rs`, add:
 
@@ -290,7 +290,7 @@ Then:
 - in `crates/app/src/tools/catalog.rs`, use `config.bash_exec.is_discoverable()` for `ToolVisibilityGate::BashRuntime`
 - do **not** replace the execution-path `is_runtime_ready()` guard in `crates/app/src/tools/bash.rs`; keep the explicit governance load-error denial there
 
-- [ ] **Step 4: Re-run the focused tests**
+- [x] **Step 4: Re-run the focused tests**
 
 Run the four commands from Step 2 again.
 

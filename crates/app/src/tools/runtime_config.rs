@@ -311,6 +311,11 @@ impl BashExecRuntimePolicy {
     pub fn is_runtime_ready(&self) -> bool {
         self.available && self.command.is_some()
     }
+
+    #[must_use]
+    pub fn is_discoverable(&self) -> bool {
+        self.is_runtime_ready() && self.governance.load_error.is_none()
+    }
 }
 
 #[allow(clippy::print_stderr)]
@@ -1709,9 +1714,35 @@ mod tests {
         let config = ToolRuntimeConfig::default();
 
         assert!(!config.bash_exec.is_runtime_ready());
+        assert!(!config.bash_exec.is_discoverable());
         assert!(config.bash_exec.command.is_none());
         assert!(config.bash_exec.warning.is_none());
         assert!(!config.bash_exec.login_shell);
+    }
+
+    #[test]
+    fn bash_exec_discoverability_requires_runtime_ready_and_governance_load_success() {
+        let unavailable = BashExecRuntimePolicy::default();
+        assert!(!unavailable.is_runtime_ready());
+        assert!(!unavailable.is_discoverable());
+
+        let runtime_ready = BashExecRuntimePolicy {
+            available: true,
+            command: Some(PathBuf::from("bash")),
+            ..BashExecRuntimePolicy::default()
+        };
+        assert!(runtime_ready.is_runtime_ready());
+        assert!(runtime_ready.is_discoverable());
+
+        let governance_failed = BashExecRuntimePolicy {
+            governance: BashGovernanceRuntimePolicy {
+                load_error: Some("broken rules".to_owned()),
+                ..BashGovernanceRuntimePolicy::default()
+            },
+            ..runtime_ready
+        };
+        assert!(governance_failed.is_runtime_ready());
+        assert!(!governance_failed.is_discoverable());
     }
 
     #[test]
