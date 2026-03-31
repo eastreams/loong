@@ -2913,11 +2913,7 @@ fn execute_feishu_bitable_app_list_tool_with_config(
             &grant,
         )
         .await?;
-        ensure_any_required_scope(
-            &grant,
-            &["drive:drive:readonly", "bitable:app"],
-            tool_name.as_str(),
-        )?;
+        ensure_required_scopes(&grant, &["drive:drive:readonly"], tool_name.as_str())?;
         let result =
             bitable::list_bitable_apps(&context.client, &grant.access_token, &query).await?;
 
@@ -2926,7 +2922,11 @@ fn execute_feishu_bitable_app_list_tool_with_config(
             context.configured_account_label.as_str(),
             context.account_id.as_str(),
             &grant.principal,
-            json!({ "result": result }),
+            json!({
+                "apps": result.apps,
+                "page_token": result.page_token,
+                "has_more": result.has_more,
+            }),
         ))
     })
 }

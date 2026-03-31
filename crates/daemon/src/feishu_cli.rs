@@ -1859,7 +1859,7 @@ pub async fn execute_feishu_bitable_app_list(args: &FeishuBitableAppListArgs) ->
     ensure_grant_has_any_scope(
         &grant,
         context.resolved.configured_account_id.as_str(),
-        &["drive:drive:readonly", "bitable:app"],
+        &["drive:drive:readonly"],
         "loongclaw feishu bitable app-list",
     )?;
     let client = context.build_client()?;
@@ -1878,7 +1878,9 @@ pub async fn execute_feishu_bitable_app_list(args: &FeishuBitableAppListArgs) ->
         "account_id": context.account_id(),
         "configured_account": context.resolved.configured_account_label,
         "principal": grant.principal,
-        "result": result,
+        "apps": result.apps,
+        "page_token": result.page_token,
+        "has_more": result.has_more,
     }))
 }
 
@@ -4042,9 +4044,6 @@ fn render_bitable_app_text(payload: &Value) -> CliResult<String> {
 }
 
 fn render_bitable_app_list_text(payload: &Value) -> CliResult<String> {
-    let result = payload
-        .get("result")
-        .ok_or_else(|| "feishu bitable app list payload missing result".to_owned())?;
     let mut lines = vec![
         "feishu bitable app-list".to_owned(),
         format!("account: {}", required_json_string(payload, "account_id")?),
@@ -4055,21 +4054,21 @@ fn render_bitable_app_list_text(payload: &Value) -> CliResult<String> {
     lines.extend([
         format!(
             "apps: {}",
-            result
+            payload
                 .get("apps")
                 .and_then(Value::as_array)
                 .map_or(0, std::vec::Vec::len)
         ),
         format!(
             "has_more: {}",
-            result
+            payload
                 .get("has_more")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         ),
         format!(
             "page_token: {}",
-            result
+            payload
                 .get("page_token")
                 .and_then(Value::as_str)
                 .unwrap_or("-")
