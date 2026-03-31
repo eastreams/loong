@@ -1263,6 +1263,13 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
+fn render_app_tool_denied_reason(reason: &str) -> String {
+    reason
+        .strip_prefix("app_tool_denied: ")
+        .unwrap_or(reason)
+        .to_owned()
+}
+
 fn with_runtime_ready_browser_companion_tools(
     base_view: ToolView,
     session_tool_view: &ToolView,
@@ -1614,18 +1621,18 @@ fn build_success_tool_outcome_trace_record(
 }
 
 fn build_bounded_tool_outcome_payload(
-    intent: &ToolIntent,
+    _intent: &ToolIntent,
     outcome: &ToolCoreOutcome,
 ) -> serde_json::Value {
-    let normalized_limit =
-        effective_payload_summary_limit(intent, TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS).clamp(
-            MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-            MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-        );
+    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+    let normalized_limit = TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS.clamp(
+        MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+    );
     let payload_text = serde_json::to_string(&outcome.payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
-        truncate_by_chars(payload_text.as_str(), normalized_limit);
+        summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
 
     if !payload_truncated {
         return outcome.payload.clone();
@@ -2747,10 +2754,11 @@ impl TurnEngine {
                 });
             }
             Err(reason) if reason.starts_with("app_tool_denied:") => {
-                let turn_result = TurnResult::policy_denied("app_tool_denied", reason.clone());
+                let human_reason = render_app_tool_denied_reason(reason.as_str());
+                let turn_result = TurnResult::policy_denied("app_tool_denied", human_reason.clone());
                 let decision = ToolDecisionTelemetry::deny(
                     effective_tool_name.as_str(),
-                    reason,
+                    human_reason,
                     "app_tool_denied",
                 );
                 return Err(PreparedToolIntentFailure {
@@ -2849,7 +2857,8 @@ impl TurnEngine {
                     Err(TurnResult::policy_denied("app_tool_disabled", reason))
                 }
                 Err(reason) if reason.starts_with("app_tool_denied:") => {
-                    Err(TurnResult::policy_denied("app_tool_denied", reason))
+                    let human_reason = render_app_tool_denied_reason(reason.as_str());
+                    Err(TurnResult::policy_denied("app_tool_denied", human_reason))
                 }
                 Err(reason) => Err(TurnResult::non_retryable_tool_error(
                     "app_tool_execution_failed",
@@ -4050,6 +4059,80 @@ mod tests {
             stored.request_payload_json["args_json"]["selector"],
             "#submit"
         );
+    }
+
+    #[tokio::test]
+    async fn governed_tool_predenied_reason_omits_internal_prefix() {
+        let memory_config = isolated_memory_config("browser-companion-click-predenied");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        tool_config
+            .approval
+            .denied_calls
+            .push("tool:browser.companion.click".to_owned());
+
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-predenied",
+                    "call-browser-companion-predenied",
+                    "browser-companion-123",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let failure = match result {
+            TurnResult::ToolDenied(failure) => failure,
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
+                panic!("expected ToolDenied, got {other:?}")
+            }
+        };
+
+        assert_eq!(failure.code, "app_tool_denied");
+        assert!(
+            !failure.reason.starts_with("app_tool_denied:"),
+            "human-facing denial reason should not expose the transport prefix: {failure:?}"
+        );
+        assert!(
+            failure.reason.contains("tool:browser.companion.click"),
+            "denial should still identify the governed tool: {failure:?}"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert!(requests.is_empty());
     }
 
     #[tokio::test]
