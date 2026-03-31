@@ -27,13 +27,7 @@ use std::{
     future::Future,
     time::{SystemTime, UNIX_EPOCH},
 };
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{path::PathBuf, sync::Arc};
 
 use tokio::sync::Notify;
 #[cfg(feature = "channel-telegram")]
@@ -327,6 +321,22 @@ pub use types::{
 use types::{
     ChannelCommandFuture, ChannelResolvedAcpTurnHints, KnownChannelSessionSendTarget,
     parse_known_channel_session_send_target, process_channel_batch,
+};
+
+mod serve_runtime;
+pub use serve_runtime::ChannelServeStopHandle;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom"
+))]
+use serve_runtime::{
+    ChannelServeCommandSpec, ChannelServeRuntimeSpec, with_channel_serve_runtime_with_stop,
+};
+#[cfg(test)]
+use serve_runtime::{
+    with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
 
 #[cfg(any(
@@ -1229,205 +1239,6 @@ struct ChannelSendCommandSpec {
     feature = "channel-matrix",
     feature = "channel-wecom"
 ))]
-#[derive(Debug, Clone, Copy)]
-struct ChannelServeRuntimeSpec<'a> {
-    platform: ChannelPlatform,
-    operation_id: &'static str,
-    account_id: &'a str,
-    account_label: &'a str,
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-#[derive(Debug, Clone, Copy)]
-struct ChannelServeCommandSpec {
-    family: ChannelCommandFamilyDescriptor,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChannelServeStopHandle {
-    requested: Arc<AtomicBool>,
-    stop: Arc<Notify>,
-}
-
-impl ChannelServeStopHandle {
-    pub fn new() -> Self {
-        Self {
-            requested: Arc::new(AtomicBool::new(false)),
-            stop: Arc::new(Notify::new()),
-        }
-    }
-
-    pub fn request_stop(&self) {
-        self.requested.store(true, Ordering::SeqCst);
-        self.stop.notify_waiters();
-    }
-
-    pub fn is_requested(&self) -> bool {
-        self.requested.load(Ordering::SeqCst)
-    }
-
-    #[cfg(any(
-        feature = "channel-telegram",
-        feature = "channel-feishu",
-        feature = "channel-matrix",
-        feature = "channel-wecom"
-    ))]
-    async fn wait(&self) {
-        if self.is_requested() {
-            return;
-        }
-        let notified = self.stop.notified();
-        tokio::pin!(notified);
-        if self.is_requested() {
-            return;
-        }
-        notified.await;
-    }
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-fn channel_runtime_now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-fn ensure_channel_operation_runtime_slot_available_in_dir(
-    runtime_dir: &std::path::Path,
-    spec: ChannelServeRuntimeSpec<'_>,
-) -> CliResult<()> {
-    let now = channel_runtime_now_ms();
-    runtime_state::prune_inactive_channel_operation_runtime_files_for_account_from_dir(
-        runtime_dir,
-        spec.platform,
-        spec.operation_id,
-        Some(spec.account_id),
-        now,
-    )?;
-    let Some(runtime) = runtime_state::load_channel_operation_runtime_for_account_from_dir(
-        runtime_dir,
-        spec.platform,
-        spec.operation_id,
-        spec.account_id,
-        now,
-    ) else {
-        return Ok(());
-    };
-    if runtime.running_instances == 0 {
-        return Ok(());
-    }
-
-    let pid = runtime
-        .pid
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_owned());
-    Err(format!(
-        "{} account `{}` already has an active {} runtime (pid={}, running_instances={}); stop the existing instance or wait for it to become stale before restarting",
-        spec.platform.as_str(),
-        spec.account_id,
-        spec.operation_id,
-        pid,
-        runtime.running_instances
-    ))
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-async fn with_channel_serve_runtime<T, F, Fut>(
-    spec: ChannelServeRuntimeSpec<'_>,
-    run: F,
-) -> CliResult<T>
-where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>) -> Fut,
-    Fut: Future<Output = CliResult<T>>,
-{
-    ensure_channel_operation_runtime_slot_available_in_dir(
-        runtime_state::default_channel_runtime_state_dir().as_path(),
-        spec,
-    )?;
-    let runtime = Arc::new(
-        ChannelOperationRuntimeTracker::start(
-            spec.platform,
-            spec.operation_id,
-            spec.account_id,
-            spec.account_label,
-        )
-        .await?,
-    );
-    let result = run(runtime.clone()).await;
-    let shutdown_result = runtime.shutdown().await;
-    match result {
-        Err(error) => Err(error),
-        Ok(value) => {
-            shutdown_result?;
-            Ok(value)
-        }
-    }
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
-async fn with_channel_serve_runtime_with_stop<F, Fut>(
-    spec: ChannelServeRuntimeSpec<'_>,
-    stop: ChannelServeStopHandle,
-    run: F,
-) -> CliResult<()>
-where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
-    Fut: Future<Output = CliResult<()>>,
-{
-    with_channel_serve_runtime(spec, move |runtime| run(runtime, stop)).await
-}
-
-#[cfg(test)]
-async fn with_channel_serve_runtime_with_stop_in_dir<F, Fut>(
-    runtime_dir: &std::path::Path,
-    process_id: u32,
-    spec: ChannelServeRuntimeSpec<'_>,
-    stop: ChannelServeStopHandle,
-    run: F,
-) -> CliResult<()>
-where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>, ChannelServeStopHandle) -> Fut,
-    Fut: Future<Output = CliResult<()>>,
-{
-    with_channel_serve_runtime_in_dir(runtime_dir, process_id, spec, move |runtime| {
-        run(runtime, stop)
-    })
-    .await
-}
-
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom"
-))]
 async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
     spec: ChannelServeCommandSpec,
@@ -1592,40 +1403,6 @@ pub async fn run_telegram_channel_with_stop(
 ) -> CliResult<()> {
     let context = build_telegram_command_context(resolved_path, config, account_id)?;
     run_telegram_channel_with_context(context, once, stop, initialize_runtime_environment).await
-}
-
-#[cfg(test)]
-async fn with_channel_serve_runtime_in_dir<T, F, Fut>(
-    runtime_dir: &std::path::Path,
-    process_id: u32,
-    spec: ChannelServeRuntimeSpec<'_>,
-    run: F,
-) -> CliResult<T>
-where
-    F: FnOnce(Arc<ChannelOperationRuntimeTracker>) -> Fut,
-    Fut: Future<Output = CliResult<T>>,
-{
-    ensure_channel_operation_runtime_slot_available_in_dir(runtime_dir, spec)?;
-    let runtime = Arc::new(
-        runtime_state::start_channel_operation_runtime_tracker_for_test(
-            runtime_dir,
-            spec.platform,
-            spec.operation_id,
-            spec.account_id,
-            spec.account_label,
-            process_id,
-        )
-        .await?,
-    );
-    let result = run(runtime.clone()).await;
-    let shutdown_result = runtime.shutdown().await;
-    match result {
-        Err(error) => Err(error),
-        Ok(value) => {
-            shutdown_result?;
-            Ok(value)
-        }
-    }
 }
 
 #[allow(clippy::print_stdout)] // CLI output
