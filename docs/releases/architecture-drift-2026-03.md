@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-03
 
 ## Summary
-- Generated at: 2026-03-31T08:05:51Z
+- Generated at: 2026-03-31T08:28:06Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -12,8 +12,8 @@
 
 | Key | Classes | File | Lines | Max Lines | Line Headroom | Functions | Max Functions | Fn Headroom | Peak Usage | Pressure |
 |---|---|---|---:|---:|---:|---:|---:|---:|---:|---|
-| spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 2909 | 3600 | 691 | 59 | 65 | 6 | 90.8% | WATCH |
-| spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3545 | 3700 | 155 | 43 | 80 | 37 | 95.8% | TIGHT |
+| spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3455 | 3600 | 145 | 65 | 65 | 0 | 100.0% | TIGHT |
+| spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3547 | 3700 | 153 | 43 | 80 | 37 | 95.9% | TIGHT |
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 375 | 1000 | 625 | 10 | 20 | 10 | 50.0% | HEALTHY |
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 356 | 650 | 294 | 14 | 16 | 2 | 87.5% | WATCH |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3383 | 3600 | 217 | 8 | 12 | 4 | 94.0% | WATCH |
@@ -29,8 +29,8 @@
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_execution (95.8%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (99.5%), onboard_cli (97.1%)
-- WATCH hotspots (>=85% and <95% of any tracked budget): spec_runtime (90.8%), memory_mod (87.5%), acp_manager (94.0%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (95.9%), acpx_runtime (96.4%), channel_registry (97.8%), channel_config (100.0%), chat_runtime (95.0%), turn_coordinator (96.2%), tools_mod (95.0%), daemon_lib (99.5%), onboard_cli (97.1%)
+- WATCH hotspots (>=85% and <95% of any tracked budget): memory_mod (87.5%), acp_manager (94.0%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
 ## Boundary Checks
@@ -57,8 +57,8 @@
 - [Release template](TEMPLATE.md)
 - [CI workflow](../../.github/workflows/ci.yml)
 
-<!-- arch-hotspot key=spec_runtime lines=2909 functions=59 -->
-<!-- arch-hotspot key=spec_execution lines=3545 functions=43 -->
+<!-- arch-hotspot key=spec_runtime lines=3455 functions=65 -->
+<!-- arch-hotspot key=spec_execution lines=3547 functions=43 -->
 <!-- arch-hotspot key=provider_mod lines=375 functions=10 -->
 <!-- arch-hotspot key=memory_mod lines=356 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3383 functions=8 -->
