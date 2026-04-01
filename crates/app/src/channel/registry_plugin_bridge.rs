@@ -28,6 +28,10 @@ pub(super) fn plugin_bridge_contract_from_descriptor(
         .map(|operation| operation.operation.id)
         .collect();
     let recommended_metadata_keys = PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS.to_vec();
+    let stable_targets =
+        super::bridge::plugin_bridge_stable_targets_for_channel_id(descriptor.id).to_vec();
+    let account_scope_note =
+        super::bridge::plugin_bridge_account_scope_note_for_channel_id(descriptor.id);
 
     Some(ChannelPluginBridgeContract {
         manifest_channel_id: descriptor.id,
@@ -35,6 +39,8 @@ pub(super) fn plugin_bridge_contract_from_descriptor(
         runtime_owner: PLUGIN_BRIDGE_RUNTIME_OWNER,
         supported_operations,
         recommended_metadata_keys,
+        stable_targets,
+        account_scope_note,
     })
 }
 

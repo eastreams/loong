@@ -322,6 +322,15 @@ pub struct ChannelPluginBridgeContract {
     pub runtime_owner: &'static str,
     pub supported_operations: Vec<&'static str>,
     pub recommended_metadata_keys: Vec<&'static str>,
+    pub stable_targets: Vec<ChannelPluginBridgeStableTarget>,
+    pub account_scope_note: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeStableTarget {
+    pub template: &'static str,
+    pub target_kind: ChannelCatalogTargetKind,
+    pub description: &'static str,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

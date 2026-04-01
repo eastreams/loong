@@ -3448,6 +3448,7 @@ pub fn render_channel_surfaces_text(
 
         push_channel_surface_header(&mut lines, surface);
         lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+        push_channel_surface_plugin_bridge_contract(&mut lines, surface);
         push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
         for snapshot in &surface.configured_accounts {
             let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
@@ -3528,6 +3529,7 @@ pub fn render_channel_surfaces_text(
         for surface in catalog_only_surfaces {
             push_channel_surface_header(&mut lines, surface);
             lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+            push_channel_surface_plugin_bridge_contract(&mut lines, surface);
             push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
             for operation in &surface.catalog.operations {
                 lines.push(format!(
@@ -3625,6 +3627,57 @@ pub fn push_channel_surface_header(
             .unwrap_or("-")
     ));
     lines.push(format!("  blurb: {}", surface.catalog.blurb));
+}
+
+pub fn push_channel_surface_plugin_bridge_contract(
+    lines: &mut Vec<String>,
+    surface: &mvp::channel::ChannelSurface,
+) {
+    let plugin_bridge_contract = surface.catalog.plugin_bridge_contract.as_ref();
+    let Some(plugin_bridge_contract) = plugin_bridge_contract else {
+        return;
+    };
+
+    let stable_targets =
+        render_channel_surface_plugin_bridge_stable_targets(&plugin_bridge_contract.stable_targets);
+    if stable_targets != "-" {
+        let stable_targets_line = format!("  stable_targets={stable_targets}");
+        lines.push(stable_targets_line);
+    }
+
+    let account_scope_note = plugin_bridge_contract.account_scope_note;
+    let Some(account_scope_note) = account_scope_note else {
+        return;
+    };
+
+    let rendered_account_scope_note = render_line_safe_text_value(account_scope_note);
+    let account_scope_line = format!("  account_scope_note={rendered_account_scope_note}");
+    lines.push(account_scope_line);
+}
+
+pub fn render_channel_surface_plugin_bridge_stable_targets(
+    stable_targets: &[mvp::channel::ChannelPluginBridgeStableTarget],
+) -> String {
+    if stable_targets.is_empty() {
+        return "-".to_owned();
+    }
+
+    let rendered_targets = stable_targets
+        .iter()
+        .map(render_channel_surface_plugin_bridge_stable_target)
+        .collect::<Vec<_>>();
+    rendered_targets.join(",")
+}
+
+pub fn render_channel_surface_plugin_bridge_stable_target(
+    stable_target: &mvp::channel::ChannelPluginBridgeStableTarget,
+) -> String {
+    format!(
+        "{}[{}]:{}",
+        stable_target.template,
+        stable_target.target_kind.as_str(),
+        stable_target.description,
+    )
 }
 
 pub fn push_channel_surface_managed_plugin_bridge_discovery(

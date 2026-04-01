@@ -283,8 +283,8 @@ plugin transports:
 
 - configure `qqbot.app_id` and `qqbot.client_secret`
 - optionally allowlist trusted peers through `qqbot.allowed_peer_ids`
-- treat account scope as part of the target contract because QQ openids are
-  bot-account specific
+- treat account scope as part of the target contract because openids are
+  scoped to the selected QQ Bot account
 - keep target routing stable with `qqbot:<account>:c2c:<openid>`,
   `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
 
@@ -297,6 +297,7 @@ that standardize on OneBot v11 compatible transports:
 - optionally allowlist trusted groups through `onebot.allowed_group_ids`
 - keep the active WebSocket and event-loop ownership in the bridge runtime,
   not in LoongClaw
+- keep `<account>` stable so personal-account bridge routes stay unambiguous
 - keep target routing stable with `onebot:<account>:private:<user_id>` and
   `onebot:<account>:group:<group_id>`
 
