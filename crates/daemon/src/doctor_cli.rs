@@ -2544,12 +2544,15 @@ mod tests {
         setup: Option<kernel::PluginSetup>,
     ) -> kernel::PluginManifest {
         kernel::PluginManifest {
+            api_version: Some("v1alpha1".to_owned()),
+            version: Some("1.0.0".to_owned()),
             plugin_id: plugin_id.to_owned(),
             provider_id: format!("{channel_id}-provider"),
             connector_name: format!("{channel_id}-connector"),
             channel_id: Some(channel_id.to_owned()),
             endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
             capabilities: BTreeSet::new(),
+            trust_tier: kernel::PluginTrustTier::Unverified,
             metadata,
             summary: None,
             tags: Vec::new(),
@@ -2557,6 +2560,8 @@ mod tests {
             output_examples: Vec::new(),
             defer_loading: false,
             setup,
+            slot_claims: Vec::new(),
+            compatibility: None,
         }
     }
 

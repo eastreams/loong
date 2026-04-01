@@ -758,13 +758,20 @@ fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight
 
     assert!(
         lines.iter().any(|line| {
-            line == "next step: loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+            line == &format!(
+                "next step: {} doctor --config '/tmp/loongclaw-config.toml'",
+                super::active_cli_command_name()
+            )
         }),
         "managed bridge doctor handoff should become the primary next step when plugin bridge preflight is unresolved: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| {
-            line == "also available: first answer · loongclaw ask --config '/tmp/loongclaw-config.toml' --message 'Summarize this repository and suggest the best next step.'"
+            line
+                == &format!(
+                    "also available: first answer · {} ask --config '/tmp/loongclaw-config.toml' --message 'Summarize this repository and suggest the best next step.'",
+                    super::active_cli_command_name()
+                )
         }),
         "the default ask handoff should remain available after the managed bridge doctor step: {lines:#?}"
     );

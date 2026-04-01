@@ -24,12 +24,27 @@ use super::shared::{
 use crate::secrets::resolve_secret_with_legacy_env;
 
 #[path = "channels_bridge.rs"]
-mod bridge;
+pub(crate) mod bridge;
+#[path = "channels_irc_impl.rs"]
+mod irc_impl;
+#[path = "channels_nostr_impl.rs"]
+mod nostr_impl;
+#[path = "channels_signal_impl.rs"]
+mod signal_impl;
+mod twitch;
 
+#[allow(unused_imports)]
+pub use self::twitch::{ResolvedTwitchChannelConfig, TwitchAccountConfig, TwitchChannelConfig};
+#[allow(unused_imports)]
 pub use bridge::{
     OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
     ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
     WeixinAccountConfig, WeixinChannelConfig,
+};
+pub use nostr_impl::{NostrAccountConfig, NostrChannelConfig, ResolvedNostrChannelConfig};
+pub(crate) use nostr_impl::{parse_nostr_private_key_hex, parse_nostr_public_key_hex};
+use signal_impl::{
+    default_signal_account_env, default_signal_service_url, default_signal_service_url_env,
 };
 
 pub(crate) const TELEGRAM_BOT_TOKEN_ENV: &str = "TELEGRAM_BOT_TOKEN";
@@ -64,6 +79,11 @@ pub(crate) const TEAMS_TENANT_ID_ENV: &str = "TEAMS_TENANT_ID";
 pub(crate) const TEAMS_WEBHOOK_URL_ENV: &str = "TEAMS_WEBHOOK_URL";
 pub(crate) const IMESSAGE_BRIDGE_URL_ENV: &str = "IMESSAGE_BRIDGE_URL";
 pub(crate) const IMESSAGE_BRIDGE_TOKEN_ENV: &str = "IMESSAGE_BRIDGE_TOKEN";
+pub(crate) const NOSTR_RELAY_URLS_ENV: &str = "NOSTR_RELAY_URLS";
+pub(crate) const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
+pub(crate) const TLON_SHIP_ENV: &str = "TLON_SHIP";
+pub(crate) const TLON_URL_ENV: &str = "TLON_URL";
+pub(crate) const TLON_CODE_ENV: &str = "TLON_CODE";
 pub(crate) const WEIXIN_BRIDGE_URL_ENV: &str = "WEIXIN_BRIDGE_URL";
 pub(crate) const WEIXIN_BRIDGE_ACCESS_TOKEN_ENV: &str = "WEIXIN_BRIDGE_ACCESS_TOKEN";
 pub(crate) const QQBOT_APP_ID_ENV: &str = "QQBOT_APP_ID";
@@ -7887,6 +7907,9 @@ mod tlon_support;
 mod hotspot_tests;
 
 #[cfg(test)]
+mod partial_env_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -9508,70 +9531,6 @@ mod tests {
             service_url.as_deref(),
             Some("http://signal.example.test:8080")
         );
-    }
-
-    #[test]
-    fn discord_partial_deserialization_keeps_default_env_pointer() {
-        let config: DiscordChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize discord config");
-
-        assert_eq!(config.bot_token_env.as_deref(), Some(DISCORD_BOT_TOKEN_ENV));
-    }
-
-    #[test]
-    fn slack_partial_deserialization_keeps_default_env_pointer() {
-        let config: SlackChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize slack config");
-
-        assert_eq!(config.bot_token_env.as_deref(), Some(SLACK_BOT_TOKEN_ENV));
-    }
-
-    #[test]
-    fn webhook_partial_deserialization_keeps_default_env_pointers() {
-        let config: WebhookChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize webhook config");
-
-        assert_eq!(
-            config.endpoint_url_env.as_deref(),
-            Some(WEBHOOK_ENDPOINT_URL_ENV)
-        );
-        assert_eq!(
-            config.auth_token_env.as_deref(),
-            Some(WEBHOOK_AUTH_TOKEN_ENV)
-        );
-        assert_eq!(
-            config.signing_secret_env.as_deref(),
-            Some(WEBHOOK_SIGNING_SECRET_ENV)
-        );
-        assert_eq!(config.auth_header_name, "Authorization");
-        assert_eq!(config.auth_token_prefix, "Bearer ");
-        assert_eq!(config.payload_format, WebhookPayloadFormat::JsonText);
-        assert_eq!(config.payload_text_field, "text");
-    }
-
-    #[test]
-    fn teams_partial_deserialization_keeps_default_env_pointers() {
-        let config: TeamsChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize teams config");
-
-        assert_eq!(
-            config.webhook_url_env.as_deref(),
-            Some(TEAMS_WEBHOOK_URL_ENV)
-        );
-        assert_eq!(config.app_id_env.as_deref(), Some(TEAMS_APP_ID_ENV));
-        assert_eq!(
-            config.app_password_env.as_deref(),
-            Some(TEAMS_APP_PASSWORD_ENV)
-        );
-        assert_eq!(config.tenant_id_env.as_deref(), Some(TEAMS_TENANT_ID_ENV));
     }
 
     #[test]

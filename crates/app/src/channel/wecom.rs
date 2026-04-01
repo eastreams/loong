@@ -872,6 +872,7 @@ mod tests {
     use crate::channel::ChannelPlatform;
     use crate::config::ProviderConfig;
     use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_test_kernel_context};
+    use crate::test_support::{ScopedEnv, unique_temp_dir};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct MockRequest {
@@ -1388,7 +1389,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_wecom_text_rejects_active_serve_runtime_before_owner_conflict() {
-        let runtime_dir = runtime_state::default_channel_runtime_state_dir();
+        let temp_home = unique_temp_dir("loongclaw-wecom-runtime-home");
+        let mut env = ScopedEnv::new();
         let now_ms = current_time_ms();
         let mut config = build_wecom_test_config("http://127.0.0.1:9", "ws://127.0.0.1:9");
         config.wecom.account_id = Some("wecom_runtime_block_test".to_owned());
@@ -1396,6 +1398,11 @@ mod tests {
             .wecom
             .resolve_account(None)
             .expect("resolve wecom account");
+        env.set("HOME", &temp_home);
+        env.set("USERPROFILE", &temp_home);
+        let runtime_dir = runtime_state::default_channel_runtime_state_dir();
+
+        std::fs::create_dir_all(&runtime_dir).expect("create isolated runtime dir");
 
         runtime_state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),

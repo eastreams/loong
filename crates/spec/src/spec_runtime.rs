@@ -48,6 +48,7 @@ use crate::spec_execution::{normalize_path_for_policy, resolve_plugin_relative_p
 #[cfg(test)]
 mod bridge_kind_tests;
 mod dynamic_catalog;
+mod embedded_pi_harness;
 mod http_json_bridge;
 mod plugin_contract_types;
 mod process_stdio_bridge;
@@ -61,6 +62,7 @@ pub(crate) use dynamic_catalog::{
     default_runtime_adapter_family, normalize_runtime_source_language,
     provider_activation_runtime_contract_state, provider_is_plugin_backed,
 };
+pub use embedded_pi_harness::EmbeddedPiHarness;
 pub use http_json_bridge::execute_http_json_bridge;
 pub use plugin_contract_types::*;
 pub use process_stdio_bridge::{
@@ -1670,6 +1672,8 @@ pub struct BootstrapSpec {
     #[serde(default)]
     pub allow_acp_runtime_auto_apply: Option<bool>,
     #[serde(default)]
+    pub block_unverified_high_risk_auto_apply: Option<bool>,
+    #[serde(default)]
     pub enforce_ready_execution: Option<bool>,
     #[serde(default)]
     pub max_tasks: Option<usize>,
@@ -1738,206 +1742,6 @@ impl HotfixSpec {
                 enabled: *enabled,
             },
         }
-    }
-}
-
-impl RunnerSpec {
-    pub fn template() -> Self {
-        Self {
-            pack: VerticalPackManifest {
-                pack_id: "sales-intel-local".to_owned(),
-                domain: "sales".to_owned(),
-                version: "0.1.0".to_owned(),
-                default_route: ExecutionRoute {
-                    harness_kind: HarnessKind::EmbeddedPi,
-                    adapter: Some("pi-local".to_owned()),
-                },
-                allowed_connectors: BTreeSet::from(["webhook".to_owned(), "crm".to_owned()]),
-                granted_capabilities: BTreeSet::from([
-                    Capability::InvokeTool,
-                    Capability::InvokeConnector,
-                    Capability::MemoryRead,
-                    Capability::MemoryWrite,
-                    Capability::ObserveTelemetry,
-                ]),
-                metadata: BTreeMap::from([
-                    ("owner".to_owned(), "platform-team".to_owned()),
-                    ("stage".to_owned(), "prototype".to_owned()),
-                ]),
-            },
-            agent_id: "agent-spec-01".to_owned(),
-            ttl_s: 300,
-            approval: Some(HumanApprovalSpec::default()),
-            defaults: Some(DefaultCoreSelection {
-                connector: Some("http-core".to_owned()),
-                runtime: Some("native-core".to_owned()),
-                tool: Some("core-tools".to_owned()),
-                memory: Some("kv-core".to_owned()),
-            }),
-            self_awareness: None,
-            plugin_scan: None,
-            plugin_setup_readiness: Some(PluginSetupReadinessSpec {
-                inherit_process_env: true,
-                verified_env_vars: Vec::new(),
-                verified_config_keys: Vec::new(),
-            }),
-            bridge_support: None,
-            bootstrap: None,
-            auto_provision: Some(AutoProvisionSpec {
-                enabled: true,
-                provider_id: "openrouter".to_owned(),
-                channel_id: "primary".to_owned(),
-                connector_name: Some("openrouter".to_owned()),
-                endpoint: Some("https://openrouter.ai/api/v1/chat/completions".to_owned()),
-                required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
-            }),
-            hotfixes: Vec::new(),
-            operation: OperationSpec::RuntimeExtension {
-                action: "start-session".to_owned(),
-                required_capabilities: BTreeSet::from([Capability::ObserveTelemetry]),
-                payload: json!({"session_id": "s-42"}),
-                extension: "acp-bridge".to_owned(),
-                core: None,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SpecRunReport {
-    pub pack_id: String,
-    pub agent_id: String,
-    pub operation_kind: &'static str,
-    pub blocked_reason: Option<String>,
-    pub approval_guard: ApprovalDecisionReport,
-    pub bridge_support_checksum: Option<String>,
-    pub bridge_support_sha256: Option<String>,
-    pub self_awareness: Option<CodebaseAwarenessSnapshot>,
-    pub architecture_guard: Option<ArchitectureGuardReport>,
-    pub plugin_scan_reports: Vec<PluginScanReport>,
-    pub plugin_translation_reports: Vec<PluginTranslationReport>,
-    pub plugin_activation_plans: Vec<PluginActivationPlan>,
-    pub plugin_bootstrap_reports: Vec<BootstrapReport>,
-    pub plugin_bootstrap_queue: Vec<String>,
-    pub plugin_absorb_reports: Vec<PluginAbsorbReport>,
-    pub security_scan_report: Option<SecurityScanReport>,
-    pub auto_provision_plan: Option<ProvisionPlan>,
-    pub outcome: Value,
-    pub integration_catalog: IntegrationCatalog,
-    pub audit_events: Option<Vec<AuditEvent>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolSearchEntry {
-    pub tool_id: String,
-    pub plugin_id: Option<String>,
-    pub connector_name: String,
-    pub provider_id: String,
-    pub channel_id: Option<String>,
-    pub source_path: Option<String>,
-    pub source_kind: Option<String>,
-    pub package_root: Option<String>,
-    pub package_manifest_path: Option<String>,
-    pub bridge_kind: PluginBridgeKind,
-    pub adapter_family: Option<String>,
-    pub entrypoint_hint: Option<String>,
-    pub source_language: Option<String>,
-    pub setup_mode: Option<String>,
-    pub setup_surface: Option<String>,
-    pub setup_required_env_vars: Vec<String>,
-    pub setup_recommended_env_vars: Vec<String>,
-    pub setup_required_config_keys: Vec<String>,
-    pub setup_default_env_var: Option<String>,
-    pub setup_docs_urls: Vec<String>,
-    pub setup_remediation: Option<String>,
-    pub channel_bridge_transport_family: Option<String>,
-    pub channel_bridge_target_contract: Option<String>,
-    pub channel_bridge_account_scope: Option<String>,
-    pub channel_bridge_ready: Option<bool>,
-    pub channel_bridge_missing_fields: Vec<String>,
-    pub setup_ready: bool,
-    pub missing_required_env_vars: Vec<String>,
-    pub missing_required_config_keys: Vec<String>,
-    pub summary: Option<String>,
-    pub tags: Vec<String>,
-    pub input_examples: Vec<Value>,
-    pub output_examples: Vec<Value>,
-    pub deferred: bool,
-    pub loaded: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ToolSearchResult {
-    pub tool_id: String,
-    pub plugin_id: Option<String>,
-    pub connector_name: String,
-    pub provider_id: String,
-    pub channel_id: Option<String>,
-    pub source_path: Option<String>,
-    pub source_kind: Option<String>,
-    pub package_root: Option<String>,
-    pub package_manifest_path: Option<String>,
-    pub bridge_kind: String,
-    pub adapter_family: Option<String>,
-    pub entrypoint_hint: Option<String>,
-    pub source_language: Option<String>,
-    pub setup_mode: Option<String>,
-    pub setup_surface: Option<String>,
-    pub setup_required_env_vars: Vec<String>,
-    pub setup_recommended_env_vars: Vec<String>,
-    pub setup_required_config_keys: Vec<String>,
-    pub setup_default_env_var: Option<String>,
-    pub setup_docs_urls: Vec<String>,
-    pub setup_remediation: Option<String>,
-    pub channel_bridge_transport_family: Option<String>,
-    pub channel_bridge_target_contract: Option<String>,
-    pub channel_bridge_account_scope: Option<String>,
-    pub channel_bridge_ready: Option<bool>,
-    pub channel_bridge_missing_fields: Vec<String>,
-    pub setup_ready: bool,
-    pub missing_required_env_vars: Vec<String>,
-    pub missing_required_config_keys: Vec<String>,
-    pub score: u32,
-    pub deferred: bool,
-    pub loaded: bool,
-    pub summary: Option<String>,
-    pub tags: Vec<String>,
-    pub input_examples: Vec<Value>,
-    pub output_examples: Vec<Value>,
-}
-
-pub struct EmbeddedPiHarness {
-    pub seen: Mutex<Vec<String>>,
-}
-
-#[async_trait]
-impl HarnessAdapter for EmbeddedPiHarness {
-    fn name(&self) -> &str {
-        "pi-local"
-    }
-
-    fn kind(&self) -> HarnessKind {
-        HarnessKind::EmbeddedPi
-    }
-
-    async fn execute(&self, request: HarnessRequest) -> Result<HarnessOutcome, HarnessError> {
-        match self.seen.lock() {
-            Ok(mut guard) => guard.push(request.task_id.clone()),
-            Err(_) => {
-                return Err(HarnessError::Execution(
-                    "EmbeddedPiHarness mutex poisoned".to_owned(),
-                ));
-            }
-        }
-
-        Ok(HarnessOutcome {
-            status: "ok".to_owned(),
-            output: json!({
-                "adapter": "pi-local",
-                "task": request.task_id,
-                "objective": request.objective,
-            }),
-        })
     }
 }
 

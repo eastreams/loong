@@ -3010,11 +3010,10 @@ mod bridge_runtime_policy_tests {
 mod plugin_metadata_tests {
     use super::*;
     use kernel::{
-        Capability, PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus,
-        PluginBridgeKind, PluginCompatibility, PluginCompatibilityMode, PluginContractDialect,
-        PluginDescriptor, PluginIR, PluginManifest, PluginRuntimeProfile, PluginScanReport,
-        PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode, PluginSourceKind,
-        PluginTranslationReport, PluginTrustTier,
+        Capability, PluginBridgeKind, PluginCompatibility, PluginCompatibilityMode,
+        PluginContractDialect, PluginDescriptor, PluginIR, PluginManifest, PluginRuntimeProfile,
+        PluginScanReport, PluginSetup, PluginSetupMode, PluginSlotClaim, PluginSlotMode,
+        PluginSourceKind, PluginTranslationReport, PluginTrustTier,
     };
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -3110,6 +3109,8 @@ mod plugin_metadata_tests {
                 diagnostic_findings: Vec::new(),
                 setup: descriptor.manifest.setup.clone(),
                 channel_bridge: None,
+                slot_claims: descriptor.manifest.slot_claims.clone(),
+                compatibility: descriptor.manifest.compatibility.clone(),
                 runtime: PluginRuntimeProfile {
                     source_language: descriptor.language.clone(),
                     bridge_kind: PluginBridgeKind::HttpJson,
@@ -3162,17 +3163,24 @@ mod plugin_metadata_tests {
             translated_plugins: 1,
             bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
             entries: vec![PluginIR {
+                manifest_api_version: descriptor.manifest.api_version.clone(),
+                plugin_version: descriptor.manifest.version.clone(),
+                dialect: descriptor.dialect,
+                dialect_version: descriptor.dialect_version.clone(),
+                compatibility_mode: descriptor.compatibility_mode,
                 plugin_id: descriptor.manifest.plugin_id.clone(),
                 provider_id: descriptor.manifest.provider_id.clone(),
                 connector_name: descriptor.manifest.connector_name.clone(),
                 channel_id: descriptor.manifest.channel_id.clone(),
                 endpoint: descriptor.manifest.endpoint.clone(),
                 capabilities: descriptor.manifest.capabilities.clone(),
+                trust_tier: descriptor.manifest.trust_tier,
                 metadata: descriptor.manifest.metadata.clone(),
                 source_path: descriptor.path.clone(),
                 source_kind: descriptor.source_kind,
                 package_root: descriptor.package_root.clone(),
                 package_manifest_path: descriptor.package_manifest_path.clone(),
+                diagnostic_findings: Vec::new(),
                 setup: descriptor.manifest.setup.clone(),
                 channel_bridge: Some(kernel::PluginChannelBridgeContract {
                     channel_id: Some("weixin".to_owned()),
@@ -3187,6 +3195,8 @@ mod plugin_metadata_tests {
                         missing_fields: Vec::new(),
                     },
                 }),
+                slot_claims: descriptor.manifest.slot_claims.clone(),
+                compatibility: descriptor.manifest.compatibility.clone(),
                 runtime: PluginRuntimeProfile {
                     source_language: descriptor.language.clone(),
                     bridge_kind: PluginBridgeKind::HttpJson,
@@ -3512,11 +3522,12 @@ mod plugin_metadata_tests {
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
+            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
         let translation = test_channel_bridge_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(

@@ -32,12 +32,15 @@ fn sample_channel_bridge_manifest_with_metadata(
     });
 
     loongclaw_kernel::PluginManifest {
+        api_version: Some("v1alpha1".to_owned()),
+        version: Some("1.0.0".to_owned()),
         plugin_id: "sample-bridge".to_owned(),
         provider_id: "sample-provider".to_owned(),
         connector_name: "sample-connector".to_owned(),
         channel_id: normalized_channel_id,
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
+        trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -45,6 +48,8 @@ fn sample_channel_bridge_manifest_with_metadata(
         output_examples: Vec::new(),
         defer_loading: false,
         setup,
+        slot_claims: Vec::new(),
+        compatibility: None,
     }
 }
 
@@ -56,12 +61,15 @@ fn sample_channel_bridge_manifest_with_setup(
     let normalized_channel_id = channel_id.map(str::to_owned);
 
     loongclaw_kernel::PluginManifest {
+        api_version: Some("v1alpha1".to_owned()),
+        version: Some("1.0.0".to_owned()),
         plugin_id: "sample-bridge".to_owned(),
         provider_id: "sample-provider".to_owned(),
         connector_name: "sample-connector".to_owned(),
         channel_id: normalized_channel_id,
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
+        trust_tier: loongclaw_kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -69,6 +77,8 @@ fn sample_channel_bridge_manifest_with_setup(
         output_examples: Vec::new(),
         defer_loading: false,
         setup,
+        slot_claims: Vec::new(),
+        compatibility: None,
     }
 }
 

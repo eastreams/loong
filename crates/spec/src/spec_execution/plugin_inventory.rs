@@ -995,6 +995,7 @@ mod tests {
                 package_manifest_path: descriptor.package_manifest_path.clone(),
                 diagnostic_findings: Vec::new(),
                 setup: descriptor.manifest.setup.clone(),
+                channel_bridge: None,
                 slot_claims: descriptor.manifest.slot_claims.clone(),
                 compatibility: descriptor.manifest.compatibility,
                 runtime: kernel::PluginRuntimeProfile {

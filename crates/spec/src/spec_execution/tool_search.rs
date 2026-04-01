@@ -50,6 +50,19 @@ pub(super) fn execute_tool_search(
     let mut entries: BTreeMap<String, ToolSearchEntry> = BTreeMap::new();
     let mut translation_by_key: BTreeMap<(String, String), ToolSearchTranslationSnapshot> =
         BTreeMap::new();
+    let mut activation_candidate_by_key: BTreeMap<(String, String), PluginActivationCandidate> =
+        BTreeMap::new();
+    let mut activation_by_key: BTreeMap<(String, String), (String, String)> = BTreeMap::new();
+    let mut activation_diagnostics_by_key: BTreeMap<
+        (String, String),
+        Vec<PluginDiagnosticFinding>,
+    > = BTreeMap::new();
+    let mut activation_inventory_by_key: BTreeMap<
+        (String, String),
+        PluginActivationInventoryEntry,
+    > = BTreeMap::new();
+    let mut scan_diagnostics_by_key: BTreeMap<(String, String), Vec<PluginDiagnosticFinding>> =
+        BTreeMap::new();
 
     for report in plugin_translation_reports {
         for entry in &report.entries {
@@ -158,6 +171,26 @@ pub(super) fn execute_tool_search(
             .cloned();
         let setup_docs_urls = metadata_strings(&provider.metadata, "plugin_setup_docs_urls_json");
         let setup_remediation = provider.metadata.get("plugin_setup_remediation").cloned();
+        let provenance_summary = provider.metadata.get("plugin_provenance_summary").cloned();
+        let trust_tier = provider.metadata.get("plugin_trust_tier").cloned();
+        let slot_claims = metadata_slot_claims(&provider.metadata);
+        let mut manifest_api_version =
+            metadata_optional_string(&provider.metadata, "plugin_manifest_api_version");
+        let mut plugin_version = metadata_optional_string(&provider.metadata, "plugin_version")
+            .or_else(|| metadata_optional_string(&provider.metadata, "version"));
+        let mut dialect = metadata_plugin_dialect(&provider.metadata, "plugin_dialect");
+        let mut dialect_version =
+            metadata_optional_string(&provider.metadata, "plugin_dialect_version");
+        let mut compatibility_mode =
+            metadata_plugin_compatibility_mode(&provider.metadata, "plugin_compatibility_mode");
+        let mut compatibility_shim = metadata_plugin_compatibility_shim(&provider.metadata)
+            .or_else(|| compatibility_mode.and_then(PluginCompatibilityShim::for_mode));
+        let mut compatibility_shim_support = None;
+        let mut compatibility_shim_support_mismatch_reasons = Vec::new();
+        let mut compatibility = metadata_plugin_compatibility(&provider.metadata);
+        let mut activation_status = None;
+        let mut activation_reason = None;
+        let mut diagnostic_findings = Vec::new();
         let mut channel_id = provider.metadata.get("plugin_channel_id").cloned();
         let mut channel_bridge_transport_family = provider
             .metadata
@@ -375,6 +408,10 @@ pub(super) fn execute_tool_search(
             let adapter_family = translation.map(|snapshot| snapshot.adapter_family.clone());
             let entrypoint_hint = translation.map(|snapshot| snapshot.entrypoint_hint.clone());
             let source_language = translation.map(|snapshot| snapshot.source_language.clone());
+            let activation = activation_inventory_by_key
+                .get(&(descriptor.path.clone(), manifest.plugin_id.clone()));
+            let activation_fallback =
+                activation_by_key.get(&(descriptor.path.clone(), manifest.plugin_id.clone()));
             let channel_id = translation
                 .and_then(|snapshot| snapshot.channel_id.clone())
                 .or_else(|| manifest.metadata.get("plugin_channel_id").cloned())
@@ -528,6 +565,45 @@ pub(super) fn execute_tool_search(
 
             if entry.plugin_id.is_none() {
                 entry.plugin_id = Some(manifest.plugin_id.clone());
+            }
+            if entry.manifest_api_version.is_none() {
+                entry.manifest_api_version = activation
+                    .and_then(|entry| entry.manifest_api_version.clone())
+                    .or_else(|| manifest.api_version.clone());
+            }
+            if entry.plugin_version.is_none() {
+                entry.plugin_version = activation
+                    .and_then(|entry| entry.plugin_version.clone())
+                    .or_else(|| manifest.version.clone());
+            }
+            if entry.dialect.is_none() {
+                entry.dialect = activation
+                    .map(|entry| entry.dialect)
+                    .or(Some(descriptor.dialect));
+            }
+            if entry.dialect_version.is_none() {
+                entry.dialect_version = activation
+                    .and_then(|entry| entry.dialect_version.clone())
+                    .or_else(|| descriptor.dialect_version.clone());
+            }
+            if entry.compatibility_mode.is_none() {
+                entry.compatibility_mode = activation
+                    .map(|entry| entry.compatibility_mode)
+                    .or(Some(descriptor.compatibility_mode));
+            }
+            if entry.compatibility_shim.is_none() {
+                entry.compatibility_shim = activation
+                    .and_then(|entry| entry.compatibility_shim.clone())
+                    .or_else(|| PluginCompatibilityShim::for_mode(descriptor.compatibility_mode));
+            }
+            if entry.compatibility_shim_support.is_none() {
+                entry.compatibility_shim_support =
+                    activation.and_then(|entry| entry.compatibility_shim_support.clone());
+            }
+            if entry.compatibility_shim_support_mismatch_reasons.is_empty() {
+                entry.compatibility_shim_support_mismatch_reasons = activation
+                    .map(|entry| entry.compatibility_shim_support_mismatch_reasons.clone())
+                    .unwrap_or_default();
             }
             if entry.channel_id.is_none() {
                 entry.channel_id = channel_id.clone();
@@ -2468,33 +2544,35 @@ mod tests {
         };
         catalog.upsert_provider(provider);
 
-        let results = execute_tool_search(
+        let report = execute_tool_search(
             &catalog,
             &[],
             &[],
             &PluginSetupReadinessContext::default(),
+            &[],
             "weixin clawbot",
             10,
+            &[],
             true,
             false,
         );
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].channel_id.as_deref(), Some("weixin"));
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].channel_id.as_deref(), Some("weixin"));
         assert_eq!(
-            results[0].channel_bridge_transport_family.as_deref(),
+            report.results[0].channel_bridge_transport_family.as_deref(),
             Some("wechat_clawbot_ilink_bridge")
         );
         assert_eq!(
-            results[0].channel_bridge_target_contract.as_deref(),
+            report.results[0].channel_bridge_target_contract.as_deref(),
             Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
         );
         assert_eq!(
-            results[0].channel_bridge_account_scope.as_deref(),
+            report.results[0].channel_bridge_account_scope.as_deref(),
             Some("multi_account")
         );
-        assert_eq!(results[0].channel_bridge_ready, Some(true));
-        assert!(results[0].channel_bridge_missing_fields.is_empty());
+        assert_eq!(report.results[0].channel_bridge_ready, Some(true));
+        assert!(report.results[0].channel_bridge_missing_fields.is_empty());
     }
 
     #[test]
@@ -2516,21 +2594,23 @@ mod tests {
         };
         catalog.upsert_provider(provider);
 
-        let results = execute_tool_search(
+        let report = execute_tool_search(
             &catalog,
             &[],
             &[],
             &PluginSetupReadinessContext::default(),
+            &[],
             "weixin",
             10,
+            &[],
             true,
             false,
         );
 
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].channel_bridge_ready, Some(false));
+        assert_eq!(report.results.len(), 1);
+        assert_eq!(report.results[0].channel_bridge_ready, Some(false));
         assert_eq!(
-            results[0].channel_bridge_missing_fields,
+            report.results[0].channel_bridge_missing_fields,
             vec![
                 "metadata.transport_family".to_owned(),
                 "metadata.target_contract".to_owned(),
