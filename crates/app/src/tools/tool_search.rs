@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use serde_json::Value;
+use serde_json::json;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 use unicode_segmentation::UnicodeSegmentation;
@@ -16,9 +17,11 @@ const MAX_SEARCH_WHY_REASONS: usize = 4;
 pub(super) struct SearchableToolEntry {
     pub(super) canonical_name: String,
     pub(super) summary: String,
+    pub(super) search_hint: String,
     pub(super) argument_hint: String,
     pub(super) required_fields: Vec<String>,
     pub(super) required_field_groups: Vec<Vec<String>>,
+    pub(super) schema_preview: Value,
     pub(super) tags: Vec<String>,
     search_document: SearchDocument,
 }
@@ -32,6 +35,7 @@ pub(super) struct RankedSearchableToolEntry {
 #[derive(Debug, Clone)]
 pub(super) struct ToolSearchRanking {
     pub(super) results: Vec<RankedSearchableToolEntry>,
+    pub(super) diagnostics_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
@@ -1005,12 +1009,14 @@ pub(super) fn searchable_entry_from_descriptor(descriptor: &ToolDescriptor) -> S
         .iter()
         .map(|tag| (*tag).to_owned())
         .collect::<Vec<_>>();
+    let search_hint = descriptor.search_hint().to_owned();
 
     searchable_entry_from_provider_definition(
         descriptor.name,
         descriptor.provider_name,
         descriptor.aliases,
         summary,
+        search_hint,
         parameters,
         descriptor.parameter_types(),
         tags,
@@ -1022,6 +1028,7 @@ pub(super) fn searchable_entry_from_provider_definition(
     provider_name: &str,
     aliases: &[&str],
     summary: String,
+    search_hint: String,
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],
     tags: Vec<String>,
@@ -1032,9 +1039,15 @@ pub(super) fn searchable_entry_from_provider_definition(
         default_required_field_groups(&required_fields, required_field_groups);
     let argument_hint =
         search_argument_hint_from_provider_definition(parameters, preferred_parameter_order);
+    let schema_preview = build_schema_preview(&required_fields, &required_field_groups, parameters);
 
     let name_fragments = build_name_fragments(canonical_name, provider_name, aliases);
-    let summary_fragments = vec![summary.clone()];
+    let mut summary_fragments = vec![summary.clone()];
+
+    if search_hint.trim() != summary.trim() {
+        summary_fragments.push(search_hint.clone());
+    }
+
     let argument_fragments = build_argument_fragments(
         argument_hint.as_str(),
         &required_fields,
@@ -1053,12 +1066,55 @@ pub(super) fn searchable_entry_from_provider_definition(
     SearchableToolEntry {
         canonical_name: canonical_name.to_owned(),
         summary,
+        search_hint,
         argument_hint,
         required_fields,
         required_field_groups,
+        schema_preview,
         tags,
         search_document,
     }
+}
+
+fn build_schema_preview(
+    required_fields: &[String],
+    required_field_groups: &[Vec<String>],
+    parameters: &Value,
+) -> Value {
+    let properties = parameters
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut required_field_names = BTreeSet::new();
+
+    for required_field in required_fields {
+        required_field_names.insert(required_field.clone());
+    }
+
+    for group in required_field_groups {
+        for field_name in group {
+            required_field_names.insert(field_name.clone());
+        }
+    }
+
+    let mut common_optional_fields = Vec::new();
+
+    for field_name in properties.keys() {
+        let is_required = required_field_names.contains(field_name);
+
+        if is_required {
+            continue;
+        }
+
+        common_optional_fields.push(field_name.clone());
+    }
+
+    json!({
+        "required_fields": required_fields,
+        "required_field_groups": required_field_groups,
+        "common_optional_fields": common_optional_fields,
+    })
 }
 
 pub(super) fn searchable_entry_from_manual_definition(
@@ -1077,9 +1133,15 @@ pub(super) fn searchable_entry_from_manual_definition(
     }
 
     let summary_text = summary.to_owned();
+    let search_hint = summary.to_owned();
     let argument_hint_text = argument_hint.to_owned();
     let argument_fragments =
         build_argument_fragments(argument_hint, &required_fields, &required_field_groups);
+    let schema_preview = json!({
+        "required_fields": required_fields,
+        "required_field_groups": required_field_groups,
+        "common_optional_fields": []
+    });
 
     let mut schema_fragments = required_fields.clone();
     for required_field_group in &required_field_groups {
@@ -1098,9 +1160,11 @@ pub(super) fn searchable_entry_from_manual_definition(
     SearchableToolEntry {
         canonical_name: canonical_name.to_owned(),
         summary: summary_text,
+        search_hint,
         argument_hint: argument_hint_text,
         required_fields,
         required_field_groups,
+        schema_preview,
         tags,
         search_document,
     }
@@ -1241,6 +1305,7 @@ pub(super) fn rank_searchable_entries(
     if entries.is_empty() {
         return ToolSearchRanking {
             results: Vec::new(),
+            diagnostics_reason: Some("no_visible_tools"),
         };
     }
 
@@ -1273,7 +1338,10 @@ pub(super) fn rank_searchable_entries(
             })
             .collect();
 
-        return ToolSearchRanking { results };
+        return ToolSearchRanking {
+            results,
+            diagnostics_reason: None,
+        };
     }
 
     coarse_fallback(entries, limit)
@@ -1475,7 +1543,10 @@ fn coarse_fallback(entries: Vec<SearchableToolEntry>, limit: usize) -> ToolSearc
         })
         .collect();
 
-    ToolSearchRanking { results }
+    ToolSearchRanking {
+        results,
+        diagnostics_reason: Some("coarse_fallback"),
+    }
 }
 
 fn coarse_fallback_score(entry: &SearchableToolEntry) -> (u32, Vec<String>) {

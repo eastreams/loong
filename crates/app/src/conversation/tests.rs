@@ -662,6 +662,7 @@ impl ConversationContextEngine for StubSystemPromptAdditionEngine {
             })],
             artifacts: vec![],
             estimated_tokens: Some(42),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
         })
     }
@@ -2600,6 +2601,26 @@ async fn default_runtime_build_context_applies_system_prompt_addition() {
         merged, "runtime-policy-addition\n\nbase-system-prompt",
         "system prompt addition should be prepended"
     );
+
+    let first_fragment_lane = assembled
+        .prompt_fragments
+        .first()
+        .map(|fragment| fragment.lane);
+    let first_fragment_content = assembled
+        .prompt_fragments
+        .first()
+        .map(|fragment| fragment.content.as_str());
+
+    assert_eq!(
+        first_fragment_lane,
+        Some(PromptLane::TaskDirective),
+        "system prompt additions should materialize as task directive fragments"
+    );
+    assert_eq!(
+        first_fragment_content,
+        Some("runtime-policy-addition"),
+        "task directive fragment should carry the addition text"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2715,6 +2736,23 @@ async fn default_runtime_kernel_stage_hydration_still_applies_system_prompt_addi
                     .is_some_and(|content| content.contains("## Memory Summary"))
         }),
         "expected staged hydration summary block to remain present after runtime middlewares"
+    );
+
+    let capability_fragment = assembled
+        .prompt_fragments
+        .iter()
+        .find(|fragment| fragment.lane == PromptLane::CapabilitySnapshot);
+    let capability_content = capability_fragment
+        .map(|fragment| fragment.content.as_str())
+        .expect("capability snapshot fragment should exist");
+
+    assert!(
+        !capability_content.contains("- delegate:"),
+        "requested child tool view should rewrite the capability snapshot fragment, got: {capability_content}"
+    );
+    assert!(
+        !capability_content.contains("- shell.exec:"),
+        "requested child tool view should keep shell hidden in the capability snapshot fragment, got: {capability_content}"
     );
 }
 
@@ -6169,6 +6207,94 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
                     .is_some_and(|content| content.starts_with("[tool_result]\n"))
         }),
         "second provider turn should receive tool-search followup context: {requested_turn_messages:?}"
+    );
+
+    let persisted = runtime
+        .persisted
+        .lock()
+        .expect("persisted turns lock")
+        .clone();
+    let discovery_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "tool_discovery_refreshed");
+    let latest_discovery_payload = discovery_payloads
+        .last()
+        .expect("tool discovery state should be persisted");
+    let entries = latest_discovery_payload["entries"]
+        .as_array()
+        .expect("tool discovery entries should be an array");
+
+    assert!(
+        !entries.is_empty(),
+        "expected at least one persisted discovery entry"
+    );
+    assert!(
+        entries.iter().all(|entry| entry.get("lease").is_none()),
+        "persisted discovery state must not retain executable leases: {latest_discovery_payload:?}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_includes_tool_discovery_delta_from_persisted_state() {
+    let mut config = test_config();
+    let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta");
+    config.memory.sqlite_path = sqlite_path;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let session_id = "session-tool-discovery-delta";
+    let discovery_event = crate::memory::build_conversation_event_content(
+        "tool_discovery_refreshed",
+        json!({
+            "schema_version": 1,
+            "query": "read note.md",
+            "entries": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]]
+                }
+            ]
+        }),
+    );
+
+    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+        .expect("persist discovery event");
+
+    let runtime = DefaultConversationRuntime::default();
+    let assembled = runtime
+        .build_context(
+            &config,
+            session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context");
+
+    let system_text = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system text");
+    let discovery_fragment = assembled
+        .prompt_fragments
+        .iter()
+        .find(|fragment| fragment.lane == PromptLane::ToolDiscoveryDelta);
+
+    assert!(
+        system_text.contains("[tool_discovery_delta]"),
+        "expected persisted discovery state to compile into the system prompt: {system_text}"
+    );
+    assert!(
+        system_text.contains("exact_tool_id"),
+        "expected discovery delta to explain exact refresh guidance: {system_text}"
+    );
+    assert!(
+        system_text.contains("file.read"),
+        "expected discovery delta to surface the discovered tool id: {system_text}"
+    );
+    assert!(
+        discovery_fragment.is_some(),
+        "expected tool discovery delta fragment to be materialized"
     );
 }
 
@@ -15203,6 +15329,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                 ],
                 artifacts: vec![],
                 estimated_tokens: Some(3),
+                prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
             },
             AssembledConversationContext {
@@ -15212,6 +15339,7 @@ async fn repair_turn_checkpoint_tail_rebuilds_original_finalization_context_for_
                 ],
                 artifacts: vec![],
                 estimated_tokens: Some(2),
+                prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
             },
         );
@@ -15326,6 +15454,7 @@ async fn repair_turn_checkpoint_tail_prefers_checkpoint_estimate_for_compaction_
             ],
             artifacts: vec![],
             estimated_tokens: Some(1),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -15439,6 +15568,7 @@ async fn probe_turn_checkpoint_tail_runtime_gate_reports_preparation_content_mis
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -15951,6 +16081,7 @@ async fn load_turn_checkpoint_diagnostics_with_runtime_preserves_summary_assessm
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -16076,6 +16207,7 @@ async fn load_turn_checkpoint_diagnostics_uses_single_kernel_window_snapshot_for
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -19756,6 +19888,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -19875,6 +20008,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_preparation_conte
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -19994,6 +20128,7 @@ async fn repair_turn_checkpoint_tail_requires_manual_repair_on_malformed_prepara
             ],
             artifacts: vec![],
             estimated_tokens: Some(99),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         });
     let coordinator = ConversationTurnCoordinator::new();
@@ -21799,4 +21934,101 @@ async fn handle_turn_with_runtime_persists_failed_open_compaction_checkpoint_whe
     );
 
     let _ = std::fs::remove_file(&db_path);
+}
+
+#[test]
+fn prompt_compiler_orders_lanes_and_dedupes_fragments() {
+    use crate::conversation::ContextArtifactKind;
+    use crate::conversation::PromptCompiler;
+    use crate::conversation::PromptFragment;
+    use crate::conversation::PromptLane;
+
+    let capability_fragment = PromptFragment::new(
+        "capability",
+        PromptLane::CapabilitySnapshot,
+        "capability-snapshot",
+        "[available_tools]",
+        ContextArtifactKind::RuntimeContract,
+    );
+    let base_fragment = PromptFragment::new(
+        "base",
+        PromptLane::BaseSystem,
+        "base-system",
+        "You are LoongClaw.",
+        ContextArtifactKind::SystemPrompt,
+    )
+    .with_dedupe_key("base-system");
+    let duplicate_base_fragment = PromptFragment::new(
+        "base-duplicate",
+        PromptLane::BaseSystem,
+        "base-system",
+        "You are LoongClaw.",
+        ContextArtifactKind::SystemPrompt,
+    )
+    .with_dedupe_key("base-system");
+    let discovery_fragment = PromptFragment::new(
+        "discovery",
+        PromptLane::ToolDiscoveryDelta,
+        "tool-discovery",
+        "[tool_discovery_delta]",
+        ContextArtifactKind::ToolHint,
+    );
+
+    let compiler = PromptCompiler;
+    let fragments = vec![
+        capability_fragment,
+        duplicate_base_fragment,
+        discovery_fragment,
+        base_fragment,
+    ];
+    let compilation = compiler.compile(fragments);
+    let system_text = compilation.system_text;
+
+    assert!(
+        system_text.starts_with("You are LoongClaw."),
+        "base system fragment should render first: {system_text}"
+    );
+    assert!(
+        system_text.contains("[available_tools]"),
+        "compiled system text should include capability snapshot: {system_text}"
+    );
+    assert!(
+        system_text.contains("[tool_discovery_delta]"),
+        "compiled system text should include discovery delta: {system_text}"
+    );
+
+    let base_count = compilation
+        .fragments
+        .iter()
+        .filter(|fragment| fragment.source_id == "base-system")
+        .count();
+
+    assert_eq!(base_count, 1, "duplicate fragments should be deduped");
+}
+
+#[tokio::test]
+async fn default_runtime_build_context_exposes_prompt_fragments() {
+    let runtime = DefaultConversationRuntime::default();
+    let config = test_config();
+    let assembled = runtime
+        .build_context(
+            &config,
+            "prompt-fragment-runtime-session",
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context");
+
+    assert!(
+        !assembled.prompt_fragments.is_empty(),
+        "runtime context should expose prompt fragments"
+    );
+
+    let first_lane = assembled
+        .prompt_fragments
+        .first()
+        .map(|fragment| fragment.lane);
+
+    assert_eq!(first_lane, Some(PromptLane::BaseSystem));
 }

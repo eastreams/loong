@@ -1038,6 +1038,7 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 provider_name,
                 &[],
                 summary,
+                canonical_name.clone(),
                 &parameters,
                 preferred_parameter_order,
                 tags,
@@ -1137,7 +1138,21 @@ fn execute_tool_search_tool_with_config(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "tool.search requires payload.query".to_owned())?;
+        .map(str::to_owned);
+    let exact_tool_id = payload
+        .get("exact_tool_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(canonical_tool_name)
+        .map(str::to_owned);
+    let has_query = query.is_some();
+    let has_exact_tool_id = exact_tool_id.is_some();
+
+    if !has_query && !has_exact_tool_id {
+        return Err("tool.search requires payload.query or payload.exact_tool_id".to_owned());
+    }
+
     let limit = payload
         .get("limit")
         .and_then(Value::as_u64)
@@ -1158,25 +1173,37 @@ fn execute_tool_search_tool_with_config(
             )
         })
         .collect::<Vec<_>>();
-    let ranking = rank_searchable_entries(searchable_entries, query, limit);
+    let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
+        searchable_entries
+            .iter()
+            .find(|entry| entry.canonical_name == *exact_tool_id)
+            .cloned()
+    });
+    let mut diagnostics_reason = None;
+    let results: Vec<Value> = if let Some(entry) = exact_match_entry {
+        vec![tool_search_result_entry_json(&entry, Vec::new(), payload)]
+    } else if let Some(query) = query.as_deref() {
+        let ranking = rank_searchable_entries(searchable_entries, query, limit);
+        diagnostics_reason = ranking.diagnostics_reason;
 
-    let results: Vec<Value> = ranking
-        .results
-        .into_iter()
-        .map(|ranked_entry| {
-            let RankedSearchableToolEntry { entry, why } = ranked_entry;
-            json!({
-                "tool_id": entry.canonical_name,
-                "summary": entry.summary,
-                "argument_hint": entry.argument_hint,
-                "required_fields": entry.required_fields,
-                "required_field_groups": entry.required_field_groups,
-                "tags": entry.tags,
-                "why": why,
-                "lease": issue_tool_lease(entry.canonical_name.as_str(), payload),
+        ranking
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+                tool_search_result_entry_json(&entry, why, payload)
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let diagnostics = tool_search_diagnostics_json(
+        exact_tool_id.as_deref(),
+        query.as_deref(),
+        results.as_slice(),
+        diagnostics_reason,
+    );
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -1184,10 +1211,62 @@ fn execute_tool_search_tool_with_config(
             "adapter": "core-tools",
             "tool_name": request.tool_name,
             "query": query,
+            "exact_tool_id": exact_tool_id,
             "returned": results.len(),
             "results": results,
+            "diagnostics": diagnostics,
         }),
     })
+}
+
+fn tool_search_result_entry_json(
+    entry: &SearchableToolEntry,
+    why: Vec<String>,
+    payload: &serde_json::Map<String, Value>,
+) -> Value {
+    json!({
+        "tool_id": entry.canonical_name,
+        "summary": entry.summary,
+        "search_hint": entry.search_hint,
+        "argument_hint": entry.argument_hint,
+        "required_fields": entry.required_fields,
+        "required_field_groups": entry.required_field_groups,
+        "schema_preview": entry.schema_preview,
+        "tags": entry.tags,
+        "why": why,
+        "lease": issue_tool_lease(entry.canonical_name.as_str(), payload),
+    })
+}
+
+fn tool_search_diagnostics_json(
+    exact_tool_id: Option<&str>,
+    query: Option<&str>,
+    results: &[Value],
+    diagnostics_reason: Option<&str>,
+) -> Value {
+    if let Some(exact_tool_id) = exact_tool_id {
+        let has_results = !results.is_empty();
+
+        if has_results {
+            return Value::Null;
+        }
+
+        return json!({
+            "reason": "exact_tool_id_not_visible",
+            "requested_tool_id": exact_tool_id,
+        });
+    }
+
+    if let Some(reason) = diagnostics_reason {
+        let diagnostics_query = query.unwrap_or_default();
+
+        return json!({
+            "reason": reason,
+            "query": diagnostics_query,
+        });
+    }
+
+    Value::Null
 }
 
 fn tool_search_entry_is_runtime_usable(
@@ -2140,11 +2219,29 @@ mod tests {
                     == Some("tool_search")
             })
             .expect("tool_search definition should exist");
+        let any_of = tool_search["function"]["parameters"]["anyOf"]
+            .as_array()
+            .expect("tool_search anyOf should be an array");
+        let required_groups = any_of
+            .iter()
+            .filter_map(|entry| entry.get("required"))
+            .filter_map(Value::as_array)
+            .map(|group| {
+                group
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
         assert!(
-            tool_search["function"]["parameters"]["required"]
-                .as_array()
-                .expect("required should be an array")
-                .contains(&Value::String("query".to_owned()))
+            required_groups.contains(&vec!["query".to_owned()]),
+            "tool_search schema should accept query-driven discovery"
+        );
+        assert!(
+            required_groups.contains(&vec!["exact_tool_id".to_owned()]),
+            "tool_search schema should accept exact tool refresh"
         );
     }
 
@@ -3309,6 +3406,65 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "exact_tool_id": "file.read"
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first = results.first().expect("one result should be returned");
+
+        assert_eq!(outcome.payload["returned"], 1);
+        assert_eq!(first["tool_id"], "file.read");
+        assert!(first["lease"].as_str().is_some());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_result_includes_search_hint_and_schema_preview() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-card-metadata");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "run shell command",
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let shell_entry = results
+            .iter()
+            .find(|entry| entry["tool_id"] == "shell.exec")
+            .expect("shell.exec should be discoverable");
+
+        assert!(shell_entry["search_hint"].as_str().is_some());
+        assert!(shell_entry["schema_preview"].is_object());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(all(feature = "tool-file", feature = "tool-webfetch"))]
     #[test]
     fn tool_search_uses_schema_derived_terms_for_web_fetch_modes() {
@@ -3414,6 +3570,9 @@ mod tests {
         .expect("tool search should succeed");
 
         let results = outcome.payload["results"].as_array().expect("results");
+        let diagnostics = outcome.payload["diagnostics"]
+            .as_object()
+            .expect("diagnostics should exist for coarse fallback");
         assert!(
             !results.is_empty(),
             "coarse fallback should surface visible tools instead of an empty set"
@@ -3425,6 +3584,10 @@ mod tests {
                     .iter()
                     .any(|reason| reason.as_str() == Some("coarse_fallback")))),
             "coarse fallback results should explain their fallback mode: {results:?}"
+        );
+        assert_eq!(
+            diagnostics.get("reason").and_then(Value::as_str),
+            Some("coarse_fallback")
         );
 
         std::fs::remove_dir_all(&root).ok();

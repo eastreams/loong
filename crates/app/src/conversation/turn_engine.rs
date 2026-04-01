@@ -38,6 +38,7 @@ use super::autonomy_policy::{
 };
 use super::runtime::SessionContext;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::tool_result_compaction::compact_tool_search_payload_summary;
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
 
@@ -483,6 +484,17 @@ pub trait AppToolDispatcher: Send + Sync {
         request: ToolCoreRequest,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String>;
+
+    async fn after_tool_execution(
+        &self,
+        _session_context: &SessionContext,
+        _intent: &ToolIntent,
+        _intent_sequence: usize,
+        _request: &ToolCoreRequest,
+        _outcome: &ToolCoreOutcome,
+        _binding: ConversationRuntimeBinding<'_>,
+    ) {
+    }
 }
 
 pub struct NoopAppToolDispatcher;
@@ -1485,7 +1497,9 @@ fn build_tool_result_envelope(
         MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
         MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
     );
-    let payload_text = serde_json::to_string(&outcome.payload)
+    let compacted_payload =
+        compact_tool_result_payload_value(effective_tool_name.as_str(), &outcome.payload);
+    let payload_text = serde_json::to_string(&compacted_payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
         summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
@@ -1499,6 +1513,21 @@ fn build_tool_result_envelope(
         payload_chars,
         payload_truncated,
     }
+}
+
+fn compact_tool_result_payload_value(
+    tool_name: &str,
+    payload: &serde_json::Value,
+) -> serde_json::Value {
+    if tool_name == "tool.search" {
+        let compacted_payload = compact_tool_search_payload_summary(payload);
+
+        if let Some(compacted_payload) = compacted_payload {
+            return compacted_payload;
+        }
+    }
+
+    payload.clone()
 }
 
 fn summarize_tool_result_payload(
@@ -2021,6 +2050,7 @@ fn observe_peak_in_flight(peak: &AtomicUsize, current: usize) {
 
 #[derive(Debug, Clone)]
 struct PreparedToolIntent {
+    intent_sequence: usize,
     intent: ToolIntent,
     request: ToolCoreRequest,
     execution_kind: ToolExecutionKind,
@@ -2276,10 +2306,11 @@ impl TurnEngine {
         let mut trace = self.trace_empty_batch(turn.tool_intents.len());
         let mut prepared = Vec::new();
         let mut autonomy_budget_state = AutonomyTurnBudgetState::default();
-        for intent in &turn.tool_intents {
+        for (intent_sequence, intent) in turn.tool_intents.iter().enumerate() {
             match self
                 .prepare_tool_intent(
                     intent,
+                    intent_sequence,
                     session_context,
                     app_dispatcher,
                     binding,
@@ -2502,6 +2533,16 @@ impl TurnEngine {
                         return Err(turn_result);
                     }
                 };
+                app_dispatcher
+                    .after_tool_execution(
+                        session_context,
+                        &prepared_intent.intent,
+                        prepared_intent.intent_sequence,
+                        &prepared_intent.request,
+                        &outcome,
+                        binding,
+                    )
+                    .await;
                 let outcome_record =
                     build_success_tool_outcome_trace_record(&prepared_intent.intent, &outcome);
                 outcome_records.push(outcome_record);
@@ -2546,7 +2587,7 @@ impl TurnEngine {
                 async move {
                     let current_in_flight = in_flight.fetch_add(1, Ordering::Relaxed) + 1;
                     observe_peak_in_flight(observed_peak.as_ref(), current_in_flight);
-                    let result = self
+                    let result = match self
                         .execute_prepared_tool_intent(
                             &prepared_intent,
                             session_context,
@@ -2554,7 +2595,18 @@ impl TurnEngine {
                             binding,
                         )
                         .await
-                        .map(|outcome| {
+                    {
+                        Ok(outcome) => {
+                            app_dispatcher
+                                .after_tool_execution(
+                                    session_context,
+                                    &prepared_intent.intent,
+                                    prepared_intent.intent_sequence,
+                                    &prepared_intent.request,
+                                    &outcome,
+                                    binding,
+                                )
+                                .await;
                             let output = format_tool_result_line_with_limit(
                                 &prepared_intent.intent,
                                 &outcome,
@@ -2568,9 +2620,9 @@ impl TurnEngine {
                                 &prepared_intent.intent,
                                 &outcome,
                             );
-                            (output, intent_outcome, outcome_record)
-                        })
-                        .map_err(|turn_result| {
+                            Ok((output, intent_outcome, outcome_record))
+                        }
+                        Err(turn_result) => {
                             let intent_outcome = build_tool_intent_failure_trace(
                                 &prepared_intent.intent,
                                 &turn_result,
@@ -2579,8 +2631,9 @@ impl TurnEngine {
                                 &prepared_intent.intent,
                                 &turn_result,
                             );
-                            (turn_result, intent_outcome, outcome_record)
-                        });
+                            Err((turn_result, intent_outcome, outcome_record))
+                        }
+                    };
                     in_flight.fetch_sub(1, Ordering::Relaxed);
                     (index, result)
                 }
@@ -2623,6 +2676,7 @@ impl TurnEngine {
     async fn prepare_tool_intent<D: AppToolDispatcher + ?Sized>(
         &self,
         intent: &ToolIntent,
+        intent_sequence: usize,
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
@@ -2813,6 +2867,7 @@ impl TurnEngine {
         }
 
         Ok(PreparedToolIntent {
+            intent_sequence,
             intent: effective_intent,
             request: effective_request,
             execution_kind: effective_execution_kind,
@@ -3131,6 +3186,48 @@ mod tests {
                     "session_id": session_context.session_id,
                 }),
             })
+        }
+    }
+
+    struct AfterExecutionSequenceRecordingDispatcher {
+        after_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, usize)>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl AppToolDispatcher for AfterExecutionSequenceRecordingDispatcher {
+        async fn execute_app_tool(
+            &self,
+            session_context: &SessionContext,
+            request: ToolCoreRequest,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> Result<ToolCoreOutcome, String> {
+            let delay_ms = match request.tool_name.as_str() {
+                "sessions_list" => 25,
+                "session_status" => 10,
+                other => return Err(format!("app_tool_not_found: {other}")),
+            };
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "tool": request.tool_name,
+                    "session_id": session_context.session_id,
+                }),
+            })
+        }
+
+        async fn after_tool_execution(
+            &self,
+            _session_context: &SessionContext,
+            intent: &ToolIntent,
+            intent_sequence: usize,
+            _request: &ToolCoreRequest,
+            _outcome: &ToolCoreOutcome,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) {
+            let mut after_calls = self.after_calls.lock().expect("after call lock");
+            let call_record = (intent.tool_call_id.clone(), intent_sequence);
+            after_calls.push(call_record);
         }
     }
 
@@ -4504,6 +4601,50 @@ mod tests {
             ToolBatchExecutionMode::Parallel
         );
         assert_eq!(trace.segments[2].observed_peak_in_flight, Some(2));
+    }
+
+    #[tokio::test]
+    async fn parallel_execution_reports_global_intent_sequence_to_after_tool_execution() {
+        let turn = fast_lane_observed_execution_turn(
+            "session-observed-sequence",
+            "turn-observed-sequence",
+            "call-observed-sequence",
+        );
+        let session_context =
+            SessionContext::root_with_tool_view("session-observed-sequence", runtime_tool_view());
+        let after_calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let dispatcher = AfterExecutionSequenceRecordingDispatcher {
+            after_calls: std::sync::Arc::clone(&after_calls),
+        };
+        let engine = TurnEngine::with_parallel_tool_execution(8, 512, true, 2);
+
+        let (result, _trace) = engine
+            .execute_turn_in_context_with_trace(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        assert!(
+            matches!(result, TurnResult::FinalText(_)),
+            "expected FinalText, got {result:?}"
+        );
+
+        let after_calls = after_calls.lock().expect("after call lock");
+        let after_call_map = after_calls
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeMap<String, usize>>();
+
+        assert_eq!(after_call_map.len(), 5);
+        assert_eq!(after_call_map.get("call-observed-sequence-1"), Some(&0));
+        assert_eq!(after_call_map.get("call-observed-sequence-2"), Some(&1));
+        assert_eq!(after_call_map.get("call-observed-sequence-3"), Some(&2));
+        assert_eq!(after_call_map.get("call-observed-sequence-4"), Some(&3));
+        assert_eq!(after_call_map.get("call-observed-sequence-5"), Some(&4));
     }
 
     #[tokio::test]

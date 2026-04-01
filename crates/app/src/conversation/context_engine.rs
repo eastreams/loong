@@ -100,6 +100,7 @@ pub struct AssembledConversationContext {
     pub messages: Vec<Value>,
     pub artifacts: Vec<ContextArtifactDescriptor>,
     pub estimated_tokens: Option<usize>,
+    pub prompt_fragments: Vec<crate::conversation::PromptFragment>,
     pub system_prompt_addition: Option<String>,
 }
 
@@ -109,6 +110,7 @@ impl AssembledConversationContext {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: None,
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         }
     }
@@ -440,6 +442,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 messages: projected.messages,
                 artifacts: projected.artifacts,
                 estimated_tokens: None,
+                prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
             });
         }
@@ -463,6 +466,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 messages: projected.messages,
                 artifacts: projected.artifacts,
                 estimated_tokens: None,
+                prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
             });
         }

@@ -847,6 +847,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let resume_input =
@@ -883,6 +884,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let resume_input =
@@ -924,6 +926,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let error = TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)

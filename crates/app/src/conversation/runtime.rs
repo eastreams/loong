@@ -16,6 +16,7 @@ use crate::tools::{
 
 use super::super::memory;
 use super::super::{config::LoongClawConfig, provider};
+use super::context_engine::ContextArtifactKind;
 use super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
     ContextEngineMetadata, ConversationContextEngine, DefaultContextEngine,
@@ -24,6 +25,8 @@ use super::context_engine_registry::{
     DEFAULT_CONTEXT_ENGINE_ID, context_engine_id_from_env, describe_context_engine,
     list_context_engine_metadata, resolve_context_engine,
 };
+use super::prompt_orchestrator::seed_prompt_fragments_from_context;
+use super::prompt_orchestrator::sync_prompt_fragments_into_context;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
@@ -34,6 +37,7 @@ use super::turn_middleware_registry::{
     default_turn_middleware_ids, describe_turn_middlewares, list_turn_middleware_metadata,
     resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
+use super::{PromptFragment, PromptLane};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -622,14 +626,20 @@ where
         let delegate_runtime_contract = include_system_prompt
             .then(|| delegate_child_runtime_contract_prompt_summary(config, session_context))
             .flatten();
-        assembled.system_prompt_addition = merge_system_prompt_additions(
-            assembled.system_prompt_addition.as_deref(),
-            runtime_self_continuity.as_deref(),
+
+        seed_prompt_fragments_from_context(&mut assembled);
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "runtime-self-continuity",
+            runtime_self_continuity,
         );
-        assembled.system_prompt_addition = merge_system_prompt_additions(
-            assembled.system_prompt_addition.as_deref(),
-            delegate_runtime_contract.as_deref(),
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "delegate-child-runtime-contract",
+            delegate_runtime_contract,
         );
+        sync_prompt_fragments_into_context(&mut assembled);
+
         self.apply_turn_middlewares_to_context(
             config,
             session_context.session_id.as_str(),
@@ -1290,17 +1300,27 @@ fn runtime_self_continuity_prompt_summary(
     runtime_self_continuity::render_runtime_self_continuity_section(&missing_continuity, inherited)
 }
 
-fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) -> Option<String> {
-    match (
-        existing.map(str::trim).filter(|s| !s.is_empty()),
-        extra.map(str::trim).filter(|s| !s.is_empty()),
-    ) {
-        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
-        (Some(a), None) => Some(a.to_owned()),
-        (None, Some(b)) => Some(b.to_owned()),
-        (None, None) => None,
-    }
+fn append_runtime_prompt_fragment(
+    assembled: &mut AssembledConversationContext,
+    source_id: &'static str,
+    content: Option<String>,
+) {
+    let Some(content) = content else {
+        return;
+    };
+
+    let fragment = PromptFragment::new(
+        source_id,
+        PromptLane::Continuity,
+        source_id,
+        content,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_dedupe_key(source_id);
+
+    assembled.prompt_fragments.push(fragment);
 }
+
 fn normalize_turn_middleware_ids(ids: Vec<String>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();

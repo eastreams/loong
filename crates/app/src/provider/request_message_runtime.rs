@@ -9,7 +9,8 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::config::LoongClawConfig;
 use crate::conversation::{
-    ContextArtifactDescriptor, ContextArtifactKind, ToolOutputStreamingPolicy,
+    ContextArtifactDescriptor, ContextArtifactKind, PromptCompiler, PromptFragment, PromptLane,
+    ToolOutputStreamingPolicy, latest_tool_discovery_state_from_assistant_contents,
 };
 use crate::runtime_identity;
 use crate::runtime_self;
@@ -22,6 +23,13 @@ use crate::memory;
 pub(crate) struct ProjectedMessageContext {
     pub messages: Vec<Value>,
     pub artifacts: Vec<ContextArtifactDescriptor>,
+    pub prompt_fragments: Vec<PromptFragment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct BasePromptProjection {
+    system_message: Option<Value>,
+    prompt_fragments: Vec<PromptFragment>,
 }
 
 pub(super) fn build_system_message(
@@ -36,12 +44,14 @@ pub(super) fn build_system_message_for_view(
     include_system_prompt: bool,
     tool_view: &ToolView,
 ) -> Option<Value> {
-    build_system_message_with_tool_runtime_config(
+    let projection = build_base_prompt_projection_with_tool_runtime_config(
         config,
         include_system_prompt,
         tool_view,
         &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
-    )
+    );
+
+    projection.system_message
 }
 
 #[cfg(test)]
@@ -54,24 +64,24 @@ pub(super) async fn build_base_messages_with_binding(
         return Vec::new();
     }
 
-    build_system_message_for_view_with_binding(
+    let projection = build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
         &tools::runtime_tool_view(),
         binding,
     )
-    .await
-    .into_iter()
-    .collect()
+    .await;
+
+    projection.system_message.into_iter().collect()
 }
 
-async fn build_system_message_for_view_with_binding(
+async fn build_base_prompt_projection_for_view_with_binding(
     config: &LoongClawConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     binding: ProviderRuntimeBinding<'_>,
-) -> Option<Value> {
-    build_system_message_with_binding_and_tool_runtime_config(
+) -> BasePromptProjection {
+    build_base_prompt_projection_with_binding_and_tool_runtime_config(
         config,
         include_system_prompt,
         tool_view,
@@ -81,14 +91,14 @@ async fn build_system_message_for_view_with_binding(
     .await
 }
 
-fn build_system_message_with_tool_runtime_config(
+fn build_base_prompt_projection_with_tool_runtime_config(
     config: &LoongClawConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
-) -> Option<Value> {
+) -> BasePromptProjection {
     if !include_system_prompt {
-        return None;
+        return BasePromptProjection::default();
     }
 
     let workspace_root = tool_runtime_config.file_root.as_deref();
@@ -96,7 +106,7 @@ fn build_system_message_with_tool_runtime_config(
         runtime_self::load_runtime_self_model_with_config(workspace_root, tool_runtime_config)
     });
 
-    build_system_message_from_runtime_self_model(
+    build_base_prompt_projection_from_runtime_self_model(
         config,
         include_system_prompt,
         tool_view,
@@ -105,15 +115,32 @@ fn build_system_message_with_tool_runtime_config(
     )
 }
 
-async fn build_system_message_with_binding_and_tool_runtime_config(
+#[cfg(test)]
+fn build_system_message_with_tool_runtime_config(
+    config: &LoongClawConfig,
+    include_system_prompt: bool,
+    tool_view: &ToolView,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+) -> Option<Value> {
+    let projection = build_base_prompt_projection_with_tool_runtime_config(
+        config,
+        include_system_prompt,
+        tool_view,
+        tool_runtime_config,
+    );
+
+    projection.system_message
+}
+
+async fn build_base_prompt_projection_with_binding_and_tool_runtime_config(
     config: &LoongClawConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     binding: ProviderRuntimeBinding<'_>,
-) -> Option<Value> {
+) -> BasePromptProjection {
     if !include_system_prompt {
-        return None;
+        return BasePromptProjection::default();
     }
 
     let workspace_root = tool_runtime_config.file_root.as_deref();
@@ -125,7 +152,7 @@ async fn build_system_message_with_binding_and_tool_runtime_config(
         None => None,
     };
 
-    build_system_message_from_runtime_self_model(
+    build_base_prompt_projection_from_runtime_self_model(
         config,
         include_system_prompt,
         tool_view,
@@ -134,20 +161,55 @@ async fn build_system_message_with_binding_and_tool_runtime_config(
     )
 }
 
-fn build_system_message_from_runtime_self_model(
+fn build_base_prompt_projection_from_runtime_self_model(
     config: &LoongClawConfig,
     include_system_prompt: bool,
     tool_view: &ToolView,
     tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
     runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
-) -> Option<Value> {
+) -> BasePromptProjection {
     if !include_system_prompt {
-        return None;
+        return BasePromptProjection::default();
     }
 
+    let prompt_fragments = build_prompt_fragments_from_runtime_self_model(
+        config,
+        tool_view,
+        tool_runtime_config,
+        runtime_self_model,
+    );
+    let compiler = PromptCompiler;
+    let compilation = compiler.compile(prompt_fragments.clone());
+    let system_text = compilation.system_text;
+
+    if system_text.is_empty() {
+        return BasePromptProjection {
+            system_message: None,
+            prompt_fragments,
+        };
+    }
+
+    let system_message = json!({
+        "role": "system",
+        "content": system_text,
+    });
+
+    BasePromptProjection {
+        system_message: Some(system_message),
+        prompt_fragments,
+    }
+}
+
+fn build_prompt_fragments_from_runtime_self_model(
+    config: &LoongClawConfig,
+    tool_view: &ToolView,
+    tool_runtime_config: &tools::runtime_config::ToolRuntimeConfig,
+    runtime_self_model: Option<runtime_self::RuntimeSelfModel>,
+) -> Vec<PromptFragment> {
     let system_prompt = config.cli.resolved_system_prompt();
-    let system = system_prompt.trim();
-    let snapshot = tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
+    let system_text = system_prompt.trim().to_owned();
+    let capability_snapshot =
+        tools::capability_snapshot_for_view_with_config(tool_view, tool_runtime_config);
     let runtime_self_section = runtime_self_model
         .as_ref()
         .and_then(runtime_self::render_runtime_self_section);
@@ -160,33 +222,60 @@ fn build_system_message_from_runtime_self_model(
         .as_ref()
         .map(runtime_identity::render_runtime_identity_section);
 
-    let mut sections = Vec::new();
-    if !system.is_empty() {
-        sections.push(system.to_owned());
+    let mut prompt_fragments = Vec::new();
+
+    if !system_text.is_empty() {
+        let base_fragment = PromptFragment::new(
+            "base-system",
+            PromptLane::BaseSystem,
+            "base-system",
+            system_text,
+            ContextArtifactKind::SystemPrompt,
+        )
+        .with_dedupe_key("base-system")
+        .with_cacheable(true);
+
+        prompt_fragments.push(base_fragment);
     }
+
     if let Some(section) = runtime_self_section {
-        sections.push(section);
+        let runtime_self_fragment = PromptFragment::new(
+            "runtime-self",
+            PromptLane::RuntimeSelf,
+            "runtime-self",
+            section,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(runtime_self_fragment);
     }
+
     if let Some(section) = runtime_identity_section {
-        sections.push(section);
+        let runtime_identity_fragment = PromptFragment::new(
+            "runtime-identity",
+            PromptLane::RuntimeIdentity,
+            "runtime-identity",
+            section,
+            ContextArtifactKind::Profile,
+        )
+        .with_cacheable(true);
+
+        prompt_fragments.push(runtime_identity_fragment);
     }
-    sections.push(snapshot);
 
-    let content = sections.join("\n\n");
-    Some(json!({
-        "role": "system",
-        "content": content,
-    }))
-}
+    let capability_fragment = PromptFragment::new(
+        "capability-snapshot",
+        PromptLane::CapabilitySnapshot,
+        "capability-snapshot",
+        capability_snapshot,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_cacheable(true);
 
-pub(super) fn build_base_messages_for_view(
-    config: &LoongClawConfig,
-    include_system_prompt: bool,
-    tool_view: &ToolView,
-) -> Vec<Value> {
-    build_system_message_for_view(config, include_system_prompt, tool_view)
-        .into_iter()
-        .collect()
+    prompt_fragments.push(capability_fragment);
+
+    prompt_fragments
 }
 
 fn build_base_artifacts(messages: &[Value]) -> Vec<ContextArtifactDescriptor> {
@@ -346,9 +435,19 @@ pub(crate) fn build_projected_context_for_session_in_view(
     #[cfg(not(feature = "memory-sqlite"))]
     {
         let _ = session_id;
+        let projection = build_base_prompt_projection_with_tool_runtime_config(
+            config,
+            include_system_prompt,
+            tool_view,
+            &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+        );
+        let system_message = projection.system_message;
+        let prompt_fragments = projection.prompt_fragments;
+        let messages = system_message.into_iter().collect();
         Ok(ProjectedMessageContext {
-            messages: build_base_messages_for_view(config, include_system_prompt, tool_view),
+            messages,
             artifacts: Vec::new(),
+            prompt_fragments,
         })
     }
 }
@@ -371,22 +470,28 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
     binding: ProviderRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
 ) -> ProjectedMessageContext {
-    let system_message = build_system_message_for_view_with_binding(
+    let projection = build_base_prompt_projection_for_view_with_binding(
         config,
         include_system_prompt,
         tool_view,
         binding,
     )
     .await;
+    let system_message = projection.system_message;
+    let mut prompt_fragments = projection.prompt_fragments;
     let mut messages = system_message.into_iter().collect::<Vec<_>>();
     let mut artifacts = build_base_artifacts(messages.as_slice());
 
     #[cfg(feature = "memory-sqlite")]
-    append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+    {
+        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, hydrated);
+        append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+    }
 
     ProjectedMessageContext {
         messages,
         artifacts,
+        prompt_fragments,
     }
 }
 
@@ -396,15 +501,27 @@ pub(crate) fn project_hydrated_memory_context_for_view(
     tool_view: &ToolView,
     #[cfg(feature = "memory-sqlite")] hydrated: &memory::HydratedMemoryContext,
 ) -> ProjectedMessageContext {
-    let mut messages = build_base_messages_for_view(config, include_system_prompt, tool_view);
+    let projection = build_base_prompt_projection_with_tool_runtime_config(
+        config,
+        include_system_prompt,
+        tool_view,
+        &tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None),
+    );
+    let system_message = projection.system_message;
+    let mut prompt_fragments = projection.prompt_fragments;
+    let mut messages = system_message.into_iter().collect::<Vec<_>>();
     let mut artifacts = build_base_artifacts(messages.as_slice());
 
     #[cfg(feature = "memory-sqlite")]
-    append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+    {
+        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, hydrated);
+        append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
+    }
 
     ProjectedMessageContext {
         messages,
         artifacts,
+        prompt_fragments,
     }
 }
 
@@ -426,6 +543,38 @@ fn append_hydrated_memory_messages(
             }
         }
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn append_hydrated_tool_discovery_prompt_fragment(
+    prompt_fragments: &mut Vec<PromptFragment>,
+    hydrated: &memory::HydratedMemoryContext,
+) {
+    let assistant_contents = hydrated
+        .recent_window
+        .iter()
+        .filter(|turn| turn.role == "assistant")
+        .map(|turn| turn.content.trim())
+        .filter(|content| !content.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let discovery_state =
+        latest_tool_discovery_state_from_assistant_contents(assistant_contents.as_slice());
+    let Some(discovery_state) = discovery_state else {
+        return;
+    };
+
+    let content = discovery_state.render_delta_prompt();
+    let fragment = PromptFragment::new(
+        "tool-discovery-delta",
+        PromptLane::ToolDiscoveryDelta,
+        "tool-discovery-delta",
+        content,
+        ContextArtifactKind::ToolHint,
+    )
+    .with_dedupe_key("tool-discovery-delta");
+
+    prompt_fragments.push(fragment);
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -556,6 +705,29 @@ mod tests {
     fn build_system_message_returns_none_when_disabled() {
         let config = LoongClawConfig::default();
         assert_eq!(build_system_message(&config, false), None);
+    }
+
+    #[test]
+    fn projected_context_exposes_prompt_fragments_for_system_prompt_sources() {
+        let config = LoongClawConfig::default();
+        let projected =
+            build_projected_context_for_session(&config, "prompt-fragment-session", true)
+                .expect("build projected context");
+
+        assert!(
+            !projected.prompt_fragments.is_empty(),
+            "projected context should expose prompt fragments"
+        );
+
+        let first_lane = projected
+            .prompt_fragments
+            .first()
+            .map(|fragment| fragment.lane);
+
+        assert_eq!(
+            first_lane,
+            Some(crate::conversation::PromptLane::BaseSystem)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

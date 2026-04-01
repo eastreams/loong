@@ -9,12 +9,16 @@ mod persistence;
 pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
+mod prompt_fragments;
+mod prompt_orchestrator;
 mod runtime;
 mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
 mod subagent;
+mod tool_discovery_state;
+mod tool_result_compaction;
 mod turn_budget;
 mod turn_checkpoint;
 mod turn_coordinator;
@@ -53,6 +57,8 @@ pub use ingress::{
     ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
+pub use prompt_fragments::{PromptFragment, PromptLane};
+pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 #[allow(unused_imports)]
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
@@ -81,6 +87,7 @@ pub use session_history::{
 pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
+pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
 pub use turn_checkpoint::{

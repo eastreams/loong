@@ -256,6 +256,10 @@ impl ToolDescriptor {
         tool_argument_hint(self.name)
     }
 
+    pub fn search_hint(&self) -> &'static str {
+        tool_search_hint(self.name, self.description)
+    }
+
     pub fn parameter_types(&self) -> &'static [(&'static str, &'static str)] {
         tool_parameter_types(self.name)
     }
@@ -1580,12 +1584,20 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "English natural-language description of the tool capability you need."
                     },
+                    "exact_tool_id": {
+                        "type": "string",
+                        "description": "Optional exact tool id to refresh a known visible tool card."
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Optional maximum number of search results to return."
                     }
                 },
-                "required": ["query"],
+                "required": [],
+                "anyOf": [
+                    { "required": ["query"] },
+                    { "required": ["exact_tool_id"] }
+                ],
                 "additionalProperties": false
             }
         }
@@ -3188,7 +3200,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
             "account_id?:string,open_id?:string,receive_id:string,receive_id_type?:string,text?:string,post?:object,image_key?:string,file_key?:string,card?:object,markdown?:string"
         }
         "feishu.whoami" => "account_id?:string,open_id?:string",
-        "tool.search" => "query:string,limit?:integer",
+        "tool.search" => "query?:string,exact_tool_id?:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
         "claw.migrate" => "input_path?:string,mode?:string,source?:string",
         "external_skills.fetch" => {
@@ -3229,6 +3241,31 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",
+    }
+}
+
+fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
+    match name {
+        "tool.search" => {
+            "discover a non-core tool for the task or refresh a known tool card by exact tool id"
+        }
+        "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
+        "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "file.write" => {
+            "write a workspace file, save file content, create or overwrite a repo file"
+        }
+        "file.edit" => "edit a workspace file, patch file content, replace text in a repo file",
+        "shell.exec" => {
+            "run a shell command, execute a terminal command, bash, zsh, powershell, cli"
+        }
+        "web.fetch" => "fetch a web page, download page text, inspect http content from a url",
+        "web.search" => "search the web, look up web results, find information online",
+        "memory_search" => {
+            "search durable workspace memory, recall prior notes, query stored memory"
+        }
+        "memory_get" => "read a memory note by path, inspect saved durable memory content",
+        "provider.switch" => "switch model provider, change runtime provider selection",
+        _ => fallback,
     }
 }
 
@@ -3516,7 +3553,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("markdown", "string"),
         ],
         "feishu.whoami" => &[("account_id", "string"), ("open_id", "string")],
-        "tool.search" => &[("query", "string"), ("limit", "integer")],
+        "tool.search" => &[
+            ("query", "string"),
+            ("exact_tool_id", "string"),
+            ("limit", "integer"),
+        ],
         "tool.invoke" => &[
             ("tool_id", "string"),
             ("lease", "string"),
@@ -3651,7 +3692,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "feishu.messages.reply" => &["message_id"],
         "feishu.messages.search" => &["query"],
         "feishu.messages.send" => &["receive_id"],
-        "tool.search" => &["query"],
+        "tool.search" => &[],
         "tool.invoke" => &["tool_id", "lease", "arguments"],
         "external_skills.fetch" => &["url"],
         "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {

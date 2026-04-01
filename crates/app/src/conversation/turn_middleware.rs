@@ -11,7 +11,10 @@ use super::context_engine::{
     AssembledConversationContext, ContextArtifactDescriptor, ContextArtifactKind,
     ToolOutputStreamingPolicy,
 };
+use super::prompt_orchestrator::seed_prompt_fragments_from_context;
+use super::prompt_orchestrator::sync_prompt_fragments_into_context;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::{PromptFragment, PromptLane};
 
 pub const TURN_MIDDLEWARE_API_VERSION: u16 = 1;
 pub const SYSTEM_PROMPT_ADDITION_TURN_MIDDLEWARE_ID: &str = "system-prompt-addition";
@@ -207,11 +210,9 @@ impl ConversationTurnMiddleware for SystemPromptAdditionTurnMiddleware {
         _requested_tool_view: &ToolView,
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
-        apply_system_prompt_addition(
-            &mut assembled.messages,
-            &mut assembled.artifacts,
-            assembled.system_prompt_addition.as_deref(),
-        );
+        let addition = assembled.system_prompt_addition.clone();
+
+        apply_system_prompt_addition(&mut assembled, addition.as_deref());
         Ok(assembled)
     }
 }
@@ -237,15 +238,14 @@ impl ConversationTurnMiddleware for SystemPromptToolViewTurnMiddleware {
         _binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if include_system_prompt && requested_tool_view != runtime_tool_view {
-            apply_tool_view_to_system_prompt(&mut assembled.messages, requested_tool_view);
+            apply_tool_view_to_system_prompt(&mut assembled, requested_tool_view);
         }
         Ok(assembled)
     }
 }
 
 pub(crate) fn apply_system_prompt_addition(
-    messages: &mut Vec<Value>,
-    artifacts: &mut Vec<ContextArtifactDescriptor>,
+    assembled: &mut AssembledConversationContext,
     addition: Option<&str>,
 ) {
     let Some(addition) = addition
@@ -255,8 +255,26 @@ pub(crate) fn apply_system_prompt_addition(
         return;
     };
 
-    for (index, message) in messages.iter_mut().enumerate() {
+    seed_prompt_fragments_from_context(assembled);
+
+    if !assembled.prompt_fragments.is_empty() {
+        let fragment = PromptFragment::new(
+            "system-prompt-addition",
+            PromptLane::TaskDirective,
+            "system-prompt-addition",
+            addition,
+            ContextArtifactKind::RuntimeContract,
+        )
+        .with_dedupe_key("system-prompt-addition");
+
+        assembled.prompt_fragments.insert(0, fragment);
+        sync_prompt_fragments_into_context(assembled);
+        return;
+    }
+
+    for (index, message) in assembled.messages.iter_mut().enumerate() {
         let is_system = message.get("role").and_then(Value::as_str) == Some("system");
+
         if !is_system {
             continue;
         }
@@ -268,27 +286,47 @@ pub(crate) fn apply_system_prompt_addition(
                 }
                 _ => addition.to_owned(),
             };
+
             object.insert("content".to_owned(), Value::String(merged_content));
-            ensure_runtime_contract_artifact(artifacts, index);
+            ensure_runtime_contract_artifact(&mut assembled.artifacts, index);
             return;
         }
     }
 
-    for artifact in artifacts.iter_mut() {
+    for artifact in &mut assembled.artifacts {
         artifact.message_index += 1;
     }
-    messages.insert(
+
+    assembled.messages.insert(
         0,
         json!({
             "role": "system",
             "content": addition,
         }),
     );
-    ensure_runtime_contract_artifact(artifacts, 0);
+
+    ensure_runtime_contract_artifact(&mut assembled.artifacts, 0);
 }
 
-fn apply_tool_view_to_system_prompt(messages: &mut [Value], tool_view: &ToolView) {
-    for message in messages.iter_mut() {
+fn apply_tool_view_to_system_prompt(
+    assembled: &mut AssembledConversationContext,
+    tool_view: &ToolView,
+) {
+    seed_prompt_fragments_from_context(assembled);
+
+    let capability_snapshot = crate::tools::capability_snapshot_for_view(tool_view);
+    let capability_fragment = assembled
+        .prompt_fragments
+        .iter_mut()
+        .find(|fragment| fragment.lane == PromptLane::CapabilitySnapshot);
+
+    if let Some(capability_fragment) = capability_fragment {
+        capability_fragment.content = capability_snapshot;
+        sync_prompt_fragments_into_context(assembled);
+        return;
+    }
+
+    for message in &mut assembled.messages {
         let is_system = message.get("role").and_then(Value::as_str) == Some("system");
         if !is_system {
             continue;
@@ -497,6 +535,22 @@ mod tests {
                 },
             ],
             estimated_tokens: None,
+            prompt_fragments: vec![
+                crate::conversation::PromptFragment::new(
+                    "base-system",
+                    crate::conversation::PromptLane::BaseSystem,
+                    "base-system",
+                    "base system",
+                    ContextArtifactKind::SystemPrompt,
+                ),
+                crate::conversation::PromptFragment::new(
+                    "capability-snapshot",
+                    crate::conversation::PromptLane::CapabilitySnapshot,
+                    "capability-snapshot",
+                    "[available_tools]\n- delegate: spawn a child session",
+                    ContextArtifactKind::RuntimeContract,
+                ),
+            ],
             system_prompt_addition: Some("runtime-policy-addition".to_owned()),
         };
         let runtime_tool_view = crate::tools::runtime_tool_view();
@@ -527,7 +581,7 @@ mod tests {
             .await
             .expect("tool view middleware should succeed");
 
-        assert_eq!(transformed.artifacts.len(), 4);
+        assert_eq!(transformed.artifacts.len(), 5);
         assert!(
             transformed
                 .artifacts
@@ -567,6 +621,14 @@ mod tests {
                 .artifacts
                 .iter()
                 .all(|artifact| artifact.message_index < transformed.messages.len())
+        );
+        assert!(
+            transformed.prompt_fragments.iter().any(|fragment| {
+                fragment.lane == crate::conversation::PromptLane::TaskDirective
+                    && fragment.content == "runtime-policy-addition"
+            }),
+            "system prompt addition should become a task directive fragment: {:?}",
+            transformed.prompt_fragments
         );
 
         let system_content = transformed.messages[0]["content"]

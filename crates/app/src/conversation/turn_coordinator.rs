@@ -77,6 +77,7 @@ use super::session_history::{
 use super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
+use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
@@ -4019,6 +4020,79 @@ where
             }
         }
     }
+
+    async fn after_tool_execution(
+        &self,
+        session_context: &SessionContext,
+        request: &loongclaw_contracts::ToolCoreRequest,
+        outcome: &loongclaw_contracts::ToolCoreOutcome,
+        binding: ConversationRuntimeBinding<'_>,
+    ) {
+        let tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
+
+        persist_tool_discovery_refresh_event_if_needed(
+            self.runtime,
+            &session_context.session_id,
+            tool_name,
+            outcome,
+            binding,
+        )
+        .await;
+    }
+}
+
+async fn persist_tool_discovery_refresh_event_if_needed<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    tool_name: &str,
+    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    if tool_name != "tool.search" {
+        return;
+    }
+
+    if outcome.status != "ok" {
+        return;
+    }
+
+    let Some(discovery_state) = ToolDiscoveryState::from_tool_search_payload(&outcome.payload)
+    else {
+        return;
+    };
+    let discovery_payload = match serde_json::to_value(discovery_state) {
+        Ok(discovery_payload) => discovery_payload,
+        Err(_) => return,
+    };
+    let persist_result = persist_conversation_event(
+        runtime,
+        session_id,
+        TOOL_DISCOVERY_REFRESHED_EVENT_NAME,
+        discovery_payload,
+        binding,
+    )
+    .await;
+
+    if persist_result.is_ok() {
+        return;
+    }
+
+    let Some(ctx) = binding.kernel_context() else {
+        return;
+    };
+
+    let _ = ctx.kernel.record_audit_event(
+        Some(ctx.agent_id()),
+        AuditEventKind::PlaneInvoked {
+            pack_id: ctx.pack_id().to_owned(),
+            plane: ExecutionPlane::Runtime,
+            tier: PlaneTier::Core,
+            primary_adapter: "conversation.runtime".to_owned(),
+            delegated_core_adapter: None,
+            operation: "conversation.runtime.tool_discovery_persist_failed".to_owned(),
+            required_capabilities: Vec::new(),
+        },
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -8833,6 +8907,7 @@ mod tests {
                 })],
                 artifacts: vec![],
                 estimated_tokens: Some(42),
+                prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
             },
             "hello world",
@@ -8872,6 +8947,7 @@ mod tests {
                 })],
                 artifacts: vec![],
                 estimated_tokens: Some(42),
+                prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
             },
             "hello world",
@@ -9461,6 +9537,7 @@ mod tests {
                 })],
                 artifacts: vec![],
                 estimated_tokens: Some(42),
+                prompt_fragments: Vec::new(),
                 system_prompt_addition: None,
             },
             "say hello",

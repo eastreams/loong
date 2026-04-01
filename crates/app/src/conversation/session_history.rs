@@ -20,7 +20,6 @@ use super::analytics::{
     summarize_turn_checkpoint_history,
 };
 use super::runtime_binding::ConversationRuntimeBinding;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AssistantHistoryLoadErrorCode {
     DirectReadFailed,

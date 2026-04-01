@@ -3,12 +3,13 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
     ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolResultPayloadSemantics,
     TurnResult,
 };
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -1184,9 +1185,7 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
             reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
         }
         _ if !payload_truncated => {
-            let payload_semantics = envelope_payload_semantics(&envelope);
-            compact_discovery_payload_summary_str(payload_summary, payload_semantics)
-                .map(|summary| (summary, false))
+            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
         }
         _ => None,
     };
@@ -1329,80 +1328,6 @@ pub fn build_external_skill_followup_user_prompt(
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
-}
-
-fn compact_discovery_payload_summary_str(
-    payload_summary: &str,
-    payload_semantics: Option<ToolResultPayloadSemantics>,
-) -> Option<String> {
-    let payload_json = serde_json::from_str::<Value>(payload_summary).ok()?;
-    let compacted_summary = compact_discovery_payload_summary(&payload_json, payload_semantics)?;
-    let compacted_summary_str = serde_json::to_string(&compacted_summary).ok()?;
-    (compacted_summary_str.len() < payload_summary.len()).then_some(compacted_summary_str)
-}
-
-fn compact_discovery_payload_summary(
-    payload: &Value,
-    payload_semantics: Option<ToolResultPayloadSemantics>,
-) -> Option<Value> {
-    let use_discovery_compaction = payload_semantics
-        == Some(ToolResultPayloadSemantics::DiscoveryResult)
-        || payload_summary_looks_like_discovery_result(payload);
-    if !use_discovery_compaction {
-        return None;
-    }
-    let payload_object = payload.as_object()?;
-    let results = payload_object.get("results")?.as_array()?;
-
-    let mut compacted = Map::new();
-    if let Some(query) = payload_object.get("query") {
-        compacted.insert("query".to_owned(), query.clone());
-    }
-    compacted.insert(
-        "results".to_owned(),
-        Value::Array(
-            results
-                .iter()
-                .map(compact_discovery_payload_result)
-                .collect(),
-        ),
-    );
-
-    Some(Value::Object(compacted))
-}
-
-fn compact_discovery_payload_result(result: &Value) -> Value {
-    let Some(result_object) = result.as_object() else {
-        return result.clone();
-    };
-
-    let mut compacted = Map::new();
-    clone_field_if_present(result_object, &mut compacted, "tool_id");
-    clone_field_if_present(result_object, &mut compacted, "summary");
-    clone_field_if_present(result_object, &mut compacted, "argument_hint");
-    clone_array_field_if_present(result_object, &mut compacted, "required_fields");
-    clone_array_field_if_present(result_object, &mut compacted, "required_field_groups");
-    clone_field_if_present(result_object, &mut compacted, "lease");
-    Value::Object(compacted)
-}
-
-fn clone_field_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
-    if let Some(value) = source.get(key) {
-        target.insert(key.to_owned(), value.clone());
-    }
-}
-
-fn clone_array_field_if_present(
-    source: &Map<String, Value>,
-    target: &mut Map<String, Value>,
-    key: &str,
-) {
-    let Some(value) = source.get(key) else {
-        return;
-    };
-    if value.as_array().is_some() {
-        target.insert(key.to_owned(), value.clone());
-    }
 }
 
 pub fn build_tool_result_followup_tail<F>(
@@ -2776,7 +2701,12 @@ mod tests {
             "adapter": "core-tools",
             "tool_name": "tool.search",
             "query": "read repo file",
+            "exact_tool_id": "file.read",
             "returned": 1,
+            "diagnostics": {
+                "reason": "exact_tool_id_not_visible",
+                "requested_tool_id": "file.read"
+            },
             "results": [
                 {
                     "tool_id": "file.read",
@@ -2822,9 +2752,14 @@ mod tests {
             .expect("reduced payload should keep the first result");
 
         assert_eq!(summary["query"], "read repo file");
+        assert_eq!(summary["exact_tool_id"], "file.read");
+        assert_eq!(
+            summary["diagnostics"]["reason"],
+            "exact_tool_id_not_visible"
+        );
         assert!(summary.get("adapter").is_none());
         assert!(summary.get("tool_name").is_none());
-        assert!(summary.get("returned").is_none());
+        assert_eq!(summary["returned"], 1);
         assert_eq!(first["tool_id"], "file.read");
         assert_eq!(first["lease"], "lease-file");
         assert!(first.get("tags").is_none());
