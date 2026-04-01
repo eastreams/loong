@@ -1353,6 +1353,8 @@ mod tests {
 
     #[tokio::test]
     async fn run_wecom_send_subscribes_and_sends_markdown_message() {
+        let temp_home = unique_temp_dir("loongclaw-wecom-send-home");
+        let mut env = ScopedEnv::new();
         let (websocket_url, websocket_server) = spawn_mock_wecom_send_server().await;
         let mut config = build_wecom_test_config("http://127.0.0.1:9", websocket_url.as_str());
         config.wecom.account_id = Some("wecom_send_runtime_test".to_owned());
@@ -1360,6 +1362,8 @@ mod tests {
             .wecom
             .resolve_account(None)
             .expect("resolve wecom account");
+        env.set("HOME", &temp_home);
+        env.set("USERPROFILE", &temp_home);
 
         run_wecom_send(
             &resolved,
