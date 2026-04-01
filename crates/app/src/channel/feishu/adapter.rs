@@ -9,7 +9,7 @@ use crate::channel::feishu::api::messaging_api::{
 };
 use crate::channel::feishu::api::resources::docs::{
     convert_content_to_blocks, create_document as create_feishu_document, create_nested_blocks,
-    fetch_document_content,
+    fetch_document_content, fetch_document_metadata,
 };
 use crate::channel::feishu::api::resources::messages::{
     self, FeishuMessageHistoryQuery, FeishuOutboundMessageBody, fetch_message_detail,
@@ -199,6 +199,60 @@ impl FeishuAdapter {
                 Err("feishu adapter only supports message_reply or receive_id targets".to_owned())
             }
         }
+    }
+
+    async fn append_document_content_with_token(
+        &self,
+        token: &str,
+        document_id: &str,
+        content: &DocumentContent,
+    ) -> ApiResult<()> {
+        let trimmed_document_id = document_id.trim();
+        if trimmed_document_id.is_empty() {
+            return Err(ApiError::InvalidRequest(
+                "Document ID cannot be empty".to_owned(),
+            ));
+        }
+
+        let content_str = match content {
+            DocumentContent::Text(text) => {
+                if text.trim().is_empty() {
+                    return Err(ApiError::InvalidRequest(
+                        "Document content cannot be empty".to_owned(),
+                    ));
+                }
+                text.as_str()
+            }
+            DocumentContent::Markdown(text) => {
+                if text.trim().is_empty() {
+                    return Err(ApiError::InvalidRequest(
+                        "Document content cannot be empty".to_owned(),
+                    ));
+                }
+                text.as_str()
+            }
+            DocumentContent::Binary(_) => {
+                return Err(ApiError::NotSupported(
+                    "Binary content not supported by Feishu documents".to_owned(),
+                ));
+            }
+            DocumentContent::Json(_) => {
+                return Err(ApiError::NotSupported(
+                    "JSON content not supported by Feishu documents".to_owned(),
+                ));
+            }
+        };
+
+        let blocks = convert_cli_result(
+            convert_content_to_blocks(&self.client, token, "markdown", content_str).await,
+        )?;
+
+        let insert_summary = convert_cli_result(
+            create_nested_blocks(&self.client, token, trimmed_document_id, &blocks).await,
+        )?;
+
+        let _ = insert_summary;
+        Ok(())
     }
 }
 
@@ -590,7 +644,8 @@ impl DocumentsApi for FeishuAdapter {
 
         // If content is provided, append it to the document
         if let Some(content) = content {
-            self.append_to_document(&document.id, content).await?;
+            self.append_document_content_with_token(&token, &document.id, content)
+                .await?;
         }
 
         Ok(document)
@@ -598,8 +653,8 @@ impl DocumentsApi for FeishuAdapter {
 
     /// Gets a Feishu document by ID.
     ///
-    /// Returns the document with available fields. Some fields may be None
-    /// if not returned by Feishu API (e.g., owner_id, timestamps).
+    /// Returns the document metadata together with plain text content.
+    /// Some fields may be None if not returned by Feishu API.
     async fn get_document(&self, id: &str) -> ApiResult<Option<Document>> {
         let document_id = id.trim();
         if document_id.is_empty() {
@@ -610,17 +665,12 @@ impl DocumentsApi for FeishuAdapter {
 
         let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
 
-        let metadata_result = fetch_document_content(&self.client, &token, document_id, None).await;
-
-        match metadata_result {
-            Ok(content) => {
-                let doc = convert_feishu_document_content_to_document(content);
-                Ok(Some(doc))
-            }
+        let metadata = match fetch_document_metadata(&self.client, &token, document_id).await {
+            Ok(metadata) => metadata,
             Err(err) => {
                 let api_err = convert_string_error_to_api_error(&err);
                 match api_err {
-                    ApiError::NotFound(_) => Ok(None),
+                    ApiError::NotFound(_) => return Ok(None),
                     ApiError::Auth(_)
                     | ApiError::RateLimited { .. }
                     | ApiError::InvalidRequest(_)
@@ -628,10 +678,31 @@ impl DocumentsApi for FeishuAdapter {
                     | ApiError::Server(_)
                     | ApiError::NotSupported(_)
                     | ApiError::Platform { .. }
-                    | ApiError::Other(_) => Err(api_err),
+                    | ApiError::Other(_) => return Err(api_err),
                 }
             }
-        }
+        };
+
+        let content = match fetch_document_content(&self.client, &token, document_id, None).await {
+            Ok(content) => content,
+            Err(err) => {
+                let api_err = convert_string_error_to_api_error(&err);
+                match api_err {
+                    ApiError::NotFound(_) => return Ok(None),
+                    ApiError::Auth(_)
+                    | ApiError::RateLimited { .. }
+                    | ApiError::InvalidRequest(_)
+                    | ApiError::Network(_)
+                    | ApiError::Server(_)
+                    | ApiError::NotSupported(_)
+                    | ApiError::Platform { .. }
+                    | ApiError::Other(_) => return Err(api_err),
+                }
+            }
+        };
+
+        let document = convert_feishu_document_snapshot_to_document(metadata, content);
+        Ok(Some(document))
     }
 
     /// Gets the content of a Feishu document.
@@ -680,56 +751,9 @@ impl DocumentsApi for FeishuAdapter {
     /// Converts the content to Feishu blocks and inserts them.
     /// Supports Text and Markdown content types.
     async fn append_to_document(&self, id: &str, content: &DocumentContent) -> ApiResult<()> {
-        let document_id = id.trim();
-        if document_id.is_empty() {
-            return Err(ApiError::InvalidRequest(
-                "Document ID cannot be empty".to_owned(),
-            ));
-        }
-
-        // Validate content is not empty
-        let (content_type, content_str) = match content {
-            DocumentContent::Text(text) => {
-                if text.trim().is_empty() {
-                    return Err(ApiError::InvalidRequest(
-                        "Document content cannot be empty".to_owned(),
-                    ));
-                }
-                ("markdown", text.as_str())
-            }
-            DocumentContent::Markdown(text) => {
-                if text.trim().is_empty() {
-                    return Err(ApiError::InvalidRequest(
-                        "Document content cannot be empty".to_owned(),
-                    ));
-                }
-                ("markdown", text.as_str())
-            }
-            DocumentContent::Binary(_) => {
-                return Err(ApiError::NotSupported(
-                    "Binary content not supported by Feishu documents".to_owned(),
-                ));
-            }
-            DocumentContent::Json(_) => {
-                return Err(ApiError::NotSupported(
-                    "JSON content not supported by Feishu documents".to_owned(),
-                ));
-            }
-        };
-
         let token = convert_cli_result(self.client.get_tenant_access_token().await)?;
-
-        // Convert content to Feishu blocks
-        let blocks = convert_cli_result(
-            convert_content_to_blocks(&self.client, &token, content_type, content_str).await,
-        )?;
-
-        // Insert blocks into document
-        let _insert_result = convert_cli_result(
-            create_nested_blocks(&self.client, &token, document_id, &blocks).await,
-        )?;
-
-        Ok(())
+        self.append_document_content_with_token(&token, id, content)
+            .await
     }
 
     /// Lists documents in a container.
@@ -801,20 +825,26 @@ fn convert_feishu_document_metadata_to_document(
 
 /// Convert FeishuDocumentContent to generic Document
 ///
-/// Note: Feishu's raw_content API returns only content, document_id, and url.
-/// title, owner_id, timestamps are not available.
-fn convert_feishu_document_content_to_document(
+/// Note: Feishu's get and raw_content APIs expose different parts of the snapshot.
+fn convert_feishu_document_snapshot_to_document(
+    metadata: crate::channel::feishu::api::resources::types::FeishuDocumentMetadata,
     content: crate::channel::feishu::api::resources::types::FeishuDocumentContent,
 ) -> Document {
+    let document_url = metadata.url.or(content.url);
+    let document_metadata = serde_json::json!({
+        "revision_id": metadata.revision_id,
+        "url": document_url,
+    });
+
     Document {
-        id: content.document_id,
-        title: None, // Raw content doesn't include title
+        id: metadata.document_id,
+        title: metadata.title,
         owner_id: None,
         created_at: None,
         updated_at: None,
         content: Some(DocumentContent::Text(content.content)),
         doc_type: DocumentType::Docx,
-        metadata: content.url.map(|url| serde_json::json!({ "url": url })),
+        metadata: Some(document_metadata),
     }
 }
 
@@ -826,7 +856,7 @@ mod tests {
         Json, Router,
         body::to_bytes,
         extract::{Request, State},
-        routing::post,
+        routing::{get, post},
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -1218,6 +1248,327 @@ mod tests {
             requests[1]
                 .body
                 .contains("\\\"text\\\":\\\"threaded reply\\\"")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn feishu_adapter_create_document_supports_initial_markdown_content() {
+        let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let state = MockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-doc-create"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "document": {
+                                        "document_id": "doxcnCreated",
+                                        "revision_id": 7,
+                                        "title": "Release Plan"
+                                    }
+                                }
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents/blocks/convert",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "first_level_block_ids": ["tmp-heading"],
+                                    "blocks": [
+                                        {
+                                            "block_id": "tmp-heading",
+                                            "block_type": 3,
+                                            "heading1": {
+                                                "elements": [
+                                                    {
+                                                        "text_run": {
+                                                            "content": "Release Plan"
+                                                        }
+                                                    }
+                                                ]
+                                            },
+                                            "children": []
+                                        }
+                                    ]
+                                }
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents/doxcnCreated/blocks/doxcnCreated/descendant",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "block_id_relations": [
+                                        {
+                                            "block_id": "blk_real_heading",
+                                            "temporary_block_id": "tmp-heading"
+                                        }
+                                    ]
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let adapter = FeishuAdapter::new(&resolved_config(&base_url)).expect("build adapter");
+
+        let document = DocumentsApi::create_document(
+            &adapter,
+            "Release Plan",
+            Some(&DocumentContent::Markdown("# Release Plan".to_owned())),
+            None,
+        )
+        .await
+        .expect("create document");
+
+        assert_eq!(document.id, "doxcnCreated");
+        assert_eq!(document.title.as_deref(), Some("Release Plan"));
+        assert_eq!(document.doc_type, DocumentType::Docx);
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[1].path, "/open-apis/docx/v1/documents");
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-doc-create")
+        );
+        assert!(requests[1].body.contains("\"title\":\"Release Plan\""));
+        assert_eq!(
+            requests[2].path,
+            "/open-apis/docx/v1/documents/blocks/convert"
+        );
+        assert!(requests[2].body.contains("\"content_type\":\"markdown\""));
+        assert!(requests[2].body.contains("# Release Plan"));
+        assert_eq!(
+            requests[3].path,
+            "/open-apis/docx/v1/documents/doxcnCreated/blocks/doxcnCreated/descendant"
+        );
+        assert!(
+            requests[3]
+                .query
+                .as_deref()
+                .is_some_and(|query| query.contains("document_revision_id=-1"))
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn feishu_adapter_get_document_reads_metadata_and_raw_content() {
+        let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let state = MockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-doc-get"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents/doxcnCreated",
+                get({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "document": {
+                                        "document_id": "doxcnCreated",
+                                        "revision_id": 9,
+                                        "title": "Release Plan"
+                                    }
+                                }
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents/doxcnCreated/raw_content",
+                get({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "content": "hello from docs"
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let adapter = FeishuAdapter::new(&resolved_config(&base_url)).expect("build adapter");
+
+        let document = DocumentsApi::get_document(&adapter, "doxcnCreated")
+            .await
+            .expect("get document should succeed")
+            .expect("document should exist");
+
+        assert_eq!(document.id, "doxcnCreated");
+        assert_eq!(document.title.as_deref(), Some("Release Plan"));
+        assert_eq!(
+            document.content,
+            Some(DocumentContent::Text("hello from docs".to_owned()))
+        );
+        assert_eq!(document.doc_type, DocumentType::Docx);
+        assert_eq!(
+            document
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("revision_id"))
+                .and_then(|value| value.as_i64()),
+            Some(9)
+        );
+        assert_eq!(
+            document
+                .metadata
+                .as_ref()
+                .and_then(|value| value.get("url"))
+                .and_then(|value| value.as_str()),
+            Some("https://open.feishu.cn/docx/doxcnCreated")
+        );
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(
+            requests[1].path,
+            "/open-apis/docx/v1/documents/doxcnCreated"
+        );
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-doc-get")
+        );
+        assert_eq!(
+            requests[2].path,
+            "/open-apis/docx/v1/documents/doxcnCreated/raw_content"
+        );
+        assert_eq!(
+            requests[2].authorization.as_deref(),
+            Some("Bearer t-token-doc-get")
+        );
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn feishu_adapter_get_document_returns_none_when_metadata_is_missing() {
+        let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let state = MockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-doc-missing"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/docx/v1/documents/doxcnMissing",
+                get({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 1770002,
+                                "msg": "not found"
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let adapter = FeishuAdapter::new(&resolved_config(&base_url)).expect("build adapter");
+
+        let document = DocumentsApi::get_document(&adapter, "doxcnMissing")
+            .await
+            .expect("get document should not fail");
+
+        assert_eq!(document, None);
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].path,
+            "/open-apis/docx/v1/documents/doxcnMissing"
         );
 
         server.abort();
