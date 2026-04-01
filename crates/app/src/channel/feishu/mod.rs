@@ -224,6 +224,13 @@ mod tests {
         assert!(!feishu_allowlist_allows_chat(&exact_only, "oc_other"));
         assert!(!feishu_allowlist_allows_chat(&exact_only, " "));
 
+        let spaced_exact_only = set(&["  oc_demo  "]);
+        assert!(feishu_allowlist_allows_chat(&spaced_exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(
+            &spaced_exact_only,
+            "oc_other"
+        ));
+
         let wildcard = set(&["*"]);
         assert!(feishu_allowlist_allows_chat(&wildcard, "oc_other"));
     }
@@ -242,6 +249,13 @@ mod tests {
         assert!(feishu_allowlist_allows_chat(&exact_only, "oc_demo"));
         assert!(!feishu_allowlist_allows_chat(&exact_only, "oc_other"));
         assert!(!feishu_allowlist_allows_chat(&exact_only, " "));
+
+        let spaced_exact_only = btree_set(&["  oc_demo  "]);
+        assert!(feishu_allowlist_allows_chat(&spaced_exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(
+            &spaced_exact_only,
+            "oc_other"
+        ));
 
         let wildcard = btree_set(&["*"]);
         assert!(feishu_allowlist_allows_chat(&wildcard, "oc_other"));
