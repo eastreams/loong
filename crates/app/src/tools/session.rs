@@ -419,11 +419,15 @@ fn execute_sessions_list(
 
     let matched_count = listed_sessions.len();
     let effective_offset = request.offset.min(matched_count);
-    let remaining_count = matched_count.saturating_sub(effective_offset);
-    let has_more = remaining_count > request.limit;
-    let paged_sessions = listed_sessions.into_iter().skip(effective_offset);
-    let mut listed_sessions = paged_sessions.collect::<Vec<_>>();
-    listed_sessions.truncate(request.limit);
+    let page_limit = request.limit.saturating_add(1);
+    let visible_sessions = listed_sessions.into_iter();
+    let offset_sessions = visible_sessions.skip(effective_offset);
+    let bounded_sessions = offset_sessions.take(page_limit);
+    let mut listed_sessions = bounded_sessions.collect::<Vec<_>>();
+    let has_more = listed_sessions.len() > request.limit;
+    if has_more {
+        let _ = listed_sessions.pop();
+    }
     let returned_count = listed_sessions.len();
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),

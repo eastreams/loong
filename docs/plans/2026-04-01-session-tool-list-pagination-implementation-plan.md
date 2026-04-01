@@ -13,7 +13,7 @@ response contract with `has_more`.
 
 ---
 
-### Task 1: Add the failing payload and tool behavior tests
+## Task 1: Add the failing payload and tool behavior tests
 
 **Files:**
 - Modify: `crates/app/src/tools/payload.rs`
@@ -48,7 +48,7 @@ cargo test -p loongclaw-app sessions_list_applies_offset_pagination --locked
 
 Expected: failing because `offset` is not implemented yet.
 
-### Task 2: Implement the pagination helper and request parsing
+## Task 2: Implement the pagination helper and request parsing
 
 **Files:**
 - Modify: `crates/app/src/tools/payload.rs`
@@ -73,7 +73,7 @@ cargo test -p loongclaw-app sessions_list_applies_offset_pagination --locked
 
 Expected: green.
 
-### Task 3: Wire pagination metadata into the `sessions_list` response contract
+## Task 3: Wire pagination metadata into the `sessions_list` response contract
 
 **Files:**
 - Modify: `crates/app/src/tools/session.rs`
@@ -95,7 +95,7 @@ Add `offset` to the `filters` payload and add `has_more` to the top-level respon
 
 Confirm legacy calls still return the same first page.
 
-### Task 4: Update tool contract metadata
+## Task 4: Update tool contract metadata
 
 **Files:**
 - Modify: `crates/app/src/tools/catalog.rs`
@@ -112,7 +112,7 @@ Add `offset` to the `sessions_list` argument hint and parameter type list.
 
 Keep coverage local to the existing catalog tests.
 
-### Task 5: Run focused and broader verification
+## Task 5: Run focused and broader verification
 
 **Files:**
 - Modify: none unless verification exposes a necessary fix
@@ -135,18 +135,20 @@ cargo test -p loongclaw-app sessions_list --locked
 cargo test -p loongclaw-app tool_catalog --locked
 ```
 
-**Step 3: Run formatting and full workspace tests**
+**Step 3: Run formatting, lint, and full workspace tests**
 
 Run:
 
 ```bash
 cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --locked
+cargo test --workspace --all-features --locked
 ```
 
 Expected: all green.
 
-### Task 6: Prepare clean delivery
+## Task 6: Prepare clean delivery
 
 **Files:**
 - Modify: GitHub artifacts through `gh`, not repository files

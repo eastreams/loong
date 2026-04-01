@@ -153,6 +153,13 @@ mod tests {
     }
 
     #[test]
+    fn optional_offset_returns_default_for_non_numeric() {
+        let payload = json!({"offset": "bad"});
+        let offset = optional_payload_offset(&payload, "offset", 0);
+        assert_eq!(offset, 0);
+    }
+
+    #[test]
     fn optional_offset_returns_default_for_negative() {
         let payload = json!({"offset": -2});
         assert_eq!(optional_payload_offset(&payload, "offset", 0), 0);
