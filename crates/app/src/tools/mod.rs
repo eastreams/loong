@@ -1692,6 +1692,24 @@ mod tests {
         }
     }
 
+    struct ScopedCurrentDir {
+        original: PathBuf,
+    }
+
+    impl ScopedCurrentDir {
+        fn new(path: &Path) -> Self {
+            let original = std::env::current_dir().expect("read current dir");
+            std::env::set_current_dir(path).expect("set current dir");
+            Self { original }
+        }
+    }
+
+    impl Drop for ScopedCurrentDir {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("restore current dir");
+        }
+    }
+
     #[cfg(all(feature = "tool-shell", unix))]
     fn configured_test_bash_runtime_with_rules(
         root: &Path,
@@ -3499,6 +3517,64 @@ mod tests {
         assert_eq!(outcome.payload["stdout"].as_str(), Some("ok"));
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    #[test]
+    fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path() {
+        use std::fs;
+
+        let home = unique_tool_temp_dir("loongclaw-bash-home-rules");
+        let workspace = unique_tool_temp_dir("loongclaw-bash-home-rules-workspace");
+        let rules_dir = home.join(".loongclaw").join("rules");
+        fs::create_dir_all(&rules_dir).expect("rules dir");
+        fs::write(
+            rules_dir.join("allow.rules"),
+            "prefix_rule(pattern=[\"printf\",\"ok\"], decision=\"allow\")\n",
+        )
+        .expect("rule file");
+        fs::create_dir_all(&workspace).expect("workspace");
+
+        let mut env = ScopedEnv::new();
+        env.set("HOME", &home);
+        let _cwd = ScopedCurrentDir::new(&workspace);
+
+        let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+            &crate::config::LoongClawConfig::default(),
+            None,
+        );
+        assert_eq!(runtime.bash_exec.governance.rules_dir, rules_dir);
+        assert!(
+            runtime.bash_exec.governance.load_error.is_none(),
+            "default HOME-scoped rules should load cleanly"
+        );
+
+        let log_path = home.join("bash-args.log");
+        let runtime_path = write_fake_bash_runtime(&home, "fake-bash", &log_path);
+        runtime.bash_exec.available = true;
+        runtime.bash_exec.command = Some(runtime_path);
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "bash.exec".to_owned(),
+                payload: json!({"command": "printf ok"}),
+            },
+            &runtime,
+        )
+        .expect("home-default rules should permit execution");
+
+        let logged_args = fs::read_to_string(&log_path).expect("read fake bash args");
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["stdout"].as_str(), Some("ok"));
+        assert!(
+            logged_args.lines().eq(["-c", "printf ok"].into_iter()),
+            "expected non-login bash invocation, got: {logged_args:?}"
+        );
+
+        drop(_cwd);
+        drop(env);
+        fs::remove_dir_all(&home).ok();
+        fs::remove_dir_all(&workspace).ok();
     }
 
     #[cfg(all(feature = "tool-shell", unix))]

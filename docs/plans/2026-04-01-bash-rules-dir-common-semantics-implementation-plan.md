@@ -181,7 +181,7 @@ Expected:
 - Modify: `crates/app/src/tools/mod.rs`
 - Test: `crates/app/src/tools/mod.rs`
 
-- [ ] **Step 1: Add a regression test for home-default rules with repo cwd and `config + None` runtime construction**
+- [x] **Step 1: Add a regression test for home-default rules with repo cwd and `config + None` runtime construction**
 
 Add a focused end-to-end test in `crates/app/src/tools/mod.rs` that mirrors the actual failure shape:
 
@@ -229,7 +229,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 
 Keep the workspace root free of local `.loongclaw/rules` fixtures so the test fails for the old code for the same reason the manual smoke failed.
 
-- [ ] **Step 2: Run the red regression test**
+- [x] **Step 2: Run the red regression test**
 
 Run:
 
@@ -239,7 +239,7 @@ Expected:
 
 - FAIL on the old code because the runtime resolves its default rules dir away from `HOME/.loongclaw/rules`
 
-- [ ] **Step 3: Finalize the regression after Task 1 lands**
+- [x] **Step 3: Finalize the regression after Task 1 lands**
 
 Once Task 1 is implemented, make any small fixture-path adjustments needed so the new regression uses the same helper assumptions as production, then re-run:
 
