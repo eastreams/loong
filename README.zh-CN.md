@@ -39,6 +39,7 @@
 <p>
   <a href="site/index.mdx">文档总览</a> •
   <a href="site/get-started/overview.mdx">快速上手</a> •
+  <a href="site/use-loongclaw/configuration-patterns.mdx">配置模式</a> •
   <a href="site/use-loongclaw/common-setups.mdx">常见路线</a> •
   <a href="site/build-on-loongclaw/overview.mdx">扩展 LoongClaw</a> •
   <a href="CONTRIBUTING.md">参与贡献</a>
@@ -130,6 +131,7 @@ loong doctor --fix
 `onboard` 是支持的 first-run 路径。它应该把你带到可用的 provider 配置和明确的下一条命令，而不是先逼你手改原始配置。
 
 首轮上手路径刻意保持简短。完整 provider 设置、channel 配置和操作变体，应该放在 docs，而不是继续往首页里塞。
+如果你想先理解公开配置形态，再进入 provider 或 channel 的具体教程，可以先看 [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx)。
 
 <a id="start-paths"></a>
 ## 从哪里开始
@@ -138,6 +140,7 @@ loong doctor --fix
 | --- | --- |
 | 先尽快得到第一条有效结果 | `onboard`、`ask`、`chat`、`doctor` |
 | 想直接跟着一条完整的 provider + channel 路径走 | [Common Setups](site/use-loongclaw/common-setups.mdx) 与其下对应的 playbook 页面 |
+| 先理解共享的公开配置形态，再进入更细的教程 | [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx)、[Provider Recipes](site/use-loongclaw/provider-recipes.mdx)、[Channel Setup](docs/product-specs/channel-setup.md) 与 [Memory Profiles](site/use-loongclaw/memory-profiles.mdx) |
 | 不靠猜测完成 provider / model 选择 | `onboard`、`list-models`、[Providers And Models](site/use-loongclaw/providers-and-models.mdx) 以及 [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) |
 | 增加交付接入面，但不把支持范围说大 | [Channels](site/use-loongclaw/channels.mdx)、[Gateway And Supervision](site/use-loongclaw/gateway-and-supervision.mdx)、[Channel Recipes](site/use-loongclaw/channel-recipes.mdx) 与完整的 [Channel Setup](docs/product-specs/channel-setup.md) 说明 |
 | 理解当前 runtime surface 以及受治理的扩展边界 | [Use LoongClaw](site/use-loongclaw/overview.mdx)、[Tools And Memory](site/use-loongclaw/tools-and-memory.mdx)、[ARCHITECTURE.md](ARCHITECTURE.md)、[Contributing](CONTRIBUTING.md) |
@@ -160,6 +163,7 @@ loong doctor --fix
 | --- | --- |
 | 快速拿到第一条有效结果 | [Get Started](site/get-started/overview.mdx) |
 | 不自己拼接文档，直接跟一条完整 rollout path 走 | [Common Setups](site/use-loongclaw/common-setups.mdx) |
+| 先理解共享的公开配置形态 | [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx) |
 | 直接看 provider / channel 的实操路径 | [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) 与 [Channel Recipes](site/use-loongclaw/channel-recipes.mdx) |
 | 理解当前操作者模型 | [Use LoongClaw](site/use-loongclaw/overview.mdx) |
 | 评估架构与扩展边界 | [Build On LoongClaw](site/build-on-loongclaw/overview.mdx) |
@@ -203,6 +207,14 @@ contracts  (stable contract vocabulary)
 - small core, rich seams：专用化应该通过 adapter、pack 和受控 assembly 完成，而不是反复改内核
 
 完整分层模型见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 [Layered Kernel Design](docs/design-docs/layered-kernel-design.md)。
+
+## Star History
+
+<p align="center">
+  <a href="https://www.star-history.com/#loongclaw-ai/loongclaw&Date">
+    <img src="https://api.star-history.com/svg?repos=loongclaw-ai/loongclaw&type=Date" alt="Star History Chart" />
+  </a>
+</p>
 
 ## 贡献
 
