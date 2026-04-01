@@ -59,11 +59,13 @@ be compiled into a full static site even when the local live preview is slow to 
 Pinning both the Node and Mintlify versions avoids two common false negatives:
 registry tag drift on the Mintlify package, and local shells that still resolve to unsupported Node 25+.
 The PATH override is necessary because the Mintlify CLI re-spawns a plain `node` process from the current shell path.
+If `mintlify export` writes the zip and then appears stuck in `preparing export`, verify the archive and stop the process instead of assuming the docs content failed to compile.
 
 CI parity:
 
 - GitHub Actions now runs the same Mintlify `broken-links` and `export` checks on pushes and pull requests in the `docs-site` job.
 - local validation should stay command-for-command compatible with CI so docs failures are reproducible before review.
+- the CI export step is time-bounded because the Mintlify CLI can occasionally leave the process running after the zip artifact is already written
 
 Mintlify repository setup:
 

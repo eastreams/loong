@@ -59,6 +59,8 @@ The extra PATH step is intentional because Mintlify's wrapper spawns `node`
 from the shell path instead of reusing the outer npm exec runtime automatically.
 GitHub Actions mirrors this same loop in the `docs-site` job, so docs pull
 requests should be reproducible locally before review.
+The CI export step is time-bounded because Mintlify can occasionally leave the
+process alive after the static export artifact has already been written.
 
 ## Standard Workflow
 
