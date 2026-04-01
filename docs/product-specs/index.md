@@ -23,6 +23,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - [Prompt And Personality](prompt-and-personality.md)
 - [Background Tasks](background-tasks.md)
 - [Skills Discovery](skills-discovery.md)
+- [Personalization](personalization.md)
 - [Memory Profiles](memory-profiles.md)
 - [Memory Retrieval](memory-retrieval.md)
 - [Runtime-Self Continuity](runtime-self-continuity.md)
@@ -36,7 +37,7 @@ Product specs describe **what** the product does from the user's perspective, no
 - `Local Product Control Plane` defines the shared localhost-only product substrate that future HTTP and Web UI surfaces must consume instead of inventing a second runtime.
 - `Background Tasks`, `Skills Discovery`, and `Memory Retrieval` define the next operator-facing productization surfaces that should be built on top of already-shipped runtime substrate.
 - `Memory Profiles`, `Memory Retrieval`, and `Runtime-Self Continuity` together define the public continuity boundary: bounded advisory memory, explicit retrieval, and strict runtime-self identity separation.
-- `Browser Automation Companion` and `Web UI` are expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
+- `Browser Automation Companion`, `Web UI`, and `Personalization` are expectation-setting specs for the next user-facing surfaces. They should not be documented as generally available before the implementation exists.
 
 Template for new specs:
 

@@ -20,6 +20,9 @@ next.
 - [ ] The shared post-onboard next-step model can also surface optional browser
       preview enable, runtime install, or first-recipe guidance when that lane
       is available for the current config.
+- [ ] Onboarding success may surface an optional personalization next step after
+      the primary first-answer handoff, but it does not turn relationship
+      bootstrapping into a required setup stage.
 - [ ] Interactive onboarding explains how to exit cleanly, including an
       explicit `Esc` cancellation hint before any config write.
 - [ ] Interactive fixed-choice prompts use terminal-native selection widgets
@@ -59,5 +62,6 @@ next.
 
 - Package-manager distribution strategy beyond the documented bootstrap installer;
   see [Installation](installation.md)
+- Mandatory operator-personalization or relationship-building rituals during setup
 - Full channel pairing or browser-based setup UIs
 - Arbitrary advanced config editing during first run

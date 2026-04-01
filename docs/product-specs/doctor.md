@@ -27,6 +27,9 @@ can recover a broken setup without reverse-engineering runtime internals.
 - [ ] On a healthy setup, the first-turn recommendations read like the next user
       action, not just a status report, for example "Get a first answer" and
       "Continue in chat".
+- [ ] On a healthy setup, doctor can also recommend an optional personalization
+      next step when operator preferences have not been configured, but that
+      recommendation remains secondary to repair or first-value commands.
 - [ ] When `onboard`, `ask`, `chat`, or channel setup hits a common health
       failure, the CLI points users toward `doctor`.
 - [ ] Doctor checks cover the current MVP path: config presence, provider

@@ -52,6 +52,7 @@ See [Product Specs Index](product-specs/index.md) for detailed user-facing requi
 - [Onboarding](product-specs/onboarding.md) — first-run setup and handoff to first success
 - [One-Shot Ask](product-specs/one-shot-ask.md) — non-interactive assistant fast path
 - [Doctor](product-specs/doctor.md) — diagnostics and safe repair expectations
+- [Personalization](product-specs/personalization.md) — expectation-setting spec for optional operator preference capture
 - [Browser Automation](product-specs/browser-automation.md) — bounded browser-style assistant actions
 - [Channel Setup](product-specs/channel-setup.md) — configuring shipped assistant surfaces
 - [Tool Surface](product-specs/tool-surface.md) — truthful runtime-visible tool advertising

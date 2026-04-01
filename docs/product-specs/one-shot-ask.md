@@ -19,6 +19,8 @@ that I can get an answer immediately without entering an interactive shell.
 - [ ] When surfaced outside `ask` itself, the one-shot handoff is labeled in
       product-facing language such as "first answer" rather than only as a
       technical example.
+- [ ] `ask` is not interrupted by optional operator-personalization flows; any
+      personalization suggestions stay outside the one-shot path.
 - [ ] `ask` help text points users toward `loong chat` for interactive
       follow-up.
 
