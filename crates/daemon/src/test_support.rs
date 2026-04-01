@@ -152,94 +152,364 @@ pub fn sign_security_scan_profile_for_test(profile: &SecurityScanProfile) -> (St
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
 
     use super::ScopedEnv;
+    use syn::visit::{self, Visit};
 
     fn daemon_source_uses_forbidden_env_guard(source: &str) -> bool {
-        let normalized_source = normalize_source_for_guard_scan(source);
-        let direct_base_path = ["mvp", "::test_support"].concat();
-        let crate_base_path = ["crate::", direct_base_path.as_str()].concat();
-        let scoped_env_name = ["Scoped", "Env"].concat();
-        let direct_path = [direct_base_path.as_str(), "::", scoped_env_name.as_str()].concat();
-        let crate_path = [crate_base_path.as_str(), "::", scoped_env_name.as_str()].concat();
-        let uses_direct_path = normalized_source.contains(&direct_path);
-
-        if uses_direct_path {
-            return true;
-        }
-
-        let uses_crate_path = normalized_source.contains(&crate_path);
-
-        if uses_crate_path {
-            return true;
-        }
-
-        let uses_direct_brace_import = brace_import_contains_scoped_env(
-            &normalized_source,
-            &direct_base_path,
-            &scoped_env_name,
-        );
-
-        if uses_direct_brace_import {
-            return true;
-        }
-
-        brace_import_contains_scoped_env(&normalized_source, &crate_base_path, &scoped_env_name)
+        let syntax = syn::parse_file(source).expect("parse daemon source for env guard");
+        let mut inspector = DaemonSourceGuardInspector::new();
+        inspector.visit_file(&syntax);
+        inspector.has_forbidden_reference
     }
 
-    fn normalize_source_for_guard_scan(source: &str) -> String {
-        let mut normalized = String::with_capacity(source.len());
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum ForbiddenImportKind {
+        Module,
+        ScopedEnv,
+    }
 
-        for ch in source.chars() {
-            let is_whitespace = ch.is_ascii_whitespace();
+    #[derive(Debug, Default)]
+    struct ForbiddenAliasScope {
+        module_aliases: BTreeSet<String>,
+        scoped_env_aliases: BTreeSet<String>,
+    }
 
-            if is_whitespace {
-                continue;
+    #[derive(Debug, Default)]
+    struct DaemonSourceGuardInspector {
+        alias_scopes: Vec<ForbiddenAliasScope>,
+        has_forbidden_reference: bool,
+    }
+
+    impl DaemonSourceGuardInspector {
+        fn new() -> Self {
+            let root_scope = ForbiddenAliasScope::default();
+            let alias_scopes = vec![root_scope];
+            Self {
+                alias_scopes,
+                has_forbidden_reference: false,
             }
-
-            normalized.push(ch);
         }
 
-        normalized
-    }
+        fn push_scope(&mut self) {
+            let scope = ForbiddenAliasScope::default();
+            self.alias_scopes.push(scope);
+        }
 
-    fn brace_import_contains_scoped_env(
-        normalized_source: &str,
-        test_support_prefix: &str,
-        scoped_env_name: &str,
-    ) -> bool {
-        let brace_import_prefix = [test_support_prefix, "::{"].concat();
-        let mut search_start = 0;
+        fn pop_scope(&mut self) {
+            let _ = self.alias_scopes.pop();
+        }
 
-        while let Some(relative_start) =
-            normalized_source[search_start..].find(&brace_import_prefix)
-        {
-            let absolute_start = search_start + relative_start;
-            let import_list_start = absolute_start + brace_import_prefix.len();
-            let remaining_source = &normalized_source[import_list_start..];
-            let closing_brace_offset = remaining_source.find('}');
+        fn mark_forbidden_reference(&mut self) {
+            self.has_forbidden_reference = true;
+        }
 
-            let Some(closing_brace_offset) = closing_brace_offset else {
-                return false;
-            };
+        fn current_scope_mut(&mut self) -> &mut ForbiddenAliasScope {
+            self.alias_scopes
+                .last_mut()
+                .expect("daemon source guard scope should exist")
+        }
 
-            let import_list = &remaining_source[..closing_brace_offset];
-            let has_scoped_env = import_list.contains(scoped_env_name);
+        fn record_alias(&mut self, alias: String, kind: ForbiddenImportKind) {
+            let current_scope = self.current_scope_mut();
 
-            if has_scoped_env {
+            match kind {
+                ForbiddenImportKind::Module => {
+                    current_scope.module_aliases.insert(alias);
+                }
+                ForbiddenImportKind::ScopedEnv => {
+                    current_scope.scoped_env_aliases.insert(alias);
+                }
+            }
+        }
+
+        fn path_uses_forbidden_scoped_env(&self, path: &syn::Path) -> bool {
+            let path_segments = path_segment_names(path);
+            let uses_forbidden_path = path_contains_forbidden_scoped_env_path(&path_segments);
+
+            if uses_forbidden_path {
                 return true;
             }
 
-            search_start = import_list_start + closing_brace_offset + 1;
+            let first_segment = match path_segments.first() {
+                Some(first_segment) => first_segment,
+                None => return false,
+            };
+
+            for scope in self.alias_scopes.iter().rev() {
+                let uses_scoped_env_alias = scope.scoped_env_aliases.contains(first_segment);
+
+                if uses_scoped_env_alias {
+                    return true;
+                }
+            }
+
+            let second_segment = match path_segments.get(1) {
+                Some(second_segment) => second_segment,
+                None => return false,
+            };
+            let uses_module_alias_scoped_env = second_segment == "ScopedEnv";
+
+            if !uses_module_alias_scoped_env {
+                return false;
+            }
+
+            for scope in self.alias_scopes.iter().rev() {
+                let uses_module_alias = scope.module_aliases.contains(first_segment);
+
+                if uses_module_alias {
+                    return true;
+                }
+            }
+
+            false
+        }
+
+        fn inspect_use_tree(&mut self, use_tree: &syn::UseTree, prefix: &mut Vec<String>) {
+            match use_tree {
+                syn::UseTree::Path(use_path) => {
+                    let segment_name = use_path.ident.to_string();
+                    prefix.push(segment_name);
+                    self.inspect_use_tree(&use_path.tree, prefix);
+                    let _ = prefix.pop();
+                }
+                syn::UseTree::Name(use_name) => {
+                    let imported_name = use_name.ident.to_string();
+                    let imported_path = build_imported_path(prefix, &imported_name);
+                    self.record_import_path(imported_path, None);
+                }
+                syn::UseTree::Rename(use_rename) => {
+                    let imported_name = use_rename.ident.to_string();
+                    let imported_path = build_imported_path(prefix, &imported_name);
+                    let alias = use_rename.rename.to_string();
+                    self.record_import_path(imported_path, Some(alias));
+                }
+                syn::UseTree::Glob(_) => {
+                    let imported_path = prefix.clone();
+                    let import_kind = forbidden_import_kind_for_use_path(&imported_path);
+
+                    if import_kind.is_some() {
+                        self.mark_forbidden_reference();
+                    }
+                }
+                syn::UseTree::Group(use_group) => {
+                    for child_tree in &use_group.items {
+                        self.inspect_use_tree(child_tree, prefix);
+                    }
+                }
+            }
+        }
+
+        fn record_import_path(&mut self, imported_path: Vec<String>, alias: Option<String>) {
+            let import_kind = forbidden_import_kind_for_use_path(&imported_path);
+            let Some(import_kind) = import_kind else {
+                return;
+            };
+
+            self.mark_forbidden_reference();
+
+            let alias_name = match alias {
+                Some(alias_name) => alias_name,
+                None => imported_binding_name(&imported_path),
+            };
+            self.record_alias(alias_name, import_kind);
+        }
+    }
+
+    impl<'ast> Visit<'ast> for DaemonSourceGuardInspector {
+        fn visit_item_mod(&mut self, item_mod: &'ast syn::ItemMod) {
+            let module_content = match &item_mod.content {
+                Some(module_content) => module_content,
+                None => return,
+            };
+            let (_, items) = module_content;
+
+            self.push_scope();
+
+            for item in items {
+                self.visit_item(item);
+            }
+
+            self.pop_scope();
+        }
+
+        fn visit_block(&mut self, block: &'ast syn::Block) {
+            self.push_scope();
+            visit::visit_block(self, block);
+            self.pop_scope();
+        }
+
+        fn visit_item_use(&mut self, item_use: &'ast syn::ItemUse) {
+            let mut prefix = Vec::new();
+            self.inspect_use_tree(&item_use.tree, &mut prefix);
+        }
+
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            let uses_forbidden_env_guard = self.path_uses_forbidden_scoped_env(path);
+
+            if uses_forbidden_env_guard {
+                self.mark_forbidden_reference();
+            }
+
+            visit::visit_path(self, path);
+        }
+    }
+
+    fn build_imported_path(prefix: &[String], imported_name: &str) -> Vec<String> {
+        if imported_name == "self" {
+            return prefix.to_vec();
+        }
+
+        let mut imported_path = prefix.to_vec();
+        let imported_name = imported_name.to_owned();
+        imported_path.push(imported_name);
+        imported_path
+    }
+
+    fn imported_binding_name(imported_path: &[String]) -> String {
+        imported_path
+            .last()
+            .cloned()
+            .expect("forbidden import path should have a binding name")
+    }
+
+    fn forbidden_import_kind_for_use_path(imported_path: &[String]) -> Option<ForbiddenImportKind> {
+        let imports_scoped_env = path_ends_with_forbidden_scoped_env_path(imported_path);
+
+        if imports_scoped_env {
+            return Some(ForbiddenImportKind::ScopedEnv);
+        }
+
+        let imports_test_support_module =
+            path_ends_with_forbidden_test_support_module(imported_path);
+
+        if imports_test_support_module {
+            return Some(ForbiddenImportKind::Module);
+        }
+
+        None
+    }
+
+    fn path_segment_names(path: &syn::Path) -> Vec<String> {
+        let mut segments = Vec::new();
+
+        for segment in &path.segments {
+            let segment_name = segment.ident.to_string();
+            segments.push(segment_name);
+        }
+
+        segments
+    }
+
+    fn path_contains_forbidden_scoped_env_path(path_segments: &[String]) -> bool {
+        let uses_mvp_scoped_env =
+            path_segments_contain_sequence(path_segments, &["mvp", "test_support", "ScopedEnv"]);
+
+        if uses_mvp_scoped_env {
+            return true;
+        }
+
+        path_segments_contain_sequence(
+            path_segments,
+            &["loongclaw_app", "test_support", "ScopedEnv"],
+        )
+    }
+
+    fn path_ends_with_forbidden_scoped_env_path(path_segments: &[String]) -> bool {
+        let imports_mvp_scoped_env =
+            path_segments_end_with_sequence(path_segments, &["mvp", "test_support", "ScopedEnv"]);
+
+        if imports_mvp_scoped_env {
+            return true;
+        }
+
+        path_segments_end_with_sequence(
+            path_segments,
+            &["loongclaw_app", "test_support", "ScopedEnv"],
+        )
+    }
+
+    fn path_ends_with_forbidden_test_support_module(path_segments: &[String]) -> bool {
+        let imports_mvp_test_support =
+            path_segments_end_with_sequence(path_segments, &["mvp", "test_support"]);
+
+        if imports_mvp_test_support {
+            return true;
+        }
+
+        path_segments_end_with_sequence(path_segments, &["loongclaw_app", "test_support"])
+    }
+
+    fn path_segments_contain_sequence(path_segments: &[String], sequence: &[&str]) -> bool {
+        if path_segments.len() < sequence.len() {
+            return false;
+        }
+
+        let last_start = path_segments.len() - sequence.len();
+
+        for start in 0..=last_start {
+            let mut matches_sequence = true;
+
+            for (offset, expected_segment) in sequence.iter().enumerate() {
+                let actual_segment = &path_segments[start + offset];
+                let matches_segment = actual_segment == expected_segment;
+
+                if !matches_segment {
+                    matches_sequence = false;
+                    break;
+                }
+            }
+
+            if matches_sequence {
+                return true;
+            }
         }
 
         false
     }
 
-    fn collect_rust_source_paths(root: &Path) -> Vec<PathBuf> {
-        let mut pending_paths = vec![root.to_path_buf()];
+    fn path_segments_end_with_sequence(path_segments: &[String], sequence: &[&str]) -> bool {
+        if path_segments.len() < sequence.len() {
+            return false;
+        }
+
+        let start = path_segments.len() - sequence.len();
+        let tail_segments = &path_segments[start..];
+
+        for (actual_segment, expected_segment) in tail_segments.iter().zip(sequence.iter()) {
+            let matches_segment = actual_segment == expected_segment;
+
+            if !matches_segment {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    fn daemon_guard_scan_roots(manifest_dir: &Path) -> Vec<PathBuf> {
+        let source_root = manifest_dir.join("src");
+        let tests_root = manifest_dir.join("tests");
+        let candidate_roots = [source_root, tests_root];
+        let mut scan_roots = Vec::new();
+
+        for candidate_root in candidate_roots {
+            let root_exists = candidate_root.is_dir();
+
+            if root_exists {
+                scan_roots.push(candidate_root);
+            }
+        }
+
+        scan_roots.sort();
+        scan_roots
+    }
+
+    fn collect_rust_source_paths(roots: &[PathBuf]) -> Vec<PathBuf> {
+        let mut pending_paths = roots.to_vec();
         let mut rust_source_paths = Vec::new();
 
         while let Some(current_path) = pending_paths.pop() {
@@ -301,7 +571,12 @@ mod tests {
     fn daemon_source_guard_flags_mvp_scoped_env_reference() {
         let base_path = ["mvp", "::test_support"].concat();
         let scoped_env_name = ["Scoped", "Env"].concat();
-        let sample_source = format!("let mut env = {base_path}::{scoped_env_name}::new();");
+        let sample_source = format!(
+            "fn build_guard() {{
+                let mut env = {base_path}::{scoped_env_name}::new();
+                drop(env);
+            }}"
+        );
 
         assert!(
             daemon_source_uses_forbidden_env_guard(&sample_source),
@@ -310,8 +585,30 @@ mod tests {
     }
 
     #[test]
+    fn daemon_source_guard_flags_loongclaw_app_scoped_env_reference() {
+        let base_path = ["loongclaw_app", "::test_support"].concat();
+        let scoped_env_name = ["Scoped", "Env"].concat();
+        let sample_source = format!(
+            "fn build_guard() {{
+                let mut env = {base_path}::{scoped_env_name}::new();
+                drop(env);
+            }}"
+        );
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(&sample_source),
+            "daemon source guard should flag direct loongclaw_app scoped env references"
+        );
+    }
+
+    #[test]
     fn daemon_source_guard_accepts_daemon_scoped_env_reference() {
-        let sample_source = "let mut env = crate::test_support::ScopedEnv::new();";
+        let sample_source = r#"
+            fn build_guard() {
+                let mut env = crate::test_support::ScopedEnv::new();
+                drop(env);
+            }
+        "#;
 
         assert!(
             !daemon_source_uses_forbidden_env_guard(sample_source),
@@ -349,10 +646,84 @@ mod tests {
     }
 
     #[test]
+    fn daemon_source_guard_flags_alias_to_forbidden_test_support_module() {
+        let sample_source = r#"
+            use crate::mvp::test_support as app_test_support;
+
+            fn build_guard() {
+                let mut env = app_test_support::ScopedEnv::new();
+                drop(env);
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag aliases to forbidden test support modules"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_alias_to_forbidden_scoped_env_item() {
+        let sample_source = r#"
+            use loongclaw_app::test_support::ScopedEnv as AppScopedEnv;
+
+            fn build_guard() {
+                let mut env = AppScopedEnv::new();
+                drop(env);
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag aliases to forbidden scoped env items"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_ignores_comment_mentions() {
+        let sample_source = r#"
+            // mvp::test_support::ScopedEnv should stay out of daemon tests.
+            fn ok() {}
+        "#;
+
+        assert!(
+            !daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should ignore comment-only mentions"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_ignores_string_literal_mentions() {
+        let sample_source = r#"
+            fn note() {
+                let message = "mvp::test_support::ScopedEnv is not allowed in daemon tests";
+                assert!(!message.is_empty());
+            }
+        "#;
+
+        assert!(
+            !daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should ignore string literal mentions"
+        );
+    }
+
+    #[test]
+    fn daemon_guard_scan_roots_include_daemon_tests_directory() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let scan_roots = daemon_guard_scan_roots(manifest_dir);
+        let tests_root = manifest_dir.join("tests");
+
+        assert!(
+            scan_roots.contains(&tests_root),
+            "daemon source guard should scan crates/daemon/tests for forbidden env guard usage"
+        );
+    }
+
+    #[test]
     fn daemon_test_env_source_files_do_not_use_app_scoped_env_guard() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let daemon_source_root = manifest_dir.join("src");
-        let rust_source_paths = collect_rust_source_paths(&daemon_source_root);
+        let scan_roots = daemon_guard_scan_roots(manifest_dir);
+        let rust_source_paths = collect_rust_source_paths(&scan_roots);
         let mut violating_paths = Vec::new();
 
         for rust_source_path in rust_source_paths {
