@@ -7,7 +7,7 @@
     <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
   </picture>
 </p>
-<p align="center"><em>“发轫于东，以会群友”</em></p>
+<p align="center"><strong><em>“发轫于东，以会群友”</em></strong></p>
 
 <p align="center">
   <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml?branch=dev"><img src="https://img.shields.io/github/actions/workflow/status/loongclaw-ai/loongclaw/ci.yml?branch=dev&label=build&style=flat-square" alt="Build" /></a>
@@ -25,17 +25,17 @@
   <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
-<p align="center">
+<p>
   <strong>LoongClaw 是一套基于 Rust 构建的安全、可扩展、可持续演进的 Claw 基座。</strong><br/>
   它以助手能力为起点，但目标并不仅停留于通用助手，而是逐步成长为面向团队的垂域智能体基础层，让人与 AI 能在真实场景中持续协作、共同进化。
 </p>
 
-<p align="center">
+<p>
   <a href="README.md">English</a> |
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center">
+<p>
   <a href="site/index.mdx">文档总览</a> •
   <a href="site/get-started/overview.mdx">快速上手</a> •
   <a href="site/use-loongclaw/common-setups.mdx">常见路线</a> •

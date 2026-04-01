@@ -7,7 +7,7 @@
     <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
   </picture>
 </p>
-<p align="center"><em>"Originated from the East, here to benefit the world"</em></p>
+<p align="center"><strong><em>"Originated from the East, here to benefit the world"</em></strong></p>
 
 <p align="center">
   <a href="https://github.com/loongclaw-ai/loongclaw/actions/workflows/ci.yml?branch=dev"><img src="https://img.shields.io/github/actions/workflow/status/loongclaw-ai/loongclaw/ci.yml?branch=dev&label=build&style=flat-square" alt="Build" /></a>
@@ -25,17 +25,17 @@
   <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
-<p align="center">
+<p>
   <strong>LoongClaw is a secure, extensible, and sustainably evolvable Claw foundation built in Rust.</strong><br/>
   It starts from assistant capabilities, but its goal does not stop at being a general assistant. It is meant to grow into a team-facing foundation layer for vertical AI agents, where people and AI can keep collaborating and evolving together.
 </p>
 
-<p align="center">
+<p>
   <a href="README.md">English</a> |
   <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-<p align="center">
+<p>
   <a href="site/index.mdx">Documentation</a> •
   <a href="site/get-started/overview.mdx">Get Started</a> •
   <a href="site/use-loongclaw/common-setups.mdx">Playbooks</a> •
