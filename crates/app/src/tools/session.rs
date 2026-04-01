@@ -1466,11 +1466,9 @@ fn load_session_workflow_record(
     session: &SessionSummaryRecord,
     delegate_events: Option<&[SessionEventRecord]>,
 ) -> Result<SessionWorkflowRecord, String> {
-    let lineage_root_session_id = repo
-        .lineage_root_session_id(&session.session_id)
-        .ok()
-        .flatten();
-    let lineage_depth = repo.session_lineage_depth(&session.session_id).ok();
+    let lineage_root_session_id =
+        optional_lineage_lookup(repo.lineage_root_session_id(&session.session_id))?.flatten();
+    let lineage_depth = optional_lineage_lookup(repo.session_lineage_depth(&session.session_id))?;
 
     let loaded_delegate_events = match delegate_events {
         Some(_) => None,
@@ -1508,30 +1506,34 @@ fn session_workflow_task_from_event(event: &SessionEventRecord) -> Option<String
 }
 
 #[cfg(feature = "memory-sqlite")]
+fn optional_lineage_lookup<T>(result: Result<T, String>) -> Result<Option<T>, String> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if is_expected_lineage_gap_error(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn is_expected_lineage_gap_error(error: &str) -> bool {
+    let is_broken = error.starts_with("session_lineage_broken:");
+    let is_cycle = error.starts_with("session_lineage_cycle_detected:");
+    is_broken || is_cycle
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn load_session_runtime_self_continuity_record(
     repo: &SessionRepository,
     session: &SessionSummaryRecord,
     delegate_events: &[SessionEventRecord],
 ) -> Result<Option<SessionRuntimeSelfContinuityRecord>, String> {
-    let recent_events = repo.list_recent_events(&session.session_id, 64)?;
-    let recent_continuity = recent_events
-        .iter()
-        .rev()
-        .filter(|event| {
-            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND
-        })
-        .find_map(|event| {
-            runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
-        });
-    if let Some(continuity) = recent_continuity {
-        let record = session_runtime_self_continuity_record_from_continuity(&continuity);
-        return Ok(Some(record));
-    }
-
-    let delegate_continuity = delegate_events.iter().rev().find_map(|event| {
-        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    let record = delegate_continuity
+    let continuity =
+        runtime_self_continuity::load_persisted_runtime_self_continuity_with_delegate_events(
+            repo,
+            &session.session_id,
+            Some(delegate_events),
+        )?;
+    let record = continuity
         .as_ref()
         .map(session_runtime_self_continuity_record_from_continuity);
     Ok(record)
@@ -4210,6 +4212,137 @@ mod tests {
             outcome.payload["workflow"]["runtime_self_continuity"]["session_profile_projection_present"],
             true
         );
+    }
+
+    #[test]
+    fn session_status_keeps_runtime_self_continuity_after_more_than_64_newer_events() {
+        let config = isolated_memory_config("session-status-refresh-continuity-stale-window");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: crate::runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND
+                .to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "source": "compaction",
+                "runtime_self_continuity": {
+                    "runtime_self": {
+                        "standing_instructions": ["Stay concise."],
+                        "tool_usage_policy": ["Prefer visible evidence."],
+                        "soul_guidance": ["Keep continuity explicit."],
+                        "identity_context": ["# Identity\n- Name: Root"],
+                        "user_context": ["Operator prefers concise technical summaries."]
+                    },
+                    "resolved_identity": {
+                        "source": "workspace_self",
+                        "content": "# Identity\n- Name: Root"
+                    },
+                    "session_profile_projection": "## Session Profile\nOperator prefers concise technical summaries."
+                }
+            }),
+        })
+        .expect("append runtime self continuity refresh");
+
+        for index in 0..70 {
+            let event_kind = format!("noise_event_{index}");
+            let payload = json!({ "index": index });
+            let event = NewSessionEvent {
+                session_id: "root-session".to_owned(),
+                event_kind,
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: payload,
+            };
+            repo.append_event(event).expect("append noise event");
+        }
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["resolved_identity_present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["session_profile_projection_present"],
+            true
+        );
+    }
+
+    #[test]
+    fn load_session_workflow_record_propagates_unexpected_lineage_lookup_failures() {
+        let config = isolated_memory_config("session-workflow-lineage-errors");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+
+        let session = repo
+            .load_session_summary_with_legacy_fallback("root-session")
+            .expect("load session summary")
+            .expect("root session summary");
+
+        let db_path = config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path for session tools test");
+        let conn = rusqlite::Connection::open(db_path).expect("open sqlite db");
+        conn.execute("DROP TABLE sessions", [])
+            .expect("drop sessions table");
+
+        let error = super::load_session_workflow_record(&repo, &session, None)
+            .expect_err("unexpected lineage lookup failures should surface");
+
+        assert!(
+            error.contains("no such table: sessions"),
+            "expected sqlite lineage lookup failure, got: {error}"
+        );
+    }
+
+    #[test]
+    fn optional_lineage_lookup_only_degrades_expected_gap_errors() {
+        let broken = super::optional_lineage_lookup::<usize>(Err(
+            "session_lineage_broken: missing parent row for `child-session`".to_owned(),
+        ))
+        .expect("broken lineage should degrade to missing");
+        assert_eq!(broken, None);
+
+        let cycle = super::optional_lineage_lookup::<usize>(Err(
+            "session_lineage_cycle_detected: `child-session` reappeared".to_owned(),
+        ))
+        .expect("cycle lineage should degrade to missing");
+        assert_eq!(cycle, None);
+
+        let error = super::optional_lineage_lookup::<usize>(Err(
+            "query sessions failed: database is locked".to_owned(),
+        ))
+        .expect_err("unexpected lineage lookup failures should not be swallowed");
+        assert_eq!(error, "query sessions failed: database is locked");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use crate::config::LoongClawConfig;
 use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::SessionRepository;
+use crate::session::repository::{SessionEventRecord, SessionRepository};
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 const DURABLE_RECALL_INTRO: &str = concat!(
@@ -101,22 +101,34 @@ pub(crate) fn load_persisted_runtime_self_continuity(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<RuntimeSelfContinuity>, String> {
-    let recent_events = repo.list_recent_events(session_id, 64)?;
-    let recent_continuity = recent_events.into_iter().rev().find_map(|event| {
-        let is_continuity_event = event.event_kind == RUNTIME_SELF_CONTINUITY_EVENT_KIND;
-        if !is_continuity_event {
-            return None;
-        }
+    load_persisted_runtime_self_continuity_with_delegate_events(repo, session_id, None)
+}
 
-        runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    if recent_continuity.is_some() {
-        return Ok(recent_continuity);
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn load_persisted_runtime_self_continuity_with_delegate_events(
+    repo: &SessionRepository,
+    session_id: &str,
+    delegate_events: Option<&[SessionEventRecord]>,
+) -> Result<Option<RuntimeSelfContinuity>, String> {
+    let latest_event =
+        repo.load_latest_event_by_kind(session_id, RUNTIME_SELF_CONTINUITY_EVENT_KIND)?;
+    let latest_continuity = latest_event
+        .as_ref()
+        .and_then(|event| runtime_self_continuity_from_event_payload(&event.payload_json));
+    if latest_continuity.is_some() {
+        return Ok(latest_continuity);
     }
 
-    let delegate_events = repo.list_delegate_lifecycle_events(session_id)?;
+    let loaded_delegate_events = match delegate_events {
+        Some(_) => None,
+        None => Some(repo.list_delegate_lifecycle_events(session_id)?),
+    };
+    let delegate_events = match delegate_events {
+        Some(events) => events,
+        None => loaded_delegate_events.as_deref().unwrap_or(&[]),
+    };
     let delegate_continuity = delegate_events
-        .into_iter()
+        .iter()
         .rev()
         .find_map(|event| runtime_self_continuity_from_event_payload(&event.payload_json));
     Ok(delegate_continuity)

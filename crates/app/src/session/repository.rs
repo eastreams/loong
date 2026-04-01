@@ -890,6 +890,17 @@ impl SessionRepository {
         Self::list_recent_events_with_conn(&conn, &session_id, limit)
     }
 
+    pub fn load_latest_event_by_kind(
+        &self,
+        session_id: &str,
+        event_kind: &str,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let event_kind = normalize_required_text(event_kind, "event_kind")?;
+        let conn = self.open_connection()?;
+        Self::load_latest_event_by_kind_with_conn(&conn, &session_id, &event_kind)
+    }
+
     pub fn list_events_after(
         &self,
         session_id: &str,
@@ -2033,6 +2044,41 @@ impl SessionRepository {
         }
         events.reverse();
         Ok(events)
+    }
+
+    fn load_latest_event_by_kind_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        event_kind: &str,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, event_kind, actor_session_id, payload_json, ts
+                 FROM session_events
+                 WHERE session_id = ?1 AND event_kind = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+            )
+            .map_err(|error| format!("prepare latest session event query failed: {error}"))?;
+        let raw = stmt
+            .query_row(params![session_id, event_kind], |row| {
+                Ok(RawSessionEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    event_kind: row.get(2)?,
+                    actor_session_id: row.get(3)?,
+                    payload_json: row.get(4)?,
+                    ts: row.get(5)?,
+                })
+            })
+            .optional()
+            .map_err(|error| format!("query latest session event failed: {error}"))?;
+        let raw = match raw {
+            Some(raw) => raw,
+            None => return Ok(None),
+        };
+        let event = SessionEventRecord::try_from_raw(raw)?;
+        Ok(Some(event))
     }
 
     fn list_events_after_with_conn(
