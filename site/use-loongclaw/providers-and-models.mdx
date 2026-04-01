@@ -1,0 +1,166 @@
+---
+title: Providers And Models
+description: Choose a provider, understand model selection, and keep provider truth explicit.
+---
+
+# Providers And Models
+
+Use this page when the base CLI path already makes sense and you need to choose
+the right provider lane before editing config in detail.
+
+LoongClaw treats provider and model choice as operator-visible configuration,
+not hidden runtime magic. This page is the chooser. The step-by-step config
+work lives in the recipe pages.
+
+If you want concrete setup walkthroughs instead of the conceptual contract on
+this page, go directly to [Provider Recipes](/use-loongclaw/provider-recipes).
+The first recipes start with Volcengine, BytePlus, and their coding-plan
+variants before branching into gateway, local, and multi-profile patterns.
+
+If you already know the provider choice and delivery surface together, go
+straight to [Common Setups](/use-loongclaw/common-setups) and the dedicated
+playbook that matches the rollout shape.
+
+## Choose A Provider Lane
+
+| If you need... | Start here | Why |
+| --- | --- | --- |
+| one hosted provider to own first value cleanly | Volcengine or BytePlus | the docs keep the main hosted lane short and explicit |
+| a separate coding lane for coding quota or billing | Volcengine Coding or BytePlus Coding | coding traffic stays separate from the general hosted lane |
+| one proxy or compatibility endpoint in front of upstream models | gateway or custom endpoint recipes | route ownership stays visible instead of being mistaken for a first-party provider |
+| a local or self-hosted model server | Ollama, LM Studio, llama.cpp, vLLM, or SGLang | the server boundary and model inventory stay explicit |
+| several reviewed provider profiles in one config | multi-profile provider recipes | cost, quota, latency, or region decisions stay operator-visible |
+
+## Already Know The Whole Rollout?
+
+If the provider choice is already tied to the delivery surface, skip this page
+and jump straight to the matching playbook.
+
+| If you already know you want... | Go here |
+| --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| Volcengine plus WeCom | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+| a local or self-hosted model plus outbound delivery | [Local Model Plus Outbound Delivery](/use-loongclaw/local-outbound-playbook) |
+
+## Start With The Supported Path
+
+```bash
+loong onboard
+loong list-models
+```
+
+`onboard` is the supported first-run path. It should discover what it can, help you resolve credentials, and leave you with a provider profile that the rest of the runtime actually uses.
+
+Use `list-models` after credentials are healthy when you want the current catalog from the active provider.
+
+## Reading Rule
+
+- Use this page to choose the provider lane.
+- Use [Provider Recipes](/use-loongclaw/provider-recipes) once you know the lane and need commands or config.
+- Use [Common Setups](/use-loongclaw/common-setups) when the provider choice only makes sense together with the delivery surface.
+
+## How Model Selection Works
+
+| Mode | What it means | When to use it |
+| --- | --- | --- |
+| Explicit model | `provider.model = "..."` pins one model name | when you want deterministic behavior or already know the exact model |
+| Auto discovery | `provider.model = "auto"` asks the runtime to discover usable models from the provider catalog | when you want a clean first-run path and the provider exposes a model catalog |
+| Preferred fallback list | `preferred_models = ["...", "..."]` defines an explicit operator fallback order | when catalog discovery is unstable or you want a reviewed fallback without inventing a hidden default |
+
+- `preferred_models` is only an operator-configured fallback list.
+- It is not a secret provider-owned runtime default.
+- When the config already pins an explicit model, `preferred_models` does not override it.
+
+## Reviewed Onboarding Defaults
+
+A small reviewed subset currently has an explicit onboarding fallback when the saved config still uses `model = "auto"` and model discovery is unavailable.
+
+| Provider | Reviewed onboarding default |
+| --- | --- |
+| DeepSeek | `deepseek-chat` |
+| MiniMax | `MiniMax-M2.7` |
+
+For other providers, LoongClaw prefers to keep `auto` or ask the operator for an explicit model instead of silently inventing one.
+
+## Built-In Provider Map
+
+You do not need to memorize every built-in provider kind to get started. Start
+with the lane chooser above, then use this section as the broader public map.
+
+A practical public grouping, inferred from the built-in provider kinds, is:
+
+### Direct Hosted Providers
+
+- OpenAI
+- Anthropic
+- Gemini
+- DeepSeek
+- MiniMax
+- Mistral
+- Cohere
+- xAI
+- Z.ai
+- Zhipu
+- Qwen
+- Kimi
+- Kimi Coding
+- Groq
+- Fireworks
+- Together
+- Perplexity
+- Qianfan
+- Cerebras
+- NVIDIA
+- SambaNova
+- Novita
+- SiliconFlow
+- StepFun
+- Step Plan
+- Venice
+
+### Gateway, Platform, And Compatibility Providers
+
+- Volcengine
+- Volcengine Coding
+- BytePlus
+- BytePlus Coding
+- Cloudflare AI Gateway
+- Vercel AI Gateway
+- OpenRouter
+- Bedrock
+- Bailian Coding
+- Custom OpenAI-compatible endpoints
+
+### Local And Self-Hosted Providers
+
+- Ollama
+- LM Studio
+- llama.cpp
+- vLLM
+- SGLang
+
+The exact active set still depends on the build, the configured profile, and whether credentials resolve on the current machine.
+
+## Minimal Config Shape
+
+The first-run path should normally write this for you, but the public config shape looks like this:
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+The important part is that the runtime uses the same provider surface after onboarding that it uses during normal operation. There is no separate marketing-only provider layer.
+
+## Continue Reading
+
+- Continue to [Provider Recipes](/use-loongclaw/provider-recipes) for step-by-step hosted, gateway, local, and multi-profile examples.
+- Go to [First Run](/get-started/first-run) if you still need the shortest path to a useful answer.
+- Go to [Common Setups](/use-loongclaw/common-setups) if the provider choice is already tied to Feishu / Lark, WeCom, Telegram, local outbound delivery, or gateway ownership.
+- Go to [Channels](/use-loongclaw/channels) if you want the current delivery-surface model.
+- Go to [Tools And Memory](/use-loongclaw/tools-and-memory) if you want the broader governed-capability story.

@@ -1,0 +1,74 @@
+---
+title: Contributing
+description: Where contributors should start in the public repository.
+---
+
+# Contributing
+
+This section is the public entrypoint for contributors who want to understand
+how LoongClaw expects work to be shaped, validated, and reviewed.
+
+This page stays short on purpose. Use the repository's
+[CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md)
+when you need the deeper repository-native single-file guide, crate-level
+recipes, and maintainer-adjacent contribution guidance.
+
+## Choose A Contribution Lane
+
+| If you want to... | Start here | Then continue to... |
+| --- | --- | --- |
+| land a small docs, test, or contained bug-fix patch | [Contribution Workflow](/build-on-loongclaw/contribution-workflow) | [Contribution Areas](/build-on-loongclaw/contribution-areas) and [CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md) |
+| improve docs placement, Mintlify structure, or public docs wording | [Docs Workflow](/build-on-loongclaw/docs-workflow) | [Documentation Policy](/reference/documentation-policy) and [Contribution Workflow](/build-on-loongclaw/contribution-workflow) |
+| change runtime behavior, policy, or architecture-sensitive code | [Architecture](/build-on-loongclaw/architecture) | [Contribution Workflow](/build-on-loongclaw/contribution-workflow) and [CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md) |
+| understand where your background is most useful first | [Contribution Areas](/build-on-loongclaw/contribution-areas) | [Contribution Workflow](/build-on-loongclaw/contribution-workflow) |
+| read the repository-native recipes and rules directly | [CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md) | the supporting public references under `docs/` |
+
+## Public Start Here
+
+Start with:
+
+- [Contribution Workflow](/build-on-loongclaw/contribution-workflow)
+- [Docs Workflow](/build-on-loongclaw/docs-workflow)
+- [Contribution Areas](/build-on-loongclaw/contribution-areas)
+- [CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md)
+
+## What Those References Cover
+
+Together they describe:
+
+- the branch and release model
+- CI and validation expectations
+- where docs changes belong across README, `site/`, and `docs/`
+- the Mintlify docs validation and deployment shape
+- contribution tracks
+- the areas where design, docs, QA, and systems work are especially valuable
+- the public docs language scope
+- where to go next for deeper repo-native recipes
+
+## Contribution Shape
+
+| Track | Good fit |
+| --- | --- |
+| Track A | docs, tests, contained bug fixes, small refactors |
+| Track B | security-sensitive behavior, API contract changes, runtime or kernel policy changes, architecture-impacting refactors |
+
+## What To Expect
+
+- LoongClaw treats public architecture boundaries seriously.
+- Reader-facing docs, tests, and verification are part of a complete contribution, not afterthoughts.
+- Internal planning history no longer drives public navigation, so contributors should anchor on the current public contract rather than old repo archaeology.
+- The docs site should answer common contributor questions directly instead of making every reader dig through repository markdown first.
+
+## Documentation Scope Reminder
+
+- The repository keeps Simplified Chinese support only for `README.zh-CN.md`.
+- The public docs site under `site/` is the main reader-facing docs surface.
+- Repository markdown under `docs/` remains public as supporting reference and source-facing material.
+- If wider docs i18n is added later, it should happen at the docs-site layer rather than by expanding repository-wide markdown translations.
+
+## Deep References
+
+- [CONTRIBUTING.md](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md)
+- [Docs Workflow](/build-on-loongclaw/docs-workflow)
+- [Contribution Areas We Especially Welcome](https://github.com/loongclaw-ai/loongclaw/blob/dev/docs/references/contribution-areas.md)
+- Maintainer-owned GitHub intake and label automation remain repository support material rather than part of the primary public docs path.

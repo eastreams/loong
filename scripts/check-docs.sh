@@ -296,7 +296,7 @@ check_canonical_github_links() {
     fi
 }
 
-for release_doc in "$REPO_ROOT/docs/releases/TEMPLATE.md" "$REPO_ROOT"/docs/releases/v*.md; do
+for release_doc in "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$REPO_ROOT"/docs/releases/v*.md; do
     [ -f "$release_doc" ] || continue
     if grep -Fq "github.com/<org>/<repo>" "$release_doc"; then
         echo "FAIL: ${release_doc} still contains placeholder github.com/<org>/<repo>"

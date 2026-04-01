@@ -1,0 +1,72 @@
+---
+title: Installation
+description: Install LoongClaw from release artifacts or source.
+---
+
+# Installation
+
+LoongClaw prefers a release-first install path.
+
+## Choose An Install Path
+
+| If you want to... | Use this path |
+| --- | --- |
+| follow the intended end-user path | the release-first installer |
+| work from an active checkout or validate local changes | source install |
+| land in onboarding immediately after install | either install path with `--onboard` |
+
+## Recommended Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --onboard
+```
+
+Windows PowerShell:
+
+```powershell
+$script = Join-Path $env:TEMP "loong-install.ps1"
+Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.ps1 -OutFile $script
+pwsh $script -Onboard
+```
+
+## What This Does
+
+- The installer prefers checksum-verified GitHub Release binaries.
+- On Linux x86_64, GNU and musl artifacts are treated separately.
+- `loong` is the primary command and `loongclaw` stays as a compatibility entrypoint.
+- The install path is meant to hand you directly into first run rather than stop at a raw binary drop.
+
+## Source Install
+
+```bash
+bash scripts/install.sh --source --onboard
+```
+
+```bash
+cargo install --path crates/daemon
+```
+
+## After Install
+
+Run the supported first-run path next:
+
+```bash
+loong onboard
+```
+
+If you want the shortest full path, continue directly to:
+
+```bash
+loong ask --message "Summarize this repository and suggest the best next step."
+```
+
+## Which Path To Choose
+
+- Use the release-first installer when you want the intended end-user path.
+- Use source install when you are developing locally, validating changes, or working from an active checkout.
+- Prefer `--onboard` unless you have a specific reason to stop before first run.
+
+## What Comes Next
+
+- Continue to [First Run](/get-started/first-run) for onboarding and your first useful answer.
+- Go to [Doctor And Health](/get-started/doctor-and-health) if you need the repair path before the first run completes cleanly.

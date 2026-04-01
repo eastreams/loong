@@ -93,6 +93,7 @@ make_fixture_repo() {
     "$fixture/scripts" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/crates/contracts/src" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
@@ -104,7 +105,8 @@ make_fixture_repo() {
   chmod +x "$fixture/scripts/check-docs.sh"
   chmod +x "$fixture/scripts/check_governance_docs_consistency.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/crates/contracts/src/audit_types.rs" \
     "$fixture/crates/contracts/src/audit_types.rs"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"
@@ -201,6 +203,7 @@ make_prerelease_fixture_repo() {
     "$fixture/scripts" \
     "$fixture/docs/design-docs" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/crates/contracts/src" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
@@ -212,7 +215,8 @@ make_prerelease_fixture_repo() {
   chmod +x "$fixture/scripts/check-docs.sh"
   chmod +x "$fixture/scripts/check_governance_docs_consistency.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/crates/contracts/src/audit_types.rs" \
     "$fixture/crates/contracts/src/audit_types.rs"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"

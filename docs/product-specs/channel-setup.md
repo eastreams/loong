@@ -1,5 +1,33 @@
 # Channel Setup
 
+This file is the repository-native source contract for LoongClaw's shipped
+channel surfaces, outbound-only delivery inventory, and current gateway owner
+model.
+
+The public reader-facing docs path for this area lives under
+`site/use-loongclaw/`, especially `channels.mdx`, `channel-recipes.mdx`, and
+`gateway-and-supervision.mdx`. This file stays longer because it is the
+source-level contract behind those pages.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read the public operator docs first | [`../../site/use-loongclaw/channels.mdx`](../../site/use-loongclaw/channels.mdx) and [`../../site/use-loongclaw/channel-recipes.mdx`](../../site/use-loongclaw/channel-recipes.mdx) |
+| follow one complete provider-plus-channel rollout | [`../../site/use-loongclaw/common-setups.mdx`](../../site/use-loongclaw/common-setups.mdx) and the playbooks under it |
+| review the source-level contract for shipped channel surfaces | this file |
+| check the current gateway owner contract | this file and [`../../site/use-loongclaw/gateway-and-supervision.mdx`](../../site/use-loongclaw/gateway-and-supervision.mdx) |
+
+## Read This File When
+
+- you need the exact shipped boundary between runtime-backed channels,
+  config-backed outbound surfaces, and catalog-only planned surfaces
+- you are reviewing required config, commands, or readiness rules for one
+  shipped surface
+- you are checking whether a surface is part of gateway-owned supervision or
+  outbound-only delivery
+- you need the repo-native source contract behind the public Mintlify guides
+
 ## User Story
 
 As a user who wants LoongClaw outside the terminal, I want channel setup to be
@@ -8,51 +36,59 @@ needs.
 
 ## Acceptance Criteria
 
-- [ ] Product docs clearly distinguish the shipped MVP surfaces:
-      CLI as the default surface, plus runtime-backed Telegram, Feishu / Lark,
-      Matrix, and WeCom, and config-backed outbound Discord, Slack, LINE,
-      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal,
-      Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat,
-      iMessage / BlueBubbles, plus plugin-backed bridge surfaces for Weixin,
-      QQBot, and OneBot.
+- [ ] Product docs clearly distinguish the shipped MVP surfaces: the base CLI
+      assistant loop, the explicit `gateway run/status/stop` runtime-owner
+      contract, runtime-backed Feishu / Lark, Telegram, Matrix, and WeCom
+      service channels, plus config-backed outbound Discord, Slack, LINE,
+      DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch,
+      Tlon, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
+      iMessage / BlueBubbles, and Nostr.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
-      config-backed outbound shipped surfaces, plugin-backed bridge surfaces,
-      and catalog-only planned surfaces such as IRC, Nostr, Twitch, Tlon,
-      Zalo, Zalo Personal, and WebChat.
-- [ ] Channel setup guidance describes required credentials, config toggles, and
-      the command used to run each shipped channel.
-- [ ] Channel setup guidance publishes stable target contracts for
-      plugin-backed bridge surfaces such as `weixin`, `qqbot`, and `onebot`
-      without claiming that LoongClaw already owns their native runtime.
-- [ ] WeCom setup guidance documents the official AIBot long-connection flow and
-      never presents webhook callback mode as a supported LoongClaw integration path.
+      config-backed outbound shipped surfaces, and catalog-only planned
+      surfaces such as Zalo, Zalo Personal, and WebChat.
+- [ ] Channel setup guidance describes required credentials, config toggles,
+      and the command used to run each shipped channel today.
+- [ ] Product docs describe `gateway run/status/stop` as the current explicit
+      gateway owner contract and `multi-channel-serve` as the attached
+      compatibility wrapper for shipped runtime-backed surfaces rather than the
+      long-term product noun.
+- [ ] WeCom setup guidance documents the official AIBot long-connection flow
+      and never presents webhook callback mode as a supported LoongClaw
+      integration path.
 - [ ] Channel setup never implies a channel is ready until its required
       credentials and runtime prerequisites are satisfied.
 - [ ] Channel-specific failures surface enough context for the operator to know
       which channel or account failed and how to recover.
-- [ ] Channel setup guidance keeps the base CLI assistant path independent, so a
-      user can still succeed with `ask` or `chat` before enabling service
+- [ ] Channel setup guidance keeps the base CLI assistant path independent, so
+      a user can still succeed with `ask` or `chat` before enabling service
       channels.
 
 ## Out of Scope
 
-- Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
-  Lark, Matrix, and WeCom
-- Promoting plugin-backed bridge surfaces such as Weixin, QQBot, or OneBot to
-  native runtime-backed support in this slice
-- Promoting the remaining catalog-only planned surfaces such as IRC, Nostr,
-  Twitch, Tlon, Zalo, Zalo Personal, or WebChat to
-  shipped support in this slice
+- Shipping additional runtime-backed channels beyond CLI, Feishu / Lark,
+  Telegram, Matrix, and WeCom
+- Promoting the remaining catalog-only planned surfaces such as Zalo,
+  Zalo Personal, or WebChat to shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
-## Channel Surface Matrix
+## Section Map
+
+| Section | Read it when... |
+| --- | --- |
+| [Shipped Channel Matrix](#shipped-channel-matrix) | you need the canonical inventory of shipped surfaces, required config, and commands |
+| [Expansion Model](#expansion-model) | you need the boundary between runtime-backed, outbound-only, and planned surfaces |
+| [Shipped Surface Families](#shipped-surface-families) | you want the quick grouping before reading detailed setup rules |
+| [Surface Setup Rules](#surface-setup-rules) | you need the per-surface readiness and config behavior |
+| [Gateway Ownership Direction](#gateway-ownership-direction) | you need the current `gateway` and `multi-channel-serve` contract |
+
+## Shipped Channel Matrix
 
 | Surface | Status | Transport | Required config | Operator commands |
 | --- | --- | --- | --- | --- |
 | CLI | Shipped | local interactive runtime | none beyond base provider config | `loong ask`, `loong chat` |
-| Telegram | Runtime-backed | Bot API polling | `telegram.enabled`, `telegram.bot_token`, `telegram.allowed_chat_ids` | `loong telegram-send`, `loong telegram-serve` |
 | Feishu / Lark | Runtime-backed | webhook or websocket | `feishu.enabled`, `feishu.app_id`, `feishu.app_secret`, `feishu.allowed_chat_ids`; webhook mode also needs `verification_token` and `encrypt_key` | `loong feishu-send`, `loong feishu-serve` |
+| Telegram | Runtime-backed | Bot API polling | `telegram.enabled`, `telegram.bot_token`, `telegram.allowed_chat_ids` | `loong telegram-send`, `loong telegram-serve` |
 | Matrix | Runtime-backed | Client-Server sync | `matrix.enabled`, `matrix.access_token`, `matrix.base_url`, `matrix.allowed_room_ids` | `loong matrix-send`, `loong matrix-serve` |
 | WeCom | Runtime-backed | official AIBot long connection | `wecom.enabled`, `wecom.bot_id`, `wecom.secret`, `wecom.allowed_conversation_ids` | `loong wecom-send`, `loong wecom-serve` |
 | Discord | Config-backed outbound | Discord HTTP API | `discord.enabled`, `discord.bot_token` | `loong discord-send` |
@@ -74,55 +110,67 @@ needs.
 | iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loong imessage-send` |
 | Nostr | Config-backed outbound | relay publish over WebSocket | `nostr.enabled`, `nostr.relay_urls`, `nostr.private_key`; `allowed_pubkeys` stays reserved for the planned inbound path | `loong nostr-send` |
 
-### Plugin-Backed Bridge Surfaces
-
-| Surface | Status | Bridge family | Sanctioned setup keys | Stable targets | Native command state |
-| --- | --- | --- | --- | --- | --- |
-| Weixin | Plugin-backed bridge | ClawBot or iLink-compatible WeChat bridge | `weixin.enabled`, `weixin.bridge_url`, `weixin.bridge_access_token`; optional `weixin.allowed_contact_ids` | `weixin:<account>:contact:<id>`, `weixin:<account>:room:<id>` | `weixin-send`, `weixin-serve` are catalog stubs until a native adapter exists |
-| QQBot | Plugin-backed bridge | official QQ Bot gateway or compatible plugin bridge | `qqbot.enabled`, `qqbot.app_id`, `qqbot.client_secret`; optional `qqbot.allowed_peer_ids` | `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, `qqbot:<account>:channel:<id>` | `qqbot-send`, `qqbot-serve` are catalog stubs until a native adapter exists |
-| OneBot | Plugin-backed bridge | OneBot v11 bridge such as NapCat or LLOneBot | `onebot.enabled`, `onebot.websocket_url`, `onebot.access_token`; optional `onebot.allowed_group_ids` | `onebot:<account>:private:<user_id>`, `onebot:<account>:group:<group_id>` | `onebot-send`, `onebot-serve` are catalog stubs until a native adapter exists |
-
-### Plugin-Backed Bridge Surfaces
-
-| Surface | Status | Bridge family | Sanctioned setup keys | Stable targets | Native command state |
-| --- | --- | --- | --- | --- | --- |
-| Weixin | Plugin-backed bridge | ClawBot or iLink-compatible WeChat bridge | `weixin.enabled`, `weixin.bridge_url`, `weixin.bridge_access_token`; optional `weixin.allowed_contact_ids` | `weixin:<account>:contact:<id>`, `weixin:<account>:room:<id>` | `weixin-send`, `weixin-serve` are catalog stubs until a native adapter exists |
-| QQBot | Plugin-backed bridge | official QQ Bot gateway or compatible plugin bridge | `qqbot.enabled`, `qqbot.app_id`, `qqbot.client_secret`; optional `qqbot.allowed_peer_ids` | `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, `qqbot:<account>:channel:<id>` | `qqbot-send`, `qqbot-serve` are catalog stubs until a native adapter exists |
-| OneBot | Plugin-backed bridge | OneBot v11 bridge such as NapCat or LLOneBot | `onebot.enabled`, `onebot.websocket_url`, `onebot.access_token`; optional `onebot.allowed_group_ids` | `onebot:<account>:private:<user_id>`, `onebot:<account>:group:<group_id>` | `onebot-send`, `onebot-serve` are catalog stubs until a native adapter exists |
-
 ## Expansion Model
 
-LoongClaw keeps channel expansion in four explicit implementation tiers inside
-one channel catalog so surfaces do not overclaim runtime support:
+LoongClaw keeps channel expansion in four explicit layers so planned surfaces
+do not overclaim runtime support:
 
-- runtime-backed service channels own credentials, direct sends, status
-  snapshots, and a long-running reply-loop runtime
-- config-backed outbound surfaces own credentials, status, and direct sends
-  without pretending they also own a long-running serve runtime
-- plugin-backed bridge surfaces own sanctioned ids, onboarding hints,
-  requirement keys, and target contracts while delegating active transport and
-  login ownership to an external bridge
-- stub surfaces remain metadata-only future entries with no sanctioned bridge
-  contract yet
-
-The channel catalog is the superset that can model all four tiers before every
-adapter is shipped. `multi-channel-serve` only supervises enabled
-runtime-backed channels and uses repeatable `--channel-account <channel=account>`
-selectors instead of channel-specific flags.
+- the channel catalog is the superset and can model planned surfaces before a
+  runtime adapter exists
+- config-backed outbound surfaces are a shipped subset that own credentials,
+  status, and direct sends without pretending they also own a long-running
+  serve runtime
+- runtime-backed service channels are a strict shipped subset of the catalog
+- `gateway run` is the current explicit runtime-owner contract and can run
+  headless or with an attached CLI session
+- `gateway status` and `gateway stop` provide the first cross-process owner
+  inspection and cooperative shutdown surfaces
+- `multi-channel-serve` is the attached compatibility wrapper and only
+  supervises enabled runtime-backed channels while using repeatable
+  `--channel-account <channel=account>` selectors instead of channel-specific
+  flags
+- the longer-term direction is an explicit gateway service that will own
+  runtime-backed channels, route mounts, auth, detached lifecycle, and operator
+  APIs without changing the registry-first channel inventory model
 
 This lets the product align channel naming and onboarding with broader channel
-ecosystems without pretending a plugin bridge or stub catalog entry is already
-a shipped native runtime surface.
+ecosystems such as OpenClaw without pretending a stub catalog entry or a
+send-only surface is already a shipped runtime surface.
 
-## Setup Rules
+## Shipped Surface Families
 
-### CLI
+| Family | Current scope | Read next |
+| --- | --- | --- |
+| base local assistant path | CLI | [Surface Setup Rules](#surface-setup-rules) |
+| runtime-backed service channels | Feishu / Lark, Telegram, Matrix, WeCom | [Runtime-Backed Service Channels](#runtime-backed-service-channels) and [Gateway Ownership Direction](#gateway-ownership-direction) |
+| config-backed outbound surfaces | Discord, Slack, LINE, DingTalk, WhatsApp, Email, Webhook, Google Chat, Signal, Twitch, Tlon, Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC, iMessage / BlueBubbles, Nostr | [Config-Backed Outbound Surfaces](#config-backed-outbound-surfaces) |
+| catalog-only planned surfaces | Zalo, Zalo Personal, WebChat | [Expansion Model](#expansion-model) |
 
-The base CLI path stays independent from service channels. A user must be able
-to succeed with `ask` or `chat` before enabling Telegram, Feishu, Matrix, or
-WeCom.
+## Surface Setup Rules
 
-### Telegram
+### Base Local Path
+
+#### CLI
+
+The base CLI path stays independent from the gateway and service channels. A
+user must be able to succeed with `ask` or `chat` before enabling Feishu / Lark,
+Telegram, Matrix, or WeCom.
+
+### Runtime-Backed Service Channels
+
+#### Feishu / Lark
+
+Feishu / Lark supports two inbound transports and the security contract depends
+on the selected mode:
+
+- both webhook and websocket modes require `app_id`, `app_secret`, and
+  `allowed_chat_ids`
+- webhook mode additionally requires `verification_token` and `encrypt_key`
+- websocket mode must not be blocked on webhook-only secrets
+- `loong feishu-send` supports both `receive_id` and `message_reply`
+- `loong feishu-serve` owns the inbound reply service
+
+#### Telegram
 
 Telegram setup remains the simplest shipped bot surface:
 
@@ -132,19 +180,7 @@ Telegram setup remains the simplest shipped bot surface:
 - run `loong telegram-serve` for reply-loop automation
 - use `loong telegram-send` for direct operator sends
 
-### Feishu / Lark
-
-Feishu supports two inbound transports and the security contract depends on the
-selected mode:
-
-- both webhook and websocket modes require `app_id`, `app_secret`, and
-  `allowed_chat_ids`
-- webhook mode additionally requires `verification_token` and `encrypt_key`
-- websocket mode must not be blocked on webhook-only secrets
-- `loong feishu-send` supports both `receive_id` and `message_reply`
-- `loong feishu-serve` owns the inbound reply service
-
-### Matrix
+#### Matrix
 
 Matrix uses a sync-loop transport with explicit homeserver configuration:
 
@@ -154,7 +190,7 @@ Matrix uses a sync-loop transport with explicit homeserver configuration:
 - use `matrix-send` for direct room delivery and `matrix-serve` for the sync
   reply loop
 
-### WeCom
+#### WeCom
 
 WeCom is shipped as a real runtime-backed surface through the official AIBot
 long-connection transport:
@@ -175,10 +211,8 @@ runtime contract is explicitly the official AIBot websocket subscription flow.
 
 Discord, Slack, LINE, DingTalk, WhatsApp, Email, generic Webhook, Google
 Chat, Signal, Twitch, Tlon, Microsoft Teams, Mattermost, Nextcloud Talk,
-Synology
-Chat, IRC, iMessage / BlueBubbles, and Nostr are shipped as account-aware
-outbound
-surfaces:
+Synology Chat, IRC, iMessage / BlueBubbles, and Nostr are shipped as
+account-aware outbound surfaces:
 
 - they publish send commands, config validation, inventory snapshots, and
   onboarding metadata through the shared channel SDK
@@ -193,159 +227,21 @@ surfaces:
   or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
   at the top level of `loongclaw.toml`
 
-### Plugin-Backed Bridge Surfaces
+#### Straightforward API Or Webhook Sends
 
-`weixin`, `qqbot`, and `onebot` are first-class channel catalog entries with
-`implementation_status = "plugin_backed"` and
-`onboarding.strategy = "plugin_bridge"`:
+Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, and Mattermost stay in
+the simplest config-backed outbound bucket for this spec slice:
 
-- they publish stable requirement metadata and target families through
-  `loongclaw channels --json`
-- they also expose config-derived account snapshots and bridge endpoint
-  summaries through `loongclaw channels --json` when the bridge surface is
-  configured
-- their reserved native `*-send` and `*-serve` command ids remain non-runnable
-  catalog stubs until LoongClaw ships the adapter itself
-- they do not join `multi-channel-serve` because the active reply loop still
-  belongs to the external bridge
+- the matrix above is the canonical source for required config keys and send
+  commands
+- these surfaces remain outbound-only even when their upstream platforms also
+  support richer bot or event contracts
+- they should not be described as shipped serve runtimes until LoongClaw owns
+  the corresponding inbound contract and gateway supervision model
 
-### Weixin
+#### Detailed Outbound Surface Notes
 
-`weixin` is a bridge-first surface that currently assumes a ClawBot or
-iLink-compatible bridge:
-
-- configure `weixin.bridge_url` and `weixin.bridge_access_token`
-- optionally allowlist trusted contacts through `weixin.allowed_contact_ids`
-- let the bridge own QR login, upstream session lifecycle, and personal WeChat
-  transport details
-- keep target routing stable with `weixin:<account>:contact:<id>` for direct
-  contacts and `weixin:<account>:room:<id>` for group rooms
-
-### QQBot
-
-`qqbot` is a bridge-first surface for the official QQ Bot gateway or compatible
-plugin transports:
-
-- configure `qqbot.app_id` and `qqbot.client_secret`
-- optionally allowlist trusted peers through `qqbot.allowed_peer_ids`
-- treat account scope as part of the target contract because QQ openids are
-  bot-account specific
-- keep target routing stable with `qqbot:<account>:c2c:<openid>`,
-  `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
-
-### OneBot
-
-`onebot` is the protocol bridge surface for QQ and personal-account ecosystems
-that standardize on OneBot v11-compatible transports:
-
-- configure `onebot.websocket_url` and `onebot.access_token`
-- optionally allowlist trusted groups through `onebot.allowed_group_ids`
-- keep the active WebSocket and event-loop ownership in the bridge runtime,
-  not in LoongClaw
-- keep target routing stable with `onebot:<account>:private:<user_id>` and
-  `onebot:<account>:group:<group_id>`
-
-### Plugin-Backed Bridge Surfaces
-
-`weixin`, `qqbot`, and `onebot` are first-class channel catalog entries with
-`implementation_status = "plugin_backed"` and
-`onboarding.strategy = "plugin_bridge"`:
-
-- they publish stable requirement metadata and target families through
-  `loongclaw channels --json`
-- they also expose config-derived account snapshots and bridge endpoint
-  summaries through `loongclaw channels --json` when the bridge surface is
-  configured
-- `loongclaw doctor` validates the local bridge contract for these surfaces and
-  treats external plugin runtime ownership as expected instead of as a native
-  runtime failure
-- their reserved native `*-send` and `*-serve` command ids remain non-runnable
-  catalog stubs until LoongClaw ships the adapter itself
-- they do not join `multi-channel-serve` because the active reply loop still
-  belongs to the external bridge
-
-When a plugin-backed bridge surface is configured and
-`external_skills.install_root` is set, `loongclaw channels --json` also
-surfaces a managed discovery block under `plugin_bridge_discovery`. That block
-captures the last discovery snapshot LoongClaw can verify locally:
-
-- `status`, `managed_install_root`, and `scan_issue` summarize discovery state
-- `compatible_plugin_ids`, `compatible_plugins`, `incomplete_plugins`, and
-  `incompatible_plugins` summarize bridge readiness at a glance
-- `plugins[]` carries per-plugin facts such as `status`, `transport_family`,
-  `target_contract`, `required_env_vars`, `required_config_keys`,
-  `setup_docs_urls`, and `setup_remediation`
-
-Compact example:
-
-```json
-{
-  "catalog": {
-    "id": "weixin",
-    "implementation_status": "plugin_backed"
-  },
-  "plugin_bridge_discovery": {
-    "status": "matches_found",
-    "managed_install_root": "~/.loongclaw/managed-skills",
-    "compatible_plugin_ids": ["weixin-bridge-a"],
-    "compatible_plugins": 1,
-    "incomplete_plugins": 0,
-    "incompatible_plugins": 0,
-    "plugins": [
-      {
-        "plugin_id": "weixin-bridge-a",
-        "status": "compatible_ready",
-        "transport_family": "wechat_clawbot_ilink_bridge",
-        "target_contract": "weixin_reply_loop"
-      }
-    ]
-  }
-}
-```
-
-`loongclaw doctor` uses the same managed discovery contract. A compatible
-external bridge counts as the expected runtime owner, while ambiguity,
-incomplete bridge setup, or discovery scan failures remain operator-facing
-warnings instead of being misreported as native adapter failures.
-
-### Weixin
-
-`weixin` is a bridge-first surface that currently assumes a ClawBot or
-iLink-compatible bridge:
-
-- configure `weixin.bridge_url` and `weixin.bridge_access_token`
-- optionally allowlist trusted contacts through `weixin.allowed_contact_ids`
-- let the bridge own QR login, upstream session lifecycle, and personal WeChat
-  transport details
-- keep target routing stable with `weixin:<account>:contact:<id>` for direct
-  contacts and `weixin:<account>:room:<id>` for group rooms
-
-### QQBot
-
-`qqbot` is a bridge-first surface for the official QQ Bot gateway or compatible
-plugin transports:
-
-- configure `qqbot.app_id` and `qqbot.client_secret`
-- optionally allowlist trusted peers through `qqbot.allowed_peer_ids`
-- treat account scope as part of the target contract because openids are
-  scoped to the selected QQ Bot account
-- keep target routing stable with `qqbot:<account>:c2c:<openid>`,
-  `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
-
-### OneBot
-
-`onebot` is the protocol bridge surface for QQ and personal-account ecosystems
-that standardize on OneBot v11 compatible transports:
-
-- configure `onebot.websocket_url` and `onebot.access_token`
-- optionally allowlist trusted groups through `onebot.allowed_group_ids`
-- keep the active WebSocket and event-loop ownership in the bridge runtime,
-  not in LoongClaw
-- keep `<account>` stable so personal-account bridge routes stay unambiguous
-- keep target routing stable with `onebot:<account>:private:<user_id>` and
-  `onebot:<account>:group:<group_id>`
-
-### Webhook
+##### Webhook
 
 Generic Webhook is shipped as a minimal config-backed outbound POST surface:
 
@@ -363,7 +259,7 @@ Generic Webhook is shipped as a minimal config-backed outbound POST surface:
 - `webhook.public_base_url` and `webhook.signing_secret` remain reserved for
   the planned inbound serve contract and are not required for send readiness
 
-### Signal
+##### Signal
 
 Signal is shipped through a `signal-cli` REST bridge send surface:
 
@@ -376,7 +272,7 @@ Signal is shipped through a `signal-cli` REST bridge send surface:
 - `signal-serve` remains planned until LoongClaw owns a real inbound listener
   contract
 
-### Email
+##### Email
 
 Email is shipped through an SMTP outbound surface:
 
@@ -391,7 +287,7 @@ Email is shipped through an SMTP outbound surface:
 - `email-serve` remains planned until LoongClaw owns an IMAP-backed reply-loop
   runtime
 
-### Microsoft Teams
+##### Microsoft Teams
 
 Microsoft Teams is shipped through the incoming webhook send surface:
 
@@ -405,7 +301,7 @@ Microsoft Teams is shipped through the incoming webhook send surface:
 - `teams-serve` remains planned until LoongClaw owns the bot-framework style
   inbound contract
 
-### Twitch
+##### Twitch
 
 Twitch is shipped through the official Twitch Chat API send surface:
 
@@ -459,7 +355,7 @@ Resolution notes:
 - `twitch.accounts.<account>.account_id` overrides the top-level
   `twitch.account_id` for the resolved runtime identity
 
-### Tlon
+##### Tlon
 
 Tlon is shipped through the outbound Urbit ship poke surface:
 
@@ -475,7 +371,7 @@ Tlon is shipped through the outbound Urbit ship poke surface:
 - `tlon-serve` remains planned until LoongClaw owns a stable inbound Urbit
   subscription and reply-loop runtime
 
-### Nextcloud Talk
+##### Nextcloud Talk
 
 Nextcloud Talk is shipped through the official bot API send surface:
 
@@ -484,7 +380,7 @@ Nextcloud Talk is shipped through the official bot API send surface:
 - `nextcloud-talk-serve` remains planned until LoongClaw owns the inbound bot
   callback contract
 
-### Synology Chat
+##### Synology Chat
 
 Synology Chat is shipped through the incoming webhook send surface:
 
@@ -498,7 +394,7 @@ Synology Chat is shipped through the incoming webhook send surface:
 - `synology-chat-serve` remains planned until LoongClaw owns the outbound
   webhook callback contract
 
-### IRC
+##### IRC
 
 IRC is shipped through a config-backed socket send surface:
 
@@ -515,7 +411,7 @@ IRC is shipped through a config-backed socket send surface:
 - `irc-serve` remains planned until LoongClaw owns a long-lived relay-loop
   contract for IRC traffic
 
-### iMessage / BlueBubbles
+##### iMessage / BlueBubbles
 
 iMessage is shipped through a BlueBubbles bridge send surface:
 
@@ -526,7 +422,7 @@ iMessage is shipped through a BlueBubbles bridge send surface:
 - `imessage-serve` remains planned until LoongClaw owns the inbound bridge
   synchronization contract
 
-### Nostr
+##### Nostr
 
 Nostr is shipped as a signed relay-publish surface:
 
@@ -541,7 +437,7 @@ Nostr is shipped as a signed relay-publish surface:
 - `nostr.allowed_pubkeys` remains reserved for the planned inbound relay
   subscriber path and is not required for send readiness today
 
-### Multi-Channel Serve And Gateway Direction
+## Gateway Ownership Direction
 
 `gateway run/status/stop` is the current explicit owner contract for the
 shipped runtime-backed service-channel subset. `multi-channel-serve` remains
@@ -554,21 +450,22 @@ the attached compatibility wrapper rather than the long-term product noun:
 - `gateway stop` can request cooperative shutdown from another CLI process
 - `multi-channel-serve` uses the same gateway owner contract while preserving
   the attached CLI-first workflow for operators who want one foreground session
-
 - `multi-channel-serve` keeps the concurrent CLI host in the foreground
 - it supervises every enabled runtime-backed surface from the loaded config
 - it accepts repeatable `--channel-account <channel=account>` selectors to pin
-  specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
-  or `wecom=robot-prod`
+  specific accounts such as `telegram=bot_123456`, `feishu=work`
+  (or the accepted alias `lark=work`), `matrix=bridge-sync`, or
+  `wecom=robot-prod`
+- those selectors should resolve against configured `accounts.<id>` entries;
+  if named accounts do not exist yet, the operator should finish the normal
+  per-channel setup first instead of inventing selector ids ad hoc
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
-  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat,
-  Mattermost, Nextcloud Talk, Synology Chat, or iMessage / BlueBubbles into
-  runtime supervision until those adapters grow real serve ownership
-- it never promotes plugin-backed bridge surfaces such as Weixin, QQBot, or
-  OneBot into runtime supervision because their active event loop still belongs
-  to the external bridge or gateway
-- it never promotes catalog-only planned surfaces such as Tlon into runtime
-  supervision until those adapters are implemented
+  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat, Twitch,
+  Tlon, Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage /
+  BlueBubbles into runtime supervision until those adapters grow real serve
+  ownership
+- it never promotes catalog-only planned surfaces such as Zalo, Zalo Personal,
+  or WebChat into runtime supervision until those adapters are implemented
 - the gateway service should continue to absorb this runtime ownership model,
   then add detached service lifecycle, route mounting, status/log surfaces,
   pairing, and richer gateway-native channel runtimes on top of the same

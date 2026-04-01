@@ -1,0 +1,102 @@
+---
+title: Docs Workflow
+description: How LoongClaw's public docs are split, validated, and deployed from this repository.
+---
+
+# Docs Workflow
+
+LoongClaw keeps public docs deliberately split across three layers so the
+landing page stays readable while the deeper public contract remains easy to
+maintain.
+
+## Put The Right Content In The Right Place
+
+| If the content is... | Put it here | Why |
+| --- | --- | --- |
+| repository landing-page positioning or first navigation | `README.md` and `README.zh-CN.md` | the front page should stay short and scannable |
+| reader-facing setup guides, tutorials, and operator docs | Mintlify source under `site/` | this is the main public docs surface |
+| source-level public specs and supporting reference markdown | repository `docs/` | these files support builders and source readers without becoming a second homepage |
+
+The split is intentional:
+
+- README explains what LoongClaw is and where to begin.
+- Mintlify docs under `site/` carry the main public walkthroughs.
+- Repository markdown under `docs/` holds supporting public references and
+  source-facing contracts.
+
+## Language Scope
+
+- The main repository supports Simplified Chinese only for `README.zh-CN.md`.
+- The Mintlify docs source under `site/` is English-only for now.
+- If broader docs i18n is added later, it should happen at the docs-site layer
+  rather than by expanding repository-wide markdown translation.
+
+## If You Introduce Docs i18n Later
+
+Use this order instead of translating the repository wholesale:
+
+1. Keep `README.zh-CN.md` as the only in-repo translated markdown unless the
+   repository language policy is intentionally expanded.
+2. Add locale routing and translated navigation at the Mintlify layer first.
+3. Translate the reader path in this order: overview, get-started pages,
+   provider/channel setup guides, then the most-used playbooks.
+4. Keep `docs/` source indexes, release-governance files, and other
+   maintainer-facing repository markdown English unless there is a specific
+   public reason to surface translated summaries in the docs site.
+
+Practical rule:
+
+- one canonical English source should continue to drive public contract edits,
+  even if translated Mintlify pages are added later
+
+## Docs Validation Loop
+
+Run Mintlify checks from `site/`, not from the repository root.
+
+```bash
+cd site
+NODE20_BIN="$(npm exec --yes --package=node@20.20.2 -- node -p 'process.execPath')"
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify broken-links
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loongclaw-docs-export.zip
+```
+
+Why this is the standard public docs loop:
+
+- `broken-links` is the fastest structural validation pass.
+- `export` proves the site can still compile as a full static artifact.
+- running from `site/` avoids unrelated root-level parsing noise
+- Node 20.20.2 is the current verified local toolchain for Mintlify in this repository
+- the Mintlify CLI version is pinned to avoid transient npm tag drift
+- `--yes` keeps the validation path non-interactive for contributor shells and CI-like local runs
+- the PATH override is required because Mintlify spawns `node` from the shell path during startup
+
+## Deployment Model
+
+LoongClaw's public docs are meant to deploy from this same repository as a
+monorepo docs surface.
+
+| Setting | Current value |
+| --- | --- |
+| repository root | this repository |
+| docs source path | `/site` |
+| config file | `site/docs.json` |
+| deployment shape | Mintlify monorepo subdirectory deployment |
+
+Practical rule:
+
+- do not invent a public docs URL in README copy until the Mintlify deployment
+  is actually connected and serving the site
+
+## Docs Contribution Checklist
+
+1. Put the change in the right layer before editing anything.
+2. Keep README changes at the landing-page level instead of turning it back into a manual.
+3. Prefer `site/` for new reader-facing guides, recipes, and walkthroughs.
+4. Keep backlog-heavy working notes and internal authoring history out of the public navigation.
+5. Re-run Mintlify validation when the site navigation, page links, or locale wiring changes.
+
+## Continue Reading
+
+- Continue to [Contributing](/build-on-loongclaw/contributing) for the public contribution entrypoint.
+- Continue to [Contribution Workflow](/build-on-loongclaw/contribution-workflow) for the standard PR and validation bar.
+- Continue to [Documentation Policy](/reference/documentation-policy) for the boundary and editorial contract.

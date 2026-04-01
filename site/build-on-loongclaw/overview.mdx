@@ -1,0 +1,56 @@
+---
+title: Build On LoongClaw
+description: Understand the boundaries you should preserve when extending the system.
+---
+
+# Build On LoongClaw
+
+Use this section when you want to extend LoongClaw without breaking the public runtime contract.
+
+This is the public builder hub. The goal is to make extension work legible:
+where a change belongs, which boundaries matter, and how a public contribution
+should be validated.
+
+## Choose A Builder Path
+
+| If you are asking... | Start here | Why |
+| --- | --- | --- |
+| Where should a runtime or architecture change live? | [Architecture](/build-on-loongclaw/architecture) | it is the public system map and boundary reference |
+| What validation bar should a contribution meet? | [Contributing](/build-on-loongclaw/contributing) | it explains workflow, CI, and review expectations |
+| What is the normal public PR and verification path? | [Contribution Workflow](/build-on-loongclaw/contribution-workflow) | it captures the public delivery lane |
+| How should public docs changes be routed and validated? | [Docs Workflow](/build-on-loongclaw/docs-workflow) | it explains the README, Mintlify, and repo-docs split plus the Mintlify validation loop |
+| Where could my background create the most leverage? | [Contribution Areas](/build-on-loongclaw/contribution-areas) | it maps common contributor shapes to current needs |
+| What public contract is already promised to users? | [Reference](/reference/overview) | it holds roadmap, reliability, policy, and release material |
+
+## Public Builder Contract
+
+The public repository exposes a small set of architecture references on purpose:
+
+- the crate DAG
+- the layered execution model
+- core engineering beliefs
+- harness and verification expectations
+- public contribution workflow and extension recipes
+
+## What This Section Optimizes For
+
+- preserve the crate boundaries
+- avoid dependency cycles
+- extend through adapters, seams, and packs
+- keep governance, approval, and audit in the real runtime path
+
+## Use This Section When
+
+- you need to place a change before you start coding
+- you are preparing a public contribution and need the verification bar
+- you are editing public docs and need the README, Mintlify, and repo-docs split
+- you want the public architecture and workflow contract without reading the full maintainer archive first
+
+## Suggested Reading Order
+
+1. Read [Architecture](/build-on-loongclaw/architecture) first if your change touches runtime shape, crate boundaries, or ownership.
+2. Read [Contributing](/build-on-loongclaw/contributing) next if you are preparing a real patch.
+3. Read [Contribution Workflow](/build-on-loongclaw/contribution-workflow) if you need the public validation and PR lane.
+4. Read [Docs Workflow](/build-on-loongclaw/docs-workflow) when the patch is primarily about public docs structure, placement, or Mintlify delivery.
+5. Read [Contribution Areas](/build-on-loongclaw/contribution-areas) if you want to match your background to current leverage points.
+6. Read [Reference](/reference/overview) or [Documentation Policy](/reference/documentation-policy) when you need the surrounding public contract and docs boundary.

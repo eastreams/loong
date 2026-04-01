@@ -1,0 +1,155 @@
+---
+title: WeCom Rollout
+description: End-to-end rollout for the shipped WeCom AIBot long-connection runtime.
+---
+
+# WeCom Rollout
+
+Use this playbook when WeCom is the enterprise chat surface that should own the
+shipped long-lived runtime.
+
+This page is specifically about the current public contract:
+
+- WeCom is documented as the official AIBot long-connection lane
+- it is not documented as a webhook callback integration
+- `gateway run` comes after `wecom-serve`, not instead of the basic runtime
+  validation
+
+## When This Is The Right Playbook
+
+- the deployment is already standardized on WeCom
+- one hosted provider should back the runtime clearly
+- proactive sends and reply-loop behavior should share the same account
+  identity
+- you want stable work versus alerts accounts before gateway selectors enter
+  the story
+
+## Use A Different Playbook If
+
+| If you actually need... | Go here instead |
+| --- | --- |
+| Feishu or Lark as the primary team-chat runtime | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+| one host supervising several already-healthy runtime-backed channels | [Gateway Rollout](/use-loongclaw/gateway-rollout-playbook) |
+
+## Step 1: Bring Up The Provider First
+
+```toml
+active_provider = "volcengine"
+
+[providers.volcengine]
+kind = "volcengine"
+api_key = { env = "ARK_API_KEY" }
+model = "auto"
+```
+
+Health loop:
+
+```bash
+loong doctor
+loong list-models
+loong ask --message "Confirm that the active provider path is healthy."
+```
+
+## Step 2: Start With A Single WeCom Account
+
+```toml
+[wecom]
+enabled = true
+bot_id = { env = "WECOM_BOT_ID" }
+secret = { env = "WECOM_SECRET" }
+ping_interval_s = 45
+reconnect_interval_s = 12
+allowed_conversation_ids = ["group_demo"]
+```
+
+Smoke-test it:
+
+```bash
+loong wecom-send --target "group_demo" --text "hello wecom"
+loong wecom-serve
+```
+
+Operational notes:
+
+- the official websocket URL is used by default
+- override `websocket_url` only for controlled environments or bridge setups
+- `ping_interval_s` and `reconnect_interval_s` are the right knobs when the
+  network path needs tuning
+
+## Step 3: Move To Stable Named Accounts
+
+Use named accounts before you introduce selectors or longer-lived gateway
+ownership.
+
+```toml
+[wecom]
+enabled = true
+default_account = "work"
+ping_interval_s = 45
+reconnect_interval_s = 12
+
+[wecom.accounts.work]
+bot_id = { env = "WECOM_WORK_BOT_ID" }
+secret = { env = "WECOM_WORK_SECRET" }
+allowed_conversation_ids = ["group_work"]
+
+[wecom.accounts.alerts]
+bot_id = { env = "WECOM_ALERTS_BOT_ID" }
+secret = { env = "WECOM_ALERTS_SECRET" }
+allowed_conversation_ids = ["group_alerts"]
+```
+
+Why this matters:
+
+- `default_account` makes the normal lane explicit
+- `accounts.<id>` creates stable selector targets such as `work` and `alerts`
+- gateway ownership stays legible instead of depending on whichever secret was
+  most recently pasted into the top level
+
+## Step 4: Choose Serve Or Gateway Ownership
+
+Foreground single-account validation:
+
+```bash
+loong wecom-serve --account work
+```
+
+Persisted owner contract:
+
+```bash
+loong gateway run \
+  --session daemon-gateway \
+  --channel-account wecom=work
+loong gateway status --json
+```
+
+Use `wecom-serve` first during rollout. Use `gateway run` after the account and
+conversation boundary are already trusted.
+
+## Step 5: Keep The Public Contract Truthful
+
+Rules that should stay explicit:
+
+- WeCom is the shipped AIBot long-connection lane
+- it should not be described as if a webhook callback mode were the same
+  supported path
+- outbound-only surfaces still do not join this reply-loop ownership model
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| `wecom-send` works but `wecom-serve` is unstable | tune `ping_interval_s` and `reconnect_interval_s`, then confirm the account and conversation ids are still the intended trust boundary |
+| `gateway run --channel-account wecom=work` fails | make sure `wecom.accounts.work` exists before using the selector |
+| replies arrive in the wrong conversation | review `allowed_conversation_ids` before changing ownership mode |
+| the team describes this as a webhook integration | fix the docs or runbook language; the shipped public contract is the AIBot long connection |
+
+## Continue Reading
+
+- Continue to [Common Setups](/use-loongclaw/common-setups) for other end-to-end
+  rollout shapes.
+- Continue to [Gateway And Supervision](/use-loongclaw/gateway-and-supervision)
+  for the owner contract and selectors without the WeCom-specific rollout path.
+- Continue to [Channel Recipes](/use-loongclaw/channel-recipes) for the broader
+  channel cookbook.

@@ -1,0 +1,143 @@
+---
+title: Local Model Plus Outbound Delivery
+description: Use local or self-hosted inference while keeping delivery truthful as outbound-only.
+---
+
+# Local Model Plus Outbound Delivery
+
+Use this playbook when you want local or self-hosted inference but only need
+governed outbound delivery instead of a reply-loop service runtime.
+
+This page is intentionally narrow:
+
+- the model runtime stays local or self-hosted
+- delivery stays outbound-only
+- nothing here is documented as if it joins the runtime-backed gateway owner
+  contract
+
+## When This Is The Right Playbook
+
+- local control over the model runtime matters more than hosted convenience
+- no inbound or reply-loop channel is required on day one
+- the team wants notifications, reports, or alerts delivered outward without
+  overclaiming runtime support
+
+## Use A Different Playbook If
+
+| If you actually need... | Go here instead |
+| --- | --- |
+| a hosted provider plus a team-chat runtime | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) or [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| a dedicated coding lane plus a lightweight bot surface | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+| provider-only local setup without delivery guidance | [Provider Recipes](/use-loongclaw/provider-recipes) |
+
+## Step 1: Bring Up The Local Provider
+
+Ollama example:
+
+```toml
+active_provider = "local"
+
+[providers.local]
+kind = "ollama"
+base_url = "http://127.0.0.1:11434"
+model = "auto"
+```
+
+Health loop:
+
+```bash
+loong doctor
+loong ask --message "Confirm that the local provider is healthy."
+```
+
+Operational note:
+
+- if the server effectively serves one production model, pin `model` explicitly
+  instead of forcing catalog discovery drama
+
+## Step 2: Add One Outbound Surface
+
+Webhook example:
+
+```toml
+[webhook]
+enabled = true
+endpoint_url = { env = "WEBHOOK_ENDPOINT_URL" }
+auth_token = { env = "WEBHOOK_AUTH_TOKEN" }
+payload_format = "json_text"
+payload_text_field = "text"
+```
+
+Smoke-test it:
+
+```bash
+loong webhook-send --text "local-runtime smoke test"
+```
+
+Email example:
+
+```toml
+[email]
+enabled = true
+smtp_host = "smtp.example.com"
+smtp_username = { env = "EMAIL_SMTP_USERNAME" }
+smtp_password = { env = "EMAIL_SMTP_PASSWORD" }
+from_address = "loongclaw@example.com"
+```
+
+```bash
+loong email-send --target "ops@example.com" --text $'Local run is healthy\nEverything is green.'
+```
+
+## Step 3: Keep The Boundary Truthful
+
+Rules that matter:
+
+- webhook, email, Slack, Discord, Teams, and similar surfaces are outbound-only
+- they do not join the same reply-loop owner model as Feishu / Lark, Telegram,
+  Matrix, or WeCom
+- do not route this setup description toward `gateway run` as if outbound-only
+  delivery became a supervised runtime
+
+## Step 4: Adjust The Outbound HTTP Boundary When Needed
+
+HTTP-backed outbound delivery blocks private or special-use hosts by default.
+
+If you intentionally target a private bridge or loopback service, widen that
+boundary explicitly:
+
+```toml
+[outbound_http]
+allow_private_hosts = true
+```
+
+Use that only when the private target is intentional.
+
+## Variants
+
+Other local or self-hosted providers fit the same shape:
+
+- `lm_studio`
+- `llamacpp`
+- `vllm`
+- `sglang`
+
+The key point is the same: local inference plus truthful outbound delivery is a
+valid public setup shape, but it is not the same thing as a shipped reply-loop
+runtime.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| `ask` is unstable before delivery is even involved | fix the local provider first; do not start with the outbound surface |
+| a local webhook target is rejected | add `[outbound_http] allow_private_hosts = true` only if the private target is intentional |
+| the setup starts being described as a channel runtime | correct the docs or runbook wording; this path is outbound-only |
+
+## Continue Reading
+
+- Continue to [Common Setups](/use-loongclaw/common-setups) for the setup hub.
+- Continue to [Provider Recipes](/use-loongclaw/provider-recipes) for the
+  broader local and self-hosted provider cookbook.
+- Continue to [Channel Recipes](/use-loongclaw/channel-recipes) for the
+  broader outbound-only delivery cookbook.

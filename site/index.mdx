@@ -1,0 +1,62 @@
+---
+title: LoongClaw Documentation
+description: Public docs for LoongClaw, the Rust foundation for vertical AI agents.
+---
+
+# LoongClaw Documentation
+
+LoongClaw is a Rust-built foundation for vertical AI agents. It starts from a runnable local assistant path, then grows outward through explicit runtime ownership, governed capabilities, and extension seams that teams can build on without rewriting the core.
+
+This site stays short at the top, then branches into focused tracks instead of turning the homepage into a giant matrix.
+
+## Choose A Track
+
+| If you want to... | Start here | What you get |
+| --- | --- | --- |
+| install LoongClaw and reach first value fast | [Get Started](/get-started/overview) | install, onboard, first-run, and doctor guidance |
+| follow one complete provider-plus-channel rollout path | [Common Setups](/use-loongclaw/common-setups) | end-to-end playbooks for hosted, service-channel, local, and gateway-owned setups |
+| configure a provider or channel right now | [Provider Recipes](/use-loongclaw/provider-recipes) and [Channel Recipes](/use-loongclaw/channel-recipes) | practical config examples, smoke tests, and rollout order |
+| understand the public runtime model before configuring it | [Use LoongClaw](/use-loongclaw/overview) | the current surface shape, page map, and capability boundaries |
+| extend or evaluate the architecture | [Build On LoongClaw](/build-on-loongclaw/overview) | crate boundaries, contribution workflow, and builder-facing contracts |
+| check public commitments and project policy | [Reference](/reference/overview) | roadmap, docs policy, reliability, security, and releases |
+
+## Public Docs Layers
+
+The public docs are intentionally split into three layers:
+
+- `README.md` stays as the repository landing page.
+- `site/` is the main reader-facing docs surface that Mintlify deploys.
+- `docs/` stays repository-native for source-facing specs and supporting references.
+
+That split keeps the front page short without hiding the deeper public contract from source readers.
+
+## Known Target Stack?
+
+If the rollout shape is already clear, skip the broad concept pass and go
+straight to a dedicated playbook.
+
+| If you already know you want... | Start here |
+| --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| Volcengine plus WeCom as the enterprise lane | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| BytePlus Coding plus Telegram | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+| a local or self-hosted model plus outbound delivery | [Local Model Plus Outbound Delivery](/use-loongclaw/local-outbound-playbook) |
+| several runtime-backed channels on one host | [Gateway Rollout](/use-loongclaw/gateway-rollout-playbook) |
+
+## What This Site Optimizes For
+
+- A short first-run path instead of a giant landing page checklist.
+- Focused provider and channel pages instead of stuffing matrices into the README.
+- Concept pages for the runtime model and tutorial pages for concrete setup.
+- Public architecture and contribution material for builders.
+- Public reference material for roadmap, reliability, security, and releases.
+
+## Reading Rules
+
+- Start with `Get Started` if you need first value fast.
+- Jump to `Common Setups` when you already know the target rollout shape and want one end-to-end path.
+- Jump to `Provider Recipes` or `Channel Recipes` when you already know what you want to configure but do not need a full playbook.
+- Use `Use LoongClaw` when you want the public runtime model before touching config.
+- Use `Build On LoongClaw` and `Reference` after the operator path is clear.
+
+If you want the explicit boundary and publishing policy, see [Documentation Policy](/reference/documentation-policy).
