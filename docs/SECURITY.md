@@ -57,10 +57,11 @@ Tool-specific request approval currently lives in the `PolicyExtensionChain`; th
 **Conversation runtime binding note:**
 - The binding makes the high-level execution mode explicit: `Kernel` means the turn is allowed to call kernel-mediated core tools; `Direct` means conversation orchestration may continue, but kernel-only tool execution must fail closed.
 - This removes ambiguity from conversation traits and dispatcher seams where `None` previously overloaded multiple meanings such as "direct mode", "not wired yet", or "forgot to pass kernel authority".
+- Conversation app-dispatch approval routing is now binding-first at the trait boundary. `AppToolDispatcher` approval checks receive `ConversationRuntimeBinding` directly instead of reconstructing approval semantics from `Option<&KernelContext>`.
 - Detached async delegate spawns carry an owned kernel context forward when the parent binding is kernel-bound. Direct-mode parents keep direct-mode children.
 - Kernel-bound history helpers no longer reuse direct sqlite fallback behind the caller's back. Higher-level orchestration may still choose how to handle the surfaced error.
 - Safe-lane governor diagnostics now surface history load status and normalized error codes instead of silently collapsing kernel history failures into an undifferentiated "no history" state.
-- User-facing chat diagnostics now preserve explicit `ConversationRuntimeBinding` semantics end-to-end. The discovery-first session-history path uses the same binding-first implementation internally. The public `Option<&KernelContext>` entrypoint remains an explicit compatibility wrapper instead of carrying shadow authority semantics deeper into the runtime.
+- User-facing chat diagnostics now preserve explicit `ConversationRuntimeBinding` semantics end-to-end. The discovery-first session-history path uses the same binding-first implementation internally. Remaining public `Option<&KernelContext>` seams are compatibility wrappers only, not first-class dispatcher-boundary contracts.
 
 **Provider runtime binding note:**
 - The provider binding makes provider governance explicit without importing conversation-layer semantics into provider code. `Kernel` means failover/audit behavior may emit kernel-backed audit events; `Direct` means provider execution is intentionally running without that authority while still recording in-process failover metrics.

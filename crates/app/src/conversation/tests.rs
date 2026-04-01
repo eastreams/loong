@@ -10524,12 +10524,12 @@ async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent(
 
     #[async_trait]
     impl crate::conversation::AppToolDispatcher for ApprovalBarrierDispatcher {
-        async fn maybe_require_approval(
+        async fn maybe_require_approval_with_binding(
             &self,
             _session_context: &crate::conversation::SessionContext,
             _intent: &crate::conversation::ToolIntent,
             descriptor: &crate::tools::ToolDescriptor,
-            _kernel_ctx: Option<&crate::KernelContext>,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
             *self.approval_checks.lock().expect("approval checks lock") += 1;
             if descriptor.name == "delegate_async" {
@@ -10640,6 +10640,37 @@ async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent(
     );
 }
 
+#[test]
+fn binding_first_approval_boundary_turn_engine_source_does_not_expose_optional_kernel_hook() {
+    let source = include_str!("turn_engine.rs");
+
+    assert!(
+        !source.contains("async fn maybe_require_approval("),
+        "AppToolDispatcher should not expose an optional-kernel approval hook"
+    );
+    assert!(
+        !source.contains(
+            "self.maybe_require_approval(session_context, intent, descriptor, kernel_ctx)"
+        ),
+        "binding-first approval should not loop back through optional kernel dispatch"
+    );
+}
+
+#[test]
+fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_binding_from_optional_kernel()
+ {
+    let source = include_str!("turn_coordinator.rs");
+
+    assert!(
+        !source.contains("async fn maybe_require_approval("),
+        "Coordinator approval wrapper should not expose an optional-kernel hook"
+    );
+    assert!(
+        !source.contains("ConversationRuntimeBinding::from_optional_kernel_context(kernel_ctx)"),
+        "Coordinator approval wrapper should not reconstruct binding from optional kernel context"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on_advisory_binding()
 {
@@ -10654,12 +10685,12 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
 
     #[async_trait]
     impl crate::conversation::AppToolDispatcher for GuardedApprovalDispatcher {
-        async fn maybe_require_approval(
+        async fn maybe_require_approval_with_binding(
             &self,
             _session_context: &crate::conversation::SessionContext,
             _intent: &crate::conversation::ToolIntent,
             _descriptor: &crate::tools::ToolDescriptor,
-            _kernel_ctx: Option<&crate::KernelContext>,
+            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
             *self.approval_checks.lock().expect("approval checks lock") += 1;
             Ok(Some(

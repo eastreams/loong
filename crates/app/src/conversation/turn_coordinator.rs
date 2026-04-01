@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant, timeout};
 
 use crate::CliResult;
+#[cfg(test)]
 use crate::KernelContext;
 use crate::acp::{
     AcpConversationTurnEntryDecision, AcpConversationTurnExecutionOutcome,
@@ -3929,18 +3930,6 @@ where
                 binding,
                 budget_state,
             )
-            .await
-    }
-
-    async fn maybe_require_approval(
-        &self,
-        session_context: &SessionContext,
-        intent: &ToolIntent,
-        descriptor: &crate::tools::ToolDescriptor,
-        kernel_ctx: Option<&KernelContext>,
-    ) -> Result<Option<super::turn_engine::ApprovalRequirement>, String> {
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(kernel_ctx);
-        self.maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
             .await
     }
 

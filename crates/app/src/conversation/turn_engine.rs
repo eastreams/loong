@@ -456,26 +456,14 @@ pub trait AppToolDispatcher: Send + Sync {
         }
     }
 
-    async fn maybe_require_approval(
+    async fn maybe_require_approval_with_binding(
         &self,
         _session_context: &SessionContext,
         _intent: &ToolIntent,
         _descriptor: &crate::tools::ToolDescriptor,
-        _kernel_ctx: Option<&KernelContext>,
+        _binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
         Ok(None)
-    }
-
-    async fn maybe_require_approval_with_binding(
-        &self,
-        session_context: &SessionContext,
-        intent: &ToolIntent,
-        descriptor: &crate::tools::ToolDescriptor,
-        binding: ConversationRuntimeBinding<'_>,
-    ) -> Result<Option<ApprovalRequirement>, String> {
-        let kernel_ctx = binding.kernel_context();
-        self.maybe_require_approval(session_context, intent, descriptor, kernel_ctx)
-            .await
     }
 
     async fn execute_app_tool(
@@ -1119,18 +1107,6 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             }
             Err(reason) => Err(reason),
         }
-    }
-
-    async fn maybe_require_approval(
-        &self,
-        session_context: &SessionContext,
-        intent: &ToolIntent,
-        descriptor: &crate::tools::ToolDescriptor,
-        kernel_ctx: Option<&KernelContext>,
-    ) -> Result<Option<ApprovalRequirement>, String> {
-        let binding = ConversationRuntimeBinding::from_optional_kernel_context(kernel_ctx);
-        self.maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
-            .await
     }
 
     async fn maybe_require_approval_with_binding(
