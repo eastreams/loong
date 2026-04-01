@@ -312,6 +312,7 @@ pub struct ChannelPluginBridgeContract {
     pub required_setup_surface: &'static str,
     pub runtime_owner: &'static str,
     pub supported_operations: Vec<&'static str>,
+    pub required_metadata_keys: Vec<&'static str>,
     pub recommended_metadata_keys: Vec<&'static str>,
 }
 
@@ -319,16 +320,19 @@ pub struct ChannelPluginBridgeContract {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelPluginBridgeManifestStatus {
     Compatible,
+    MissingChannelId,
     UnknownChannel,
     MissingSetupSurface,
+    MissingRequiredMetadata,
     UnsupportedChannelSurface,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChannelPluginBridgeManifestValidation {
-    pub channel_id: String,
+    pub channel_id: Option<String>,
     pub status: ChannelPluginBridgeManifestStatus,
     pub issues: Vec<String>,
+    pub required_metadata_keys: Vec<&'static str>,
     pub recommended_metadata_keys: Vec<&'static str>,
 }
 
@@ -986,12 +990,11 @@ const PLUGIN_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
 
 const PLUGIN_BRIDGE_REQUIRED_SETUP_SURFACE: &str = "channel";
 const PLUGIN_BRIDGE_RUNTIME_OWNER: &str = "external_plugin";
+const PLUGIN_BRIDGE_REQUIRED_METADATA_KEYS: &[&str] = &["transport_family", "target_contract"];
 const PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS: &[&str] = &[
     "bridge_kind",
     "adapter_family",
     "entrypoint",
-    "transport_family",
-    "target_contract",
     "account_scope",
 ];
 

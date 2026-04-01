@@ -25,7 +25,7 @@ Files:
 
 - `docs/plans/2026-04-01-channel-bridge-plugin-contract-design.md`
 - `docs/plans/2026-04-01-channel-bridge-plugin-contract-implementation-plan.md`
-- `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-plugin-contract-analysis.md`
+- maintainer-local private KB analysis note (not repo-tracked)
 
 Store the public design in the repo and the deeper reasoning in the private KB.
 
@@ -92,6 +92,16 @@ Add:
 - `ChannelPluginBridgeManifestValidation`
 - `validate_plugin_channel_bridge_manifest`
 - `plugin_bridge_contract` on `ChannelCatalogEntry`
+
+Make the registry contract explicit about required vs recommended metadata:
+
+- required metadata keys: `transport_family`, `target_contract`
+- recommended additive metadata keys: `bridge_kind`, `adapter_family`,
+  `entrypoint`, `account_scope`
+
+The app-layer validator should reject explicit bridge manifests that omit the
+required metadata keys so the public contract matches the kernel readiness
+gate.
 
 Keep the contract registry-owned and derive it from existing plugin-backed
 channel descriptors rather than per-channel custom logic.

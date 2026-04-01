@@ -27,6 +27,7 @@ pub(super) fn plugin_bridge_contract_from_descriptor(
         .iter()
         .map(|operation| operation.operation.id)
         .collect();
+    let required_metadata_keys = PLUGIN_BRIDGE_REQUIRED_METADATA_KEYS.to_vec();
     let recommended_metadata_keys = PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS.to_vec();
 
     Some(ChannelPluginBridgeContract {
@@ -34,6 +35,7 @@ pub(super) fn plugin_bridge_contract_from_descriptor(
         required_setup_surface: PLUGIN_BRIDGE_REQUIRED_SETUP_SURFACE,
         runtime_owner: PLUGIN_BRIDGE_RUNTIME_OWNER,
         supported_operations,
+        required_metadata_keys,
         recommended_metadata_keys,
     })
 }
@@ -82,14 +84,38 @@ pub fn validate_plugin_channel_bridge_manifest(
     manifest: &PluginManifest,
 ) -> Option<ChannelPluginBridgeManifestValidation> {
     let raw_channel_id = manifest.channel_id.as_deref();
-    let declared_channel_id = normalized_manifest_channel_id(raw_channel_id)?;
+    let declared_channel_id = normalized_manifest_channel_id(raw_channel_id);
+    let setup_surface = normalized_manifest_setup_surface(manifest);
+    let declares_channel_surface =
+        setup_surface.as_deref() == Some(PLUGIN_BRIDGE_REQUIRED_SETUP_SURFACE);
+    let declares_channel_bridge_metadata = manifest_declares_channel_bridge_metadata(manifest);
+    let declares_channel_bridge_adapter = manifest_declares_channel_bridge_adapter(manifest);
+    let declares_channel_bridge = declares_channel_surface
+        || declares_channel_bridge_metadata
+        || (declared_channel_id.is_some() && declares_channel_bridge_adapter);
+
+    if !declares_channel_bridge {
+        return None;
+    }
+
+    let Some(declared_channel_id) = declared_channel_id else {
+        return Some(ChannelPluginBridgeManifestValidation {
+            channel_id: None,
+            status: ChannelPluginBridgeManifestStatus::MissingChannelId,
+            issues: vec!["plugin bridge manifest must declare channel_id".to_owned()],
+            required_metadata_keys: PLUGIN_BRIDGE_REQUIRED_METADATA_KEYS.to_vec(),
+            recommended_metadata_keys: PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS.to_vec(),
+        });
+    };
+
     let registry_descriptor = find_channel_registry_descriptor(&declared_channel_id);
 
     let Some(registry_descriptor) = registry_descriptor else {
         return Some(ChannelPluginBridgeManifestValidation {
-            channel_id: declared_channel_id,
+            channel_id: Some(declared_channel_id),
             status: ChannelPluginBridgeManifestStatus::UnknownChannel,
             issues: vec!["channel registry entry is unknown".to_owned()],
+            required_metadata_keys: Vec::new(),
             recommended_metadata_keys: Vec::new(),
         });
     };
@@ -99,21 +125,24 @@ pub fn validate_plugin_channel_bridge_manifest(
 
     let Some(plugin_bridge_contract) = plugin_bridge_contract else {
         return Some(ChannelPluginBridgeManifestValidation {
-            channel_id: resolved_channel_id,
+            channel_id: Some(resolved_channel_id),
             status: ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface,
             issues: vec!["channel does not accept external plugin bridge ownership".to_owned()],
+            required_metadata_keys: Vec::new(),
             recommended_metadata_keys: Vec::new(),
         });
     };
 
-    let setup_surface = normalized_manifest_setup_surface(manifest);
+    let required_metadata_keys = plugin_bridge_contract.required_metadata_keys.clone();
+    let recommended_metadata_keys = plugin_bridge_contract.recommended_metadata_keys.clone();
 
     let Some(setup_surface) = setup_surface else {
         return Some(ChannelPluginBridgeManifestValidation {
-            channel_id: resolved_channel_id,
+            channel_id: Some(resolved_channel_id),
             status: ChannelPluginBridgeManifestStatus::MissingSetupSurface,
             issues: vec!["plugin bridge manifest must declare setup.surface".to_owned()],
-            recommended_metadata_keys: plugin_bridge_contract.recommended_metadata_keys,
+            required_metadata_keys,
+            recommended_metadata_keys,
         });
     };
 
@@ -126,18 +155,33 @@ pub fn validate_plugin_channel_bridge_manifest(
         );
 
         return Some(ChannelPluginBridgeManifestValidation {
-            channel_id: resolved_channel_id,
+            channel_id: Some(resolved_channel_id),
             status: ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface,
             issues: vec![issue],
-            recommended_metadata_keys: plugin_bridge_contract.recommended_metadata_keys,
+            required_metadata_keys,
+            recommended_metadata_keys,
+        });
+    }
+
+    let missing_required_metadata_issues =
+        missing_required_metadata_issues(manifest, &plugin_bridge_contract);
+
+    if !missing_required_metadata_issues.is_empty() {
+        return Some(ChannelPluginBridgeManifestValidation {
+            channel_id: Some(resolved_channel_id),
+            status: ChannelPluginBridgeManifestStatus::MissingRequiredMetadata,
+            issues: missing_required_metadata_issues,
+            required_metadata_keys,
+            recommended_metadata_keys,
         });
     }
 
     Some(ChannelPluginBridgeManifestValidation {
-        channel_id: resolved_channel_id,
+        channel_id: Some(resolved_channel_id),
         status: ChannelPluginBridgeManifestStatus::Compatible,
         issues: Vec::new(),
-        recommended_metadata_keys: plugin_bridge_contract.recommended_metadata_keys,
+        required_metadata_keys,
+        recommended_metadata_keys,
     })
 }
 
@@ -577,4 +621,55 @@ fn normalized_manifest_setup_surface(
     }
 
     Some(trimmed.to_ascii_lowercase())
+}
+
+fn normalized_manifest_metadata_value(
+    manifest: &loongclaw_kernel::PluginManifest,
+    key: &str,
+) -> Option<String> {
+    let value = manifest.metadata.get(key);
+    let value = value.map(String::as_str);
+    let value = value?;
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    Some(trimmed.to_owned())
+}
+
+fn manifest_declares_channel_bridge_metadata(manifest: &loongclaw_kernel::PluginManifest) -> bool {
+    let transport_family = normalized_manifest_metadata_value(manifest, "transport_family");
+    let target_contract = normalized_manifest_metadata_value(manifest, "target_contract");
+    let account_scope = normalized_manifest_metadata_value(manifest, "account_scope");
+
+    transport_family.is_some() || target_contract.is_some() || account_scope.is_some()
+}
+
+fn manifest_declares_channel_bridge_adapter(manifest: &loongclaw_kernel::PluginManifest) -> bool {
+    let adapter_family = normalized_manifest_metadata_value(manifest, "adapter_family");
+
+    adapter_family.as_deref() == Some("channel-bridge")
+}
+
+fn missing_required_metadata_issues(
+    manifest: &loongclaw_kernel::PluginManifest,
+    plugin_bridge_contract: &ChannelPluginBridgeContract,
+) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    for required_metadata_key in &plugin_bridge_contract.required_metadata_keys {
+        let required_metadata_value =
+            normalized_manifest_metadata_value(manifest, required_metadata_key);
+
+        if required_metadata_value.is_some() {
+            continue;
+        }
+
+        let issue = format!("plugin bridge manifest must declare metadata.{required_metadata_key}");
+        issues.push(issue);
+    }
+
+    issues
 }

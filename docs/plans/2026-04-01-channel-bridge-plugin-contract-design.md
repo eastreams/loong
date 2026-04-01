@@ -177,6 +177,7 @@ operators what a compatible manifest must look like for the surface:
 
 - `manifest_channel_id`
 - `required_setup_surface`
+- `required_metadata_keys`
 - `runtime_owner`
 - `supported_operations`
 - `recommended_metadata_keys`
@@ -184,6 +185,17 @@ operators what a compatible manifest must look like for the surface:
 The registry also exposes an app-layer validator that checks a
 `PluginManifest` against the registry-owned bridge contract without making
 `kernel` depend on `app`.
+
+That validator should align with the kernel readiness gate instead of only
+checking `channel_id` and `setup.surface`. In practice that means the registry
+contract must surface the metadata fields activation already treats as
+mandatory:
+
+- `transport_family`
+- `target_contract`
+
+The wider metadata guidance remains useful, but it is separate from the
+additive keys that improve discovery without blocking activation.
 
 ### 5. Surface the registry contract through channel inventory output
 

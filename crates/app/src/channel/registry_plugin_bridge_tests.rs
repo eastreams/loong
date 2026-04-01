@@ -8,6 +8,7 @@ use tempfile::TempDir;
 fn sample_channel_bridge_manifest(
     channel_id: Option<&str>,
     setup_surface: Option<&str>,
+    metadata: BTreeMap<String, String>,
 ) -> loongclaw_kernel::PluginManifest {
     sample_channel_bridge_manifest_with_metadata(channel_id, setup_surface, BTreeMap::new())
 }
@@ -137,13 +138,15 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
     assert_eq!(weixin_contract.runtime_owner, "external_plugin");
     assert_eq!(weixin_contract.supported_operations, vec!["send", "serve"]);
     assert_eq!(
+        weixin_contract.required_metadata_keys,
+        vec!["transport_family", "target_contract"]
+    );
+    assert_eq!(
         weixin_contract.recommended_metadata_keys,
         vec![
             "bridge_kind",
             "adapter_family",
             "entrypoint",
-            "transport_family",
-            "target_contract",
             "account_scope",
         ]
     );
@@ -163,28 +166,44 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
 
 #[test]
 fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
-    let compatible_manifest = sample_channel_bridge_manifest(Some("weixin"), Some("channel"));
+    let compatible_manifest = sample_channel_bridge_manifest(
+        Some("weixin"),
+        Some("channel"),
+        BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+        ]),
+    );
     let compatible_validation = validate_plugin_channel_bridge_manifest(&compatible_manifest)
         .expect("compatible channel bridge validation");
     assert_eq!(
         compatible_validation.status,
         ChannelPluginBridgeManifestStatus::Compatible
     );
-    assert_eq!(compatible_validation.channel_id, "weixin");
+    assert_eq!(compatible_validation.channel_id.as_deref(), Some("weixin"));
     assert!(compatible_validation.issues.is_empty());
+    assert_eq!(
+        compatible_validation.required_metadata_keys,
+        vec!["transport_family", "target_contract"]
+    );
     assert_eq!(
         compatible_validation.recommended_metadata_keys,
         vec![
             "bridge_kind",
             "adapter_family",
             "entrypoint",
-            "transport_family",
-            "target_contract",
             "account_scope",
         ]
     );
 
-    let unknown_manifest = sample_channel_bridge_manifest(Some("unknown-bridge"), Some("channel"));
+    let unknown_manifest =
+        sample_channel_bridge_manifest(Some("unknown-bridge"), Some("channel"), BTreeMap::new());
     let unknown_validation = validate_plugin_channel_bridge_manifest(&unknown_manifest)
         .expect("unknown channel bridge validation");
     assert_eq!(
@@ -192,7 +211,8 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         ChannelPluginBridgeManifestStatus::UnknownChannel
     );
 
-    let runtime_backed_manifest = sample_channel_bridge_manifest(Some("telegram"), Some("channel"));
+    let runtime_backed_manifest =
+        sample_channel_bridge_manifest(Some("telegram"), Some("channel"), BTreeMap::new());
     let runtime_backed_validation =
         validate_plugin_channel_bridge_manifest(&runtime_backed_manifest)
             .expect("runtime-backed channel validation");
@@ -201,13 +221,53 @@ fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
         ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
     );
 
-    let missing_surface_manifest = sample_channel_bridge_manifest(Some("qqbot"), None);
+    let non_explicit_manifest =
+        sample_channel_bridge_manifest(Some("weixin"), None, BTreeMap::new());
+    let non_explicit_validation = validate_plugin_channel_bridge_manifest(&non_explicit_manifest);
+    assert!(
+        non_explicit_validation.is_none(),
+        "channel_id alone should not declare a plugin bridge contract"
+    );
+
+    let missing_surface_manifest = sample_channel_bridge_manifest(
+        Some("qqbot"),
+        None,
+        BTreeMap::from([("transport_family".to_owned(), "qqbot_bridge".to_owned())]),
+    );
     let missing_surface_validation =
         validate_plugin_channel_bridge_manifest(&missing_surface_manifest)
             .expect("missing setup surface validation");
     assert_eq!(
         missing_surface_validation.status,
         ChannelPluginBridgeManifestStatus::MissingSetupSurface
+    );
+
+    let missing_channel_id_manifest =
+        sample_channel_bridge_manifest(None, Some("channel"), BTreeMap::new());
+    let missing_channel_id_validation =
+        validate_plugin_channel_bridge_manifest(&missing_channel_id_manifest)
+            .expect("missing channel id validation");
+    assert_eq!(
+        missing_channel_id_validation.status,
+        ChannelPluginBridgeManifestStatus::MissingChannelId
+    );
+    assert_eq!(missing_channel_id_validation.channel_id, None);
+
+    let missing_metadata_manifest =
+        sample_channel_bridge_manifest(Some("qqbot"), Some("channel"), BTreeMap::new());
+    let missing_metadata_validation =
+        validate_plugin_channel_bridge_manifest(&missing_metadata_manifest)
+            .expect("missing metadata validation");
+    assert_eq!(
+        missing_metadata_validation.status,
+        ChannelPluginBridgeManifestStatus::MissingRequiredMetadata
+    );
+    assert_eq!(
+        missing_metadata_validation.issues,
+        vec![
+            "plugin bridge manifest must declare metadata.transport_family".to_owned(),
+            "plugin bridge manifest must declare metadata.target_contract".to_owned(),
+        ]
     );
 }
 

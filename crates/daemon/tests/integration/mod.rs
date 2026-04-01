@@ -962,6 +962,16 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
                         == Some("channel")
                     && entry
                         .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("required_metadata_keys"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|keys| {
+                            keys.iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["transport_family", "target_contract"])
+                    && entry
+                        .get("plugin_bridge_contract")
                         .and_then(|contract| contract.get("runtime_owner"))
                         .and_then(serde_json::Value::as_str)
                         == Some("external_plugin")
