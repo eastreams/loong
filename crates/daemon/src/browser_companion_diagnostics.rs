@@ -9,7 +9,6 @@ pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
-const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +17,7 @@ pub(crate) struct BrowserCompanionDiagnostics {
     pub(crate) expected_version: Option<String>,
     pub(crate) observed_version: Option<String>,
     pub(crate) runtime_ready: bool,
+    pub(crate) probe_timeout_seconds: u64,
     pub(crate) install_status: BrowserCompanionInstallStatus,
 }
 
@@ -38,7 +38,7 @@ impl BrowserCompanionDiagnostics {
             BrowserCompanionInstallStatus::ProbeTimedOut { command } => {
                 format!(
                     "command `{command} {BROWSER_COMPANION_VERSION_ARG}` timed out after {}s",
-                    BROWSER_COMPANION_PROBE_TIMEOUT.as_secs()
+                    self.probe_timeout_seconds
                 )
             }
             BrowserCompanionInstallStatus::ProbeFailed { command, error } => {
@@ -139,17 +139,19 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 
     let runtime_ready = runtime.is_runtime_ready();
     let expected_version = runtime.expected_version;
+    let probe_timeout_seconds = runtime.timeout_seconds;
     let Some(command) = runtime.command else {
         return Some(BrowserCompanionDiagnostics {
             command: None,
             expected_version,
             observed_version: None,
             runtime_ready,
+            probe_timeout_seconds,
             install_status: BrowserCompanionInstallStatus::MissingCommand,
         });
     };
 
-    match probe_browser_companion_version(&command).await {
+    match probe_browser_companion_version(&command, probe_timeout_seconds).await {
         Ok(observed_version) => {
             let install_status = match expected_version.as_deref() {
                 Some(expected_version)
@@ -168,6 +170,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
                 expected_version,
                 observed_version: Some(observed_version),
                 runtime_ready,
+                probe_timeout_seconds,
                 install_status,
             })
         }
@@ -176,6 +179,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
             expected_version,
             observed_version: None,
             runtime_ready,
+            probe_timeout_seconds,
             install_status: BrowserCompanionInstallStatus::MissingBinary { command },
         }),
         Err(BrowserCompanionProbeError::TimedOut) => Some(BrowserCompanionDiagnostics {
@@ -183,6 +187,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
             expected_version,
             observed_version: None,
             runtime_ready,
+            probe_timeout_seconds,
             install_status: BrowserCompanionInstallStatus::ProbeTimedOut { command },
         }),
         Err(BrowserCompanionProbeError::SpawnFailed(error)) => Some(BrowserCompanionDiagnostics {
@@ -190,6 +195,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
             expected_version,
             observed_version: None,
             runtime_ready,
+            probe_timeout_seconds,
             install_status: BrowserCompanionInstallStatus::ProbeFailed { command, error },
         }),
         Err(BrowserCompanionProbeError::Exited {
@@ -200,6 +206,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
             expected_version,
             observed_version: Some(observed.clone()),
             runtime_ready,
+            probe_timeout_seconds,
             install_status: BrowserCompanionInstallStatus::ProbeExited {
                 command,
                 observed,
@@ -211,12 +218,14 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 
 async fn probe_browser_companion_version(
     command: &str,
+    timeout_seconds: u64,
 ) -> Result<String, BrowserCompanionProbeError> {
+    let timeout_budget = Duration::from_secs(timeout_seconds.max(1));
     let mut probe = Command::new(command);
     probe.arg(BROWSER_COMPANION_VERSION_ARG);
     probe.kill_on_drop(true);
 
-    match timeout(BROWSER_COMPANION_PROBE_TIMEOUT, probe.output()).await {
+    match timeout(timeout_budget, probe.output()).await {
         Ok(Ok(output)) => {
             let observed = observed_output(&output.stdout, &output.stderr);
             if output.status.success() {
@@ -384,6 +393,36 @@ mod tests {
                     && observed_version == "loongclaw-browser-companion 11.5.0"
             ),
             "partial version matches should still warn as mismatches: {diagnostics:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_uses_runtime_probe_timeout_budget() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("probe-timeout-budget");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(&script_path, "#!/bin/sh\nsleep 2\necho late\n");
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.timeout_seconds = 1;
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        assert!(
+            matches!(
+                diagnostics.install_status,
+                BrowserCompanionInstallStatus::ProbeTimedOut { .. }
+            ),
+            "slow probes should time out when the runtime timeout budget is exhausted: {diagnostics:#?}"
+        );
+        assert!(
+            diagnostics.install_detail().contains("timed out after 1s"),
+            "timeout detail should reflect the runtime-configured probe budget: {diagnostics:#?}"
         );
     }
 
