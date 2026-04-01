@@ -19,7 +19,18 @@ trap 'rm -f "$TEMP_REPORT" "$NORMALIZED_TRACKED" "$NORMALIZED_GENERATED" "$DIFF_
 
 normalize_architecture_drift_report() {
   local input_path="${1:?input_path is required}"
-  sed '/^- Generated at: /d' "$input_path"
+
+  # Freshness should compare report substance, not volatile provenance metadata.
+  local generated_at_pattern
+  generated_at_pattern='/^- Generated at: /d'
+
+  local baseline_report_pattern
+  baseline_report_pattern='/^- Baseline report: /d'
+
+  sed \
+    -e "$generated_at_pattern" \
+    -e "$baseline_report_pattern" \
+    "$input_path"
 }
 
 if ! git ls-files --error-unmatch "$REPORT_PATH" >/dev/null 2>&1; then

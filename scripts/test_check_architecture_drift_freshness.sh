@@ -223,10 +223,60 @@ run_temp_regeneration_preserves_tracked_baseline_test() {
   assert_contains "$output_file" "tracked architecture drift report is fresh"
 }
 
+run_baseline_path_alias_preserves_freshness_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  local baseline_file
+  baseline_file="$fixture/docs/releases/architecture-drift-2098-12.md"
+
+  local report_file
+  report_file="$fixture/docs/releases/architecture-drift-2099-01.md"
+
+  local baseline_path
+  baseline_path="docs/releases/architecture-drift-2098-12.md"
+
+  local report_path
+  report_path="docs/releases/architecture-drift-2099-01.md"
+
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+      scripts/generate_architecture_drift_report.sh "$baseline_path"
+    git add "$baseline_file"
+    git commit -qm "seed baseline architecture drift report"
+  )
+
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      scripts/generate_architecture_drift_report.sh "$report_path"
+    git add "$report_file"
+    git commit -qm "seed tracked architecture drift report with relative baseline path"
+  )
+
+  local tracked_dir
+  tracked_dir="$fixture/docs/releases"
+
+  local output_file
+  output_file="$fixture/path-alias.out"
+
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      LOONGCLAW_ARCH_DRIFT_BASELINE_DIR="$tracked_dir" \
+      scripts/check_architecture_drift_freshness.sh "$report_path" >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "tracked architecture drift report is fresh"
+}
+
 run_fresh_report_passes_test
 run_fresh_report_with_adjacent_baseline_passes_test
 run_stale_report_fails_test
 run_untracked_report_fails_test
 run_temp_regeneration_preserves_tracked_baseline_test
+run_baseline_path_alias_preserves_freshness_test
 
 echo "check_architecture_drift_freshness.sh checks passed"

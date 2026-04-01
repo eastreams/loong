@@ -14,7 +14,7 @@ Cover the regression with shell tests before changing the scripts.
 
 ---
 
-### Task 1: Reproduce the temp-path baseline mismatch in tests
+## Task 1: Reproduce the temp-path baseline mismatch in tests
 
 **Files:**
 - Modify: `scripts/test_check_architecture_drift_freshness.sh`
@@ -42,7 +42,7 @@ Expected: FAIL in the new regression case because the freshness script regenerat
 Confirm the failure is caused by the baseline mismatch, not by missing fixture data or an unrelated
 diff.
 
-### Task 2: Add generator coverage for stable baseline directory overrides
+## Task 2: Add generator coverage for stable baseline directory overrides
 
 **Files:**
 - Modify: `scripts/test_generate_architecture_drift_report.sh`
@@ -63,7 +63,7 @@ Run: `bash scripts/test_generate_architecture_drift_report.sh`
 Expected: FAIL because the generator currently only derives the baseline from `dirname
 "$OUTPUT_PATH"`
 
-### Task 3: Implement the minimal baseline-directory override
+## Task 3: Implement the minimal baseline-directory override
 
 **Files:**
 - Modify: `scripts/generate_architecture_drift_report.sh`
@@ -89,7 +89,7 @@ Derive the previous-month filename once and join it against the chosen directory
 Run: `bash scripts/test_generate_architecture_drift_report.sh`
 Expected: PASS
 
-### Task 4: Wire the freshness checker to the stable baseline directory
+## Task 4: Wire the freshness checker to the stable baseline directory
 
 **Files:**
 - Modify: `scripts/check_architecture_drift_freshness.sh`
@@ -108,7 +108,7 @@ Pass `LOONGCLAW_ARCH_DRIFT_BASELINE_DIR` when invoking
 Run: `bash scripts/test_check_architecture_drift_freshness.sh`
 Expected: PASS
 
-### Task 5: Run syntax and governance verification
+## Task 5: Run syntax and governance verification
 
 **Files:**
 - Modify: none unless verification exposes follow-up fixes
