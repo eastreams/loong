@@ -238,6 +238,7 @@ pub struct ChannelOnboardingDescriptor {
 pub enum ChannelDoctorCheckTrigger {
     OperationHealth,
     ReadyRuntime,
+    PluginBridgeHealth,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -7786,16 +7787,18 @@ mod tests {
         );
 
         assert_eq!(weixin.onboarding.strategy.as_str(), "plugin_bridge");
-        assert_eq!(
-            weixin.onboarding.status_command,
-            "loongclaw channels --json"
-        );
+        assert_eq!(weixin.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(weixin.onboarding.repair_command, None);
         assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
 
         assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert_eq!(qqbot.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(qqbot.onboarding.repair_command, None);
         assert!(qqbot.onboarding.setup_hint.contains("QQ Bot"));
 
         assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert_eq!(onebot.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(onebot.onboarding.repair_command, None);
         assert!(onebot.onboarding.setup_hint.contains("OneBot"));
     }
 
@@ -7859,6 +7862,51 @@ mod tests {
         assert_eq!(
             resolve_channel_doctor_operation_spec("telegram", "send"),
             None
+        );
+
+        let weixin_send =
+            resolve_channel_doctor_operation_spec("weixin", "send").expect("weixin send spec");
+        let weixin_send_checks = weixin_send
+            .checks
+            .iter()
+            .map(|check| (check.name, check.trigger))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            weixin_send_checks,
+            vec![(
+                "weixin bridge send contract",
+                ChannelDoctorCheckTrigger::PluginBridgeHealth,
+            )]
+        );
+
+        let qqbot_serve =
+            resolve_channel_doctor_operation_spec("qqbot", "serve").expect("qqbot serve spec");
+        let qqbot_serve_checks = qqbot_serve
+            .checks
+            .iter()
+            .map(|check| (check.name, check.trigger))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            qqbot_serve_checks,
+            vec![(
+                "qqbot bridge serve contract",
+                ChannelDoctorCheckTrigger::PluginBridgeHealth,
+            )]
+        );
+
+        let onebot_serve =
+            resolve_channel_doctor_operation_spec("onebot", "serve").expect("onebot serve spec");
+        let onebot_serve_checks = onebot_serve
+            .checks
+            .iter()
+            .map(|check| (check.name, check.trigger))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            onebot_serve_checks,
+            vec![(
+                "onebot bridge serve contract",
+                ChannelDoctorCheckTrigger::PluginBridgeHealth,
+            )]
         );
     }
 
