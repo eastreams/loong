@@ -30,8 +30,15 @@ use crate::channel::{
 use crate::config::{FeishuIntegrationConfig, ResolvedFeishuChannelConfig};
 
 const FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES: usize = 30 * 1024;
-pub(super) const FEISHU_ACK_REACTIONS: &[&str] =
-    &["THUMBSUP", "OK", "APPLAUSE", "MUSCLE", "DONE", "SMILE"];
+pub(super) const FEISHU_ACK_REACTIONS: &[&str] = &[
+    "HappyDragon",
+    "OneSecond",
+    "OK",
+    "APPLAUSE",
+    "GoGoGo",
+    "DONE",
+    "CheckMark",
+];
 
 fn pick_uniform_index(len: usize) -> usize {
     debug_assert!(len > 0);
