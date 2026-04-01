@@ -2244,11 +2244,20 @@ mod tests {
         let provider_requests = provider_requests.lock().await.clone();
         assert_eq!(provider_requests.len(), 1);
 
-        let feishu_requests = feishu_requests.lock().await.clone();
-        assert_eq!(feishu_requests.len(), 2);
-        assert_eq!(
-            feishu_requests[1].path,
-            "/open-apis/im/v1/messages/om_runtime_end_1/reply"
+        let feishu_requests = wait_for_request_count(&feishu_requests, 3).await;
+        assert_eq!(feishu_requests.len(), 3);
+        assert!(
+            feishu_requests
+                .iter()
+                .any(|request| request.path == "/open-apis/im/v1/messages/om_runtime_end_1/reply"),
+            "reply should still be sent when runtime end bookkeeping fails"
+        );
+        assert!(
+            feishu_requests
+                .iter()
+                .any(|request| request.path
+                    == "/open-apis/im/v1/messages/om_runtime_end_1/reactions"),
+            "ack reaction should still be attempted when runtime end bookkeeping fails"
         );
 
         provider_server.abort();
