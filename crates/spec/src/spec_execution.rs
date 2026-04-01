@@ -970,22 +970,57 @@ fn filter_scan_report_by_keys(
     }
 }
 
+#[derive(Clone)]
+struct PluginTranslationMetadataSnapshot {
+    bridge_kind: String,
+    adapter_family: String,
+    entrypoint_hint: String,
+    source_language: String,
+    channel_id: Option<String>,
+    channel_bridge_transport_family: Option<String>,
+    channel_bridge_target_contract: Option<String>,
+    channel_bridge_account_scope: Option<String>,
+    channel_bridge_ready: Option<bool>,
+    channel_bridge_missing_fields: Vec<String>,
+}
+
 fn enrich_scan_report_with_translation(
     report: &PluginScanReport,
     translation: &PluginTranslationReport,
 ) -> PluginScanReport {
-    let mut runtime_by_key: BTreeMap<(String, String), (String, String, String, String)> =
+    let mut runtime_by_key: BTreeMap<(String, String), PluginTranslationMetadataSnapshot> =
         BTreeMap::new();
 
     for entry in &translation.entries {
+        let channel_bridge = entry.channel_bridge.as_ref();
+        let channel_id = channel_bridge
+            .and_then(|bridge| bridge.channel_id.clone())
+            .or_else(|| entry.channel_id.clone());
+        let channel_bridge_transport_family =
+            channel_bridge.and_then(|bridge| bridge.transport_family.clone());
+        let channel_bridge_target_contract =
+            channel_bridge.and_then(|bridge| bridge.target_contract.clone());
+        let channel_bridge_account_scope =
+            channel_bridge.and_then(|bridge| bridge.account_scope.clone());
+        let channel_bridge_ready = channel_bridge.map(|bridge| bridge.readiness.ready);
+        let channel_bridge_missing_fields = channel_bridge
+            .map(|bridge| bridge.readiness.missing_fields.clone())
+            .unwrap_or_default();
+
         runtime_by_key.insert(
             (entry.source_path.clone(), entry.plugin_id.clone()),
-            (
-                entry.runtime.bridge_kind.as_str().to_owned(),
-                entry.runtime.adapter_family.clone(),
-                entry.runtime.entrypoint_hint.clone(),
-                entry.runtime.source_language.clone(),
-            ),
+            PluginTranslationMetadataSnapshot {
+                bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
+                adapter_family: entry.runtime.adapter_family.clone(),
+                entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
+                source_language: entry.runtime.source_language.clone(),
+                channel_id,
+                channel_bridge_transport_family,
+                channel_bridge_target_contract,
+                channel_bridge_account_scope,
+                channel_bridge_ready,
+                channel_bridge_missing_fields,
+            },
         );
     }
 
@@ -1053,32 +1088,41 @@ fn enrich_scan_report_with_translation(
                     .or_insert_with(|| normalized.display().to_string());
             }
 
-            if let Some((bridge_kind, adapter_family, entrypoint_hint, source_language)) =
-                runtime_by_key.get(&(
-                    descriptor.path.clone(),
-                    descriptor.manifest.plugin_id.clone(),
-                ))
-            {
+            if let Some(runtime_snapshot) = runtime_by_key.get(&(
+                descriptor.path.clone(),
+                descriptor.manifest.plugin_id.clone(),
+            )) {
+                let bridge_kind = runtime_snapshot.bridge_kind.clone();
+                let adapter_family = runtime_snapshot.adapter_family.clone();
+                let entrypoint_hint = runtime_snapshot.entrypoint_hint.clone();
+                let source_language = runtime_snapshot.source_language.clone();
                 descriptor
                     .manifest
                     .metadata
                     .entry("bridge_kind".to_owned())
-                    .or_insert_with(|| bridge_kind.clone());
+                    .or_insert(bridge_kind);
                 descriptor
                     .manifest
                     .metadata
                     .entry("adapter_family".to_owned())
-                    .or_insert_with(|| adapter_family.clone());
+                    .or_insert(adapter_family);
                 descriptor
                     .manifest
                     .metadata
                     .entry("entrypoint_hint".to_owned())
-                    .or_insert_with(|| entrypoint_hint.clone());
+                    .or_insert(entrypoint_hint);
                 descriptor
                     .manifest
                     .metadata
                     .entry("source_language".to_owned())
-                    .or_insert_with(|| source_language.clone());
+                    .or_insert(source_language);
+
+                insert_plugin_channel_bridge_metadata(
+                    &mut descriptor.manifest.metadata,
+                    Some(runtime_snapshot),
+                );
+            } else {
+                insert_plugin_channel_bridge_metadata(&mut descriptor.manifest.metadata, None);
             }
             descriptor
         })
@@ -1162,6 +1206,86 @@ fn insert_plugin_setup_metadata(
         let remediation_key = "plugin_setup_remediation".to_owned();
         metadata.insert(remediation_key, remediation);
     }
+}
+
+fn insert_plugin_channel_bridge_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    snapshot: Option<&PluginTranslationMetadataSnapshot>,
+) {
+    let Some(snapshot) = snapshot else {
+        remove_plugin_channel_bridge_metadata(metadata);
+        return;
+    };
+
+    upsert_or_remove_metadata_value(metadata, "plugin_channel_id", snapshot.channel_id.as_ref());
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_transport_family",
+        snapshot.channel_bridge_transport_family.as_ref(),
+    );
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_target_contract",
+        snapshot.channel_bridge_target_contract.as_ref(),
+    );
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_account_scope",
+        snapshot.channel_bridge_account_scope.as_ref(),
+    );
+
+    if let Some(channel_bridge_ready) = snapshot.channel_bridge_ready {
+        let ready_key = "plugin_channel_bridge_ready".to_owned();
+        let ready_value = channel_bridge_ready.to_string();
+        metadata.insert(ready_key, ready_value);
+    } else {
+        metadata.remove("plugin_channel_bridge_ready");
+    }
+
+    upsert_or_remove_json_string_list_metadata(
+        metadata,
+        "plugin_channel_bridge_missing_fields_json",
+        &snapshot.channel_bridge_missing_fields,
+    );
+}
+
+fn remove_plugin_channel_bridge_metadata(metadata: &mut BTreeMap<String, String>) {
+    metadata.remove("plugin_channel_id");
+    metadata.remove("plugin_channel_bridge_transport_family");
+    metadata.remove("plugin_channel_bridge_target_contract");
+    metadata.remove("plugin_channel_bridge_account_scope");
+    metadata.remove("plugin_channel_bridge_ready");
+    metadata.remove("plugin_channel_bridge_missing_fields_json");
+}
+
+fn upsert_or_remove_metadata_value(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    value: Option<&String>,
+) {
+    let Some(value) = value else {
+        metadata.remove(key);
+        return;
+    };
+
+    let metadata_key = key.to_owned();
+    let metadata_value = value.clone();
+    metadata.insert(metadata_key, metadata_value);
+}
+
+fn upsert_or_remove_json_string_list_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    values: &[String],
+) {
+    let serialized = serde_json::to_string(values);
+    let Ok(serialized) = serialized else {
+        metadata.remove(key);
+        return;
+    };
+
+    let metadata_key = key.to_owned();
+    metadata.insert(metadata_key, serialized);
 }
 
 fn insert_plugin_setup_string_list_metadata(
@@ -1823,11 +1947,89 @@ mod plugin_metadata_tests {
                 package_root: descriptor.package_root.clone(),
                 package_manifest_path: descriptor.package_manifest_path.clone(),
                 setup: descriptor.manifest.setup.clone(),
+                channel_bridge: None,
                 runtime: PluginRuntimeProfile {
                     source_language: descriptor.language.clone(),
                     bridge_kind: PluginBridgeKind::HttpJson,
                     adapter_family: "http-adapter".to_owned(),
                     entrypoint_hint: "https://example.com/search".to_owned(),
+                },
+            }],
+        }
+    }
+
+    fn test_channel_bridge_descriptor(source_kind: PluginSourceKind) -> PluginDescriptor {
+        let mut descriptor = test_descriptor(source_kind);
+
+        descriptor.manifest.plugin_id = "weixin-clawbot-bridge".to_owned();
+        descriptor.manifest.provider_id = "weixin-bridge".to_owned();
+        descriptor.manifest.connector_name = "weixin-clawbot-http".to_owned();
+        descriptor.manifest.channel_id = Some("weixin".to_owned());
+        descriptor.manifest.endpoint = Some("http://127.0.0.1:8091/bridge".to_owned());
+        descriptor.manifest.metadata = BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+            ("account_scope".to_owned(), "multi_account".to_owned()),
+        ]);
+        descriptor.manifest.setup = Some(PluginSetup {
+            mode: PluginSetupMode::MetadataOnly,
+            surface: Some("channel".to_owned()),
+            required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+            recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+            required_config_keys: vec![
+                "weixin.enabled".to_owned(),
+                "weixin.bridge_url".to_owned(),
+                "weixin.bridge_access_token".to_owned(),
+            ],
+            default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+            docs_urls: vec!["https://docs.example.com/weixin-bridge".to_owned()],
+            remediation: Some("configure the sanctioned weixin bridge contract".to_owned()),
+        });
+
+        descriptor
+    }
+
+    fn test_channel_bridge_translation(descriptor: &PluginDescriptor) -> PluginTranslationReport {
+        PluginTranslationReport {
+            translated_plugins: 1,
+            bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
+            entries: vec![PluginIR {
+                plugin_id: descriptor.manifest.plugin_id.clone(),
+                provider_id: descriptor.manifest.provider_id.clone(),
+                connector_name: descriptor.manifest.connector_name.clone(),
+                channel_id: descriptor.manifest.channel_id.clone(),
+                endpoint: descriptor.manifest.endpoint.clone(),
+                capabilities: descriptor.manifest.capabilities.clone(),
+                metadata: descriptor.manifest.metadata.clone(),
+                source_path: descriptor.path.clone(),
+                source_kind: descriptor.source_kind,
+                package_root: descriptor.package_root.clone(),
+                package_manifest_path: descriptor.package_manifest_path.clone(),
+                setup: descriptor.manifest.setup.clone(),
+                channel_bridge: Some(kernel::PluginChannelBridgeContract {
+                    channel_id: Some("weixin".to_owned()),
+                    setup_surface: Some("channel".to_owned()),
+                    transport_family: Some("wechat_clawbot_ilink_bridge".to_owned()),
+                    target_contract: Some(
+                        "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+                    ),
+                    account_scope: Some("multi_account".to_owned()),
+                    readiness: kernel::PluginChannelBridgeReadiness {
+                        ready: true,
+                        missing_fields: Vec::new(),
+                    },
+                }),
+                runtime: PluginRuntimeProfile {
+                    source_language: descriptor.language.clone(),
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "channel-bridge".to_owned(),
+                    entrypoint_hint: "http://127.0.0.1:8091/bridge".to_owned(),
                 },
             }],
         }
@@ -2052,6 +2254,55 @@ mod plugin_metadata_tests {
                 .get("plugin_setup_required_env_vars_json")
                 .map(String::as_str),
             Some("[\"TAVILY_API_KEY\"]")
+        );
+    }
+
+    #[test]
+    fn enrich_scan_report_adds_channel_bridge_contract_metadata() {
+        let descriptor = test_channel_bridge_descriptor(PluginSourceKind::PackageManifest);
+        let report = PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor.clone()],
+        };
+        let translation = test_channel_bridge_translation(&descriptor);
+
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
+        let metadata = &enriched.descriptors[0].manifest.metadata;
+
+        assert_eq!(
+            metadata.get("plugin_channel_id").map(String::as_str),
+            Some("weixin")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_transport_family")
+                .map(String::as_str),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_target_contract")
+                .map(String::as_str),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_account_scope")
+                .map(String::as_str),
+            Some("multi_account")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_ready")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_missing_fields_json")
+                .map(String::as_str),
+            Some("[]")
         );
     }
 }
