@@ -1276,13 +1276,13 @@ fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
 
     assert!(
         rendered.contains(
-            "stable_targets=weixin:<account>:contact:<id>[conversation]:direct contact conversation,weixin:<account>:room:<id>[conversation]:group room conversation"
+            "stable_targets=\"weixin:<account>:contact:<id>[conversation]:direct contact conversation,weixin:<account>:room:<id>[conversation]:group room conversation\""
         ),
         "rendered channel surfaces should expose weixin stable target templates: {rendered}"
     );
     assert!(
         rendered.contains(
-            "stable_targets=qqbot:<account>:c2c:<openid>[conversation]:direct message openid,qqbot:<account>:group:<openid>[conversation]:group openid,qqbot:<account>:channel:<id>[conversation]:guild channel id"
+            "stable_targets=\"qqbot:<account>:c2c:<openid>[conversation]:direct message openid,qqbot:<account>:group:<openid>[conversation]:group openid,qqbot:<account>:channel:<id>[conversation]:guild channel id\""
         ),
         "rendered channel surfaces should expose qqbot stable target templates: {rendered}"
     );

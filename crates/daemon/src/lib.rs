@@ -3641,7 +3641,8 @@ pub fn push_channel_surface_plugin_bridge_contract(
     let stable_targets =
         render_channel_surface_plugin_bridge_stable_targets(&plugin_bridge_contract.stable_targets);
     if stable_targets != "-" {
-        let stable_targets_line = format!("  stable_targets={stable_targets}");
+        let rendered_stable_targets = render_line_safe_text_value(&stable_targets);
+        let stable_targets_line = format!("  stable_targets={rendered_stable_targets}");
         lines.push(stable_targets_line);
     }
 
