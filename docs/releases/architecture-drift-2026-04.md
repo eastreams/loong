@@ -26,7 +26,6 @@
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14764 | 15000 | 236 | 56 | 70 | 14 | 98.4% | TIGHT | 14472 | 2.0% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6340 | 6500 | 160 | 210 | 210 | 0 | 100.0% | TIGHT | 6324 | 0.3% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9519 | 9800 | 281 | 228 | 250 | 22 | 97.1% | TIGHT | 9519 | 0.0% | PASS | 228 |
-
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
 - TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (99.4%), acpx_runtime (96.4%), channel_registry (98.9%), channel_config (100.0%), chat_runtime (95.6%), turn_coordinator (96.7%), tools_mod (98.4%), daemon_lib (100.0%), onboard_cli (97.1%)
