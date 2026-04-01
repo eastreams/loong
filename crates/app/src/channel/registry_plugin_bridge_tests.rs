@@ -10,7 +10,7 @@ fn sample_channel_bridge_manifest(
     setup_surface: Option<&str>,
     metadata: BTreeMap<String, String>,
 ) -> loongclaw_kernel::PluginManifest {
-    sample_channel_bridge_manifest_with_metadata(channel_id, setup_surface, BTreeMap::new())
+    sample_channel_bridge_manifest_with_metadata(channel_id, setup_surface, metadata)
 }
 
 fn sample_channel_bridge_manifest_with_metadata(
@@ -312,7 +312,8 @@ fn channel_inventory_reports_managed_bridge_plugin_statuses_per_surface() {
         Some("channel"),
         incomplete_metadata,
     );
-    let incompatible_manifest = sample_channel_bridge_manifest(Some("onebot"), Some("tool"));
+    let incompatible_manifest =
+        sample_channel_bridge_manifest(Some("onebot"), Some("tool"), BTreeMap::new());
     let mut config = LoongClawConfig::default();
 
     assert_eq!(

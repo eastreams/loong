@@ -385,7 +385,8 @@ fn discovered_plugin_matches_by_channel_id(
             continue;
         };
 
-        let resolved_channel_id = normalize_channel_catalog_id(&validation.channel_id);
+        let declared_channel_id = validation.channel_id.as_deref();
+        let resolved_channel_id = declared_channel_id.and_then(normalize_channel_catalog_id);
         let Some(resolved_channel_id) = resolved_channel_id else {
             continue;
         };
@@ -538,6 +539,10 @@ fn discovered_plugin_bridge_status_from_validation(
         }
         ChannelPluginBridgeManifestStatus::MissingSetupSurface => {
             ChannelDiscoveredPluginBridgeStatus::MissingSetupSurface
+        }
+        ChannelPluginBridgeManifestStatus::MissingChannelId
+        | ChannelPluginBridgeManifestStatus::MissingRequiredMetadata => {
+            ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract
         }
         ChannelPluginBridgeManifestStatus::UnsupportedChannelSurface
         | ChannelPluginBridgeManifestStatus::UnknownChannel => {
