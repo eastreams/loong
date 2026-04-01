@@ -56,6 +56,20 @@ pub async fn fetch_document_content(
     parse_raw_content_response(document_id.as_str(), &payload)
 }
 
+pub async fn fetch_document_metadata(
+    client: &FeishuClient,
+    user_access_token: &str,
+    document_id_or_url: &str,
+) -> CliResult<FeishuDocumentMetadata> {
+    let document_id = extract_document_id(document_id_or_url)
+        .ok_or_else(|| "failed to resolve Feishu document id".to_owned())?;
+    let path = format!("/open-apis/docx/v1/documents/{document_id}");
+    let payload = client
+        .get_json(path.as_str(), Some(user_access_token), &[])
+        .await?;
+    parse_document_metadata_response(&payload)
+}
+
 pub async fn create_document(
     client: &FeishuClient,
     user_access_token: &str,
@@ -80,7 +94,7 @@ pub async fn create_document(
             &Value::Object(body),
         )
         .await?;
-    parse_document_create_response(&payload)
+    parse_document_metadata_response(&payload)
 }
 
 pub async fn convert_content_to_blocks(
@@ -183,7 +197,7 @@ pub fn parse_raw_content_response(
     })
 }
 
-pub fn parse_document_create_response(payload: &Value) -> CliResult<FeishuDocumentMetadata> {
+pub fn parse_document_metadata_response(payload: &Value) -> CliResult<FeishuDocumentMetadata> {
     let document = payload
         .get("data")
         .and_then(|value| value.get("document"))
@@ -1221,7 +1235,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_document_create_response_reads_document_metadata() {
+    fn parse_document_metadata_response_reads_document_metadata() {
         let payload = serde_json::json!({
             "code": 0,
             "msg": "success",
@@ -1234,7 +1248,7 @@ mod tests {
             }
         });
 
-        let document = parse_document_create_response(&payload).expect("parse document create");
+        let document = parse_document_metadata_response(&payload).expect("parse document metadata");
 
         assert_eq!(document.document_id, "doxcnCreated");
         assert_eq!(document.revision_id, Some(1));
