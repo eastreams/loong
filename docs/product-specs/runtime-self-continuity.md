@@ -51,6 +51,32 @@ mixing identity authority with transient task context.
   context.
 - Session-local content is never promoted into durable self-state implicitly.
 
+## Selected Direction
+
+LoongClaw's public continuity direction is intentionally narrow:
+
+- keep runtime-self guidance and resolved runtime identity as the authority lane
+- keep session profile and future durable recall advisory
+- add bounded durable context before broadening retrieval scope
+- add explicit query-aware retrieval before embedding-dependent search becomes
+  required
+
+In practical terms, that means:
+
+- durable hot memory should stay bounded and operator-legible instead of turning
+  into a second identity layer
+- retrieval should start with local text-first recall and clear provenance
+  rather than jumping directly to opaque vendor-managed search
+- future memory providers may enrich advisory context, but they must not become
+  prompt authority or override runtime-owned continuity lanes
+
+Related public specs:
+
+- [Memory Profiles](memory-profiles.md) covers bounded profile projection and
+  advisory durable context
+- [Memory Retrieval](memory-retrieval.md) covers explicit query-aware recall and
+  provenance expectations
+
 ## Acceptance Criteria
 
 - Summary blocks clearly state that they do not replace runtime-self guidance,
