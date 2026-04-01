@@ -530,6 +530,11 @@ fn required_capabilities_for_tool_name_and_payload(
         "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
+        BASH_EXEC_TOOL_NAME => {
+            caps.insert(Capability::FilesystemRead);
+            caps.insert(Capability::FilesystemWrite);
+            caps.insert(Capability::NetworkEgress);
+        }
         "claw.migrate" => {
             caps.insert(Capability::FilesystemRead);
             if claw_migrate_mode_requires_write(payload) {
@@ -2536,6 +2541,8 @@ mod tests {
         assert!(properties.contains_key("cwd"));
         assert!(properties.contains_key("timeout_ms"));
         assert!(!properties.contains_key("args"));
+        assert_eq!(properties["timeout_ms"]["minimum"], json!(1000));
+        assert_eq!(properties["timeout_ms"]["maximum"], json!(600000));
         assert_eq!(
             definition["function"]["parameters"]["required"],
             json!(["command"])
@@ -2752,6 +2759,20 @@ mod tests {
             BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
         );
 
+        let direct_bash_exec = ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({"command": "printf ok"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_bash_exec),
+            BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+                Capability::NetworkEgress,
+            ])
+        );
+
         let invoked_file_read = ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
             payload: json!({
@@ -2789,6 +2810,24 @@ mod tests {
         assert_eq!(
             required_capabilities_for_request(&invoked_web_fetch),
             BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
+        let invoked_bash_exec = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "bash.exec",
+                "lease": "unused",
+                "arguments": {"command": "printf ok"}
+            }),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&invoked_bash_exec),
+            BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+                Capability::NetworkEgress,
+            ])
         );
 
         let invoked_claw_plan = ToolCoreRequest {
@@ -5331,6 +5370,41 @@ mod tests {
         assert!(
             !tool_ids.contains(&"file.read"),
             "file.read requires FilesystemRead, should be hidden when only InvokeTool is granted; got: {tool_ids:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn tool_search_hides_bash_exec_without_side_effect_capabilities() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-search-bash-cap-filter-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.bash_exec = ready_bash_exec_runtime_policy();
+
+        let result = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "bash.exec",
+                    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: [
+                        "InvokeTool"
+                    ]
+                }),
+            },
+            &config,
+        )
+        .expect("search should succeed");
+
+        let results = result.payload["results"].as_array().expect("results array");
+        assert!(
+            results.iter().all(|entry| entry["tool_id"] != "bash.exec"),
+            "bash.exec should be hidden when the granted capabilities only include InvokeTool; got: {results:?}"
         );
 
         std::fs::remove_dir_all(&root).ok();

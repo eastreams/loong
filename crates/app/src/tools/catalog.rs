@@ -2532,6 +2532,8 @@ fn bash_exec_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "timeout_ms": {
                         "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 600000,
                         "description": "Optional command timeout in milliseconds. Defaults to 120000 and is clamped to 1000..=600000."
                     }
                 },

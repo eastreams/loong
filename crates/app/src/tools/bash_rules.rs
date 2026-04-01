@@ -153,9 +153,17 @@ where
         .into_iter()
         .map(|token| token.as_ref().trim().to_owned())
         .collect();
+    let lowered_command: Vec<String> = command
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
 
     if rules.iter().any(|rule| {
-        rule.decision == PrefixRuleDecision::Deny && prefix_matches(&command, &rule.prefix)
+        rule.decision == PrefixRuleDecision::Deny
+            && prefix_matches(
+                command_tokens_for_rule(rule, &command, &lowered_command),
+                &rule.prefix,
+            )
     }) {
         return Some(PrefixRuleDecision::Deny);
     }
@@ -163,9 +171,29 @@ where
     rules
         .iter()
         .any(|rule| {
-            rule.decision == PrefixRuleDecision::Allow && prefix_matches(&command, &rule.prefix)
+            rule.decision == PrefixRuleDecision::Allow
+                && prefix_matches(
+                    command_tokens_for_rule(rule, &command, &lowered_command),
+                    &rule.prefix,
+                )
         })
         .then_some(PrefixRuleDecision::Allow)
+}
+
+fn command_tokens_for_rule<'a>(
+    rule: &CompiledPrefixRule,
+    command: &'a [String],
+    lowered_command: &'a [String],
+) -> &'a [String] {
+    if is_legacy_shell_rule(rule) {
+        lowered_command
+    } else {
+        command
+    }
+}
+
+fn is_legacy_shell_rule(rule: &CompiledPrefixRule) -> bool {
+    rule.source.starts_with("shell_allow:") || rule.source.starts_with("shell_deny:")
 }
 
 fn compile_rules<I>(specs: I) -> Vec<CompiledPrefixRule>
@@ -370,6 +398,32 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn compatibility_rules_match_mixed_case_command_tokens() {
+        let rules =
+            compile_compatibility_rules("shell_allow", PrefixRuleDecision::Allow, ["Cargo"]);
+
+        assert_eq!(
+            evaluate_prefix_rules(&rules, ["Cargo", "publish"]),
+            Some(PrefixRuleDecision::Allow)
+        );
+    }
+
+    #[test]
+    fn starlark_rules_keep_case_sensitive_matching() {
+        let rules = compile_rules([PrefixRuleSpec {
+            source: "rules:custom".to_owned(),
+            pattern: vec!["Cargo".to_owned()],
+            decision: PrefixRuleDecision::Allow,
+        }]);
+
+        assert_eq!(
+            evaluate_prefix_rules(&rules, ["Cargo", "publish"]),
+            Some(PrefixRuleDecision::Allow)
+        );
+        assert_eq!(evaluate_prefix_rules(&rules, ["cargo", "publish"]), None);
     }
 
     #[test]
