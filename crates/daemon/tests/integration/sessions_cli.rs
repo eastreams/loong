@@ -1,5 +1,37 @@
 use super::*;
 
+fn create_delegate_session(
+    repo: &mvp::session::repository::SessionRepository,
+    parent_session_id: &str,
+    session_id: &str,
+    label: &str,
+    state: mvp::session::repository::SessionState,
+) {
+    repo.create_session(mvp::session::repository::NewSessionRecord {
+        session_id: session_id.to_owned(),
+        kind: mvp::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some(parent_session_id.to_owned()),
+        label: Some(label.to_owned()),
+        state,
+    })
+    .expect("create delegate session");
+}
+
+fn append_session_turn(
+    root: &super::tasks_cli::TempDirGuard,
+    session_id: &str,
+    role: &str,
+    content: &str,
+) {
+    let sqlite_path = root.path().join("memory.sqlite3");
+    let memory_config = mvp::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(sqlite_path),
+        ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()
+    };
+    mvp::memory::append_turn_direct(session_id, role, content, &memory_config)
+        .expect("append session turn");
+}
+
 #[test]
 fn sessions_list_cli_parses_global_flags_after_subcommand() {
     let cli = try_parse_cli([
@@ -244,5 +276,320 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
     assert!(
         rendered.contains("runtime_self_continuity: present"),
         "status render should surface continuity summary: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_events_history_and_wait_surface_incremental_payloads() {
+    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-events");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Release Research",
+        mvp::session::repository::SessionState::Running,
+    );
+    repo.append_event(mvp::session::repository::NewSessionEvent {
+        session_id: "delegate:session-1".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("ops-root".to_owned()),
+        payload_json: json!({
+            "task": "research release readiness",
+            "label": "Release Research",
+            "execution": {
+                "mode": "async",
+                "depth": 1,
+                "max_depth": 3,
+                "active_children": 0,
+                "max_active_children": 2,
+                "timeout_seconds": 60,
+                "allow_shell_in_child": false,
+                "child_tool_allowlist": ["file.read"],
+                "kernel_bound": false,
+                "runtime_narrowing": {}
+            }
+        }),
+    })
+    .expect("append delegate_started event");
+    append_session_turn(&root, "delegate:session-1", "user", "hello");
+    append_session_turn(&root, "delegate:session-1", "assistant", "world");
+
+    let events_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::Events {
+                session_id: "delegate:session-1".to_owned(),
+                after_id: None,
+                limit: 20,
+            },
+        },
+    )
+    .await
+    .expect("sessions events should succeed");
+
+    let next_after_id = events_execution.payload["next_after_id"]
+        .as_i64()
+        .expect("next_after_id");
+    let rendered_events =
+        loongclaw_daemon::sessions_cli::render_sessions_cli_text(&events_execution)
+            .expect("render sessions events");
+
+    assert_eq!(events_execution.payload["command"], "events");
+    assert_eq!(events_execution.payload["session_id"], "delegate:session-1");
+    assert_eq!(
+        events_execution.payload["events"][0]["event_kind"],
+        "delegate_started"
+    );
+    assert!(next_after_id >= 1);
+    assert!(
+        rendered_events.contains("delegate_started"),
+        "events render should surface event kind: {rendered_events}"
+    );
+
+    let history_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::History {
+                session_id: "delegate:session-1".to_owned(),
+                limit: 20,
+            },
+        },
+    )
+    .await
+    .expect("sessions history should succeed");
+
+    let rendered_history =
+        loongclaw_daemon::sessions_cli::render_sessions_cli_text(&history_execution)
+            .expect("render sessions history");
+
+    assert_eq!(history_execution.payload["command"], "history");
+    assert_eq!(
+        history_execution.payload["session_id"],
+        "delegate:session-1"
+    );
+    assert_eq!(history_execution.payload["turns"][0]["role"], "user");
+    assert_eq!(history_execution.payload["turns"][1]["role"], "assistant");
+    assert!(
+        rendered_history.contains("user: hello"),
+        "history render should surface transcript turns: {rendered_history}"
+    );
+
+    let wait_execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::Wait {
+                session_id: "delegate:session-1".to_owned(),
+                after_id: Some(next_after_id),
+                timeout_ms: 1,
+            },
+        },
+    )
+    .await
+    .expect("sessions wait should succeed");
+
+    let rendered_wait = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&wait_execution)
+        .expect("render sessions wait");
+
+    assert_eq!(wait_execution.payload["command"], "wait");
+    assert_eq!(wait_execution.payload["session_id"], "delegate:session-1");
+    assert_eq!(wait_execution.payload["wait_status"], "timeout");
+    assert_eq!(wait_execution.payload["detail"]["events"], json!([]));
+    assert_eq!(
+        wait_execution.payload["detail"]["session"]["session_id"],
+        "delegate:session-1"
+    );
+    assert!(
+        rendered_wait.contains("wait result: timeout"),
+        "wait render should surface timeout result: {rendered_wait}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_cancel_dry_run_surfaces_cancel_action() {
+    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-cancel");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Release Check",
+        mvp::session::repository::SessionState::Ready,
+    );
+    repo.append_event(mvp::session::repository::NewSessionEvent {
+        session_id: "delegate:session-1".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("ops-root".to_owned()),
+        payload_json: json!({
+            "task": "check release readiness",
+            "label": "Release Check",
+            "timeout_seconds": 60
+        }),
+    })
+    .expect("append delegate_queued event");
+
+    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::Cancel {
+                session_id: "delegate:session-1".to_owned(),
+                dry_run: true,
+            },
+        },
+    )
+    .await
+    .expect("sessions cancel dry run should succeed");
+
+    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions cancel");
+
+    assert_eq!(execution.payload["command"], "cancel");
+    assert_eq!(execution.payload["dry_run"], true);
+    assert_eq!(execution.payload["result"], "would_apply");
+    assert_eq!(
+        execution.payload["action"]["kind"],
+        "queued_async_cancelled"
+    );
+    assert!(
+        rendered.contains("queued_async_cancelled"),
+        "cancel render should surface cancel action: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_recover_dry_run_surfaces_non_recoverable_result() {
+    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-recover");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Release Check",
+        mvp::session::repository::SessionState::Ready,
+    );
+    repo.append_event(mvp::session::repository::NewSessionEvent {
+        session_id: "delegate:session-1".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("ops-root".to_owned()),
+        payload_json: json!({
+            "task": "check release readiness",
+            "label": "Release Check",
+            "timeout_seconds": 60
+        }),
+    })
+    .expect("append delegate_queued event");
+
+    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::Recover {
+                session_id: "delegate:session-1".to_owned(),
+                dry_run: true,
+            },
+        },
+    )
+    .await
+    .expect("sessions recover dry run should succeed");
+
+    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions recover");
+
+    assert_eq!(execution.payload["command"], "recover");
+    assert_eq!(execution.payload["dry_run"], true);
+    assert_eq!(execution.payload["result"], "skipped_not_recoverable");
+    assert!(
+        execution.payload["message"]
+            .as_str()
+            .expect("recover message")
+            .contains("session_recover_not_recoverable"),
+        "recover dry run should surface root cause: {:?}",
+        execution.payload
+    );
+    assert!(
+        rendered.contains("skipped_not_recoverable"),
+        "recover render should surface non-recoverable result: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
+    let root = super::tasks_cli::TempDirGuard::new("loongclaw-sessions-cli-archive");
+    let _env = super::tasks_cli::TasksCliEnvironmentGuard::set(&[]);
+    let config_path = super::tasks_cli::write_tasks_config(root.path());
+    let repo = super::tasks_cli::load_session_repository(&config_path);
+    super::tasks_cli::ensure_root_session(&repo, "ops-root");
+    create_delegate_session(
+        &repo,
+        "ops-root",
+        "delegate:session-1",
+        "Release Archive",
+        mvp::session::repository::SessionState::Running,
+    );
+    repo.finalize_session_terminal(
+        "delegate:session-1",
+        mvp::session::repository::FinalizeSessionTerminalRequest {
+            state: mvp::session::repository::SessionState::Completed,
+            last_error: None,
+            event_kind: "delegate_completed".to_owned(),
+            actor_session_id: Some("ops-root".to_owned()),
+            event_payload_json: json!({
+                "result": "ok"
+            }),
+            outcome_status: "ok".to_owned(),
+            outcome_payload_json: json!({
+                "child_session_id": "delegate:session-1",
+                "result": "ok"
+            }),
+        },
+    )
+    .expect("finalize child session");
+
+    let execution = loongclaw_daemon::sessions_cli::execute_sessions_command(
+        loongclaw_daemon::sessions_cli::SessionsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "ops-root".to_owned(),
+            command: loongclaw_daemon::sessions_cli::SessionsCommands::Archive {
+                session_id: "delegate:session-1".to_owned(),
+                dry_run: true,
+            },
+        },
+    )
+    .await
+    .expect("sessions archive dry run should succeed");
+
+    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions archive");
+
+    assert_eq!(execution.payload["command"], "archive");
+    assert_eq!(execution.payload["dry_run"], true);
+    assert_eq!(execution.payload["result"], "would_apply");
+    assert_eq!(execution.payload["action"]["kind"], "session_archived");
+    assert_eq!(
+        execution.payload["inspection"]["session"]["state"],
+        "completed"
+    );
+    assert!(
+        rendered.contains("session_archived"),
+        "archive render should surface archive action: {rendered}"
     );
 }

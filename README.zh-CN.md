@@ -216,6 +216,16 @@ cargo install --path crates/daemon
    loong doctor --fix
    ```
 
+当委派出来的后台工作超出单次前台交互后，可以直接用 session shell
+检查保留下来的 session lineage：
+
+```bash
+loong sessions list --session default
+loong sessions status --session default delegate:child-1
+loong sessions history --session default delegate:child-1
+loong sessions wait --session default delegate:child-1 --timeout-ms 1000
+```
+
 先把 CLI 这条基础路径走通，再继续配置其他通道。
 
 ### 仓库可观测性

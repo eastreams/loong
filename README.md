@@ -300,6 +300,16 @@ loong completions elvish >> ~/.config/elvish/rc.elv
    loong audit token-trail --token-id token-abc
    ```
 
+When delegated work outlives one foreground turn, use the session shell to
+inspect the retained session lineage directly:
+
+```bash
+loong sessions list --session default
+loong sessions status --session default delegate:child-1
+loong sessions history --session default delegate:child-1
+loong sessions wait --session default delegate:child-1 --timeout-ms 1000
+```
+
 Channel setup comes after the base CLI path is healthy.
 
 ### Repository Observability
