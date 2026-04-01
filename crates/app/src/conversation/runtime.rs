@@ -38,6 +38,8 @@ use super::turn_middleware_registry::{
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::operator::session_graph::OperatorSessionGraph;
+#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     SessionKind, SessionRepository, SessionState, SessionToolPolicyRecord,
     TransitionSessionWithEventIfCurrentRequest,
@@ -266,7 +268,8 @@ fn build_base_tool_view_from_snapshot(
     };
 
     if snapshot.parent_session_id.is_some() {
-        let depth = match repo.session_lineage_depth(session_id) {
+        let session_graph = OperatorSessionGraph::new(repo);
+        let depth = match session_graph.lineage_depth(session_id) {
             Ok(depth) => depth,
             Err(error)
                 if error.starts_with("session_lineage_broken:")

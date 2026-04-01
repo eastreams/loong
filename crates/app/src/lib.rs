@@ -9,6 +9,7 @@ pub mod crypto;
 pub mod memory;
 pub mod migration;
 pub(crate) mod observability;
+pub(crate) mod operator;
 pub mod presentation;
 pub mod prompt;
 pub mod provider;

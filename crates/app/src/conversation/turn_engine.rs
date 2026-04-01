@@ -18,6 +18,10 @@ use crate::config::{
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
+#[cfg(feature = "memory-sqlite")]
+use crate::operator::session_graph::OperatorSessionGraph;
+#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
 };
@@ -613,10 +617,11 @@ impl DefaultAppToolDispatcher {
         session_context: &SessionContext,
     ) -> Result<ToolView, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
+        let session_graph = OperatorSessionGraph::new(&repo);
         if let Some(session) = repo.load_session(&session_context.session_id)? {
             if session.parent_session_id.is_some() {
-                let depth = repo
-                    .session_lineage_depth(&session_context.session_id)
+                let depth = session_graph
+                    .lineage_depth(&session_context.session_id)
                     .map_err(|error| {
                         format!(
                             "compute session lineage depth for dispatcher tool view failed: {error}"
@@ -688,23 +693,11 @@ impl DefaultAppToolDispatcher {
         repo: &SessionRepository,
         session_context: &SessionContext,
     ) -> Result<String, String> {
-        let mut current_session_id = session_context.session_id.clone();
-        let mut visited = BTreeSet::new();
-
-        loop {
-            if !visited.insert(current_session_id.clone()) {
-                return Err(format!(
-                    "session_lineage_cycle_detected: `{current_session_id}` reappeared while resolving approval grant scope"
-                ));
-            }
-            let Some(session) = repo.load_session(&current_session_id)? else {
-                return Ok(current_session_id);
-            };
-            match session.parent_session_id {
-                Some(parent_session_id) => current_session_id = parent_session_id,
-                None => return Ok(current_session_id),
-            }
-        }
+        let session_graph = OperatorSessionGraph::new(repo);
+        session_graph.effective_lineage_root_session_id(
+            &session_context.session_id,
+            session_context.parent_session_id.as_deref(),
+        )
     }
 
     fn autonomy_policy_snapshot(&self) -> crate::tools::runtime_config::AutonomyPolicySnapshot {
@@ -714,9 +707,7 @@ impl DefaultAppToolDispatcher {
     }
 
     fn approval_key_for_descriptor(descriptor: &crate::tools::ToolDescriptor) -> String {
-        let tool_name = descriptor.name;
-        let approval_key = format!("tool:{tool_name}");
-        approval_key
+        OperatorApprovalRuntime::approval_key_for_tool_name(descriptor.name)
     }
 
     fn is_tool_call_preapproved(&self, approval_key: &str) -> bool {
@@ -806,8 +797,12 @@ impl DefaultAppToolDispatcher {
         approval_key: &str,
     ) -> Result<bool, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
-        let scope_session_id = Self::lineage_root_session_id(&repo, session_context)?;
-        let grant = repo.load_approval_grant(&scope_session_id, approval_key)?;
+        let approval_runtime = OperatorApprovalRuntime::new(&repo);
+        let grant = approval_runtime.load_runtime_grant_for_context(
+            &session_context.session_id,
+            session_context.parent_session_id.as_deref(),
+            approval_key,
+        )?;
         Ok(grant.is_some())
     }
 
@@ -847,7 +842,14 @@ impl DefaultAppToolDispatcher {
                 "app_tool_denied: governed tool `{approval_key}` is denied by approval policy"
             ));
         }
-        if self.has_approval_grant(session_context, approval_key.as_str())? {
+        let repo = SessionRepository::new(&self.memory_config)?;
+        let approval_runtime = OperatorApprovalRuntime::new(&repo);
+        let runtime_grant = approval_runtime.load_runtime_grant_for_context(
+            &session_context.session_id,
+            session_context.parent_session_id.as_deref(),
+            &approval_key,
+        )?;
+        if runtime_grant.is_some() {
             return Ok(None);
         }
 
@@ -856,22 +858,28 @@ impl DefaultAppToolDispatcher {
             descriptor.name
         );
         let rule_id = "governed_tool_requires_approval";
-        let governance_snapshot_json = json!({
-            "governance_scope": governance.scope.as_str(),
-            "risk_class": governance.risk_class.as_str(),
-            "approval_mode": governance.approval_mode.as_str(),
-            "rule_id": rule_id,
-            "reason": reason,
-        });
-        let requirement = self.persist_approval_request(
-            session_context,
-            intent,
-            descriptor,
-            approval_key.as_str(),
-            reason.as_str(),
+        let approval_request = GovernedToolApprovalRequest {
+            session_id: &session_context.session_id,
+            parent_session_id: session_context.parent_session_id.as_deref(),
+            turn_id: &intent.turn_id,
+            tool_call_id: &intent.tool_call_id,
+            tool_name: descriptor.name,
+            args_json: intent.args_json.clone(),
+            source: &intent.source,
+            governance_scope: governance.scope.as_str(),
+            risk_class: governance.risk_class.as_str(),
+            approval_mode: governance.approval_mode.as_str(),
+            reason: &reason,
             rule_id,
-            governance_snapshot_json,
-        )?;
+        };
+        let stored = approval_runtime.ensure_governed_tool_approval_request(approval_request)?;
+        let requirement = ApprovalRequirement::governed_tool(
+            descriptor.name,
+            approval_key,
+            reason,
+            rule_id,
+            Some(stored.approval_request_id),
+        );
         Ok(Some(requirement))
     }
 
@@ -1124,7 +1132,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         {
             let _ = binding;
             let governance = governance_profile_for_descriptor(descriptor);
-            let approval_key = format!("tool:{}", descriptor.name);
+            let approval_key = Self::approval_key_for_descriptor(descriptor);
             let governed_approval_eligible = descriptor.execution_kind == ToolExecutionKind::App
                 && governance.approval_mode == ToolApprovalMode::PolicyDriven;
             let approval_key_is_denied = governed_approval_eligible

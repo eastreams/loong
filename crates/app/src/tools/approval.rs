@@ -11,6 +11,8 @@ use crate::config::ToolConfig;
 use crate::config::{SessionVisibility, ToolConsentMode};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::operator::approval_runtime::OperatorApprovalRuntime;
+#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalDecision, ApprovalGrantRecord, ApprovalRequestRecord, ApprovalRequestStatus,
     SessionRepository,
@@ -565,6 +567,7 @@ fn derive_attention_view(
     repo: &SessionRepository,
     record: &ApprovalRequestRecord,
 ) -> Result<DerivedAttentionView, String> {
+    let approval_runtime = OperatorApprovalRuntime::new(repo);
     let mut execution_signals = Vec::new();
     match record.status {
         ApprovalRequestStatus::Pending => execution_signals.push(AttentionSignal {
@@ -601,13 +604,8 @@ fn derive_attention_view(
         | ApprovalRequestStatus::Cancelled => {}
     }
 
-    let grant_scope_session_id = repo.lineage_root_session_id(&record.session_id)?;
-    let grant_record = match grant_scope_session_id.as_deref() {
-        Some(scope_session_id) => {
-            repo.load_approval_grant(scope_session_id, &record.approval_key)?
-        }
-        None => None,
-    };
+    let (grant_scope_session_id, grant_record) =
+        approval_runtime.load_runtime_grant_for_request(record)?;
     let grant_age_seconds = grant_record
         .as_ref()
         .map(|grant| unix_ts_now().saturating_sub(grant.updated_at).max(0));
@@ -652,7 +650,7 @@ fn derive_attention_view(
         execution_signals,
         grant_signals,
         grant_state,
-        grant_scope_session_id,
+        grant_scope_session_id: Some(grant_scope_session_id),
         grant_record,
         grant_age_seconds,
     })
@@ -1099,6 +1097,22 @@ mod tests {
             params![updated_at, scope_session_id, approval_key],
         )
         .expect("age runtime grant");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn delete_session_row(config: &MemoryRuntimeConfig, session_id: &str) {
+        let db_path = config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .to_path_buf();
+        let conn = Connection::open(db_path).expect("open sqlite connection");
+
+        conn.execute(
+            "DELETE FROM sessions WHERE session_id = ?1",
+            params![session_id],
+        )
+        .expect("delete session row");
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1644,5 +1658,52 @@ mod tests {
             outcome.payload["approval_request"]["grant_attention"]["needs_attention"],
             true
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_status_uses_request_session_scope_when_session_row_is_missing() {
+        let config = isolated_memory_config("approval-grant-missing-session-row");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-missing-session-row",
+            "root-session",
+            "delegate",
+            "rule-missing-session-row",
+        );
+        approve_request(
+            &repo,
+            "apr-missing-session-row",
+            ApprovalDecision::ApproveAlways,
+            "root-session",
+        );
+        mark_request_executed(&repo, "apr-missing-session-row", None);
+        seed_runtime_grant(&repo, "root-session", "tool:delegate");
+        delete_session_row(&config, "root-session");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_request_status".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-missing-session-row",
+                }),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_request_status outcome");
+
+        let approval_request = &outcome.payload["approval_request"];
+        let grant_review = &approval_request["grant_review"];
+        let grant_attention = &approval_request["grant_attention"];
+
+        assert_eq!(grant_review["state"], "clean");
+        assert_eq!(grant_review["scope_session_id"], "root-session");
+        assert_eq!(grant_review["grant_exists"], true);
+        assert_eq!(grant_attention["needs_attention"], false);
     }
 }
