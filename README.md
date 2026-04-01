@@ -169,23 +169,37 @@ If you are reading through repository source rather than a deployed docs site, s
 <a id="architecture"></a>
 ## Architecture At A Glance
 
-LoongClaw is organized as a 7-crate Rust workspace with a strict dependency DAG:
+LoongClaw is organized as a 7-crate Rust workspace, but the more useful public
+reading is not just "which crate depends on which." The codebase is really split
+across five ownership layers: a stable contract vocabulary, a governed kernel,
+a product/runtime layer, deterministic spec and benchmark rails, and a daemon
+assembly layer.
 
 ```text
-contracts (leaf -- zero internal deps)
-├── kernel --> contracts
-├── protocol (independent leaf)
-├── app --> contracts, kernel
-├── spec --> contracts, kernel, protocol
-├── bench --> contracts, kernel, spec
-└── daemon (binary) --> all of the above
+direct dependency DAG
+
+contracts  (stable contract vocabulary)
+├── kernel   -> contracts
+├── protocol (independent transport foundation)
+├── app      -> contracts, kernel
+├── spec     -> contracts, kernel, protocol
+├── bench    -> kernel, spec
+└── daemon   -> app, bench, contracts, kernel, spec
 ```
+
+In practice, those crates group into five public ownership zones:
+
+- **Stable contracts**: `contracts` owns the shared capability, policy, audit, runtime, tool, and memory vocabulary that other crates build on.
+- **Governed kernel**: `kernel` owns audit, policy, harness orchestration, runtime/tool/memory/connector planes, plugin and integration control, bootstrap, and architecture awareness.
+- **Product/runtime layer**: `app` owns providers, channels, tools, memory backends, chat, conversation, session, config, and presentation surfaces.
+- **Deterministic rails**: `spec` owns reproducible execution scenarios and bootstrap builders, while `bench` owns benchmark and pressure gates on top of those rails.
+- **Operator assembly**: `daemon` wires the lower layers into the runnable CLI and service entrypoints such as `onboard`, `ask`, `chat`, `doctor`, `gateway`, `tasks`, `skills`, and plugin workflows.
 
 Three design rules matter most:
 
-- governance-first: policy, approvals, and audit are modeled in critical execution paths
+- governance-first: policy, approvals, and audit stay in the real execution path
 - additive evolution: public contracts should grow without breaking integrations
-- small core, rich seams: specialization should happen through adapters and packs, not repeated kernel mutation
+- small core, rich seams: specialization should happen through adapters, packs, and controlled assembly rather than repeated kernel mutation
 
 For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and [Layered Kernel Design](docs/design-docs/layered-kernel-design.md).
 <a id="contributing"></a>

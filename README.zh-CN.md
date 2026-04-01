@@ -168,23 +168,36 @@ loong doctor --fix
 <a id="architecture"></a>
 ## 架构速览
 
-LoongClaw 目前是一个 7-crate Rust workspace，依赖 DAG 明确且严格：
+LoongClaw 目前是一个 7-crate Rust workspace，但更有用的 public 读法不只是
+“谁依赖谁”。按源码里的真实 ownership 来看，它其实更接近五层：稳定
+contract 词汇层、受治理的 kernel、product/runtime layer、deterministic
+spec/bench rails，以及 daemon assembly layer。
 
 ```text
-contracts (leaf -- zero internal deps)
-├── kernel --> contracts
-├── protocol (independent leaf)
-├── app --> contracts, kernel
-├── spec --> contracts, kernel, protocol
-├── bench --> contracts, kernel, spec
-└── daemon (binary) --> all of the above
+direct dependency DAG
+
+contracts  (stable contract vocabulary)
+├── kernel   -> contracts
+├── protocol (independent transport foundation)
+├── app      -> contracts, kernel
+├── spec     -> contracts, kernel, protocol
+├── bench    -> kernel, spec
+└── daemon   -> app, bench, contracts, kernel, spec
 ```
+
+按职责看，这些 crate 可以再收敛成五个公开 ownership zone：
+
+- **稳定 contract 层**：`contracts` 负责共享的 capability、policy、audit、runtime、tool、memory 词汇和类型。
+- **受治理的 kernel 层**：`kernel` 负责 audit、policy、harness orchestration、runtime/tool/memory/connector planes、plugin 与 integration control、bootstrap、architecture awareness。
+- **product/runtime layer**：`app` 负责 providers、channels、tools、memory backends、chat、conversation、session、config、presentation 等产品运行时能力。
+- **deterministic rails**：`spec` 负责可复现的 execution scenarios 和 bootstrap builders，`bench` 负责构建在这些 rails 之上的 benchmark 与 pressure gates。
+- **operator assembly layer**：`daemon` 把下层能力接成真正可运行的 CLI 与 service entrypoints，例如 `onboard`、`ask`、`chat`、`doctor`、`gateway`、`tasks`、`skills` 和 plugin workflows。
 
 最重要的三条架构规则是：
 
-- governance-first：policy、approval、audit 都在关键执行路径中
+- governance-first：policy、approval、audit 都在真实执行路径里
 - additive evolution：公共 contract 应该在不破坏集成的前提下持续增长
-- small core, rich seams：专用化应该通过 adapter 和 pack 完成，而不是反复改内核
+- small core, rich seams：专用化应该通过 adapter、pack 和受控 assembly 完成，而不是反复改内核
 
 完整分层模型见 [ARCHITECTURE.md](ARCHITECTURE.md) 与 [Layered Kernel Design](docs/design-docs/layered-kernel-design.md)。
 

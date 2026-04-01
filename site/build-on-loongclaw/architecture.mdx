@@ -28,27 +28,33 @@ preserve, not the full internal authoring trail.
 - the usual starting point for common change types
 - the common architecture smells that signal a boundary problem
 
+Publicly, the useful split is: stable contracts, a governed kernel, a
+product/runtime layer, deterministic spec and benchmark rails, and the daemon
+assembly layer that turns those lower layers into runnable operator entrypoints.
+
 ```text
-contracts (leaf -- zero internal deps)
-├── kernel --> contracts
-├── protocol (independent leaf)
-├── app --> contracts, kernel
-├── spec --> contracts, kernel, protocol
-├── bench --> contracts, kernel, spec
-└── daemon (binary) --> all of the above
+direct dependency DAG
+
+contracts  (stable contract vocabulary)
+├── kernel   -> contracts
+├── protocol (independent transport foundation)
+├── app      -> contracts, kernel
+├── spec     -> contracts, kernel, protocol
+├── bench    -> kernel, spec
+└── daemon   -> app, bench, contracts, kernel, spec
 ```
 
 ## Crate Roles
 
 | Crate | Public role |
 | --- | --- |
-| `contracts` | shared types and stable contract boundary |
-| `kernel` | capability, policy, audit, and pack-governed execution core |
-| `protocol` | transport contracts and route model |
-| `app` | providers, tools, memory, channels, and conversation engine |
-| `spec` | deterministic execution-spec runner |
-| `bench` | performance benchmark harness |
-| `daemon` | runnable operator CLI and service entrypoints |
+| `contracts` | shared contract vocabulary for capability, policy, audit, and execution request-outcome types |
+| `kernel` | governed execution core for policy, audit, planes, harness, plugin, and integration control |
+| `protocol` | transport and route foundation used by the spec rail |
+| `app` | product/runtime layer for providers, channels, tools, memory, conversation, config, and presentation |
+| `spec` | deterministic execution rail and bootstrap/test runtime |
+| `bench` | performance and pressure rail on top of spec/kernel |
+| `daemon` | operator CLI and service assembly layer over the lower crates |
 
 ## Layered Execution Model
 

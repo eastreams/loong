@@ -30,34 +30,53 @@ maintainers who need the codebase-level structure behind the Mintlify docs.
 
 | Section | Read it when... |
 | --- | --- |
-| [Crate Structure](#crate-structure) | you need the DAG, crate roles, and daemon entrypoint truth |
+| [Crate Structure](#crate-structure) | you need the direct DAG and the higher-level ownership split across crates |
+| [Practical Ownership Map](#practical-ownership-map) | you need the shortest source-driven explanation of what each crate family really owns |
 | [Layered Execution Model](#layered-execution-model) | you need the architecture layers and what each one protects |
 | [Design Principles](#design-principles) | you need the invariants that should survive implementation detail changes |
 | [Further Reading](#further-reading) | you need the deeper source docs behind one area |
 
 ## Crate Structure
 
+The workspace DAG matters, but so does the ownership model behind it. The code
+currently splits into one stable contract crate, one governed execution core,
+one product/runtime crate, two validation rails, and one daemon assembly crate.
+
 ```text
-contracts (leaf -- zero internal deps)
-├── kernel --> contracts
-├── protocol (independent leaf)
-├── app --> contracts, kernel
-├── spec --> contracts, kernel, protocol
-├── bench --> contracts, kernel, spec
-└── daemon (binary) --> all of the above
+direct dependency DAG
+
+contracts  (stable contract vocabulary)
+├── kernel   -> contracts
+├── protocol (independent transport foundation)
+├── app      -> contracts, kernel
+├── spec     -> contracts, kernel, protocol
+├── bench    -> kernel, spec
+└── daemon   -> app, bench, contracts, kernel, spec
 ```
 
 No dependency cycles. This is non-negotiable.
 
+## Practical Ownership Map
+
+```text
+contracts  stable vocabulary for capability, policy, audit, runtime, tool, and memory contracts
+kernel     governed execution core: policy, audit, planes, harness, plugin/integration control
+protocol   transport and route foundation used by the spec rail
+app        product/runtime layer: providers, channels, tools, memory, conversation, presentation
+spec       deterministic execution rail and bootstrap/test runtime
+bench      performance and pressure rail on top of spec/kernel
+daemon     operator CLI and service assembly over the lower layers
+```
+
 | Crate | Role |
 |-------|------|
-| `contracts` | Shared types, capability model, and route model. Zero internal dependencies -- the stable ABI surface. |
-| `kernel` | Policy engine, audit timeline, capability token lifecycle, plugin system, integration catalog, and pack boundary enforcement. |
-| `protocol` | Transport contracts, typed method routing, json-line stream transport, and linked in-memory channel primitive. Independent leaf crate. |
-| `app` | Providers, tools, channels, memory backends, configuration, and conversation engine. Houses all feature-flagged modules. |
-| `spec` | Execution specification runner for deterministic test scenarios. |
-| `bench` | Performance benchmark harness and gate enforcement. |
-| `daemon` | Runnable operator CLI and service entrypoints. `loong` is the primary command, while `loongclaw` remains a compatibility entrypoint. Wires all crates into commands such as `onboard`, `ask`, `chat`, `doctor`, `channels`, `gateway`, `run-spec`, and benchmarks. |
+| `contracts` | Shared types and stable contract vocabulary: capability tokens, policy/audit types, runtime/tool/memory request-outcome shapes, task state, namespaces, and pack manifests. Zero internal dependencies. |
+| `kernel` | Governed execution core. Owns audit, policy, runtime/tool/memory/connector planes, harness brokerage, task supervision, plugin and integration control, bootstrap execution, and architecture awareness. |
+| `protocol` | Transport and route foundation: frames, route resolution, capability-aware authorization, json-line transport, and linked in-memory transport primitives. Independent leaf crate. |
+| `app` | Product/runtime layer. Owns providers, channels, tools, memory backends, chat/conversation/session logic, config loading, runtime environment helpers, and presentation-facing surfaces. Houses the feature-flagged product modules. |
+| `spec` | Deterministic execution rail. Owns runner specs, bootstrap builders, programmatic tool/spec execution, and test-facing runtime scaffolding that should stay out of daemon business logic. |
+| `bench` | Performance and pressure rail. Owns benchmark suites and gate enforcement on top of the spec/kernel surfaces instead of folding that logic into the normal runtime path. |
+| `daemon` | Operator assembly layer. `loong` is the primary command, while `loongclaw` remains a compatibility entrypoint. Wires lower-layer crates into CLI and service entrypoints such as `onboard`, `ask`, `chat`, `doctor`, `gateway`, `tasks`, `skills`, plugin flows, migration flows, and benchmarks. |
 
 ## Layered Execution Model
 
