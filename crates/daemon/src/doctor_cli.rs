@@ -2360,6 +2360,10 @@ fn select_doctor_first_turn_actions(
     });
 
     for action in actions {
+        if action.kind == crate::next_actions::SetupNextActionKind::Doctor {
+            continue;
+        }
+
         push_unique_action(&mut prioritized, action);
         if prioritized.len() == 3 {
             break;
@@ -2517,6 +2521,41 @@ mod tests {
             defer_loading: false,
             setup,
         }
+    }
+
+    #[test]
+    fn select_doctor_first_turn_actions_skips_doctor_self_recursion() {
+        let actions = vec![
+            crate::next_actions::SetupNextAction {
+                kind: crate::next_actions::SetupNextActionKind::Doctor,
+                channel_action_id: None,
+                browser_preview_phase: None,
+                label: "verify managed bridges".to_owned(),
+                command: "loongclaw doctor --config '/tmp/loongclaw-config.toml'".to_owned(),
+            },
+            crate::next_actions::SetupNextAction {
+                kind: crate::next_actions::SetupNextActionKind::Channel,
+                channel_action_id: Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID),
+                browser_preview_phase: None,
+                label: "channels".to_owned(),
+                command: "loongclaw channels --config '/tmp/loongclaw-config.toml'".to_owned(),
+            },
+        ];
+
+        let selected = select_doctor_first_turn_actions(actions);
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(
+            selected[0].kind,
+            crate::next_actions::SetupNextActionKind::Channel
+        );
+        assert_eq!(selected[0].label, "channels");
+        assert!(
+            selected
+                .iter()
+                .all(|action| { action.kind != crate::next_actions::SetupNextActionKind::Doctor }),
+            "doctor success follow-ups should not suggest running doctor again: {selected:#?}"
+        );
     }
 
     fn managed_bridge_setup_with_guidance(

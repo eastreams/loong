@@ -167,7 +167,24 @@ pub fn apply_selected_domains_to_config(
     candidate: &ImportCandidate,
     selected: &[migration::SetupDomainKind],
 ) -> mvp::config::LoongClawConfig {
+    let result = apply_selected_domains_to_config_with_report(base, candidate, selected);
+
+    result.config
+}
+
+struct SelectedDomainApplyResult {
+    config: mvp::config::LoongClawConfig,
+    channel_conflicts: Vec<migration::channels::ChannelApplyConflict>,
+}
+
+fn apply_selected_domains_to_config_with_report(
+    base: &mvp::config::LoongClawConfig,
+    candidate: &ImportCandidate,
+    selected: &[migration::SetupDomainKind],
+) -> SelectedDomainApplyResult {
     let mut config = base.clone();
+    let mut channel_conflicts = Vec::new();
+
     for domain in selected {
         match domain {
             migration::SetupDomainKind::Provider => {
@@ -179,11 +196,13 @@ pub fn apply_selected_domains_to_config(
                     .iter()
                     .map(|channel| channel.id)
                     .collect::<Vec<_>>();
-                migration::channels::apply_selected_channels(
+                let channel_report = migration::channels::apply_selected_channels_with_report(
                     &mut config,
                     &candidate.config,
                     &selected_channels,
                 );
+
+                channel_conflicts.extend(channel_report.conflicts);
             }
             migration::SetupDomainKind::Cli => {
                 config.cli = candidate.config.cli.clone();
@@ -197,7 +216,11 @@ pub fn apply_selected_domains_to_config(
             migration::SetupDomainKind::WorkspaceGuidance => {}
         }
     }
-    config
+
+    SelectedDomainApplyResult {
+        config,
+        channel_conflicts,
+    }
 }
 
 fn filter_candidate_by_selected_domains(
@@ -856,8 +879,19 @@ pub fn apply_import_candidate(
                 .to_owned(),
         );
     }
-    let mut resolved_config =
-        apply_selected_domains_to_config(&base_config, candidate, &selected_domains);
+    let apply_result =
+        apply_selected_domains_to_config_with_report(&base_config, candidate, &selected_domains);
+    let channel_conflicts = apply_result.channel_conflicts;
+
+    if !channel_conflicts.is_empty() {
+        let conflict_detail = format_channel_apply_conflicts(&channel_conflicts);
+
+        return Err(format!(
+            "cannot apply selected channel domains: {conflict_detail}"
+        ));
+    }
+
+    let mut resolved_config = apply_result.config;
     if provider.is_some() || has_provider_domain {
         apply_provider_profiles_to_config(
             &base_config,
@@ -898,4 +932,15 @@ pub fn apply_import_candidate(
 
 fn domain_changes_config(domain: migration::SetupDomainKind) -> bool {
     domain.changes_config()
+}
+
+fn format_channel_apply_conflicts(
+    conflicts: &[migration::channels::ChannelApplyConflict],
+) -> String {
+    let summaries = conflicts
+        .iter()
+        .map(migration::channels::summarize_channel_apply_conflict)
+        .collect::<Vec<_>>();
+
+    summaries.join(" · ")
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use loongclaw_app as mvp;
+use serde_json::Value;
 
 use super::types::{
     ChannelCandidate, ChannelCredentialState, ChannelImportReadiness, ImportSurface,
@@ -9,6 +10,7 @@ use super::types::{
 
 mod feishu;
 mod matrix;
+mod plugin_bridge;
 mod telegram;
 mod wecom;
 
@@ -123,10 +125,15 @@ pub fn collect_channel_previews(
     readiness: &ChannelImportReadiness,
     source: &str,
 ) -> Vec<ChannelPreview> {
-    ordered_channel_adapters()
+    let mut previews = ordered_channel_adapters()
         .into_iter()
         .filter_map(|adapter| (adapter.collect_preview)(config, readiness, source))
-        .collect()
+        .collect::<Vec<_>>();
+    let plugin_bridge_previews = plugin_bridge::collect_previews(config, source);
+
+    previews.extend(plugin_bridge_previews);
+
+    previews
 }
 
 pub fn resolve_import_readiness(config: &mvp::config::LoongClawConfig) -> ChannelImportReadiness {
@@ -141,9 +148,15 @@ pub fn enabled_channels_have_blockers(
     config: &mvp::config::LoongClawConfig,
     readiness: &ChannelImportReadiness,
 ) -> bool {
-    registered_enabled_channel_ids(config)
+    let service_channel_blockers = registered_enabled_channel_ids(config)
         .into_iter()
-        .any(|channel_id| !readiness.is_ready(channel_id))
+        .any(|channel_id| !readiness.is_ready(channel_id));
+
+    if service_channel_blockers {
+        return true;
+    }
+
+    plugin_bridge::enabled_channels_have_blockers(config)
 }
 
 pub fn apply_detected_import_readiness(
@@ -160,22 +173,82 @@ pub fn apply_selected_channels(
     source: &mvp::config::LoongClawConfig,
     channel_ids: &[&str],
 ) -> bool {
+    let report = apply_selected_channels_with_report(target, source, channel_ids);
+
+    report.changed
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelApplyReport {
+    pub changed: bool,
+    pub conflicts: Vec<ChannelApplyConflict>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelApplyConflict {
+    pub channel_id: String,
+    pub kind: ChannelApplyConflictKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChannelApplyConflictKind {
+    PluginBridgeInstallRoot {
+        existing_install_root: String,
+        source_install_root: String,
+    },
+}
+
+pub fn apply_selected_channels_with_report(
+    target: &mut mvp::config::LoongClawConfig,
+    source: &mvp::config::LoongClawConfig,
+    channel_ids: &[&str],
+) -> ChannelApplyReport {
     let mut changed = false;
+    let mut conflicts = Vec::new();
+
     for channel_id in channel_ids {
         if let Some(adapter) = find_adapter(channel_id) {
             changed |= (adapter.apply)(target, source);
+            continue;
+        }
+
+        let outcome = apply_fallback_channel_section(target, source, channel_id);
+
+        changed |= outcome.changed;
+
+        if let Some(conflict) = outcome.conflict {
+            conflicts.push(conflict);
         }
     }
-    changed
+
+    ChannelApplyReport { changed, conflicts }
+}
+
+pub fn summarize_channel_apply_conflict(conflict: &ChannelApplyConflict) -> String {
+    match &conflict.kind {
+        ChannelApplyConflictKind::PluginBridgeInstallRoot {
+            existing_install_root,
+            source_install_root,
+        } => {
+            format!(
+                "managed bridge install_root conflict: existing root {existing_install_root} does not match detected root {source_install_root}"
+            )
+        }
+    }
 }
 
 pub fn collect_channel_preflight_checks(
     config: &mvp::config::LoongClawConfig,
 ) -> Vec<ChannelPreflightCheck> {
-    enabled_channel_adapters(config)
+    let mut checks = enabled_channel_adapters(config)
         .into_iter()
         .flat_map(|adapter| (adapter.collect_preflight_checks)(config))
-        .collect()
+        .collect::<Vec<_>>();
+    let plugin_bridge_checks = plugin_bridge::collect_preflight_checks(config);
+
+    checks.extend(plugin_bridge_checks);
+
+    checks
 }
 
 pub fn collect_channel_doctor_checks(
@@ -277,6 +350,190 @@ fn ordered_channel_adapters() -> Vec<&'static ChannelAdapter> {
 
 fn find_adapter(channel_id: &str) -> Option<&'static ChannelAdapter> {
     REGISTRY.iter().find(|adapter| adapter.id == channel_id)
+}
+
+fn apply_fallback_channel_section(
+    target: &mut mvp::config::LoongClawConfig,
+    source: &mvp::config::LoongClawConfig,
+    channel_id: &str,
+) -> FallbackChannelSectionOutcome {
+    let install_root_conflict =
+        resolve_plugin_bridge_install_root_conflict(target, source, channel_id);
+
+    if let Some(conflict) = install_root_conflict {
+        return FallbackChannelSectionOutcome {
+            changed: false,
+            conflict: Some(conflict),
+        };
+    }
+
+    let default_config = mvp::config::LoongClawConfig::default();
+    let mut target_value = match serde_json::to_value(&*target) {
+        Ok(value) => value,
+        Err(_) => return FallbackChannelSectionOutcome::unchanged(),
+    };
+    let source_value = match serde_json::to_value(source) {
+        Ok(value) => value,
+        Err(_) => return FallbackChannelSectionOutcome::unchanged(),
+    };
+    let default_value = match serde_json::to_value(default_config) {
+        Ok(value) => value,
+        Err(_) => return FallbackChannelSectionOutcome::unchanged(),
+    };
+    let Some(target_object) = target_value.as_object_mut() else {
+        return FallbackChannelSectionOutcome::unchanged();
+    };
+    let Some(source_object) = source_value.as_object() else {
+        return FallbackChannelSectionOutcome::unchanged();
+    };
+    let Some(default_object) = default_value.as_object() else {
+        return FallbackChannelSectionOutcome::unchanged();
+    };
+    let Some(source_section) = source_object.get(channel_id) else {
+        return FallbackChannelSectionOutcome::unchanged();
+    };
+    let null_value = Value::Null;
+    let default_section = default_object.get(channel_id).unwrap_or(&null_value);
+    let target_section = target_object
+        .entry(channel_id.to_owned())
+        .or_insert_with(|| default_section.clone());
+    let section_changed =
+        merge_channel_section_value(target_section, source_section, default_section);
+
+    if section_changed {
+        let restored_config = match serde_json::from_value(target_value) {
+            Ok(config) => config,
+            Err(_) => return FallbackChannelSectionOutcome::unchanged(),
+        };
+
+        *target = restored_config;
+    }
+
+    let install_root_changed = supplement_plugin_bridge_install_root(target, source);
+    let changed = section_changed || install_root_changed;
+
+    FallbackChannelSectionOutcome {
+        changed,
+        conflict: None,
+    }
+}
+
+fn merge_channel_section_value(target: &mut Value, source: &Value, default: &Value) -> bool {
+    let target_object = target.as_object_mut();
+    let source_object = source.as_object();
+    let default_object = default.as_object();
+
+    if let (Some(target_object), Some(source_object), Some(default_object)) =
+        (target_object, source_object, default_object)
+    {
+        let mut changed = false;
+
+        for (key, source_value) in source_object {
+            let null_value = Value::Null;
+            let default_value = default_object.get(key).unwrap_or(&null_value);
+            let target_value = target_object
+                .entry(key.clone())
+                .or_insert_with(|| default_value.clone());
+            let merged = merge_channel_section_value(target_value, source_value, default_value);
+
+            changed |= merged;
+        }
+
+        return changed;
+    }
+
+    let target_matches_default = *target == *default;
+    let source_matches_default = *source == *default;
+
+    if !target_matches_default || source_matches_default {
+        return false;
+    }
+
+    *target = source.clone();
+
+    true
+}
+
+fn supplement_plugin_bridge_install_root(
+    target: &mut mvp::config::LoongClawConfig,
+    source: &mvp::config::LoongClawConfig,
+) -> bool {
+    let target_install_root = normalized_plugin_bridge_install_root(target);
+
+    if target_install_root.is_some() {
+        return false;
+    }
+
+    let source_install_root = normalized_plugin_bridge_install_root(source);
+    let Some(source_install_root) = source_install_root else {
+        return false;
+    };
+
+    target.external_skills.install_root = Some(source_install_root);
+
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FallbackChannelSectionOutcome {
+    changed: bool,
+    conflict: Option<ChannelApplyConflict>,
+}
+
+impl FallbackChannelSectionOutcome {
+    fn unchanged() -> Self {
+        Self {
+            changed: false,
+            conflict: None,
+        }
+    }
+}
+
+fn resolve_plugin_bridge_install_root_conflict(
+    target: &mvp::config::LoongClawConfig,
+    source: &mvp::config::LoongClawConfig,
+    channel_id: &str,
+) -> Option<ChannelApplyConflict> {
+    if !channel_uses_plugin_bridge_contract(channel_id) {
+        return None;
+    }
+
+    let target_install_root = normalized_plugin_bridge_install_root(target)?;
+    let source_install_root = normalized_plugin_bridge_install_root(source)?;
+
+    if target_install_root == source_install_root {
+        return None;
+    }
+
+    let conflict = ChannelApplyConflict {
+        channel_id: channel_id.to_owned(),
+        kind: ChannelApplyConflictKind::PluginBridgeInstallRoot {
+            existing_install_root: target_install_root,
+            source_install_root,
+        },
+    };
+
+    Some(conflict)
+}
+
+fn channel_uses_plugin_bridge_contract(channel_id: &str) -> bool {
+    let catalog_entry = mvp::channel::resolve_channel_catalog_entry(channel_id);
+    let Some(catalog_entry) = catalog_entry else {
+        return false;
+    };
+
+    catalog_entry.plugin_bridge_contract.is_some()
+}
+
+fn normalized_plugin_bridge_install_root(config: &mvp::config::LoongClawConfig) -> Option<String> {
+    let install_root = config.external_skills.install_root.as_deref()?;
+    let trimmed_install_root = install_root.trim();
+
+    if trimmed_install_root.is_empty() {
+        return None;
+    }
+
+    Some(trimmed_install_root.to_owned())
 }
 
 fn preview_status_from_surface_level(level: ImportSurfaceLevel) -> PreviewStatus {

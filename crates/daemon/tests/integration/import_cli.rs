@@ -2398,3 +2398,81 @@ fn import_cli_apply_summary_reports_active_provider_and_saved_profiles() {
         "import apply summary should show retained provider profiles after supplementing: {lines:#?}"
     );
 }
+
+#[test]
+fn import_cli_apply_candidate_rejects_conflicting_plugin_bridge_install_root() {
+    let temp_root = unique_temp_dir("plugin-bridge-install-root-conflict");
+    let output_path = temp_root.join("config.toml");
+    let current_install_root = temp_root.join("managed-skills-current");
+    let detected_install_root = temp_root.join("managed-skills-detected");
+    let base: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "external_skills": {
+            "install_root": current_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize base config");
+    let candidate_config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        },
+        "external_skills": {
+            "install_root": detected_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize candidate config");
+    let candidate = loongclaw_daemon::migration::types::ImportCandidate {
+        source_kind: loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        source: "Codex config at ~/.codex/config.toml".to_owned(),
+        config: candidate_config,
+        surfaces: Vec::new(),
+        domains: vec![loongclaw_daemon::migration::types::DomainPreview {
+            kind: loongclaw_daemon::migration::types::SetupDomainKind::Channels,
+            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            decision: Some(loongclaw_daemon::migration::types::PreviewDecision::UseDetected),
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            summary: "weixin Ready".to_owned(),
+        }],
+        channel_candidates: vec![loongclaw_daemon::migration::types::ChannelCandidate {
+            id: "weixin",
+            label: "weixin",
+            status: loongclaw_daemon::migration::types::PreviewStatus::Ready,
+            source: "Codex config at ~/.codex/config.toml".to_owned(),
+            summary: "managed bridge ready".to_owned(),
+        }],
+        workspace_guidance: Vec::new(),
+    };
+
+    std::fs::create_dir_all(&temp_root).expect("create temp root");
+    mvp::config::write(Some(output_path.to_string_lossy().as_ref()), &base, true)
+        .expect("write base config");
+
+    let error = loongclaw_daemon::import_cli::apply_import_candidate(
+        &output_path,
+        true,
+        std::slice::from_ref(&candidate),
+        &candidate,
+        None,
+    )
+    .expect_err("conflicting managed bridge roots should fail import apply");
+
+    assert!(
+        error.contains("managed bridge install_root conflict"),
+        "import apply should surface the managed bridge install root conflict: {error}"
+    );
+
+    let (_, reloaded) = mvp::config::load(Some(output_path.to_string_lossy().as_ref()))
+        .expect("reload config after rejected import");
+
+    assert!(
+        !reloaded.weixin.enabled,
+        "rejected import should leave the conflicting plugin-backed channel disabled"
+    );
+    assert_eq!(
+        reloaded.external_skills.install_root.as_deref(),
+        Some(current_install_root.to_string_lossy().as_ref()),
+        "rejected import should preserve the original managed bridge install root"
+    );
+}

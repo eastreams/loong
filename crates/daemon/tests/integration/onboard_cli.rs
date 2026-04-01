@@ -2201,6 +2201,287 @@ fn import_surfaces_detect_ready_channels_from_environment_only() {
 }
 
 #[test]
+fn import_surfaces_detect_configured_plugin_backed_channels_for_review_when_managed_bridge_install_root_is_missing()
+ {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "weixin channel"
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Review
+                && surface.detail.contains("external_skills.install_root")
+        }),
+        "import preview should surface managed bridge review guidance when a plugin-backed channel is configured but install_root is missing: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_detect_configured_plugin_backed_channels_as_ready_when_single_compatible_managed_bridge_is_available()
+ {
+    let install_root = unique_temp_path("managed-bridge-import-ready");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+
+    assert!(
+        surfaces.iter().any(|surface| {
+            surface.name == "weixin channel"
+                && surface.level == loongclaw_daemon::onboard_cli::ImportSurfaceLevel::Ready
+                && surface.detail.contains("weixin-managed-bridge")
+        }),
+        "import preview should mark a configured plugin-backed channel as ready when exactly one compatible managed bridge is available: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn import_surfaces_ignore_unconfigured_plugin_backed_channels_even_when_managed_bridge_is_installed()
+ {
+    let install_root = unique_temp_path("managed-bridge-import-unconfigured");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config = mvp::config::LoongClawConfig::default();
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let surfaces = loongclaw_daemon::onboard_cli::collect_import_surfaces(&config);
+
+    assert!(
+        surfaces
+            .iter()
+            .all(|surface| surface.name != "weixin channel"),
+        "import preview should ignore plugin-backed channels that still match the default placeholder snapshot: {surfaces:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_warns_when_install_root_is_missing() {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("external_skills.install_root")
+        }),
+        "onboard preflight should surface managed bridge discovery guidance when install_root is missing: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_warns_when_managed_bridge_setup_is_incomplete() {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-incomplete");
+    let mut metadata = super::compatible_managed_bridge_metadata(
+        "qq_official_bot_gateway_or_plugin_bridge",
+        "qqbot_reply_loop",
+    );
+    let removed_transport_family = metadata.remove("transport_family");
+    let setup = super::managed_bridge_setup_with_guidance(
+        "channel",
+        vec!["QQBOT_BRIDGE_URL"],
+        vec!["qqbot.bridge_url"],
+        vec!["https://example.test/docs/qqbot-bridge"],
+        Some("Run the QQ bridge setup flow before enabling this bridge."),
+    );
+    let manifest = super::managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        }
+    }))
+    .expect("deserialize qqbot config");
+
+    assert_eq!(
+        removed_transport_family.as_deref(),
+        Some("qq_official_bot_gateway_or_plugin_bridge")
+    );
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "qq bot channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("QQBOT_BRIDGE_URL")
+                && check.detail.contains("qqbot.bridge_url")
+        }),
+        "onboard preflight should preserve managed bridge setup guidance when discovery finds only incomplete plugins: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_warns_when_managed_bridge_discovery_is_ambiguous() {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-ambiguous");
+    let first_manifest = super::managed_bridge_manifest_with_plugin_id(
+        "weixin-bridge-a",
+        "weixin",
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+        Some(super::managed_bridge_setup_with_guidance(
+            "channel",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = super::managed_bridge_manifest_with_plugin_id(
+        "weixin-bridge-b",
+        "weixin",
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+        Some(super::managed_bridge_setup_with_guidance(
+            "channel",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-bridge-a",
+        &first_manifest,
+    );
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-bridge-b",
+        &second_manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("weixin-bridge-a")
+                && check.detail.contains("weixin-bridge-b")
+        }),
+        "onboard preflight should warn when multiple compatible managed bridges are discovered: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_passes_when_single_compatible_plugin_is_available() {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-ready");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Pass
+                && check.detail.contains("weixin-managed-bridge")
+        }),
+        "onboard preflight should pass when exactly one compatible managed bridge is ready: {checks:#?}"
+    );
+}
+
+#[test]
 fn detect_env_import_starting_config_enables_ready_channels() {
     let imported =
         loongclaw_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
@@ -5311,6 +5592,141 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
 }
 
 #[test]
+fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_needing_bridge_review()
+{
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+
+    config.external_skills.install_root = None;
+
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let action_kinds = summary
+        .next_actions
+        .iter()
+        .map(|action| action.kind)
+        .collect::<Vec<_>>();
+    let action_labels = summary
+        .next_actions
+        .iter()
+        .map(|action| action.label.clone())
+        .collect::<Vec<_>>();
+
+    assert!(
+        summary.next_actions.iter().any(|action| action.kind
+            == crate::onboard_cli::OnboardingActionKind::Doctor
+            && action.command == "loongclaw doctor --config '/tmp/loongclaw-config.toml'"),
+        "plugin-backed channels that still need managed bridge review should surface doctor as an explicit next action: {summary:#?}"
+    );
+    assert!(
+        summary
+            .next_actions
+            .iter()
+            .position(|action| action.kind == crate::onboard_cli::OnboardingActionKind::Doctor)
+            < summary.next_actions.iter().position(|action| {
+                action.kind == crate::onboard_cli::OnboardingActionKind::Channel
+                    && action.label == "channels"
+            }),
+        "doctor should be promoted ahead of the generic channel catalog when a managed bridge still needs review: kinds={action_kinds:?} labels={action_labels:?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_adds_doctor_action_for_incomplete_managed_bridge_setup() {
+    let install_root = unique_temp_path("managed-bridge-success-summary-incomplete");
+    let mut metadata = super::compatible_managed_bridge_metadata(
+        "qq_official_bot_gateway_or_plugin_bridge",
+        "qqbot_reply_loop",
+    );
+    let removed_transport_family = metadata.remove("transport_family");
+    let setup = super::managed_bridge_setup_with_guidance(
+        "channel",
+        vec!["QQBOT_BRIDGE_URL"],
+        vec!["qqbot.bridge_url"],
+        vec!["https://example.test/docs/qqbot-bridge"],
+        Some("Run the QQ bridge setup flow before enabling this bridge."),
+    );
+    let manifest = super::managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        }
+    }))
+    .expect("deserialize qqbot config");
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+
+    assert_eq!(
+        removed_transport_family.as_deref(),
+        Some("qq_official_bot_gateway_or_plugin_bridge")
+    );
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+
+    assert!(
+        summary
+            .next_actions
+            .iter()
+            .any(|action| action.kind == crate::onboard_cli::OnboardingActionKind::Doctor),
+        "incomplete managed bridge setup should produce a doctor follow-up action: {summary:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_keeps_generic_handoff_when_managed_bridge_is_ready() {
+    let install_root = unique_temp_path("managed-bridge-success-summary-ready");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let summary = crate::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+
+    assert!(
+        summary
+            .next_actions
+            .iter()
+            .all(|action| action.kind != crate::onboard_cli::OnboardingActionKind::Doctor),
+        "ready managed bridge setups should keep the existing generic handoff and avoid forcing doctor into the next-action list: {summary:#?}"
+    );
+}
+
+#[test]
 fn onboarding_success_summary_advertises_browser_preview_enable_action() {
     let path = PathBuf::from("/tmp/loongclaw-config.toml");
     let summary = crate::onboard_cli::build_onboarding_success_summary(
@@ -7229,6 +7645,90 @@ fn onboarding_success_summary_uses_channel_catalog_handoff_when_cli_is_disabled_
                 line == "- channels: loong channels --config '/tmp/loongclaw-config.toml'"
             }),
         "success summary should fall back to the channel catalog when no direct cli or service-channel handoff exists: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_when_cli_is_disabled()
+{
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.weixin.enabled = true;
+    config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 80);
+
+    assert_eq!(
+        summary.next_actions[0].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor,
+        "plugin-backed channel setups should guide operators into diagnostics before the generic channel catalog: {summary:#?}"
+    );
+    assert_eq!(summary.next_actions[0].label, "verify managed bridges");
+    assert_eq!(
+        summary.next_actions[0].command,
+        "loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+    );
+    assert_eq!(
+        summary.next_actions[1].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel,
+        "the generic channel catalog should remain available as a secondary fallback: {summary:#?}"
+    );
+    assert_eq!(summary.next_actions[1].label, "channels");
+    assert!(
+        lines.iter().any(|line| line == "start here")
+            && lines.iter().any(|line| {
+                line
+                    == "- verify managed bridges: loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+            }),
+        "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
+    );
+}
+
+#[test]
+fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_when_cli_is_enabled()
+{
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.weixin.enabled = true;
+    config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+    let path = PathBuf::from("/tmp/loongclaw-config.toml");
+    let summary =
+        loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
+    let lines =
+        loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
+    let doctor_position = summary.next_actions.iter().position(|action| {
+        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
+            && action.label == "verify managed bridges"
+    });
+    let catalog_position = summary
+        .next_actions
+        .iter()
+        .position(|action| action.label == "channels");
+
+    assert_eq!(
+        doctor_position,
+        Some(2),
+        "cli-enabled plugin-backed setups should keep ask/chat first, then add diagnostics before the generic channel catalog: {summary:#?}"
+    );
+    assert_eq!(catalog_position, Some(3));
+    assert!(
+        lines.iter().any(|line| {
+            line.contains("verify managed bridges")
+                && line.contains("loongclaw doctor --config '/tmp/loongclaw-config.toml'")
+        }),
+        "success summary should surface the managed bridge verification follow-up in the secondary actions: {lines:#?}"
     );
 }
 

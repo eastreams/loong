@@ -797,10 +797,13 @@ fn compose_channels_domain(
     candidates: &[ImportCandidate],
 ) -> (Vec<ChannelCandidate>, Option<DomainPreview>) {
     let mut chosen_channels = Vec::new();
+    let mut any_channel_conflicts = false;
     let mut any_channel_supplemented = false;
     let mut all_channels_from_current = true;
     let mut distinct_channel_sources = BTreeSet::new();
-    for channel_id in channels::registered_channel_ids() {
+    let ordered_channel_ids = ordered_candidate_channel_ids(candidates);
+
+    for channel_id in ordered_channel_ids {
         let Some(channel) = select_channel_candidate(channel_id, candidates) else {
             continue;
         };
@@ -808,25 +811,51 @@ fn compose_channels_domain(
             all_channels_from_current = false;
         }
         distinct_channel_sources.insert(channel.source.clone());
-        channels::apply_selected_channels(merged_config, &channel.config, &[channel.id]);
+        let selected_report = channels::apply_selected_channels_with_report(
+            merged_config,
+            &channel.config,
+            &[channel.id],
+        );
+        let mut selected_conflict = first_channel_apply_conflict(&selected_report);
         let mut supplemented_from = Vec::new();
+        let mut supplemental_conflict = None;
+
         for candidate in candidates {
             if candidate.source == channel.source {
                 continue;
             }
-            if candidate
+            let candidate_supplies_channel = candidate
                 .channel_candidates
                 .iter()
-                .any(|candidate_channel| candidate_channel.id == channel.id)
-                && channels::apply_selected_channels(
-                    merged_config,
-                    &candidate.config,
-                    &[channel.id],
-                )
-            {
+                .any(|candidate_channel| candidate_channel.id == channel.id);
+
+            if !candidate_supplies_channel {
+                continue;
+            }
+
+            let supplement_report = channels::apply_selected_channels_with_report(
+                merged_config,
+                &candidate.config,
+                &[channel.id],
+            );
+            let next_conflict = first_channel_apply_conflict(&supplement_report);
+
+            if let Some(conflict) = next_conflict {
+                if supplemental_conflict.is_none() {
+                    supplemental_conflict = Some(conflict);
+                }
+
+                continue;
+            }
+
+            if supplement_report.changed {
                 supplemented_from.push(candidate.source.clone());
             }
         }
+
+        let conflict_detected = selected_conflict.is_some() || supplemental_conflict.is_some();
+
+        any_channel_conflicts |= conflict_detected;
         any_channel_supplemented |= !supplemented_from.is_empty();
 
         let effective_source = if supplemented_from.is_empty() {
@@ -834,27 +863,42 @@ fn compose_channels_domain(
         } else {
             "multiple sources".to_owned()
         };
-        let mut final_channel = channels::collect_channel_previews(
+        let preview_candidate = channels::collect_channel_previews(
             merged_config,
             &resolve_channel_import_readiness_from_config(merged_config),
             &effective_source,
         )
         .into_iter()
         .find(|preview| preview.candidate.id == channel.id)
-        .map(|preview| preview.candidate)
-        .unwrap_or(ChannelCandidate {
-            id: channel.id,
-            label: channel.label,
-            status: channel.status,
-            source: effective_source,
-            summary: channel.summary.clone(),
-        });
+        .map(|preview| preview.candidate);
+        let mut final_channel = match preview_candidate {
+            Some(preview_candidate) => preview_candidate,
+            None => {
+                if let Some(conflict) = selected_conflict.take() {
+                    conflicted_channel_candidate(&channel, &effective_source, &conflict)
+                } else {
+                    ChannelCandidate {
+                        id: channel.id,
+                        label: channel.label,
+                        status: channel.status,
+                        source: effective_source.clone(),
+                        summary: channel.summary.clone(),
+                    }
+                }
+            }
+        };
+
         if !supplemented_from.is_empty() {
             final_channel.summary.push_str(" · supplemented from ");
             final_channel
                 .summary
                 .push_str(&supplemented_from.join(", "));
         }
+
+        if let Some(conflict) = supplemental_conflict.as_ref() {
+            append_channel_conflict_summary(&mut final_channel.summary, conflict);
+        }
+
         chosen_channels.push(final_channel);
     }
 
@@ -910,19 +954,79 @@ fn compose_channels_domain(
         Some(DomainPreview {
             kind: SetupDomainKind::Channels,
             status,
-            decision: Some(
-                if any_channel_supplemented || distinct_channel_sources.len() > 1 {
-                    PreviewDecision::Supplement
-                } else if all_channels_from_current {
-                    PreviewDecision::KeepCurrent
-                } else {
-                    PreviewDecision::UseDetected
-                },
-            ),
+            decision: Some(if any_channel_conflicts {
+                PreviewDecision::ReviewConflict
+            } else if any_channel_supplemented || distinct_channel_sources.len() > 1 {
+                PreviewDecision::Supplement
+            } else if all_channels_from_current {
+                PreviewDecision::KeepCurrent
+            } else {
+                PreviewDecision::UseDetected
+            }),
             source,
             summary,
         }),
     )
+}
+
+fn first_channel_apply_conflict(
+    report: &channels::ChannelApplyReport,
+) -> Option<channels::ChannelApplyConflict> {
+    let conflict = report.conflicts.first()?;
+
+    Some(conflict.clone())
+}
+
+fn conflicted_channel_candidate(
+    channel: &SelectedChannel,
+    effective_source: &str,
+    conflict: &channels::ChannelApplyConflict,
+) -> ChannelCandidate {
+    let mut summary = channel.summary.clone();
+
+    append_channel_conflict_summary(&mut summary, conflict);
+
+    ChannelCandidate {
+        id: channel.id,
+        label: channel.label,
+        status: PreviewStatus::NeedsReview,
+        source: effective_source.to_owned(),
+        summary,
+    }
+}
+
+fn append_channel_conflict_summary(
+    summary: &mut String,
+    conflict: &channels::ChannelApplyConflict,
+) {
+    let conflict_summary = channels::summarize_channel_apply_conflict(conflict);
+
+    if summary.is_empty() {
+        summary.push_str(&conflict_summary);
+        return;
+    }
+
+    summary.push_str(" · ");
+    summary.push_str(&conflict_summary);
+}
+
+fn ordered_candidate_channel_ids(candidates: &[ImportCandidate]) -> Vec<&'static str> {
+    let mut seen_channel_ids = BTreeSet::new();
+    let mut ordered_channel_ids = Vec::new();
+
+    for candidate in candidates {
+        for channel in &candidate.channel_candidates {
+            let inserted = seen_channel_ids.insert(channel.id);
+
+            if !inserted {
+                continue;
+            }
+
+            ordered_channel_ids.push(channel.id);
+        }
+    }
+
+    ordered_channel_ids
 }
 
 fn passive_domain_decision(

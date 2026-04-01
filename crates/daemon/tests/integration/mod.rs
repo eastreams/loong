@@ -82,6 +82,112 @@ fn validation_diagnostic_with_severity(
     }
 }
 
+fn managed_bridge_manifest(
+    channel_id: &str,
+    setup_surface: Option<&str>,
+    metadata: BTreeMap<String, String>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    let setup = setup_surface.map(|surface| loongclaw_daemon::kernel::PluginSetup {
+        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(surface.to_owned()),
+        required_env_vars: Vec::new(),
+        recommended_env_vars: Vec::new(),
+        required_config_keys: Vec::new(),
+        default_env_var: None,
+        docs_urls: Vec::new(),
+        remediation: None,
+    });
+
+    managed_bridge_manifest_with_setup(channel_id, metadata, setup)
+}
+
+fn managed_bridge_manifest_with_setup(
+    channel_id: &str,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    let plugin_id = format!("{channel_id}-managed-bridge");
+
+    managed_bridge_manifest_with_plugin_id(plugin_id.as_str(), channel_id, metadata, setup)
+}
+
+fn managed_bridge_manifest_with_plugin_id(
+    plugin_id: &str,
+    channel_id: &str,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    loongclaw_daemon::kernel::PluginManifest {
+        plugin_id: plugin_id.to_owned(),
+        provider_id: format!("{channel_id}-provider"),
+        connector_name: format!("{channel_id}-connector"),
+        channel_id: Some(channel_id.to_owned()),
+        endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
+        capabilities: BTreeSet::new(),
+        metadata,
+        summary: None,
+        tags: Vec::new(),
+        input_examples: Vec::new(),
+        output_examples: Vec::new(),
+        defer_loading: false,
+        setup,
+    }
+}
+
+fn managed_bridge_setup_with_guidance(
+    surface: &str,
+    required_env_vars: Vec<&str>,
+    required_config_keys: Vec<&str>,
+    docs_urls: Vec<&str>,
+    remediation: Option<&str>,
+) -> loongclaw_daemon::kernel::PluginSetup {
+    let normalized_required_env_vars = required_env_vars.into_iter().map(str::to_owned).collect();
+    let normalized_required_config_keys = required_config_keys
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
+    let normalized_remediation = remediation.map(str::to_owned);
+
+    loongclaw_daemon::kernel::PluginSetup {
+        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(surface.to_owned()),
+        required_env_vars: normalized_required_env_vars,
+        recommended_env_vars: Vec::new(),
+        required_config_keys: normalized_required_config_keys,
+        default_env_var: None,
+        docs_urls: normalized_docs_urls,
+        remediation: normalized_remediation,
+    }
+}
+
+fn compatible_managed_bridge_metadata(
+    transport_family: &str,
+    target_contract: &str,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+
+    metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
+    metadata.insert("transport_family".to_owned(), transport_family.to_owned());
+    metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+
+    metadata
+}
+
+fn write_managed_bridge_manifest(
+    install_root: &Path,
+    directory_name: &str,
+    manifest: &loongclaw_daemon::kernel::PluginManifest,
+) {
+    let plugin_directory = install_root.join(directory_name);
+    let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+    let encoded_manifest =
+        serde_json::to_string_pretty(manifest).expect("serialize managed bridge manifest");
+
+    std::fs::create_dir_all(&plugin_directory).expect("create managed bridge plugin directory");
+    std::fs::write(&manifest_path, encoded_manifest).expect("write managed bridge plugin manifest");
+}
+
 mod acp;
 mod architecture;
 mod ask_cli;

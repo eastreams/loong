@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ffi::OsStr;
 
 use loongclaw_app as mvp;
@@ -44,6 +45,8 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
     path_env: Option<&OsStr>,
 ) -> Vec<SetupNextAction> {
     let mut actions = Vec::new();
+    let channel_actions =
+        crate::migration::channels::collect_channel_next_actions(config, config_path);
     let browser_preview =
         crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
     if config.cli.enabled {
@@ -65,17 +68,14 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             command: crate::cli_handoff::format_subcommand_with_config("chat", config_path),
         });
     }
-    actions.extend(
-        crate::migration::channels::collect_channel_next_actions(config, config_path)
-            .into_iter()
-            .map(|action| SetupNextAction {
-                kind: SetupNextActionKind::Channel,
-                channel_action_id: Some(action.id),
-                browser_preview_phase: None,
-                label: action.label.to_owned(),
-                command: action.command,
-            }),
-    );
+    if should_add_managed_bridge_doctor_action(config, &channel_actions) {
+        let doctor_action = build_managed_bridge_doctor_action(config_path);
+        actions.push(doctor_action);
+    }
+    let channel_setup_actions = channel_actions
+        .into_iter()
+        .map(channel_next_action_to_setup_action);
+    actions.extend(channel_setup_actions);
     if config.cli.enabled {
         let preview_action = if browser_preview.ready() {
             Some(SetupNextAction {
@@ -126,6 +126,110 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
         });
     }
     actions
+}
+
+fn should_add_managed_bridge_doctor_action(
+    config: &mvp::config::LoongClawConfig,
+    channel_actions: &[crate::migration::channels::ChannelNextAction],
+) -> bool {
+    let has_catalog_only_channel_handoff = channel_actions_are_catalog_only(channel_actions);
+
+    if !has_catalog_only_channel_handoff {
+        return false;
+    }
+
+    has_unresolved_plugin_bridge_preflight(config)
+}
+
+fn channel_actions_are_catalog_only(
+    channel_actions: &[crate::migration::channels::ChannelNextAction],
+) -> bool {
+    if channel_actions.len() != 1 {
+        return false;
+    }
+
+    let Some(action) = channel_actions.first() else {
+        return false;
+    };
+
+    action.id == crate::migration::channels::CHANNEL_CATALOG_ACTION_ID
+}
+
+fn has_unresolved_plugin_bridge_preflight(config: &mvp::config::LoongClawConfig) -> bool {
+    let plugin_bridge_surface_names = collect_enabled_plugin_bridge_surface_names(config);
+
+    if plugin_bridge_surface_names.is_empty() {
+        return false;
+    }
+
+    let channel_checks = crate::migration::channels::collect_channel_preflight_checks(config);
+
+    channel_checks.into_iter().any(|check| {
+        let check_name = check.name;
+        let check_is_plugin_bridge_surface = plugin_bridge_surface_names.contains(check_name);
+        let check_needs_review = check.level != crate::migration::channels::ChannelCheckLevel::Pass;
+
+        check_is_plugin_bridge_surface && check_needs_review
+    })
+}
+
+fn collect_enabled_plugin_bridge_surface_names(
+    config: &mvp::config::LoongClawConfig,
+) -> BTreeSet<&'static str> {
+    let inventory = mvp::channel::channel_inventory(config);
+
+    inventory
+        .channel_surfaces
+        .into_iter()
+        .filter(enabled_plugin_bridge_surface)
+        .map(|surface| plugin_bridge_surface_name(surface.catalog.id))
+        .collect()
+}
+
+fn enabled_plugin_bridge_surface(surface: &mvp::channel::ChannelSurface) -> bool {
+    let has_plugin_bridge_contract = surface.catalog.plugin_bridge_contract.is_some();
+
+    if !has_plugin_bridge_contract {
+        return false;
+    }
+
+    surface
+        .configured_accounts
+        .iter()
+        .any(|snapshot| snapshot.enabled)
+}
+
+fn plugin_bridge_surface_name(channel_id: &'static str) -> &'static str {
+    let descriptor = mvp::config::channel_descriptor(channel_id);
+
+    match descriptor {
+        Some(descriptor) => descriptor.surface_label,
+        None => channel_id,
+    }
+}
+
+fn build_managed_bridge_doctor_action(config_path: &str) -> SetupNextAction {
+    let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+
+    SetupNextAction {
+        kind: SetupNextActionKind::Doctor,
+        channel_action_id: None,
+        browser_preview_phase: None,
+        label: "verify managed bridges".to_owned(),
+        command,
+    }
+}
+
+fn channel_next_action_to_setup_action(
+    action: crate::migration::channels::ChannelNextAction,
+) -> SetupNextAction {
+    SetupNextAction {
+        kind: SetupNextActionKind::Channel,
+        channel_action_id: Some(action.id),
+        browser_preview_phase: None,
+        label: action.label.to_owned(),
+        command: action.command,
+    }
 }
 
 #[cfg(test)]
