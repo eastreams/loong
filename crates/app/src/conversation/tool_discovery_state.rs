@@ -57,13 +57,9 @@ impl ToolDiscoveryState {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let returned = payload_object.get("returned").and_then(Value::as_u64);
         let has_entries = !entries.is_empty();
-        let has_state = query.is_some()
-            || exact_tool_id.is_some()
-            || diagnostics.is_some()
-            || returned.is_some()
-            || has_entries;
+        let has_state =
+            query.is_some() || exact_tool_id.is_some() || diagnostics.is_some() || has_entries;
 
         if !has_state {
             return None;
@@ -538,6 +534,20 @@ mod tests {
         assert_eq!(state.entries.len(), 1);
         assert_eq!(state.entries[0].tool_id, "file.read");
         assert_eq!(state.entries[0].summary, "Read a file.");
+    }
+
+    #[test]
+    fn tool_discovery_state_ignores_returned_only_tool_search_payloads() {
+        let payload = json!({
+            "returned": 0
+        });
+
+        let state = ToolDiscoveryState::from_tool_search_payload(&payload);
+
+        assert!(
+            state.is_none(),
+            "returned-only payloads should not recover empty discovery state"
+        );
     }
 
     #[test]
