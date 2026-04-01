@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 #[cfg(feature = "tool-shell")]
@@ -13,6 +15,7 @@ use super::runtime_config::BashExecRuntimePolicy;
 
 const BASH_UNAVAILABLE_WARNING: &str =
     "bash unavailable; hiding bash.exec from runtime tool surface";
+const BASH_RUNTIME_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 #[cfg(feature = "tool-shell")]
 const BASH_EXEC_ALLOWED_FIELDS: &[&str] = &[
     "command",
@@ -195,13 +198,40 @@ fn parse_bash_timeout_ms(payload: &serde_json::Map<String, Value>) -> Result<u64
 }
 
 fn probe_bash_candidate(candidate: &Path) -> bool {
-    Command::new(candidate)
+    probe_bash_candidate_with_timeout(candidate, BASH_RUNTIME_PROBE_TIMEOUT)
+}
+
+fn probe_bash_candidate_with_timeout(candidate: &Path, timeout: Duration) -> bool {
+    let Ok(mut child) = Command::new(candidate)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .spawn()
+    else {
+        return false;
+    };
+
+    let timeout = timeout.max(Duration::from_millis(1));
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                thread::park_timeout(Duration::from_millis(10));
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -210,6 +240,10 @@ mod tests {
     use crate::tools::runtime_config::ToolRuntimeConfig;
     use loongclaw_contracts::ToolCoreRequest;
     use serde_json::json;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn probe_bash_runtime_prefers_path_bash_before_windows_fallbacks() {
@@ -230,6 +264,29 @@ mod tests {
         assert!(!policy.available);
         assert!(policy.command.is_none());
         assert_eq!(policy.warning.as_deref(), Some(BASH_UNAVAILABLE_WARNING));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn probe_bash_candidate_with_timeout_returns_false_for_slow_candidate() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let script = tempdir.path().join("slow-bash");
+        fs::write(&script, "#!/bin/sh\nsleep 2\nexit 0\n").expect("write slow probe script");
+        let mut permissions = fs::metadata(&script)
+            .expect("stat slow probe script")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script, permissions).expect("chmod slow probe script");
+
+        let start = Instant::now();
+        let available = probe_bash_candidate_with_timeout(&script, Duration::from_millis(50));
+
+        assert!(!available);
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "slow probe should time out quickly, elapsed={:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

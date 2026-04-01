@@ -124,6 +124,28 @@ fn evaluate_bash_analysis(
     default_mode: ShellPolicyDefault,
 ) -> BashGovernanceOutcome {
     if analysis.parse_unreliable {
+        let evaluated_units = analysis
+            .units
+            .iter()
+            .map(|unit| evaluate_unit(unit, rules))
+            .collect::<Vec<_>>();
+
+        if let Some((index, source)) = evaluated_units
+            .iter()
+            .enumerate()
+            .find(|(_, outcome)| outcome.decision == UnitGovernanceDecision::Deny)
+            .map(|(index, outcome)| (index, outcome.decision_source.clone()))
+        {
+            return BashGovernanceOutcome {
+                command: command.to_owned(),
+                parse_unreliable: true,
+                unit_outcomes: evaluated_units,
+                default_mode,
+                final_decision: FinalGovernanceDecision::Deny,
+                final_source: FinalDecisionSource::Unit { index, source },
+            };
+        }
+
         let unit_outcomes = analysis
             .units
             .iter()
@@ -506,5 +528,43 @@ mod tests {
             outcome.denial_reason().as_deref(),
             Some("bash command produced no governable units and default-deny policy denied it")
         );
+    }
+
+    #[test]
+    fn parse_unreliable_analysis_preserves_explicit_deny_precedence() {
+        let analysis = BashCommandAnalysis {
+            parse_unreliable: true,
+            units: vec![
+                MinimalCommandUnit {
+                    classification: UnitClassification::GovernablePlainCommand {
+                        argv: vec!["cargo".to_owned(), "publish".to_owned()],
+                    },
+                    preceding_operator: None,
+                },
+                MinimalCommandUnit {
+                    classification: UnitClassification::GovernablePlainCommand {
+                        argv: vec!["printf".to_owned(), "ok".to_owned()],
+                    },
+                    preceding_operator: Some(UnitOperator::Sequential),
+                },
+            ],
+        };
+
+        let outcome = evaluate_bash_analysis(
+            "cargo publish; if then",
+            &analysis,
+            &PrefixRuleFixture::rules([PrefixRuleFixture::deny(["cargo", "publish"])]),
+            ShellPolicyDefault::Allow,
+        );
+
+        assert!(outcome.parse_unreliable);
+        assert_eq!(outcome.final_decision, FinalGovernanceDecision::Deny);
+        assert!(matches!(
+            outcome.final_source,
+            FinalDecisionSource::Unit {
+                index: 0,
+                source: UnitDecisionSource::ExplicitDeny { .. },
+            }
+        ));
     }
 }

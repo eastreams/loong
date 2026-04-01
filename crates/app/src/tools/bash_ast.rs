@@ -109,7 +109,10 @@ fn collect_program_units(
 ) -> bool {
     let mut reliable = true;
     let mut cursor = root.walk();
-    let children: Vec<Node<'_>> = root.named_children(&mut cursor).collect();
+    let children: Vec<Node<'_>> = root
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() != "comment")
+        .collect();
     let mut previous_end = None;
 
     for child in children {
@@ -156,7 +159,10 @@ fn collect_list_units(
     units: &mut Vec<MinimalCommandUnit>,
 ) -> bool {
     let mut cursor = list.walk();
-    let children: Vec<Node<'_>> = list.named_children(&mut cursor).collect();
+    let children: Vec<Node<'_>> = list
+        .named_children(&mut cursor)
+        .filter(|child| child.kind() != "comment")
+        .collect();
     let [left, right] = children.as_slice() else {
         units.push(MinimalCommandUnit {
             classification: UnitClassification::Unsupported(
@@ -340,11 +346,24 @@ fn resolve_static_shell_word(text: &str) -> Option<String> {
 
 fn separator_supports_sequential_split(separator: &str) -> bool {
     let mut saw_supported_separator = false;
+    let mut in_comment = false;
 
     for ch in separator.chars() {
+        if in_comment {
+            match ch {
+                '\n' | '\r' => {
+                    in_comment = false;
+                    saw_supported_separator = true;
+                }
+                _ => {}
+            }
+            continue;
+        }
+
         match ch {
             ';' | '\n' | '\r' => saw_supported_separator = true,
             ' ' | '\t' => {}
+            '#' => in_comment = true,
             _ => return false,
         }
     }
@@ -433,6 +452,18 @@ mod tests {
     fn splits_semicolon_lists_into_two_minimal_units() {
         let analysis = analyze_bash_command("cargo fmt ; cargo test");
 
+        assert_eq!(analysis.units.len(), 2);
+        assert_eq!(
+            analysis.units[1].preceding_operator,
+            Some(UnitOperator::Sequential)
+        );
+    }
+
+    #[test]
+    fn comments_between_sequential_units_do_not_mark_parse_unreliable() {
+        let analysis = analyze_bash_command("printf ok; # note\nprintf done");
+
+        assert!(!analysis.parse_unreliable);
         assert_eq!(analysis.units.len(), 2);
         assert_eq!(
             analysis.units[1].preceding_operator,

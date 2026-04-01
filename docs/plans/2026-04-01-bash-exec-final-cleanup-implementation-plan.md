@@ -368,7 +368,10 @@ Run:
 
 Expected:
 
-- all commands pass on the final tree
+- all scope-in commands pass on the final tree
+- `LOONGCLAW_RELEASE_DOCS_STRICT=1 scripts/check-docs.sh` and
+  `LOONGCLAW_ARCH_STRICT=true ./scripts/check_architecture_boundaries.sh`
+  remain documented baseline failures until their separate follow-ups land
 
 - [ ] **Step 2: Run the required superpower reviews and fix anything they find**
 

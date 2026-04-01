@@ -846,6 +846,8 @@ impl BashToolConfig {
     pub fn resolved_rules_dir(&self) -> PathBuf {
         self.rules_dir
             .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(expand_path)
             .unwrap_or_else(|| default_loongclaw_home().join("rules"))
     }
@@ -1653,6 +1655,26 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         };
 
         assert_eq!(config.resolved_rules_dir(), PathBuf::from("custom/rules"));
+    }
+
+    #[test]
+    fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+
+        for raw in ["", "   "] {
+            let config = BashToolConfig {
+                rules_dir: Some(raw.to_owned()),
+                ..BashToolConfig::default()
+            };
+
+            assert_eq!(
+                config.resolved_rules_dir(),
+                crate::config::default_loongclaw_home().join("rules"),
+                "blank rules_dir `{raw}` should fall back to the default home rules dir"
+            );
+        }
     }
 
     #[test]

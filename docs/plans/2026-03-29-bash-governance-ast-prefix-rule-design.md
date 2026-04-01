@@ -74,9 +74,9 @@ Excluded from this slice:
 
 ### Rules Directory
 
-The default workspace-local rules directory should follow a Codex-like shape:
+The default home-scoped rules directory should follow a Codex-like shape:
 
-- `.loongclaw/rules/`
+- `~/.loongclaw/rules/`
 
 This design assumes LoongClaw loads Bash governance rules from `*.rules` files in that directory.
 
@@ -94,13 +94,11 @@ The user-facing rule language should be Starlark-backed, but the exposed first-s
 prefix_rule(
     pattern = ["cargo", "test"],
     decision = "allow",
-    note = "verification command",
 )
 
 prefix_rule(
     pattern = ["cargo", "publish"],
     decision = "deny",
-    note = "release path blocked",
 )
 ```
 

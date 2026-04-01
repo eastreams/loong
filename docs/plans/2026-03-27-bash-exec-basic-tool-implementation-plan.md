@@ -237,7 +237,7 @@ Expected: PASS
 
 Run:
 
-- `git add crates/app/src/tools/bash.rs crates/app/src/tools/runtime_config.rs`
+- `git add crates/app/src/tools/bash.rs crates/app/src/tools/runtime_config.rs crates/app/src/config/tools.rs`
 - `git commit -m "feat(app): add bash.exec runtime availability policy"`
 
 ### Task 2: Add the `bash.exec` visibility, catalog, and dispatch surface

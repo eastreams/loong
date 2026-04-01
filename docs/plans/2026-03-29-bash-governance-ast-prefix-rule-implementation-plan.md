@@ -4,7 +4,7 @@
 
 **Goal:** Add the next implementation slice for issue `#637`: AST-backed, prefix-rule-based governance for `bash.exec`, with conservative `Default(Allow|Deny)` fallback, without changing `shell.exec`.
 
-**Architecture:** Keep `bash.exec` as the only governed surface in this slice. Resolve a workspace-local rules directory (`.loongclaw/rules`) plus compatibility rules translated from `tools.shell_allow` / `tools.shell_deny` into one compiled prefix-rule set. Parse `bash.exec` commands with `tree-sitter-bash`, split only the supported outer list forms (`;`, newline, `&&`, `||`), classify each unit as governable plain command or unsupported structure, aggregate unit results with deny precedence plus `tools.shell_default_mode`, and only execute Bash when the whole command resolves to `Allow`. Keep rule loading fail-closed for broken rule files, but treat a missing rules directory as an empty explicit rule set.
+**Architecture:** Keep `bash.exec` as the only governed surface in this slice. Resolve the default home rules directory (`~/.loongclaw/rules`) plus compatibility rules translated from `tools.shell_allow` / `tools.shell_deny` into one compiled prefix-rule set. Parse `bash.exec` commands with `tree-sitter-bash`, split only the supported outer list forms (`;`, newline, `&&`, `||`), classify each unit as governable plain command or unsupported structure, aggregate unit results with deny precedence plus `tools.shell_default_mode`, and only execute Bash when the whole command resolves to `Allow`. Keep rule loading fail-closed for broken rule files, but treat a missing rules directory as an empty explicit rule set.
 
 **Tech Stack:** Rust, `tree-sitter` + `tree-sitter-bash`, `starlark`, serde/toml config parsing, existing `bash.exec` executor, Cargo unit tests, existing tool runtime config and tool dispatch infrastructure in `crates/app`.
 
@@ -19,7 +19,7 @@
 - Create: `crates/app/src/tools/bash_governance.rs`
   - Top-level evaluator API, decision/result types, whole-command aggregation, structured denial analysis.
 - Create: `crates/app/src/tools/bash_rules.rs`
-  - Task-1 bridge types for compiled prefix rules and fail-closed directory loading, then Task-2 Starlark-backed rule loading, `.loongclaw/rules/*.rules` discovery, and compatibility-rule translation from `shell_allow` / `shell_deny`.
+  - Task-1 bridge types for compiled prefix rules and fail-closed directory loading, then Task-2 Starlark-backed rule loading, `~/.loongclaw/rules/*.rules` discovery, and compatibility-rule translation from `shell_allow` / `shell_deny`.
 - Create: `crates/app/src/tools/bash_ast.rs`
   - `tree-sitter-bash` parsing, parse-error detection, minimal-command-unit extraction, unsupported-structure classification.
 - Modify: `crates/app/Cargo.toml`
@@ -27,7 +27,7 @@
 - Modify: `crates/app/src/config/tools.rs`
   - Extend `BashToolConfig` with a rules-directory override and resolution helpers; add config parsing tests.
 - Modify: `crates/app/src/tools/runtime_config.rs`
-  - Add typed runtime config for Bash governance, resolve default `.loongclaw/rules` paths, compile rules at runtime-config build time, preserve fail-closed load errors for later execution.
+  - Add typed runtime config for Bash governance, resolve the default `~/.loongclaw/rules` path, compile rules at runtime-config build time, preserve fail-closed load errors for later execution.
 - Modify: `crates/app/src/tools/bash.rs`
   - Run governance evaluation before process execution, surface policy denials, keep the existing successful execution path unchanged.
 - Modify: `crates/app/src/tools/catalog.rs`
@@ -44,8 +44,7 @@
 - `approval_required`, `approve_once`, and `approve_always` remain out of scope.
 - Default rules directory behavior:
   - if `tools.bash.rules_dir` is configured, resolve and use it
-  - otherwise use `.loongclaw/rules` relative to the config file parent when `config_path` is known
-  - otherwise use `.loongclaw/rules` relative to the current working directory
+  - otherwise use `~/.loongclaw/rules`
 - Missing rules directory is not an error; broken `.rules` files are an error.
 - Compatibility translation:
   - `shell_allow = ["cargo"]` becomes allow prefix `["cargo"]`
@@ -112,7 +111,10 @@ Add runtime-config tests in `crates/app/src/tools/runtime_config.rs`:
 
 ```rust
 #[test]
-fn tool_runtime_config_uses_default_workspace_rules_dir_when_unset() {
+fn tool_runtime_config_uses_default_home_rules_dir_when_unset() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let mut env = ScopedEnv::new();
+    env.set("HOME", home.path());
     let loongclaw = crate::config::LoongClawConfig::default();
     let runtime = ToolRuntimeConfig::from_loongclaw_config(
         &loongclaw,
@@ -121,7 +123,7 @@ fn tool_runtime_config_uses_default_workspace_rules_dir_when_unset() {
 
     assert_eq!(
         runtime.bash_exec.governance.rules_dir,
-        std::path::PathBuf::from("/tmp/work/.loongclaw/rules")
+        crate::config::default_loongclaw_home().join("rules")
     );
 }
 
@@ -210,7 +212,7 @@ In `crates/app/src/config/tools.rs`:
 
 - extend `BashToolConfig` to include `rules_dir: Option<String>`
 - add a helper to resolve the effective rules directory from `config_path`
-- keep `rules_dir = None` as the config default so runtime resolution can supply `.loongclaw/rules`
+- keep `rules_dir = None` as the config default so runtime resolution can supply `~/.loongclaw/rules`
 
 In `crates/app/src/tools/bash_rules.rs`, create the minimum bridge types needed for the runtime slice to compile:
 
