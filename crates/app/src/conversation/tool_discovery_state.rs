@@ -109,6 +109,7 @@ impl ToolDiscoveryState {
 
     pub(crate) fn render_delta_prompt(&self) -> String {
         const MAX_ENTRIES: usize = 10;
+
         let mut sections = Vec::new();
         let mut entry_lines = Vec::new();
 
@@ -852,6 +853,44 @@ mod tests {
             "should render at most {} tools, got {}",
             MAX_ENTRIES,
             tool_count
+        );
+    }
+
+    #[test]
+    fn render_delta_prompt_renders_exactly_max_entries_boundary() {
+        const MAX_ENTRIES: usize = 10;
+        let entries: Vec<ToolDiscoveryEntry> = (0..MAX_ENTRIES)
+            .map(|i| ToolDiscoveryEntry {
+                tool_id: format!("tool_{i}"),
+                summary: format!("Summary for tool {i}"),
+                search_hint: None,
+                argument_hint: None,
+                required_fields: vec![],
+                required_field_groups: vec![],
+            })
+            .collect();
+
+        let state = ToolDiscoveryState {
+            schema_version: TOOL_DISCOVERY_SCHEMA_VERSION,
+            query: None,
+            exact_tool_id: None,
+            entries,
+            diagnostics: None,
+        };
+
+        let rendered = state.render_delta_prompt();
+
+        assert!(
+            rendered.contains("[tool_discovery_delta]"),
+            "should render discovery delta header, got: {}",
+            rendered
+        );
+
+        let tool_count = rendered.matches("- ").count();
+        assert_eq!(
+            tool_count, MAX_ENTRIES,
+            "should render exactly {} tools when entries equals MAX_ENTRIES, got {}: {}",
+            MAX_ENTRIES, tool_count, rendered
         );
     }
 }

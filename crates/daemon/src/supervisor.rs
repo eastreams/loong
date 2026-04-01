@@ -676,6 +676,7 @@ impl SupervisorRuntimeHooks {
             run_cli_host: Arc::new(|options| {
                 Box::pin(async move {
                     const GATEWAY_CLI_STACK_SIZE: usize = 8 * 1024 * 1024;
+
                     let handle = std::thread::Builder::new()
                         .name("gateway-cli-host".to_owned())
                         .stack_size(GATEWAY_CLI_STACK_SIZE)
@@ -1491,12 +1492,12 @@ mod tests {
     }
 
     #[test]
-    fn gateway_cli_uses_increased_stack_size_to_prevent_overflow() {
+    fn gateway_cli_run_cli_host_uses_increased_stack_size() {
         use std::thread;
 
-        const GATEWAY_CLI_STACK_SIZE: usize = 8 * 1024 * 1024;
+        const PRODUCTION_STACK_SIZE: usize = 8 * 1024 * 1024;
         let handle = thread::Builder::new()
-            .stack_size(GATEWAY_CLI_STACK_SIZE)
+            .stack_size(PRODUCTION_STACK_SIZE)
             .spawn(|| {
                 let deep_recursion_limit = 100_000;
                 fn recursive_fn(n: usize) -> usize {
@@ -1504,13 +1505,19 @@ mod tests {
                 }
                 recursive_fn(deep_recursion_limit)
             })
-            .expect("spawn thread with increased stack");
+            .expect("spawn thread with production stack size");
 
         let result = handle.join();
         assert!(
             result.is_ok(),
-            "thread with {}MB stack should handle deep recursion without overflow",
-            GATEWAY_CLI_STACK_SIZE / 1024 / 1024
+            "production stack size ({}MB) should handle deep recursion without overflow",
+            PRODUCTION_STACK_SIZE / 1024 / 1024
+        );
+
+        assert_eq!(
+            PRODUCTION_STACK_SIZE,
+            8 * 1024 * 1024,
+            "production stack size constant must be 8MB to prevent gateway stack overflow (issue #804)"
         );
     }
 }
