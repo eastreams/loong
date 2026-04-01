@@ -290,7 +290,7 @@ impl FeishuClient {
         &self,
         code: &str,
         redirect_uri: Option<&str>,
-        scopes: &FeishuGrantScopeSet,
+        _scopes: &FeishuGrantScopeSet,
         code_verifier: Option<&str>,
     ) -> CliResult<Value> {
         let mut body = serde_json::Map::new();
@@ -315,9 +315,6 @@ impl FeishuClient {
                 "redirect_uri".to_owned(),
                 Value::String(redirect_uri.to_owned()),
             );
-        }
-        if !scopes.is_empty() {
-            body.insert("scope".to_owned(), Value::String(scopes.to_scope_csv()));
         }
         if let Some(code_verifier) = code_verifier
             .map(str::trim)

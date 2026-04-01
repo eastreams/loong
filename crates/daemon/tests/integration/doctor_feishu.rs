@@ -44,7 +44,7 @@ fn sample_grant(account_id: &str, now_s: i64) -> mvp::channel::feishu::api::Feis
             "offline_access",
             "docx:document:readonly",
             "im:message:readonly",
-            "im:message.group_msg:readonly",
+            "im:message.group_msg",
             "search:message",
             "calendar:calendar:readonly",
         ]),

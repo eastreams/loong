@@ -28,7 +28,7 @@ use crate::channel::feishu::api::{
 
 const FEISHU_MESSAGE_RESOURCE_ACCEPTED_SCOPES: &[&str] = &[
     "im:message:readonly",
-    "im:message.group_msg:readonly",
+    "im:message.group_msg",
     "im:message",
     "im:message:send_as_bot",
     "im:message:send",
@@ -4272,7 +4272,7 @@ fn execute_feishu_messages_history_tool_with_config(
         .await?;
         ensure_any_required_scope(
             &grant,
-            &["im:message:readonly", "im:message.group_msg:readonly"],
+            &["im:message:readonly", "im:message.group_msg"],
             tool_name.as_str(),
         )?;
         let tenant_access_token = context.client.get_tenant_access_token().await?;
@@ -4702,7 +4702,7 @@ fn execute_feishu_messages_get_tool_with_config(
         .await?;
         ensure_any_required_scope(
             &grant,
-            &["im:message:readonly", "im:message.group_msg:readonly"],
+            &["im:message:readonly", "im:message.group_msg"],
             tool_name.as_str(),
         )?;
         let tenant_access_token = context.client.get_tenant_access_token().await?;

@@ -153,7 +153,7 @@ fn sample_grant(
             "offline_access",
             "docx:document:readonly",
             "im:message:readonly",
-            "im:message.group_msg:readonly",
+            "im:message.group_msg",
             "search:message",
             "calendar:calendar:readonly",
         ]),
@@ -3768,6 +3768,8 @@ async fn feishu_auth_start_persists_oauth_state_and_authorize_url() {
     assert!(authorize_url.contains("https://accounts.feishu.cn/open-apis/authen/v1/authorize"));
     assert!(authorize_url.contains("client_id=cli_a1b2c3"));
     assert!(authorize_url.contains("state="));
+    assert!(authorize_url.contains("im%3Amessage.group_msg"));
+    assert!(!authorize_url.contains("im%3Amessage.group_msg%3Areadonly"));
 
     let store = mvp::channel::feishu::api::FeishuTokenStore::new(temp_dir.join("feishu.sqlite3"));
     let stored = store
@@ -3785,6 +3787,18 @@ async fn feishu_auth_start_persists_oauth_state_and_authorize_url() {
             .scope_csv
             .split_whitespace()
             .any(|scope| scope == "offline_access")
+    );
+    assert!(
+        stored
+            .scope_csv
+            .split_whitespace()
+            .any(|scope| scope == "im:message.group_msg")
+    );
+    assert!(
+        !stored
+            .scope_csv
+            .split_whitespace()
+            .any(|scope| scope == "im:message.group_msg:readonly")
     );
 }
 
@@ -3972,6 +3986,11 @@ async fn feishu_auth_exchange_sets_selected_open_id_for_new_grant() {
             .body
             .contains("\"code_verifier\":\"verifier-123\"")
     );
+    assert!(
+        !requests[0].body.contains("\"scope\""),
+        "authorization_code exchange should not resend scope list: {}",
+        requests[0].body
+    );
     assert_eq!(requests[1].path, "/open-apis/authen/v1/user_info");
     assert_eq!(
         requests[1].authorization.as_deref(),
@@ -4003,7 +4022,7 @@ async fn feishu_whoami_refreshes_expired_grant_and_updates_store() {
                             "refresh_token": "r-token-next",
                             "expires_in": 7200,
                             "refresh_token_expires_in": 2592000,
-                            "scope": "offline_access docx:document:readonly im:message:readonly im:message.group_msg:readonly search:message calendar:calendar:readonly"
+                            "scope": "offline_access docx:document:readonly im:message:readonly im:message.group_msg search:message calendar:calendar:readonly"
                         }))
                     }
                 }

@@ -7541,7 +7541,7 @@ mod tests {
         let _store = seed_feishu_tool_grant(
             &sqlite_path,
             "u-token-detail",
-            &["offline_access", "im:message.group_msg:readonly"],
+            &["offline_access", "im:message.group_msg"],
         );
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
@@ -7639,7 +7639,7 @@ mod tests {
             "feishu_shared",
             "ou_shared",
             "u-token-detail-ingress",
-            &["offline_access", "im:message.group_msg:readonly"],
+            &["offline_access", "im:message.group_msg"],
         );
         let config = runtime_config::ToolRuntimeConfig {
             feishu: Some(runtime_config::FeishuToolRuntimeConfig {
@@ -7726,6 +7726,101 @@ mod tests {
             requests[1].path,
             "/open-apis/im/v1/messages/om_ingress_detail"
         );
+
+        server.abort();
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feishu_messages_get_tool_accepts_legacy_group_message_read_scope() {
+        use std::fs;
+
+        use axum::{
+            Json, Router,
+            extract::{Request, State},
+            routing::{get, post},
+        };
+
+        let temp_dir = unique_feishu_tool_temp_dir("messages-get-legacy-group-scope");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let requests =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<FeishuToolMockRequest>::new()));
+        let state = FeishuToolMockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-detail-legacy"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/im/v1/messages/om_legacy",
+                get({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "data": {
+                                    "items": [{
+                                        "message_id": "om_legacy",
+                                        "chat_id": "oc_demo",
+                                        "msg_type": "text",
+                                        "sender": {
+                                            "id": "ou_123",
+                                            "sender_type": "user"
+                                        }
+                                    }]
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-detail-legacy",
+            &["offline_access", "im:message.group_msg:readonly"],
+        );
+        let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
+
+        let outcome = execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "feishu.messages.get".to_owned(),
+                payload: serde_json::json!({
+                    "message_id": "om_legacy"
+                }),
+            },
+            &config,
+        )
+        .expect("legacy group scope should remain accepted");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["message"]["message_id"], "om_legacy");
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-detail-legacy")
+        );
+        assert_eq!(requests[1].path, "/open-apis/im/v1/messages/om_legacy");
 
         server.abort();
     }
