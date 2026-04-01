@@ -64,6 +64,7 @@ Why this is the standard public docs loop:
 
 - `broken-links` is the fastest structural validation pass.
 - `export` proves the site can still compile as a full static artifact.
+- GitHub Actions runs the same two checks in the `docs-site` job so pull requests and local runs stay aligned.
 - running from `site/` avoids unrelated root-level parsing noise
 - Node 20.20.2 is the current verified local toolchain for Mintlify in this repository
 - the Mintlify CLI version is pinned to avoid transient npm tag drift
@@ -87,13 +88,34 @@ Practical rule:
 - do not invent a public docs URL in README copy until the Mintlify deployment
   is actually connected and serving the site
 
+## Connect Mintlify To This Repository
+
+Repository changes alone do not switch hosting on. The repository-side work only
+makes the docs source verifiable and ready to connect.
+
+Use this dashboard checklist when you wire Mintlify to the repo:
+
+1. In Mintlify dashboard `Git Settings`, install the Mintlify GitHub App for this repository.
+2. Limit repository access to the repository that actually contains the `site/` source.
+3. Set the publishing branch to the branch you intentionally use for docs deployments.
+4. Enable monorepo mode and set the docs path to `/site` without a trailing slash.
+5. Save the Git settings and verify Mintlify resolves `site/docs.json` from that directory.
+6. Confirm a pull request preview and a branch deployment before publishing a docs URL from any README or release note.
+
+If automatic deploys do not trigger after the connection is set up:
+
+- verify the dashboard branch matches the branch you are pushing to
+- verify the GitHub App is installed on the correct repository selection
+- re-check the monorepo path for an accidental trailing slash or wrong directory
+- use Mintlify's dashboard troubleshooting flow before changing repository docs copy
+
 ## Docs Contribution Checklist
 
 1. Put the change in the right layer before editing anything.
 2. Keep README changes at the landing-page level instead of turning it back into a manual.
 3. Prefer `site/` for new reader-facing guides, recipes, and walkthroughs.
 4. Keep backlog-heavy working notes and internal authoring history out of the public navigation.
-5. Re-run Mintlify validation when the site navigation, page links, or locale wiring changes.
+5. Re-run Mintlify validation when the site navigation, page links, locale wiring, or deployment path assumptions change.
 
 ## Continue Reading
 

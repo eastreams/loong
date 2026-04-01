@@ -60,6 +60,11 @@ Pinning both the Node and Mintlify versions avoids two common false negatives:
 registry tag drift on the Mintlify package, and local shells that still resolve to unsupported Node 25+.
 The PATH override is necessary because the Mintlify CLI re-spawns a plain `node` process from the current shell path.
 
+CI parity:
+
+- GitHub Actions now runs the same Mintlify `broken-links` and `export` checks on pushes and pull requests in the `docs-site` job.
+- local validation should stay command-for-command compatible with CI so docs failures are reproducible before review.
+
 Mintlify repository setup:
 
 - repository root: this repository
@@ -67,6 +72,16 @@ Mintlify repository setup:
 - config file: `site/docs.json`
 - when configuring Mintlify monorepo deployment, the docs path should stay `/site` without a trailing slash
 - no custom docs domain or checked-in `CNAME` is configured in this repository today; do not invent a public docs URL in README copy until the Mintlify deployment is actually connected
+
+Mintlify connection checklist:
+
+1. Open Mintlify dashboard `Git Settings` and install the Mintlify GitHub App for this repository.
+2. Grant repository access only to the LoongClaw repo that actually hosts the docs source.
+3. Choose the publishing branch that should trigger production docs updates.
+4. Enable monorepo mode and set the docs path to `/site` with no trailing slash.
+5. Verify Mintlify resolves `site/docs.json` from that path before treating the site as connected.
+6. Confirm one pull request preview and one branch deployment before announcing a public docs URL.
+7. If the GitHub organization uses extra network restrictions or IP allowlists, follow Mintlify's current GitHub connection guidance in the dashboard docs before debugging sync failures.
 
 The current scaffold keeps a compact information architecture:
 
@@ -89,5 +104,6 @@ Repository-docs boundary:
 Deployment notes:
 
 - Mintlify can deploy automatically from the connected GitHub repository through the GitHub App
+- the repository-side definition of "deployment ready" is: CI can validate the site, and Mintlify dashboard connection is configured against this repo
 - this repository should be connected as a monorepo with `site/` as the docs source
 - if deployment is added for docs i18n in the future, it should live at the Mintlify site layer rather than by expanding repository-wide markdown translation

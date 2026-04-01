@@ -25,6 +25,8 @@ env:
   ANDROID_NDK_REVISION: "r27d"
   ANDROID_NDK_LINUX_SHA256: "601246087a682d1944e1e16dd85bc6e49560fe8b6d61255be2829178c8ed15d9"
   ANDROID_API_LEVEL: "24"
+  MINTLIFY_NODE_VERSION: "20.20.2"
+  MINTLIFY_VERSION: "4.2.464"
 
 jobs:
   governance:
@@ -100,6 +102,32 @@ jobs:
 
       - name: Diff hygiene
         run: git diff --check
+
+  docs-site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Setup Node
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: ${{ env.MINTLIFY_NODE_VERSION }}
+
+      - name: Mintlify broken links
+        run: npm exec --yes --package=mintlify@${{ env.MINTLIFY_VERSION }} -- mintlify broken-links
+
+      - name: Mintlify export
+        run: npm exec --yes --package=mintlify@${{ env.MINTLIFY_VERSION }} -- mintlify export --output /tmp/loongclaw-docs-export.zip
+
+      - name: Assert export artifact exists
+        run: test -f /tmp/loongclaw-docs-export.zip
 
   rust-quality:
     runs-on: ubuntu-latest
