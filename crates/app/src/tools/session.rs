@@ -9,7 +9,10 @@ use tokio::time::{Duration, Instant, sleep};
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Value, json};
 
-use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
+use super::payload::{
+    optional_payload_limit, optional_payload_offset, optional_payload_string,
+    required_payload_string,
+};
 
 use crate::config::{SessionVisibility, ToolConfig};
 #[cfg(feature = "memory-sqlite")]
@@ -110,6 +113,7 @@ struct SessionDelegateCancellationRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SessionsListRequest {
     limit: usize,
+    offset: usize,
     state: Option<SessionState>,
     kind: Option<SessionKind>,
     parent_session_id: Option<String>,
@@ -414,6 +418,11 @@ fn execute_sessions_list(
     }
 
     let matched_count = listed_sessions.len();
+    let effective_offset = request.offset.min(matched_count);
+    let remaining_count = matched_count.saturating_sub(effective_offset);
+    let has_more = remaining_count > request.limit;
+    let paged_sessions = listed_sessions.into_iter().skip(effective_offset);
+    let mut listed_sessions = paged_sessions.collect::<Vec<_>>();
     listed_sessions.truncate(request.limit);
     let returned_count = listed_sessions.len();
     Ok(ToolCoreOutcome {
@@ -423,6 +432,7 @@ fn execute_sessions_list(
             "filters": sessions_list_filters_json(&request),
             "matched_count": matched_count,
             "returned_count": returned_count,
+            "has_more": has_more,
             "sessions": listed_sessions
                 .into_iter()
                 .map(|(session, delegate_lifecycle)| {
@@ -2682,6 +2692,7 @@ fn parse_sessions_list_request(
             tool_config.sessions.list_limit,
             tool_config.sessions.list_limit,
         ),
+        offset: optional_payload_offset(payload, "offset", 0),
         state: optional_payload_session_state(payload, "state")?,
         kind: optional_payload_session_kind(payload, "kind")?,
         parent_session_id: optional_payload_string(payload, "parent_session_id"),
@@ -3008,6 +3019,7 @@ fn is_session_visibility_skip_error(error: &str) -> bool {
 fn sessions_list_filters_json(request: &SessionsListRequest) -> Value {
     json!({
         "limit": request.limit,
+        "offset": request.offset,
         "state": request.state.map(SessionState::as_str),
         "kind": request.kind.map(SessionKind::as_str),
         "parent_session_id": request.parent_session_id.clone(),
@@ -3139,6 +3151,23 @@ mod tests {
             )
             .expect("update session event ts");
         assert!(updated > 0, "expected at least one updated event row");
+    }
+
+    fn overwrite_session_updated_at(config: &MemoryRuntimeConfig, session_id: &str, ts: i64) {
+        let db_path = config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path for session tools test");
+        let conn = rusqlite::Connection::open(db_path).expect("open sqlite db");
+        let updated = conn
+            .execute(
+                "UPDATE sessions
+                 SET updated_at = ?2
+                 WHERE session_id = ?1",
+                params![session_id, ts],
+            )
+            .expect("update session updated_at");
+        assert!(updated > 0, "expected at least one updated session row");
     }
 
     fn batch_result<'a>(payload: &'a Value, session_id: &str) -> &'a Value {
@@ -3605,6 +3634,78 @@ mod tests {
             sessions[0]["delegate_lifecycle"]["staleness"]["reference"],
             "started"
         );
+    }
+
+    #[test]
+    fn sessions_list_applies_offset_pagination() {
+        let config = isolated_memory_config("sessions-list-offset");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "000-root".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        for session_id in ["001-child", "002-child", "003-child"] {
+            repo.create_session(NewSessionRecord {
+                session_id: session_id.to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("000-root".to_owned()),
+                label: Some(session_id.to_owned()),
+                state: SessionState::Running,
+            })
+            .expect("create child");
+        }
+
+        overwrite_session_updated_at(&config, "000-root", 400);
+        overwrite_session_updated_at(&config, "001-child", 300);
+        overwrite_session_updated_at(&config, "002-child", 200);
+        overwrite_session_updated_at(&config, "003-child", 100);
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "sessions_list".to_owned(),
+                payload: json!({
+                    "limit": 2,
+                    "offset": 1
+                }),
+            },
+            "000-root",
+            &config,
+        )
+        .expect("sessions_list outcome");
+
+        let sessions_value = &outcome.payload["sessions"];
+        let sessions = sessions_value.as_array().expect("sessions array");
+        let mut ids = Vec::new();
+        for item in sessions {
+            let session_id_value = item.get("session_id");
+            let Some(session_id_value) = session_id_value else {
+                continue;
+            };
+            let session_id = session_id_value.as_str();
+            let Some(session_id) = session_id else {
+                continue;
+            };
+            ids.push(session_id);
+        }
+
+        let filter_offset_value = &outcome.payload["filters"]["offset"];
+        let matched_count_value = &outcome.payload["matched_count"];
+        let returned_count_value = &outcome.payload["returned_count"];
+        let has_more_value = &outcome.payload["has_more"];
+        let filter_offset = filter_offset_value.as_u64().expect("filter offset");
+        let matched_count = matched_count_value.as_u64().expect("matched count");
+        let returned_count = returned_count_value.as_u64().expect("returned count");
+        let has_more = has_more_value.as_bool().expect("has more");
+
+        assert_eq!(ids, vec!["001-child", "002-child"]);
+        assert_eq!(filter_offset, 1);
+        assert_eq!(matched_count, 4);
+        assert_eq!(returned_count, 2);
+        assert!(has_more);
     }
 
     #[test]

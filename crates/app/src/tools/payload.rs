@@ -46,6 +46,18 @@ pub(super) fn optional_payload_limit(
         .unwrap_or(default)
 }
 
+/// Extract an optional non-negative integer field.
+///
+/// Returns `default` when the field is absent or not a valid `u64`.
+pub(super) fn optional_payload_offset(payload: &Value, field: &str, default: usize) -> usize {
+    let raw_value = payload.get(field);
+    let parsed_value = raw_value.and_then(Value::as_u64);
+    let max_value = usize::MAX as u64;
+    let bounded_value = parsed_value.map(|value| value.min(max_value));
+    let offset = bounded_value.map(|value| value as usize);
+    offset.unwrap_or(default)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +138,24 @@ mod tests {
     fn optional_limit_returns_default_for_negative() {
         let payload = json!({"limit": -3});
         assert_eq!(optional_payload_limit(&payload, "limit", 10, 20), 10);
+    }
+
+    #[test]
+    fn optional_offset_returns_default_for_missing() {
+        let payload = json!({});
+        assert_eq!(optional_payload_offset(&payload, "offset", 0), 0);
+    }
+
+    #[test]
+    fn optional_offset_returns_value_in_normal_range() {
+        let payload = json!({"offset": 7});
+        assert_eq!(optional_payload_offset(&payload, "offset", 0), 7);
+    }
+
+    #[test]
+    fn optional_offset_returns_default_for_negative() {
+        let payload = json!({"offset": -2});
+        assert_eq!(optional_payload_offset(&payload, "offset", 0), 0);
     }
 
     #[test]

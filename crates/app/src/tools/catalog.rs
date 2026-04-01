@@ -2530,6 +2530,11 @@ fn sessions_list_definition(descriptor: &ToolDescriptor) -> Value {
                         "maximum": 200,
                         "description": "Maximum visible sessions to return after filtering."
                     },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Number of matching visible sessions to skip before applying limit."
+                    },
                     "state": {
                         "type": "string",
                         "enum": ["ready", "running", "completed", "failed", "timed_out"],
@@ -3220,7 +3225,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
-        "sessions_list" => "limit?:integer,state?:string",
+        "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",
@@ -3597,7 +3602,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
-        "sessions_list" => &[("limit", "integer"), ("state", "string")],
+        "sessions_list" => &[
+            ("limit", "integer"),
+            ("offset", "integer"),
+            ("state", "string"),
+        ],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         "web.search" => &[
             ("query", "string"),
@@ -4248,5 +4257,31 @@ mod tests {
                 .parameter_types()
                 .contains(&("automatic_fields", "boolean"))
         );
+    }
+
+    #[test]
+    fn sessions_list_definition_and_hint_surface_offset_pagination() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("sessions_list")
+            .expect("sessions_list descriptor");
+        let definition = descriptor.provider_definition();
+        let function_definition = &definition["function"];
+        let parameter_definition = &function_definition["parameters"];
+        let property_definition = &parameter_definition["properties"];
+        let offset_definition = &property_definition["offset"];
+        let offset_description_value = &offset_definition["description"];
+        let offset_description = offset_description_value
+            .as_str()
+            .expect("offset description");
+        let parameter_types = descriptor.parameter_types();
+        let has_offset_parameter = parameter_types.contains(&("offset", "integer"));
+
+        assert!(offset_description.contains("skip"));
+        assert_eq!(
+            descriptor.argument_hint(),
+            "limit?:integer,offset?:integer,state?:string"
+        );
+        assert!(has_offset_parameter);
     }
 }
