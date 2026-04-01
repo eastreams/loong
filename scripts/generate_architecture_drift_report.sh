@@ -8,6 +8,7 @@ cd "$REPO_ROOT"
 REPORT_MONTH="${LOONGCLAW_ARCH_REPORT_MONTH:-$(date +%Y-%m)}"
 OUTPUT_PATH="${1:-docs/releases/architecture-drift-${REPORT_MONTH}.md}"
 EXPLICIT_BASELINE="${LOONGCLAW_ARCH_DRIFT_BASELINE_REPORT:-}"
+EXPLICIT_BASELINE_DIR="${LOONGCLAW_ARCH_DRIFT_BASELINE_DIR:-}"
 GENERATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 derive_previous_month() {
@@ -30,11 +31,15 @@ resolve_baseline_path() {
     return 0
   fi
 
-  local output_dir
-  output_dir="$(dirname "$OUTPUT_PATH")"
   local previous_month
   previous_month="$(derive_previous_month "$REPORT_MONTH")"
-  printf '%s/architecture-drift-%s.md\n' "$output_dir" "$previous_month"
+  local baseline_dir
+  if [[ -n "$EXPLICIT_BASELINE_DIR" ]]; then
+    baseline_dir="$EXPLICIT_BASELINE_DIR"
+  else
+    baseline_dir="$(dirname "$OUTPUT_PATH")"
+  fi
+  printf '%s/architecture-drift-%s.md\n' "$baseline_dir" "$previous_month"
 }
 
 baseline_hotspot_value() {

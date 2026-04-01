@@ -191,9 +191,42 @@ run_untracked_report_fails_test() {
   assert_contains "$output_file" "must already be tracked by git"
 }
 
+run_temp_regeneration_preserves_tracked_baseline_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  local baseline_file="$fixture/docs/releases/architecture-drift-2098-12.md"
+  local report_file="$fixture/docs/releases/architecture-drift-2099-01.md"
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2098-12" \
+      scripts/generate_architecture_drift_report.sh "$baseline_file"
+    git add "$baseline_file"
+    git commit -qm "seed baseline architecture drift report"
+  )
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      scripts/generate_architecture_drift_report.sh "$report_file"
+    git add "$report_file"
+    git commit -qm "seed tracked architecture drift report with baseline"
+  )
+
+  local output_file="$fixture/temp-regeneration.out"
+  (
+    cd "$fixture"
+    LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+      scripts/check_architecture_drift_freshness.sh "$report_file" >"$output_file" 2>&1
+  )
+
+  assert_contains "$output_file" "tracked architecture drift report is fresh"
+}
+
 run_fresh_report_passes_test
 run_fresh_report_with_adjacent_baseline_passes_test
 run_stale_report_fails_test
 run_untracked_report_fails_test
+run_temp_regeneration_preserves_tracked_baseline_test
 
 echo "check_architecture_drift_freshness.sh checks passed"

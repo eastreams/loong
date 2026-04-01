@@ -128,7 +128,41 @@ BASELINE
   assert_contains "$output_file" "BREACH"
 }
 
+run_baseline_directory_override_test() {
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+
+  local baseline_dir="$tmp_dir/tracked-reports"
+  local generated_dir="$tmp_dir/generated"
+  mkdir -p "$baseline_dir"
+  mkdir -p "$generated_dir"
+
+  local baseline_file="$baseline_dir/architecture-drift-2098-12.md"
+  cat >"$baseline_file" <<'BASELINE'
+<!-- arch-hotspot key=spec_runtime lines=7 functions=3 -->
+<!-- arch-boundary key=memory_literals status=PASS -->
+<!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
+<!-- arch-boundary key=spec_app_dependency status=PASS -->
+BASELINE
+
+  local output_file="$generated_dir/architecture-drift-2099-01.md"
+  LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+    LOONGCLAW_ARCH_DRIFT_BASELINE_DIR="$baseline_dir" \
+    "$SCRIPT_UNDER_TEST" "$output_file"
+
+  [[ -f "$output_file" ]] || {
+    echo "expected generated report at $output_file" >&2
+    exit 1
+  }
+
+  assert_contains "$output_file" "Baseline report: $baseline_file"
+  assert_contains "$output_file" "Prev Lines"
+  assert_contains "$output_file" "Prev Functions"
+}
+
 run_no_baseline_test
 run_breach_baseline_test
+run_baseline_directory_override_test
 
 echo "generate_architecture_drift_report.sh checks passed"
