@@ -70,6 +70,7 @@ Why this is the standard public docs loop:
 - the Mintlify CLI version is pinned to avoid transient npm tag drift
 - `--yes` keeps the validation path non-interactive for contributor shells and CI-like local runs
 - the PATH override is required because Mintlify spawns `node` from the shell path during startup
+- if `export` writes the zip and then appears to stay in `preparing export`, verify the archive and stop the process instead of treating that local CLI hang as a docs-content failure
 
 ## Deployment Model
 
