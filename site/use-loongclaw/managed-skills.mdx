@@ -1,0 +1,210 @@
+---
+title: Managed Skills
+description: Install, expose, and troubleshoot managed external skills without guessing.
+---
+
+# Managed Skills
+
+Use this page when the question is no longer "does LoongClaw support skills?"
+and is now "how do I discover, install, expose, and troubleshoot them on
+purpose?"
+
+`loong skills` is the public operator surface for discovery, install, removal,
+and persisted policy updates around managed external skills.
+
+## Start Here
+
+| If you need to... | Start here |
+| --- | --- |
+| inspect the current persisted skills policy | `loong skills policy get` |
+| see what is already resolved in the runtime | `loong skills list` |
+| search or recommend by operator goal | `loong skills search "browser preview"` or `loong skills recommend "summarize docs site"` |
+| inspect one installed or discoverable skill | `loong skills info <skill_id>` |
+| install a local directory or archive | `loong skills install ./path/to/skill` |
+| fetch and install a remote package | `loong skills fetch https://example.com/skill.zip --approve-download --install` |
+| turn on the browser preview helper path | `loong skills enable-browser-preview` |
+
+## Default Public Posture
+
+Managed external skills start from a fail-closed default:
+
+```toml
+[external_skills]
+enabled = false
+require_download_approval = true
+allowed_domains = []
+blocked_domains = []
+auto_expose_installed = false
+```
+
+Rules that matter:
+
+- `enabled = false` keeps the managed runtime fail-closed rather than silently
+  widening capability.
+- `require_download_approval = true` means remote skill downloads require an
+  explicit operator approval step.
+- `auto_expose_installed = false` means installation and runtime visibility are
+  kept separate until you turn that gate on.
+- `install_root` is optional and is the right place to pin a stable managed
+  skill location when the default runtime-owned path is not enough.
+
+If you want the broader config map before this page gets operational, start with
+[Configuration Patterns](/use-loongclaw/configuration-patterns).
+
+## Operator Mental Model
+
+Managed external skills have four separate states:
+
+1. discovery: `loong skills list`, `search`, `recommend`, and `info` tell you
+   what the runtime can resolve; they do not install anything
+2. installation: `loong skills install` or `fetch --install` copies a skill
+   into the managed install root
+3. exposure: `external_skills.enabled` and `auto_expose_installed` decide
+   whether installed skills become part of the usable runtime surface
+4. runtime readiness: some skills, especially browser preview, still depend on
+   shell policy or an external runtime binary on `PATH`
+
+That separation is why "the skill installed correctly" and "the assistant can
+use it right now" are not always the same statement.
+
+## Core Operator Commands
+
+Discovery and inspection:
+
+```bash
+loong skills list
+loong skills search "browser preview"
+loong skills recommend "summarize docs site"
+loong skills info browser-companion-preview
+```
+
+Install and remove:
+
+```bash
+loong skills install ./downloads/my-skill
+loong skills install ./downloads/my-skill.zip --skill-id my-skill --replace
+loong skills fetch https://example.com/my-skill.zip --approve-download --install
+loong skills remove my-skill
+```
+
+Persisted policy:
+
+```bash
+loong skills policy get
+loong skills policy set --enabled true --auto-expose-installed true --approve-policy-update
+loong skills policy set --allow-domain skills.sh --block-domain internal.example --approve-policy-update
+loong skills policy reset --approve-policy-update
+```
+
+Operational notes:
+
+- use `skills search` or `skills recommend` when you do not already know the
+  skill id.
+- use `skills info` after install to inspect prerequisites and follow-up steps.
+- `skills fetch` is the remote-download path; if approval is required, include
+  `--approve-download`.
+- `skills policy` persists runtime policy into config; it does not just change
+  one in-memory session.
+- `skills policy` can toggle enablement, download approval, domain allow/block
+  rules, and `auto_expose_installed`, but `install_root` still belongs in
+  config.
+- `skills install-bundled <skill_id>` also exists for first-party packaged
+  managed skills, but browser preview is usually easier through
+  `enable-browser-preview`.
+
+## Local Install vs Remote Fetch
+
+Use local install when the package is already on disk:
+
+```bash
+loong skills install ./skills/browser-helper
+```
+
+Use remote fetch when the package lives behind a URL and you want the runtime to
+apply the same domain and approval policy that operators see in config:
+
+```bash
+loong skills fetch https://example.com/browser-helper.zip \
+  --approve-download \
+  --install
+```
+
+Choose deliberately:
+
+- `install` is best for local archives, unpacked directories, or reviewed build
+  artifacts you already trust.
+- `fetch --install` is best when you want one operator command that both
+  downloads and installs under the governed external-skills policy.
+- domain allow/block rules apply to `fetch` and belong in persisted policy
+  rather than being hidden in ad-hoc shell aliases.
+
+## Browser Preview Shortcut
+
+`loong skills enable-browser-preview` is the shortest public route when the real
+goal is "make the browser preview path usable" rather than "manually compose all
+the config toggles myself."
+
+What it does:
+
+- enables the managed external-skills runtime
+- turns on `auto_expose_installed`
+- ensures `agent-browser` is allowed through shell policy unless you explicitly
+  hard-deny it
+- fills `tools.file_root` if it was still empty
+- installs the bundled browser preview helper skill
+
+Typical operator loop:
+
+```bash
+loong skills enable-browser-preview
+npm install -g agent-browser && agent-browser install
+agent-browser open example.com
+loong doctor
+```
+
+Two boundaries still matter:
+
+- if `[tools].shell_deny` contains `agent-browser`, the enable command will
+  fail until you remove that hard deny.
+- if the runtime binary is still missing on `PATH`, the helper skill may be
+  installed but preview will not be ready yet.
+
+## Persisted Policy Shape
+
+When you want the config to be explicit instead of relying only on CLI
+mutations, this is the public shape to keep in mind:
+
+```toml
+[external_skills]
+enabled = true
+require_download_approval = true
+allowed_domains = ["skills.sh"]
+blocked_domains = ["internal.example"]
+install_root = "~/managed-skills"
+auto_expose_installed = true
+```
+
+Use this when:
+
+- one team wants a reviewed install root instead of a runtime-owned default
+  location
+- download sources should be pinned to an explicit domain set
+- installed skills should become runtime-visible automatically across operator
+  restarts
+
+## Common Failure Cases
+
+| What happened | What it usually means | What to do next |
+| --- | --- | --- |
+| `skills fetch` is rejected before download starts | download approval or domain policy is blocking it | run `loong skills policy get`, then retry with `--approve-download` or update policy deliberately |
+| a skill installed but does not show up as usable | install succeeded, but the runtime exposure gate is still closed | set `auto_expose_installed = true` through `skills policy set` or use `enable-browser-preview` for the preview path |
+| you do not know where managed skills should live | the runtime default is acceptable until you need a reviewed location | set `external_skills.install_root` in config when you need a stable explicit path |
+| `skills enable-browser-preview` fails immediately | `[tools].shell_deny` hard-denies `agent-browser` | remove `agent-browser` from `shell_deny`, then rerun the enable command |
+| browser preview still is not ready after enable | the helper skill is present, but the runtime binary is missing or not callable | install `agent-browser`, verify it with `agent-browser open example.com`, then rerun `loong doctor` |
+
+## Continue Reading
+
+- Continue to [Browser And Web Boundaries](/use-loongclaw/browser-and-web-boundaries) when the failure is really a private-host, allowed-domain, or browser runtime gate problem.
+- Continue to [Tool Surface](/use-loongclaw/tool-surface) when you want the broader truthful-tool contract around enablement surfaces.
+- Continue to [Doctor And Health](/get-started/doctor-and-health) when you want the health-first repair path after enabling skills or browser preview.
+- Go back to [Configuration Patterns](/use-loongclaw/configuration-patterns) when you want the wider operator config map.

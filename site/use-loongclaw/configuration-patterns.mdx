@@ -21,6 +21,8 @@ recipes, channel rollouts, or the repository-native product specs.
 | one service-channel account that should own a reply loop | [Single-Account Channel Shape](#single-account-channel-shape) |
 | several channel accounts with stable selector ids | [Multi-Account Channel Shape](#multi-account-channel-shape) |
 | `gateway run` or `multi-channel-serve` selectors | [Gateway Selector Rule](#gateway-selector-rule) |
+| managed skill install, exposure, and persisted download policy | [Managed Skills](/use-loongclaw/managed-skills) |
+| built-in web or browser private-host and domain rules | [Browser And Web Boundaries](/use-loongclaw/browser-and-web-boundaries) |
 | outbound sends to a private bridge or self-hosted HTTP endpoint | [Outbound HTTP Trust Toggle](#outbound-http-trust-toggle) |
 | the current public memory shape | [Memory Profile Shape](#memory-profile-shape) |
 
@@ -32,6 +34,10 @@ LoongClaw keeps the top-level operator config explicit:
 - `providers.<id>` stores reviewed provider profiles
 - channel families such as `feishu`, `telegram`, or `wecom` keep their own
   account-aware config blocks
+- `external_skills` keeps managed skill enablement and download policy explicit
+- `tools.browser`, `tools.web`, and `tools.browser_companion` keep browser
+  session limits, trust boundaries, and companion policy explicit instead of
+  hiding them in helper scripts
 - `memory.profile` stays operator-visible instead of hiding behind prompt logic
 - top-level runtime toggles such as `outbound_http` stay explicit
 
@@ -61,6 +67,61 @@ allowed_chat_ids = ["oc_ops_room"]
 This is the public pattern: one provider lane, one explicit memory profile, and
 one channel family that stays visible in config instead of being hidden behind a
 launcher.
+
+Other governed operator-facing config families live alongside that core shape:
+
+- [Managed Skills](/use-loongclaw/managed-skills) covers `[external_skills]`
+  enablement, install policy, and browser preview bootstrap.
+- [Browser And Web Boundaries](/use-loongclaw/browser-and-web-boundaries)
+  covers `[tools.browser]`, `[tools.web]`, `[tools.browser_companion]`, and
+  when `[outbound_http] allow_private_hosts = true` is the right owner.
+
+## Skills And Browser Boundary Shape
+
+When the `config.toml` question is really about managed skills, browser
+enablement, or domain restrictions, the public shape looks like this:
+
+```toml
+[external_skills]
+enabled = false
+require_download_approval = true
+auto_expose_installed = false
+
+[tools.browser]
+enabled = true
+max_sessions = 4
+max_links = 8
+max_text_chars = 2048
+
+[tools.web]
+enabled = true
+allow_private_hosts = false
+allowed_domains = ["docs.example.com"]
+blocked_domains = ["internal.example"]
+
+[tools.browser_companion]
+enabled = false
+
+[outbound_http]
+allow_private_hosts = false
+```
+
+Read that block with these owner rules:
+
+- `[external_skills]` governs managed skill discovery, download approval,
+  install location, and runtime exposure policy
+- `[tools.browser]` governs built-in browser enablement and local session, link,
+  and text limits
+- `[tools.web]` governs built-in web fetch and built-in browser host and domain
+  trust
+- `[tools.browser_companion]` governs the managed companion runtime lane
+- `[outbound_http]` governs HTTP-backed outbound delivery, not the built-in
+  browser
+
+Continue to [Managed Skills](/use-loongclaw/managed-skills) when the blocker is
+install or exposure policy. Continue to
+[Browser And Web Boundaries](/use-loongclaw/browser-and-web-boundaries) when
+the blocker is private hosts, domains, or companion readiness.
 
 ## Single Provider Profile
 
@@ -263,6 +324,8 @@ continuity model and progression rules.
 | choose the provider lane first | [Providers And Models](/use-loongclaw/providers-and-models) |
 | follow provider-specific config walkthroughs | [Provider Recipes](/use-loongclaw/provider-recipes) |
 | understand the delivery-surface model first | [Channels](/use-loongclaw/channels) |
+| manage skill install and exposure policy | [Managed Skills](/use-loongclaw/managed-skills) |
+| debug private-host, domain, or browser runtime gates | [Browser And Web Boundaries](/use-loongclaw/browser-and-web-boundaries) |
 | follow channel setup and smoke-test paths | [Channel Recipes](/use-loongclaw/channel-recipes) and [Channel Setup](/use-loongclaw/channel-setup) |
 | choose between foreground serve loops and gateway ownership | [Gateway And Supervision](/use-loongclaw/gateway-and-supervision) |
 | inspect the source-level public contract | the repository-native [Channel Setup](https://github.com/loongclaw-ai/loongclaw/blob/dev/docs/product-specs/channel-setup.md) spec |
