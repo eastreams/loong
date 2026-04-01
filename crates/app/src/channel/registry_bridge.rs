@@ -10,11 +10,11 @@ use crate::config::{
 use super::{
     CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCatalogImplementationStatus,
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
-    ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelOnboardingDescriptor,
-    ChannelOnboardingStrategy, ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor,
-    ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation,
-    misconfigured_operation, redact_endpoint_status_url, unsupported_operation, validate_http_url,
-    validate_websocket_url,
+    ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelDoctorCheckSpec,
+    ChannelDoctorCheckTrigger, ChannelOnboardingDescriptor, ChannelOnboardingStrategy,
+    ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor, ChannelStatusSnapshot,
+    PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation, misconfigured_operation,
+    redact_endpoint_status_url, unsupported_operation, validate_http_url, validate_websocket_url,
 };
 
 const WEIXIN_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -98,21 +98,31 @@ const WEIXIN_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+const WEIXIN_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "weixin bridge send contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const WEIXIN_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "weixin bridge serve contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
 const WEIXIN_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: WEIXIN_SEND_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: WEIXIN_SEND_DOCTOR_CHECKS,
     },
     ChannelRegistryOperationDescriptor {
         operation: WEIXIN_SERVE_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: WEIXIN_SERVE_DOCTOR_CHECKS,
     },
 ];
 
 const WEIXIN_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge weixin surface; connect a compatible WeChat ClawBot or iLink bridge under weixin or weixin.accounts.<account> and let that bridge own the upstream login flow until a native LoongClaw adapter exists",
-    status_command: "loongclaw channels --json",
+    status_command: "loongclaw doctor",
     repair_command: None,
 };
 
@@ -194,21 +204,31 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+const QQBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot bridge send contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const QQBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "qqbot bridge serve contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
 const QQBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: QQBOT_SEND_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: QQBOT_SEND_DOCTOR_CHECKS,
     },
     ChannelRegistryOperationDescriptor {
         operation: QQBOT_SERVE_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: QQBOT_SERVE_DOCTOR_CHECKS,
     },
 ];
 
 const QQBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge qqbot surface; connect an official QQ Bot gateway or compatible plugin bridge under qqbot or qqbot.accounts.<account> and keep target routing stable across c2c, group, and guild-style conversations",
-    status_command: "loongclaw channels --json",
+    status_command: "loongclaw doctor",
     repair_command: None,
 };
 
@@ -296,21 +316,31 @@ const ONEBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
+const ONEBOT_SEND_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "onebot bridge send contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
+const ONEBOT_SERVE_DOCTOR_CHECKS: &[ChannelDoctorCheckSpec] = &[ChannelDoctorCheckSpec {
+    name: "onebot bridge serve contract",
+    trigger: ChannelDoctorCheckTrigger::PluginBridgeHealth,
+}];
+
 const ONEBOT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: ONEBOT_SEND_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: ONEBOT_SEND_DOCTOR_CHECKS,
     },
     ChannelRegistryOperationDescriptor {
         operation: ONEBOT_SERVE_OPERATION,
-        doctor_checks: &[],
+        doctor_checks: ONEBOT_SERVE_DOCTOR_CHECKS,
     },
 ];
 
 const ONEBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::PluginBridge,
     setup_hint: "plugin-bridge OneBot surface; connect a OneBot-compatible bridge such as NapCat or LLOneBot under onebot or onebot.accounts.<account> and use this surface as the stable protocol contract until a native adapter exists",
-    status_command: "loongclaw channels --json",
+    status_command: "loongclaw doctor",
     repair_command: None,
 };
 

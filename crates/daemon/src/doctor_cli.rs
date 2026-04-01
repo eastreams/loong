@@ -1124,6 +1124,14 @@ fn build_channel_operation_doctor_check(
             let runtime_check = build_channel_runtime_check(check_name.as_str(), operation);
             Some(runtime_check)
         }
+        mvp::channel::ChannelDoctorCheckTrigger::PluginBridgeHealth => {
+            if operation.health == mvp::channel::ChannelOperationHealth::Disabled {
+                return None;
+            }
+            let bridge_check =
+                build_plugin_bridge_health_check(check_name.as_str(), snapshot, operation);
+            Some(bridge_check)
+        }
     }
 }
 
@@ -1134,6 +1142,64 @@ fn doctor_check_level_for_health(health: mvp::channel::ChannelOperationHealth) -
         mvp::channel::ChannelOperationHealth::Unsupported
         | mvp::channel::ChannelOperationHealth::Misconfigured => DoctorCheckLevel::Fail,
     }
+}
+
+fn build_plugin_bridge_health_check(
+    name: &str,
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> DoctorCheck {
+    let level = plugin_bridge_check_level(snapshot, operation);
+    let detail = plugin_bridge_check_detail(snapshot, operation);
+
+    DoctorCheck {
+        name: name.to_owned(),
+        level,
+        detail,
+    }
+}
+
+fn plugin_bridge_check_level(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> DoctorCheckLevel {
+    match operation.health {
+        mvp::channel::ChannelOperationHealth::Ready => DoctorCheckLevel::Pass,
+        mvp::channel::ChannelOperationHealth::Disabled => DoctorCheckLevel::Warn,
+        mvp::channel::ChannelOperationHealth::Misconfigured => DoctorCheckLevel::Fail,
+        mvp::channel::ChannelOperationHealth::Unsupported => {
+            let external_plugin_owner = snapshot_has_external_plugin_bridge_owner(snapshot);
+
+            if snapshot.compiled && external_plugin_owner {
+                return DoctorCheckLevel::Pass;
+            }
+
+            DoctorCheckLevel::Fail
+        }
+    }
+}
+
+fn plugin_bridge_check_detail(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+    operation: &mvp::channel::ChannelOperationStatus,
+) -> String {
+    let external_plugin_owner = snapshot_has_external_plugin_bridge_owner(snapshot);
+    let supported_external_bridge = snapshot.compiled && external_plugin_owner;
+    let is_bridge_contract = operation.health == mvp::channel::ChannelOperationHealth::Unsupported;
+
+    if supported_external_bridge && is_bridge_contract {
+        let detail = operation.detail.as_str();
+        return format!("configured for external bridge runtime ownership; {detail}");
+    }
+
+    operation.detail.clone()
+}
+
+fn snapshot_has_external_plugin_bridge_owner(
+    snapshot: &mvp::channel::ChannelStatusSnapshot,
+) -> bool {
+    let bridge_runtime_owner = snapshot_note_value(snapshot, "bridge_runtime_owner");
+    bridge_runtime_owner == Some("external_plugin")
 }
 
 fn build_channel_runtime_check(
@@ -2113,6 +2179,112 @@ mod tests {
             checks.is_empty(),
             "disabled registry-backed operations should not emit live doctor checks: {checks:#?}"
         );
+    }
+
+    #[test]
+    fn build_channel_surface_checks_reports_plugin_bridge_contract_status_for_configured_surface() {
+        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "weixin": {
+                "enabled": true,
+                "bridge_url": "https://bridge.example.test/weixin",
+                "bridge_access_token": "weixin-token",
+                "allowed_contact_ids": ["wxid_alice"]
+            },
+            "qqbot": {
+                "enabled": true,
+                "app_id": "10001",
+                "client_secret": "qqbot-secret",
+                "allowed_peer_ids": ["openid-alice"]
+            },
+            "onebot": {
+                "enabled": true,
+                "websocket_url": "ws://127.0.0.1:5700",
+                "access_token": "onebot-token",
+                "allowed_group_ids": ["123456"]
+            }
+        }))
+        .expect("deserialize bridge-backed config");
+
+        let checks = check_channel_surfaces(&config);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "weixin bridge send contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "weixin bridge serve contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "qqbot bridge serve contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "onebot bridge send contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "onebot bridge serve contract" && check.level == DoctorCheckLevel::Pass
+        }));
+    }
+
+    #[test]
+    fn build_channel_surface_checks_fails_plugin_bridge_contract_when_serve_requirements_are_missing()
+     {
+        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "qqbot": {
+                "enabled": true,
+                "app_id": "10001",
+                "client_secret": "qqbot-secret"
+            }
+        }))
+        .expect("deserialize qqbot config");
+
+        let checks = check_channel_surfaces(&config);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "qqbot bridge send contract" && check.level == DoctorCheckLevel::Pass
+        }));
+        assert!(checks.iter().any(|check| {
+            check.name == "qqbot bridge serve contract"
+                && check.level == DoctorCheckLevel::Fail
+                && check.detail.contains("allowed_peer_ids is empty")
+        }));
+    }
+
+    #[test]
+    fn build_channel_surface_checks_fails_plugin_bridge_contract_when_surface_is_uncompiled() {
+        let snapshots = vec![ChannelStatusSnapshot {
+            id: "weixin",
+            configured_account_id: "default".to_owned(),
+            configured_account_label: "default".to_owned(),
+            is_default_account: true,
+            default_account_source:
+                mvp::config::ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            label: "Weixin",
+            aliases: vec!["wechat", "wx"],
+            transport: "wechat_clawbot_ilink_bridge",
+            compiled: false,
+            enabled: true,
+            api_base_url: None,
+            notes: vec!["bridge_runtime_owner=external_plugin".to_owned()],
+            operations: vec![ChannelOperationStatus {
+                id: "send",
+                label: "bridge send",
+                command: "weixin-send",
+                health: ChannelOperationHealth::Unsupported,
+                detail: "weixin bridge surface is unavailable in this build".to_owned(),
+                issues: vec!["weixin bridge surface is unavailable in this build".to_owned()],
+                runtime: None,
+            }],
+        }];
+
+        let checks = build_channel_surface_checks(&snapshots);
+
+        assert!(checks.iter().any(|check| {
+            check.name == "weixin bridge send contract"
+                && check.level == DoctorCheckLevel::Fail
+                && check.detail.contains("unavailable in this build")
+        }));
     }
 
     #[test]
