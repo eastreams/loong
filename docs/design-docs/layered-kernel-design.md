@@ -164,6 +164,9 @@ Rules:
   request/response method+id consistency, and bounded timeout controls.
 - Runtime http_json execution should enforce protocol-route authorization and
   support optional strict method/id response contract validation.
+- Runtime wasm execution should enforce bounded timeout controls via Wasmtime
+  epoch interruption and bypass shared engine/module caches when timeout
+  enforcement is enabled so per-invocation deadlines stay isolated.
 - Shared protocol-context construction should be reused across bridge executors
   to avoid policy drift between transport implementations.
 - Shared protocol runtime-evidence field appending should be reused across
@@ -229,7 +232,8 @@ Rules:
   as ACPX do not collapse into the same abstraction bucket as bridge/gateway entrypoints.
 - WASM runtime execution is policy-driven through `security_scan.runtime` with fail-closed
   guards (`execute_wasm_component`, `allowed_path_prefixes`, `max_component_bytes`,
-  `fuel_limit`) so enabling execution never requires hardcoded kernel branches.
+  `max_output_bytes`, `fuel_limit`) so enabling execution never requires hardcoded kernel
+  branches.
 
 ### L8. Self-Awareness and Architecture Guard Plane
 

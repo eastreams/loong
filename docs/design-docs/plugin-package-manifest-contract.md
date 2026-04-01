@@ -205,6 +205,20 @@ contract:
   operators can see whether their plugin surface is drifting toward foreign
   dialect, shim-heavy, or bridge-constrained mixes before those mixes become
   delivery or marketplace problems
+- the daemon now also exposes `loongclaw plugins init <package_root>` as a
+  bounded authoring bootstrap that writes a canonical
+  `loongclaw.plugin.json` plus a README for external authors instead of asking
+  them to reverse-engineer package shape from kernel internals or tests
+- the daemon now also exposes `loongclaw plugins doctor --root <package_root>`
+  as the author-facing diagnosis surface, reusing shared preflight truth to
+  surface setup contracts, remediation classes, and operator follow-up actions
+- scaffolded manifests pin `api_version` and `compatibility.host_api` to the
+  current host contract and reuse kernel-owned bridge defaults for
+  `bridge_kind`, `adapter_family`, and `entrypoint`
+- package-manifest runtime projection now also honors explicit
+  `metadata.source_language`, so language-specific scaffolds do not collapse
+  into a fake `manifest` language during preflight, bridge-profile fit
+  analysis, or activation planning
 
 This is intentionally not the full Stage 4 ecosystem model yet. It closes the
 most important ownership ambiguity first: plugin packages can now express and
@@ -232,6 +246,27 @@ Every distributable plugin package should have one package-level manifest file.
 Recommended filename:
 
 - `loongclaw.plugin.json`
+
+The repo now also ships a bounded first-mile authoring command for that file
+contract:
+
+```bash
+loongclaw plugins init ./plugins/tavily-search \
+  --plugin-id tavily-search \
+  --provider-id tavily \
+  --connector-name tavily-http \
+  --bridge-kind http_json \
+  --summary "Tavily-backed search package"
+```
+
+The scaffold is intentionally narrow:
+
+- it creates an empty package root only
+- it writes a canonical `loongclaw.plugin.json`
+- it writes a README that points authors to `plugins doctor` and
+  `plugins actions`
+- it does not generate runtime code, widen trust policy, or guess setup/slot
+  ownership
 
 The manifest is the source of truth for:
 
@@ -460,6 +495,11 @@ Example:
   "tags": ["search", "provider", "web"]
 }
 ```
+
+For language-specific bridges such as `process_stdio` or `native_ffi`, the
+manifest should also carry `metadata.source_language`. The scaffold command adds
+that field when `--source-language` is provided so bridge policy, preflight
+summary, and activation planning all stay aligned on one runtime projection.
 
 Important design constraints:
 

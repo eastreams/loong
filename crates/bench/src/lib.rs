@@ -3224,7 +3224,9 @@ fn run_wasm_bridge_sample(wasm_artifact: &Path) -> CliResult<WasmBridgeSample> {
         bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
         wasm_allowed_path_prefixes: vec![artifact_parent.to_path_buf()],
         wasm_max_component_bytes: Some(8 * 1024 * 1024),
+        wasm_max_output_bytes: None,
         wasm_fuel_limit: Some(2_000_000),
+        wasm_timeout_ms: None,
         wasm_require_hash_pin: false,
         wasm_required_sha256_by_plugin: BTreeMap::new(),
         enforce_execution_success: true,
@@ -4661,7 +4663,7 @@ fn schema_descriptor(value: &Value) -> Value {
 fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 fn normalize_ratio_tolerance(value: f64) -> f64 {

@@ -22,7 +22,7 @@ channel-signal = []
 channel-twitch = []
 channel-teams = []
 channel-tlon = []
-channel-whatsapp = []
+channel-whatsapp = ["dep:axum"]
 channel-email = []
 channel-mattermost = []
 channel-nextcloud-talk = []
@@ -60,13 +60,13 @@ toml = { workspace = true, optional = true }
 reqwest.workspace = true
 scraper = { version = "0.26", optional = true }
 sha2.workspace = true
-hmac = "0.12"
+hmac = "0.13"
 hex = "0.4"
 subtle = "2.6"
 flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
-lettre = { version = "0.11.19", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.20", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 futures-util.workspace = true
 base64.workspace = true
 bech32.workspace = true
@@ -84,7 +84,7 @@ wait-timeout = "0.2"
 tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
-unicode-segmentation = "1.12"
+unicode-segmentation = "1.13"
 # Kept unconditional because conversation/turn_shared.rs uses Regex to strip
 # leaked <think> tags even when tool-websearch is compiled out.
 regex.workspace = true
@@ -95,6 +95,7 @@ secp256k1.workspace = true
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-native-roots"], optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 libc = "0.2"
+tracing.workspace = true
 
 [dev-dependencies]
 axum.workspace = true

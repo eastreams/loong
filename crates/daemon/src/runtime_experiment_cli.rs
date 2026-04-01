@@ -1193,7 +1193,7 @@ fn compute_run_id(
         "tags": tags,
     }))
     .map_err(|error| format!("serialize runtime experiment run_id input failed: {error}"))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
 fn persist_runtime_experiment_artifact(

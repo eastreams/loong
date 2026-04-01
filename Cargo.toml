@@ -31,7 +31,8 @@ time = { version = "0.3.47", features = ["formatting", "local-offset", "macros",
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util", "io-std", "process", "signal"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "multipart", "rustls-tls", "gzip", "deflate", "stream"] }
 futures-util = "0.3"
-sha2 = "0.10"
+hex = "0.4"
+sha2 = "0.11"
 flate2 = "1"
 tar = "0.4.45"
 rand = "0.10"
@@ -45,6 +46,8 @@ wasmtime = { version = "43.0.0", default-features = false, features = ["std", "r
 rusqlite = { version = "0.39", features = ["bundled"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 which = "8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 
 [profile.release]
 lto = "thin"

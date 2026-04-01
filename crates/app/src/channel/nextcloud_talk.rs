@@ -1,4 +1,4 @@
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 use serde::Serialize;
 
 use crate::{CliResult, config::ResolvedNextcloudTalkChannelConfig};

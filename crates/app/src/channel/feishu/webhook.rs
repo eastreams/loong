@@ -22,13 +22,13 @@ use tokio::sync::Mutex;
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::{
     ChannelAdapter, ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
     process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
 use crate::crypto::timing_safe_eq;
-use crate::feishu::{FeishuClient, resources::cards};
 
 use super::adapter::{FeishuAdapter, outbound_reply_message_from_text};
 use super::payload::{FeishuCardCallbackEvent, FeishuWebhookAction};
@@ -839,7 +839,7 @@ fn verify_feishu_signature(
     hasher.update(nonce.as_bytes());
     hasher.update(encrypt_key.as_bytes());
     hasher.update(raw_body.as_bytes());
-    let expected = format!("{:x}", hasher.finalize());
+    let expected = hex::encode(hasher.finalize());
 
     if !timing_safe_eq(expected.as_bytes(), signature.as_bytes()) {
         return Err((
@@ -1466,7 +1466,7 @@ mod tests {
         hasher.update(nonce.as_bytes());
         hasher.update(encrypt_key.as_bytes());
         hasher.update(body.as_bytes());
-        let signature = format!("{:x}", hasher.finalize());
+        let signature = hex::encode(hasher.finalize());
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -1542,7 +1542,7 @@ mod tests {
         hasher.update(nonce.as_bytes());
         hasher.update(encrypt_key.as_bytes());
         hasher.update(body.as_bytes());
-        let signature = format!("{:x}", hasher.finalize());
+        let signature = hex::encode(hasher.finalize());
 
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -2186,15 +2186,18 @@ mod tests {
             response.body(),
             &json!({
                 "card": {
+                    "schema": "2.0",
                     "config": {
                         "wide_screen_mode": true
                     },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": "Approved inline"
-                        }
-                    ]
+                    "body": {
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": "Approved inline"
+                            }
+                        ]
+                    }
                 }
             })
         );
@@ -2386,15 +2389,18 @@ mod tests {
                     "content": "Approved"
                 },
                 "card": {
+                    "schema": "2.0",
                     "config": {
                         "wide_screen_mode": true
                     },
-                    "elements": [
-                        {
-                            "tag": "markdown",
-                            "content": "Approved inline"
-                        }
-                    ]
+                    "body": {
+                        "elements": [
+                            {
+                                "tag": "markdown",
+                                "content": "Approved inline"
+                            }
+                        ]
+                    }
                 }
             })
         );

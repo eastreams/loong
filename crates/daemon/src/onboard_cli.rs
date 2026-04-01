@@ -2018,8 +2018,20 @@ fn resolve_model_selection(
         ),
     )?;
     if !available_models.is_empty() {
+        // When we render the model catalog choices from a static provider list,
+        // we still compute `prompt_default` (often `auto`) for the prompt UI.
+        // Hide `auto` from the selectable catalog to match operator expectations.
+        let hide_prompt_default_from_catalog = prompt_default.trim().eq_ignore_ascii_case("auto")
+            && is_volcengine_coding_plan_domestic_static_catalog(&config.provider);
+
+        let effective_prompt_default = if hide_prompt_default_from_catalog {
+            ""
+        } else {
+            prompt_default.as_str()
+        };
+
         let catalog_choices = onboarding_model_policy::onboarding_model_catalog_choices(
-            prompt_default.as_str(),
+            effective_prompt_default,
             available_models,
         );
         let (select_options, default_idx) = build_model_selection_options(&catalog_choices);
@@ -2035,7 +2047,7 @@ fn resolve_model_selection(
         if selected.slug != ONBOARD_CUSTOM_MODEL_OPTION_SLUG {
             return Ok(selected.slug.clone());
         }
-        let custom_model = ui.prompt_with_default("Custom model id", prompt_default.as_str())?;
+        let custom_model = ui.prompt_with_default("Custom model id", effective_prompt_default)?;
         let trimmed = custom_model.trim();
         if trimmed.is_empty() {
             return Err("model cannot be empty".to_owned());
@@ -2054,15 +2066,100 @@ async fn load_onboarding_model_catalog(
     options: &OnboardCommandOptions,
     config: &mvp::config::LoongClawConfig,
 ) -> Vec<String> {
+    // Volcano Engine "Coding Plan" domestic endpoint has a stable, operator-provided model list.
+    // Using it avoids an interactive onboarding dependency on `GET /models`.
+    if is_volcengine_coding_plan_domestic_static_catalog(&config.provider) {
+        return vec![
+            // Keep the historical default model id as an explicit choice.
+            "ark-code-latest".to_owned(),
+            "doubao-seed-2.0-code".to_owned(),
+            "doubao-seed-2.0-pro".to_owned(),
+            "doubao-seed-2.0-lite".to_owned(),
+            "doubao-seed-code".to_owned(),
+            "minimax-m2.5".to_owned(),
+            "glm-4.7".to_owned(),
+            "deepseek-v3.2".to_owned(),
+            "kimi-k2.5".to_owned(),
+        ];
+    }
+
     if options.non_interactive || options.skip_model_probe {
         return Vec::new();
     }
-    if !mvp::provider::provider_auth_ready(config).await {
+    let has_provider_credentials = mvp::provider::provider_auth_ready(config).await;
+    let provider_requires_explicit_auth = config.provider.requires_explicit_auth_configuration();
+    if !has_provider_credentials && provider_requires_explicit_auth {
         return Vec::new();
     }
     mvp::provider::fetch_available_models(config)
         .await
         .unwrap_or_default()
+}
+
+fn is_volcengine_coding_plan_domestic_static_catalog(
+    provider: &mvp::config::ProviderConfig,
+) -> bool {
+    if provider.kind != mvp::config::ProviderKind::VolcengineCoding {
+        return false;
+    }
+
+    let Ok(actual_url) = reqwest::Url::parse(provider.resolved_base_url().trim()) else {
+        return false;
+    };
+    let Ok(canonical_url) = reqwest::Url::parse(
+        mvp::config::ProviderKind::VolcengineCoding
+            .profile()
+            .base_url,
+    ) else {
+        return false;
+    };
+
+    actual_url.scheme() == canonical_url.scheme()
+        && actual_url.host_str() == canonical_url.host_str()
+        && actual_url.port_or_known_default() == canonical_url.port_or_known_default()
+        && actual_url.path().trim_end_matches('/') == canonical_url.path().trim_end_matches('/')
+}
+
+#[cfg(test)]
+mod volcengine_coding_plan_catalog_tests {
+    use super::*;
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_detects_cn_beijing_coding_v3() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            base_url: "https://ark.cn-beijing.volces.com/api/coding/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(is_volcengine_coding_plan_domestic_static_catalog(&provider));
+    }
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_rejects_non_coding_plan_endpoints() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            base_url: "https://ark.cn-beijing.volces.com/api/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(!is_volcengine_coding_plan_domestic_static_catalog(
+            &provider
+        ));
+    }
+
+    #[test]
+    fn volcengine_coding_plan_domestic_static_catalog_rejects_proxy_path() {
+        let provider = mvp::config::ProviderConfig {
+            kind: mvp::config::ProviderKind::VolcengineCoding,
+            base_url: "https://proxy.example.com/api/coding/v3".to_owned(),
+            ..mvp::config::ProviderConfig::default()
+        };
+
+        assert!(!is_volcengine_coding_plan_domestic_static_catalog(
+            &provider
+        ));
+    }
 }
 
 fn build_model_selection_options(
@@ -6924,6 +7021,40 @@ mod tests {
     }
 
     #[test]
+    fn provider_credential_check_accepts_x_api_key_provider_env_credentials() {
+        let mut env = ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Anthropic;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credential_check(&config);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, OnboardCheckLevel::Pass);
+        assert!(check.detail.contains("ANTHROPIC_API_KEY is available"));
+    }
+
+    #[test]
+    fn provider_credential_check_passes_for_auth_optional_provider() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Ollama;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credential_check(&config);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, OnboardCheckLevel::Pass);
+        assert!(check.detail.contains("optional for this provider"));
+    }
+
+    #[test]
     fn preferred_api_key_env_default_ignores_invalid_configured_secret_literal() {
         let secret = "sk-live-direct-secret-value";
         let mut config = mvp::config::LoongClawConfig::default();
@@ -8015,6 +8146,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_provider_selection_allows_switching_step_plan_region_endpoint() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        let options = interactive_onboard_options();
+        let provider_selection = crate::migration::ProviderSelectionPlan::default();
+        let context = onboard_test_context();
+        let mut ui = TestOnboardUi::with_inputs(["", "", "2"]);
+
+        config.provider =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::StepPlan);
+
+        let selected = resolve_provider_selection(
+            &options,
+            &config,
+            &provider_selection,
+            GuidedPromptPath::NativePromptPack,
+            &mut ui,
+            &context,
+        )
+        .expect("step plan region selection should accept the global endpoint");
+
+        assert_eq!(selected.kind, mvp::config::ProviderKind::StepPlan);
+        assert_eq!(selected.base_url, "https://api.stepfun.ai");
+    }
+
+    #[test]
     fn resolve_model_selection_prefills_minimax_recommended_model_interactively() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
@@ -8277,6 +8433,113 @@ mod tests {
         assert_eq!(
             selected, "deepseek-reasoner",
             "interactive onboarding should use the probed model catalog instead of treating numeric selection input as a literal model id"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_keeps_auto_visible_for_noncanonical_volcengine_catalog() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+        config.provider.base_url =
+            "https://proxy.example.com/forward/ark.cn-beijing.volces.com/api/coding/v3".to_owned();
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(["1"]);
+        let context = onboard_test_context();
+        let available_models = vec![
+            "doubao-seed-2.0-code".to_owned(),
+            "doubao-seed-2.0-pro".to_owned(),
+        ];
+
+        let selected = resolve_model_selection(
+            &interactive_onboard_options(),
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &available_models,
+            &mut ui,
+            &context,
+        )
+        .expect("resolve model selection");
+
+        assert_eq!(
+            selected, "auto",
+            "noncanonical Volcengine endpoints should not hide the `auto` choice just because the returned models contain a static-catalog model id"
+        );
+    }
+
+    #[test]
+    fn resolve_model_selection_rejects_blank_custom_override_when_auto_is_hidden() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+        config.provider.model = "auto".to_owned();
+        let mut ui = TestOnboardUi::with_inputs(["3", ""]);
+        let context = onboard_test_context();
+        let available_models = vec![
+            "ark-code-latest".to_owned(),
+            "doubao-seed-2.0-code".to_owned(),
+        ];
+
+        let error = resolve_model_selection(
+            &interactive_onboard_options(),
+            &config,
+            GuidedPromptPath::NativePromptPack,
+            &available_models,
+            &mut ui,
+            &context,
+        )
+        .expect_err("blank custom entry should not round-trip hidden auto");
+
+        assert_eq!(error, "model cannot be empty");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_onboarding_model_catalog_returns_static_list_for_canonical_volcengine_endpoint() {
+        let mut options = interactive_onboard_options();
+        options.skip_model_probe = true;
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+
+        let models = load_onboarding_model_catalog(&options, &config).await;
+
+        assert_eq!(
+            models,
+            vec![
+                "ark-code-latest".to_owned(),
+                "doubao-seed-2.0-code".to_owned(),
+                "doubao-seed-2.0-pro".to_owned(),
+                "doubao-seed-2.0-lite".to_owned(),
+                "doubao-seed-code".to_owned(),
+                "minimax-m2.5".to_owned(),
+                "glm-4.7".to_owned(),
+                "deepseek-v3.2".to_owned(),
+                "kimi-k2.5".to_owned(),
+            ],
+            "the canonical Volcengine Coding endpoint should still use the static onboarding catalog"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn load_onboarding_model_catalog_skips_static_list_for_noncanonical_volcengine_endpoint()
+    {
+        let mut options = interactive_onboard_options();
+        options.skip_model_probe = true;
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider = mvp::config::ProviderConfig::fresh_for_kind(
+            mvp::config::ProviderKind::VolcengineCoding,
+        );
+        config.provider.base_url =
+            "https://proxy.example.com/forward/ark.cn-beijing.volces.com/api/coding/v3".to_owned();
+
+        let models = load_onboarding_model_catalog(&options, &config).await;
+
+        assert!(
+            models.is_empty(),
+            "noncanonical Volcengine endpoints should follow normal probe-skip behavior instead of forcing the hardcoded static catalog: {models:?}"
         );
     }
 

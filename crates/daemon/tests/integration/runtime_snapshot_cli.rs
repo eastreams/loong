@@ -299,6 +299,78 @@ fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved
     )
     .expect("anthropic provider profile should be present");
     assert_eq!(anthropic_profile["credential_resolved"], true);
+    assert_eq!(
+        anthropic_profile["descriptor"]["schema"]["version"],
+        serde_json::json!(mvp::config::PROVIDER_DESCRIPTOR_SCHEMA_VERSION)
+    );
+    assert_eq!(
+        anthropic_profile["descriptor"]["auth"]["scheme"],
+        serde_json::json!("x_api_key")
+    );
+    assert_eq!(
+        anthropic_profile["descriptor"]["auth"]["requires_explicit_configuration"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        anthropic_profile["descriptor"]["feature"]["family"],
+        serde_json::json!("anthropic")
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_json_payload_preserves_auth_optional_provider_descriptor_contract() {
+    let root = unique_temp_dir("loongclaw-runtime-snapshot-auth-optional");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+    ]);
+    let (config_path, mut config) = write_runtime_snapshot_config(&root);
+    config.providers.insert(
+        "ollama-local".to_owned(),
+        mvp::config::ProviderProfileConfig {
+            default_for_kind: false,
+            provider: mvp::config::ProviderConfig {
+                kind: mvp::config::ProviderKind::Ollama,
+                model: "qwen2.5-coder".to_owned(),
+                ..Default::default()
+            },
+        },
+    );
+    mvp::config::write(Some(config_path.to_string_lossy().as_ref()), &config, true)
+        .expect("rewrite config fixture");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+
+    let ollama_profile = array_object_with_string_field(
+        &payload["provider"]["profiles"],
+        "profile_id",
+        "ollama-local",
+    )
+    .expect("ollama provider profile should be present");
+    assert_eq!(ollama_profile["credential_resolved"], false);
+    assert_eq!(
+        ollama_profile["descriptor"]["auth"]["scheme"],
+        serde_json::json!("bearer")
+    );
+    assert_eq!(
+        ollama_profile["descriptor"]["auth"]["auth_optional"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        ollama_profile["descriptor"]["auth"]["requires_explicit_configuration"],
+        serde_json::json!(false)
+    );
+    assert_eq!(
+        ollama_profile["descriptor"]["auth"]["hint_env_names"],
+        serde_json::json!([])
+    );
 
     fs::remove_dir_all(&root).ok();
 }

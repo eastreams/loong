@@ -110,7 +110,7 @@ pub struct FeishuDownloadedMessageResource {
 pub struct FeishuMessageHistoryPage {
     pub has_more: bool,
     pub page_token: Option<String>,
-    pub items: Vec<FeishuMessageSummary>,
+    pub items: Vec<FeishuMessageDetail>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +163,35 @@ pub struct FeishuCalendarFreebusySlot {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeishuCalendarFreebusyResult {
     pub freebusy_list: Vec<FeishuCalendarFreebusySlot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuBitableTable {
+    pub table_id: Option<String>,
+    pub name: Option<String>,
+    pub revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableTableListPage {
+    pub items: Vec<FeishuBitableTable>,
+    pub page_token: Option<String>,
+    pub has_more: Option<bool>,
+    pub total: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableRecord {
+    pub record_id: Option<String>,
+    pub fields: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableRecordPage {
+    pub items: Vec<FeishuBitableRecord>,
+    pub page_token: Option<String>,
+    pub has_more: Option<bool>,
+    pub total: Option<i64>,
 }
 
 #[cfg(test)]

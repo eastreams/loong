@@ -4,6 +4,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use clap::Subcommand;
 use kernel::probe_jsonl_audit_journal_runtime_ready;
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
@@ -13,12 +14,19 @@ use serde_json::json;
 use crate::provider_credential_policy;
 use crate::provider_model_probe_policy;
 
+#[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
+pub enum DoctorCommands {
+    /// Report effective security exposure and config hygiene posture
+    Security,
+}
+
 #[derive(Debug, Clone)]
 pub struct DoctorCommandOptions {
     pub config: Option<String>,
     pub fix: bool,
     pub json: bool,
     pub skip_model_probe: bool,
+    pub command: Option<DoctorCommands>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +51,22 @@ struct DoctorSummary {
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
+    if let Some(command) = options.command.clone() {
+        return match command {
+            DoctorCommands::Security => {
+                crate::doctor_security_cli::run_doctor_security_cli(
+                    crate::doctor_security_cli::DoctorSecurityCommandOptions {
+                        config: options.config,
+                        json: options.json,
+                        fix: options.fix,
+                        skip_model_probe: options.skip_model_probe,
+                    },
+                )
+                .await
+            }
+        };
+    }
+
     let (config_path, mut config) = mvp::config::load(options.config.as_deref())?;
     let mut checks = Vec::new();
     let mut fixes = Vec::new();
@@ -52,6 +76,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
     config_mutated |= maybe_apply_channel_env_fix(&mut config, options.fix, &mut fixes);
 
     let has_provider_credentials = mvp::provider::provider_auth_ready(&config).await;
+    let provider_requires_explicit_auth = config.provider.requires_explicit_auth_configuration();
     checks.push(provider_credentials_doctor_check(
         &config,
         has_provider_credentials,
@@ -65,7 +90,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
             level: DoctorCheckLevel::Warn,
             detail: "skipped by --skip-model-probe".to_owned(),
         });
-    } else if !has_provider_credentials {
+    } else if !has_provider_credentials && provider_requires_explicit_auth {
         checks.push(DoctorCheck {
             name: "provider model probe".to_owned(),
             level: DoctorCheckLevel::Warn,
@@ -339,7 +364,7 @@ fn durable_audit_retention_doctor_check(
     }
 }
 
-fn durable_audit_target_issue(path: &Path) -> Option<String> {
+pub(crate) fn durable_audit_target_issue(path: &Path) -> Option<String> {
     durable_audit_target_issue_with_probe(path, durable_audit_runtime_probe)
 }
 
@@ -541,7 +566,7 @@ pub fn check_feishu_integration(
         "create feishu integration store directory",
     ));
 
-    let store = mvp::feishu::FeishuTokenStore::new(sqlite_path);
+    let store = mvp::channel::feishu::api::FeishuTokenStore::new(sqlite_path);
     let configured_ids = config.feishu.configured_account_ids();
     let scoped = configured_ids.len() > 1;
 
@@ -601,18 +626,20 @@ pub fn check_feishu_integration(
 
         let grant_name =
             scoped_feishu_check_name("feishu user grant", &resolved.configured_account_id, scoped);
-        let inventory =
-            match mvp::feishu::inspect_grants_for_account(&store, resolved.account.id.as_str()) {
-                Ok(inventory) => inventory,
-                Err(error) => {
-                    checks.push(DoctorCheck {
-                        name: grant_name,
-                        level: DoctorCheckLevel::Fail,
-                        detail: error,
-                    });
-                    continue;
-                }
-            };
+        let inventory = match mvp::channel::feishu::api::inspect_grants_for_account(
+            &store,
+            resolved.account.id.as_str(),
+        ) {
+            Ok(inventory) => inventory,
+            Err(error) => {
+                checks.push(DoctorCheck {
+                    name: grant_name,
+                    level: DoctorCheckLevel::Fail,
+                    detail: error,
+                });
+                continue;
+            }
+        };
 
         if inventory.grants.is_empty() {
             checks.push(DoctorCheck {
@@ -638,8 +665,11 @@ pub fn check_feishu_integration(
             continue;
         };
         let effective_grant = inventory.effective_grant();
-        let effective_status =
-            mvp::feishu::auth::summarize_grant_status(effective_grant, now_s, &required_scopes);
+        let effective_status = mvp::channel::feishu::api::auth::summarize_grant_status(
+            effective_grant,
+            now_s,
+            &required_scopes,
+        );
 
         checks.push(DoctorCheck {
             name: grant_name,
@@ -800,7 +830,8 @@ pub fn check_feishu_integration(
                 )
             },
         });
-        let doc_write_status = mvp::feishu::summarize_doc_write_scope_status(effective_grant);
+        let doc_write_status =
+            mvp::channel::feishu::api::summarize_doc_write_scope_status(effective_grant);
         checks.push(DoctorCheck {
             name: scoped_feishu_check_name(
                 "feishu doc write readiness",
@@ -852,7 +883,8 @@ pub fn check_feishu_integration(
                 )
             },
         });
-        let write_status = mvp::feishu::summarize_message_write_scope_status(effective_grant);
+        let write_status =
+            mvp::channel::feishu::api::summarize_message_write_scope_status(effective_grant);
         checks.push(DoctorCheck {
             name: scoped_feishu_check_name(
                 "feishu message write readiness",
@@ -1325,6 +1357,8 @@ fn provider_credentials_doctor_check(
     has_provider_credentials: bool,
 ) -> DoctorCheck {
     let provider_label = crate::provider_presentation::active_provider_detail_label(config);
+    let support_facts = config.provider.support_facts();
+    let auth_support = support_facts.auth;
     if has_provider_credentials {
         return DoctorCheck {
             name: "provider credentials".to_owned(),
@@ -1333,19 +1367,17 @@ fn provider_credentials_doctor_check(
         };
     }
 
-    let hints = provider_credential_policy::provider_credential_env_hints(&config.provider);
-    let mut detail = if hints.is_empty() {
-        "provider credentials are missing".to_owned()
-    } else {
-        format!(
-            "provider credentials are missing (try env: {})",
-            hints.join(", ")
-        )
-    };
-    if let Some(hint) = config.provider.auth_guidance_hint() {
-        detail.push(' ');
-        detail.push_str(hint.as_str());
+    if !auth_support.requires_explicit_configuration {
+        return DoctorCheck {
+            name: "provider credentials".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: format!(
+                "{provider_label}: provider credentials are optional for this provider"
+            ),
+        };
     }
+
+    let detail = auth_support.missing_configuration_message;
     DoctorCheck {
         name: "provider credentials".to_owned(),
         level: DoctorCheckLevel::Warn,
@@ -1925,7 +1957,12 @@ mod tests {
         let mut file = std::fs::File::create(script_path).expect("create browser companion script");
         file.write_all(body.as_bytes())
             .expect("write browser companion script");
-        let mut permissions = file.metadata().expect("script metadata").permissions();
+        file.sync_all()
+            .expect("sync browser companion script to disk");
+        drop(file);
+        let mut permissions = std::fs::metadata(script_path)
+            .expect("script metadata")
+            .permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
     }
@@ -2151,19 +2188,19 @@ mod tests {
             config.feishu.app_secret_env.as_deref(),
             Some("FEISHU_APP_SECRET")
         );
-        assert_eq!(
-            config.feishu.verification_token_env.as_deref(),
-            Some("FEISHU_VERIFICATION_TOKEN")
+        assert!(
+            config.feishu.verification_token_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook verification_token_env"
         );
-        assert_eq!(
-            config.feishu.encrypt_key_env.as_deref(),
-            Some("FEISHU_ENCRYPT_KEY")
+        assert!(
+            config.feishu.encrypt_key_env.is_none(),
+            "default feishu mode is websocket; doctor env fix must not set webhook encrypt_key_env"
         );
         assert_eq!(
             config.matrix.access_token_env.as_deref(),
             Some("MATRIX_ACCESS_TOKEN")
         );
-        assert_eq!(fixes.len(), 6);
+        assert_eq!(fixes.len(), 4);
     }
 
     #[test]
@@ -2753,11 +2790,12 @@ mod tests {
             .feishu
             .resolve_account(None)
             .expect("resolve default feishu account");
-        let store =
-            mvp::feishu::FeishuTokenStore::new(config.feishu_integration.resolved_sqlite_path());
+        let store = mvp::channel::feishu::api::FeishuTokenStore::new(
+            config.feishu_integration.resolved_sqlite_path(),
+        );
         store
-            .save_grant(&mvp::feishu::FeishuGrant {
-                principal: mvp::feishu::FeishuUserPrincipal {
+            .save_grant(&mvp::channel::feishu::api::FeishuGrant {
+                principal: mvp::channel::feishu::api::FeishuUserPrincipal {
                     account_id: resolved.account.id,
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -2770,7 +2808,7 @@ mod tests {
                 },
                 access_token: "u-token".to_owned(),
                 refresh_token: "r-token".to_owned(),
-                scopes: mvp::feishu::FeishuGrantScopeSet::from_scopes(
+                scopes: mvp::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
                     config.feishu_integration.trimmed_default_scopes(),
                 ),
                 access_expires_at_s: chrono::Utc::now().timestamp() + 3600,
@@ -3275,17 +3313,20 @@ mod tests {
 
         assert_eq!(
             next_steps[0],
-            "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw.toml' --fix"
+            "Apply safe local repairs: loong doctor --config '/tmp/loongclaw.toml' --fix"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Set provider credentials in env: OPENAI_CODEX_OAUTH_TOKEN or OPENAI_API_KEY"
+                step
+                    == "Set provider credentials in env: OPENAI_CODEX_OAUTH_TOKEN or OPENAI_OAUTH_ACCESS_TOKEN or OPENAI_API_KEY"
             }),
             "doctor should turn missing provider auth into a concrete next step: {next_steps:#?}"
         );
         assert!(
-            next_steps.iter().any(|step| step
-                == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"),
+            next_steps
+                .iter()
+                .any(|step| step
+                    == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"),
             "doctor should tell the operator how to confirm the repair path: {next_steps:#?}"
         );
     }
@@ -3313,6 +3354,22 @@ mod tests {
     }
 
     #[test]
+    fn provider_credentials_doctor_check_passes_for_auth_optional_provider() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Ollama;
+        config.provider.api_key = None;
+        config.provider.api_key_env = None;
+        config.provider.oauth_access_token = None;
+        config.provider.oauth_access_token_env = None;
+
+        let check = provider_credentials_doctor_check(&config, false);
+
+        assert_eq!(check.name, "provider credentials");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(check.detail.contains("optional for this provider"));
+    }
+
+    #[test]
     fn build_doctor_next_steps_shell_quotes_config_paths_with_single_quotes() {
         let checks = vec![DoctorCheck {
             name: "memory path".to_owned(),
@@ -3328,13 +3385,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Apply safe local repairs: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
+                step == "Apply safe local repairs: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml' --fix"
             }),
             "doctor should shell-quote config paths with single quotes in fix commands: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                step == "Re-run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
             }),
             "doctor should shell-quote config paths with single quotes in rerun commands: {next_steps:#?}"
         );
@@ -3357,7 +3414,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Install or expose the browser companion command on PATH, then re-run: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Install or expose the browser companion command on PATH, then re-run: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "doctor should turn browser companion warnings into a concrete repair path: {next_steps:#?}"
         );
@@ -3493,13 +3550,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loongclaw onboard --config '/tmp/loongclaw.toml'"
+                step == "Rerun onboarding and accept reviewed model `deepseek-chat`: loong onboard --config '/tmp/loongclaw.toml'"
             }),
             "doctor should point reviewed providers back to onboarding when auto-model recovery needs an explicit reviewed default: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Or set `provider.model` / `preferred_models` explicitly, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "doctor should also keep the manual remediation path explicit for operators who do not want to rerun onboarding: {next_steps:#?}"
         );
@@ -3527,13 +3584,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "warn-level explicit model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
             }),
             "warn-level explicit model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -3557,13 +3614,13 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Retry provider probe only after credentials are ready: loongclaw doctor --config '/tmp/loongclaw.toml'"
+                step == "Retry provider probe only after credentials are ready: loong doctor --config '/tmp/loongclaw.toml'"
             }),
             "warn-level preferred-model recovery should still tell operators how to retry diagnostics: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "If your provider blocks model listing during setup, retry with: loongclaw doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
+                step == "If your provider blocks model listing during setup, retry with: loong doctor --config '/tmp/loongclaw.toml' --skip-model-probe"
             }),
             "warn-level preferred-model recovery should still keep the skip-model-probe escape hatch visible: {next_steps:#?}"
         );
@@ -3599,7 +3656,7 @@ mod tests {
         assert!(
             next_steps.iter().any(|step| {
                 step.contains("provider route")
-                    && step.contains("loongclaw doctor --config '/tmp/loongclaw.toml'")
+                    && step.contains("loong doctor --config '/tmp/loongclaw.toml'")
             }),
             "route-probe findings should produce a concrete diagnostics rerun step: {next_steps:#?}"
         );
@@ -3663,25 +3720,25 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Get a first answer: loongclaw ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
+                step == "Get a first answer: loong ask --config '/tmp/loongclaw.toml' --message 'Summarize this repository and suggest the best next step.'"
             }),
             "green doctor runs should hand the user into ask immediately: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Continue in chat: loongclaw chat --config '/tmp/loongclaw.toml'"
+                step == "Continue in chat: loong chat --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should still advertise chat as the follow-up path: {next_steps:#?}"
         );
         assert!(
             next_steps.iter().any(|step| {
-                step == "Open a channel: loongclaw channels --config '/tmp/loongclaw.toml'"
+                step == "Open a channel: loong channels --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should surface the channel catalog when no service channel is enabled yet: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "green doctor runs should prioritize the channel catalog ahead of optional browser preview when no service channel is enabled yet: {next_steps:#?}"
         );
@@ -3746,7 +3803,7 @@ mod tests {
         );
         assert!(
             !next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should not fall back to the optional enable step after preview has already been configured: {next_steps:#?}"
         );
@@ -3774,7 +3831,7 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
-                step == "Optional browser preview: loongclaw skills enable-browser-preview --config '/tmp/loongclaw.toml'"
+                step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should keep a browser preview action visible even when channel actions are available: {next_steps:#?}"
         );

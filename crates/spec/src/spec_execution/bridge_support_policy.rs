@@ -928,8 +928,10 @@ fn canonical_security_scan_runtime_value(runtime: &SecurityRuntimeExecutionSpec)
         "execute_wasm_component": runtime.execute_wasm_component,
         "allowed_path_prefixes": allowed_path_prefixes,
         "max_component_bytes": runtime.max_component_bytes,
+        "max_output_bytes": runtime.max_output_bytes,
         "fuel_limit": runtime.fuel_limit,
         "bridge_circuit_breaker": bridge_circuit_breaker,
+        "timeout_ms": runtime.timeout_ms,
     })
 }
 

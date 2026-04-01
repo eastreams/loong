@@ -1061,6 +1061,51 @@ pub(super) fn searchable_entry_from_provider_definition(
     }
 }
 
+pub(super) fn searchable_entry_from_manual_definition(
+    canonical_name: &str,
+    summary: &str,
+    argument_hint: &str,
+    required_fields: Vec<String>,
+    required_field_groups: Vec<Vec<String>>,
+    tags: Vec<String>,
+) -> SearchableToolEntry {
+    let mut name_fragments = vec![canonical_name.to_owned()];
+    let canonical_name_variant = identifier_phrase_variant(canonical_name);
+    let variant_is_distinct = canonical_name_variant != canonical_name;
+    if variant_is_distinct {
+        name_fragments.push(canonical_name_variant);
+    }
+
+    let summary_text = summary.to_owned();
+    let argument_hint_text = argument_hint.to_owned();
+    let argument_fragments =
+        build_argument_fragments(argument_hint, &required_fields, &required_field_groups);
+
+    let mut schema_fragments = required_fields.clone();
+    for required_field_group in &required_field_groups {
+        let group_fragment = required_field_group.join(" ");
+        schema_fragments.push(group_fragment);
+    }
+
+    let search_document = SearchDocument::new(
+        name_fragments,
+        vec![summary_text.clone()],
+        argument_fragments,
+        schema_fragments,
+        tags.clone(),
+    );
+
+    SearchableToolEntry {
+        canonical_name: canonical_name.to_owned(),
+        summary: summary_text,
+        argument_hint: argument_hint_text,
+        required_fields,
+        required_field_groups,
+        tags,
+        search_document,
+    }
+}
+
 pub(super) fn search_argument_hint_from_provider_definition(
     parameters: &Value,
     preferred_parameter_order: &[(&str, &str)],

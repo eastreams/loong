@@ -15,7 +15,9 @@ use rusqlite::Connection;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::super::config::{LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig};
+use super::super::config::{
+    AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
+};
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
 use super::*;
@@ -37,8 +39,8 @@ use crate::memory::{
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    NewSessionEvent, NewSessionRecord, NewSessionToolPolicyRecord, SessionKind, SessionRepository,
-    SessionState,
+    NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord, NewSessionToolPolicyRecord,
+    SessionKind, SessionRepository, SessionState,
 };
 
 #[cfg(feature = "memory-sqlite")]
@@ -992,6 +994,25 @@ fn persisted_conversation_event_payloads_by_name(
         .collect()
 }
 
+fn persisted_internal_records_by_type(
+    persisted: &[(String, String, String)],
+    record_type: &str,
+) -> Vec<Value> {
+    persisted
+        .iter()
+        .filter_map(|(_, role, content)| {
+            if role != "assistant" {
+                return None;
+            }
+            let parsed = serde_json::from_str::<Value>(content).ok()?;
+            if parsed.get("type")?.as_str()? != record_type {
+                return None;
+            }
+            Some(parsed)
+        })
+        .collect()
+}
+
 fn assert_discovery_first_followup_summary(
     persisted: &[(String, String, String)],
     raw_tool_output_requested: bool,
@@ -1093,8 +1114,8 @@ fn persisted_visible_turns(
 
 fn test_turn_checkpoint_identity(user_input: &str, assistant_reply: &str) -> Value {
     json!({
-        "user_input_sha256": format!("{:x}", Sha256::digest(user_input.as_bytes())),
-        "assistant_reply_sha256": format!("{:x}", Sha256::digest(assistant_reply.as_bytes())),
+        "user_input_sha256": hex::encode(Sha256::digest(user_input.as_bytes())),
+        "assistant_reply_sha256": hex::encode(Sha256::digest(assistant_reply.as_bytes())),
         "user_input_chars": user_input.chars().count(),
         "assistant_reply_chars": assistant_reply.chars().count(),
     })
@@ -1103,7 +1124,7 @@ fn test_turn_checkpoint_identity(user_input: &str, assistant_reply: &str) -> Val
 fn test_turn_preparation_context_fingerprint(messages: &[Value]) -> String {
     let serialized =
         serde_json::to_vec(messages).expect("serializing test preparation messages should work");
-    format!("{:x}", Sha256::digest(serialized))
+    hex::encode(Sha256::digest(serialized))
 }
 
 fn unique_memory_sqlite_path(suffix: &str) -> String {
@@ -1480,6 +1501,20 @@ fn test_config() -> LoongClawConfig {
     }
 }
 
+fn enable_guided_autonomy(config: &mut LoongClawConfig) {
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+}
+
+fn preapprove_tool_call(config: &mut LoongClawConfig, tool_name: &str) {
+    let approval_key = format!("tool:{tool_name}");
+    let approved_calls = &mut config.tools.approval.approved_calls;
+    let is_already_approved = approved_calls.iter().any(|entry| entry == &approval_key);
+    if is_already_approved {
+        return;
+    }
+    approved_calls.push(approval_key);
+}
+
 fn test_kernel_context(agent_id: &str) -> KernelContext {
     crate::context::bootstrap_test_kernel_context(agent_id, 60)
         .expect("bootstrap test kernel context")
@@ -1783,6 +1818,28 @@ fn effective_tool_request(request: &ToolCoreRequest) -> (String, &Value) {
     let arguments = request.payload.get("arguments").unwrap_or(&request.payload);
     (invoked_tool, arguments)
 }
+
+fn autonomy_runtime_session_context(
+    session_id: impl Into<String>,
+    config: &LoongClawConfig,
+) -> SessionContext {
+    let tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(config);
+    SessionContext::root_with_tool_view(session_id, tool_view)
+}
+
+fn write_test_external_skill(
+    workspace_root: &std::path::Path,
+    relative_skill_root: &str,
+) -> std::path::PathBuf {
+    let skill_root = workspace_root.join(relative_skill_root);
+    std::fs::create_dir_all(&skill_root).expect("create external skill root");
+    let skill_body =
+        "# Demo Skill\n\nUse this skill when the task needs product-mode runtime discipline.\n";
+    let skill_path = skill_root.join("SKILL.md");
+    std::fs::write(&skill_path, skill_body).expect("write external skill");
+    skill_root
+}
+
 #[tokio::test]
 async fn default_runtime_supports_injected_context_engine() {
     let runtime = DefaultConversationRuntime::with_context_engine(StubContextEngine);
@@ -5286,6 +5343,8 @@ async fn handle_turn_with_runtime_compacts_when_token_threshold_reached() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.lock().await;
     let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-flush");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 
@@ -5369,6 +5428,8 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_does_not_flush_durable_memory_when_compaction_is_skipped() {
+    let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
+    let _durable_flush_guard = durable_flush_lock.lock().await;
     let workspace_root = crate::test_support::unique_temp_dir("pre-compaction-durable-skip");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
 
@@ -6686,6 +6747,7 @@ async fn handle_turn_with_runtime_tool_search_followup_checkpoint_uses_visible_c
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
 async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_followup_round() {
     use crate::test_support::TurnTestHarness;
 
@@ -6713,6 +6775,25 @@ async fn handle_turn_with_runtime_provider_switch_tool_updates_provider_for_foll
     );
     config.provider = openai;
     config.active_provider = Some("openai-gpt-5".to_owned());
+    config.memory.sqlite_path = unique_acp_sqlite_path("provider-switch-followup-round");
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    repo.create_session(NewSessionRecord {
+        session_id: "session-provider-switch".to_owned(),
+        kind: SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Provider Switch".to_owned()),
+        state: SessionState::Ready,
+    })
+    .expect("create provider switch root session");
+    repo.upsert_approval_grant(NewApprovalGrantRecord {
+        scope_session_id: "session-provider-switch".to_owned(),
+        approval_key: "tool:provider.switch".to_owned(),
+        created_by_session_id: Some("session-provider-switch".to_owned()),
+    })
+    .expect("seed provider switch approval grant");
 
     std::fs::write(
         &config_path,
@@ -10655,7 +10736,7 @@ async fn sessions_send_rejects_unknown_target_session() {
     })
     .expect("create controller root");
 
-    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let session_context = SessionContext::root_with_tool_view(
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
@@ -10709,7 +10790,7 @@ async fn sessions_send_rejects_delegate_child_target() {
     })
     .expect("create child target");
 
-    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
     let session_context = SessionContext::root_with_tool_view(
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
@@ -11109,6 +11190,1181 @@ async fn turn_engine_truncates_oversized_tool_payload_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_engine_keeps_discovery_shaped_payloads_intact_for_followup_compaction() {
+    use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
+    use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
+    use loongclaw_kernel::CoreToolAdapter;
+
+    struct LargeToolSearchAdapter;
+
+    #[async_trait]
+    impl CoreToolAdapter for LargeToolSearchAdapter {
+        fn name(&self) -> &str {
+            "large-discovery-result-adapter"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            let (tool_name, _arguments) = effective_tool_request(&request);
+            let repeated_summary = "news result".repeat(600);
+
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({
+                    "query": "latest ai news",
+                    "returned": 12,
+                    "results": (0..12)
+                        .map(|index| json!({
+                            "tool_id": format!("tool-{index}"),
+                            "summary": format!("{} {}", repeated_summary.as_str(), index),
+                            "argument_hint": "query:string",
+                            "required_fields": ["query"],
+                            "required_field_groups": [["query"]],
+                            "lease": format!("lease-{index}")
+                        }))
+                        .collect::<Vec<_>>(),
+                    "tool": tool_name
+                }),
+            })
+        }
+    }
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let clock = Arc::new(FixedClock::new(1_700_000_000));
+    let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+    let pack = VerticalPackManifest {
+        pack_id: "test-pack".to_owned(),
+        domain: "testing".to_owned(),
+        version: "0.1.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead]),
+        metadata: BTreeMap::new(),
+    };
+    kernel.register_pack(pack).expect("register pack");
+    kernel.register_core_tool_adapter(LargeToolSearchAdapter);
+    kernel
+        .set_default_core_tool_adapter("large-discovery-result-adapter")
+        .expect("set default");
+
+    let token = kernel
+        .issue_token("test-pack", "test-agent", 3600)
+        .expect("issue token");
+
+    let ctx = KernelContext {
+        kernel: Arc::new(kernel),
+        token,
+    };
+
+    let engine = TurnEngine::new(5);
+    let turn = ProviderTurn {
+        assistant_text: "".to_owned(),
+        tool_intents: vec![provider_tool_intent(
+            "file.read",
+            json!({"path": "README.md"}),
+            "s1",
+            "t1",
+            "c-search-large",
+        )],
+        raw_meta: serde_json::Value::Null,
+    };
+
+    let result = engine.execute_turn(&turn, &ctx).await;
+    match result {
+        TurnResult::FinalText(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+
+            assert_eq!(envelope["tool"], "file.read");
+            assert_eq!(envelope["tool_call_id"], "c-search-large");
+            assert_eq!(envelope["payload_semantics"], json!("discovery_result"));
+            assert_eq!(envelope["payload_truncated"], false);
+            assert!(
+                envelope["payload_chars"]
+                    .as_u64()
+                    .expect("payload chars should exist")
+                    > 64_000
+            );
+            let payload_summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be string");
+            assert!(payload_summary.contains("\"tool_id\""));
+            assert!(payload_summary.contains("\"lease\""));
+            assert!(payload_summary.chars().count() > 64_000);
+        }
+        TurnResult::StreamingText(other) => {
+            panic!("expected FinalText, got StreamingText({other:?})")
+        }
+        TurnResult::StreamingDone(other) => {
+            panic!("expected FinalText, got StreamingDone({other:?})")
+        }
+        TurnResult::NeedsApproval(other) => {
+            panic!("expected FinalText, got NeedsApproval({other:?})")
+        }
+        TurnResult::ToolDenied(other) => {
+            panic!("expected FinalText, got ToolDenied({other:?})")
+        }
+        TurnResult::ToolError(other) => {
+            panic!("expected FinalText, got ToolError({other:?})")
+        }
+        TurnResult::ProviderError(other) => {
+            panic!("expected FinalText, got ProviderError({other:?})")
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_discovery_only_denies_capability_install() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-policy", "discovery-install-denied");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-discovery-install-denied");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-discovery-install-denied",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-discovery-install";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": "source/demo-skill"
+        }),
+        session_id,
+        "turn-autonomy-discovery-install",
+        "call-autonomy-discovery-install",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(
+                failure.code,
+                "autonomy_policy_capability_acquisition_disallowed"
+            );
+            assert!(
+                failure
+                    .reason
+                    .contains("capability acquisition is disabled"),
+                "unexpected denial reason: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {other:?}");
+        }
+    }
+
+    let installed_skill_path = workspace_root
+        .join("external-skills-installed")
+        .join("demo-skill")
+        .join("SKILL.md");
+    assert!(
+        !installed_skill_path.exists(),
+        "discovery_only should block installation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_capability_install() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-policy", "guided-install-approval");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-guided-install-approval");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-guided-install-approval",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-guided-install";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": "source/demo-skill"
+        }),
+        session_id,
+        "turn-autonomy-guided-install",
+        "call-autonomy-guided-install",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    let approval_request_id = match result {
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(
+                requirement.tool_name.as_deref(),
+                Some("external_skills.install")
+            );
+            assert_eq!(
+                requirement.approval_key.as_deref(),
+                Some("tool:external_skills.install")
+            );
+            requirement
+                .approval_request_id
+                .expect("approval request id should be persisted")
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected NeedsApproval, got {other:?}");
+        }
+    };
+
+    let stored_request = repo
+        .load_approval_request(&approval_request_id)
+        .expect("load approval request")
+        .expect("approval request should exist");
+    let governance_snapshot = stored_request.governance_snapshot_json;
+    assert_eq!(stored_request.tool_name, "external_skills.install");
+    assert_eq!(stored_request.approval_key, "tool:external_skills.install");
+    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
+    assert_eq!(
+        governance_snapshot["autonomy_profile"],
+        "guided_acquisition"
+    );
+    assert_eq!(
+        governance_snapshot["capability_action_class"],
+        "capability_install"
+    );
+    assert_eq!(
+        governance_snapshot["rule_id"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+    assert_eq!(
+        governance_snapshot["reason_code"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+
+    let installed_skill_path = workspace_root
+        .join("external-skills-installed")
+        .join("demo-skill")
+        .join("SKILL.md");
+    assert!(
+        !installed_skill_path.exists(),
+        "guided_acquisition should gate installation behind approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_bounded_autonomous_allows_capability_install_execution() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-policy", "bounded-install-allow");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-allow");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-bounded-install-allow",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-bounded-install";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": "source/demo-skill"
+        }),
+        session_id,
+        "turn-autonomy-bounded-install",
+        "call-autonomy-bounded-install",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::FinalText(text)
+        | TurnResult::StreamingText(text)
+        | TurnResult::StreamingDone(text) => {
+            let line = text.lines().next().expect("tool result line should exist");
+            let payload = line
+                .strip_prefix("[ok] ")
+                .expect("tool result line should keep [ok] prefix");
+            let envelope: Value =
+                serde_json::from_str(payload).expect("tool result envelope should be json");
+            assert_eq!(envelope["tool"], "external_skills.install");
+        }
+        other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected successful tool execution, got {other:?}");
+        }
+    }
+
+    let installed_skill_path = workspace_root
+        .join("external-skills-installed")
+        .join("demo-skill")
+        .join("SKILL.md");
+    assert!(
+        installed_skill_path.exists(),
+        "bounded_autonomous should allow installation to complete"
+    );
+
+    let approval_requests = repo
+        .list_approval_requests_for_session(session_id, None)
+        .expect("list approval requests");
+    assert!(
+        approval_requests.is_empty(),
+        "bounded_autonomous install should not persist approval requests"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_bounded_autonomous_enforces_capability_budget() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-policy", "bounded-install-budget");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let skill_one_path = "source/demo-skill-1";
+    let skill_two_path = "source/demo-skill-2";
+    let skill_three_path = "source/demo-skill-3";
+
+    write_test_external_skill(&workspace_root, skill_one_path);
+    write_test_external_skill(&workspace_root, skill_two_path);
+    write_test_external_skill(&workspace_root, skill_three_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-bounded-install-budget");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-bounded-install-budget",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-bounded-install-budget";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+
+    let first_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_one_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-1",
+    );
+    let second_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_two_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-2",
+    );
+    let third_intent = provider_tool_intent(
+        "external_skills.install",
+        json!({
+            "path": skill_three_path
+        }),
+        session_id,
+        "turn-autonomy-bounded-install-budget",
+        "call-autonomy-bounded-install-budget-3",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![first_intent, second_intent, third_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(
+                failure.code,
+                "autonomy_policy_capability_acquisition_budget_exceeded"
+            );
+            assert!(
+                failure
+                    .reason
+                    .contains("capability acquisition budget exceeded"),
+                "unexpected denial reason: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {other:?}");
+        }
+    }
+
+    let installed_skill_root = workspace_root.join("external-skills-installed");
+    let installed_one = installed_skill_root.join("demo-skill-1").join("SKILL.md");
+    let installed_two = installed_skill_root.join("demo-skill-2").join("SKILL.md");
+    let installed_three = installed_skill_root.join("demo-skill-3").join("SKILL.md");
+
+    assert!(
+        !installed_one.exists(),
+        "budget denial should abort execution before the first install runs"
+    );
+    assert!(
+        !installed_two.exists(),
+        "budget denial should abort execution before the second install runs"
+    );
+    assert!(
+        !installed_three.exists(),
+        "budget denial should abort execution before the third install runs"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_provider_switch() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let workspace_root_name = unique_acp_test_id(
+        "conversation-autonomy-policy",
+        "bounded-provider-switch-approval",
+    );
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let mut config = test_config();
+    config.memory.sqlite_path =
+        unique_memory_sqlite_path("autonomy-bounded-provider-switch-approval");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let mut openai = ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
+    openai.model = "gpt-5".to_owned();
+    config.set_active_provider_profile(
+        "openai-gpt-5",
+        crate::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: openai.clone(),
+        },
+    );
+    let mut deepseek = ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Deepseek);
+    deepseek.model = "deepseek-chat".to_owned();
+    config.providers.insert(
+        "deepseek-chat".to_owned(),
+        crate::config::ProviderProfileConfig {
+            default_for_kind: true,
+            provider: deepseek.clone(),
+        },
+    );
+    config.provider = openai;
+    config.active_provider = Some("openai-gpt-5".to_owned());
+
+    let config_path = workspace_root.join("loongclaw.toml");
+    let rendered_config = crate::config::render(&config).expect("render config");
+    std::fs::write(&config_path, rendered_config).expect("write config");
+    let canonical_config_path =
+        std::fs::canonicalize(&config_path).expect("canonicalize config path");
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-bounded-provider-switch-approval",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-bounded-provider-switch";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "provider.switch",
+        json!({
+            "selector": "deepseek",
+            "config_path": canonical_config_path.display().to_string()
+        }),
+        session_id,
+        "turn-autonomy-bounded-provider-switch",
+        "call-autonomy-bounded-provider-switch",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    let approval_request_id = match result {
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(requirement.tool_name.as_deref(), Some("provider.switch"));
+            assert_eq!(
+                requirement.approval_key.as_deref(),
+                Some("tool:provider.switch")
+            );
+            requirement
+                .approval_request_id
+                .expect("approval request id should be persisted")
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected NeedsApproval, got {other:?}");
+        }
+    };
+
+    let stored_request = repo
+        .load_approval_request(&approval_request_id)
+        .expect("load approval request")
+        .expect("approval request should exist");
+    let governance_snapshot = stored_request.governance_snapshot_json;
+    let (_, reloaded_config) =
+        crate::config::load(Some(config_path.to_str().expect("utf8 config path")))
+            .expect("reload provider switch config");
+    assert_eq!(stored_request.tool_name, "provider.switch");
+    assert_eq!(stored_request.approval_key, "tool:provider.switch");
+    assert_eq!(
+        reloaded_config.active_provider_id(),
+        Some("openai-gpt-5"),
+        "provider should remain unchanged before approval is granted"
+    );
+    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
+    assert_eq!(
+        governance_snapshot["autonomy_profile"],
+        "bounded_autonomous"
+    );
+    assert_eq!(
+        governance_snapshot["capability_action_class"],
+        "runtime_switch"
+    );
+    assert_eq!(
+        governance_snapshot["rule_id"],
+        "autonomy_policy_provider_switch_requires_approval"
+    );
+    assert_eq!(
+        governance_snapshot["reason_code"],
+        "autonomy_policy_provider_switch_requires_approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_discovery_only_denies_topology_expand() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-discovery-delegate-denied");
+    config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config, config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-discovery-delegate-denied",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-discovery-delegate";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "delegate",
+        json!({
+            "task": "spawn a child session"
+        }),
+        session_id,
+        "turn-autonomy-discovery-delegate",
+        "call-autonomy-discovery-delegate",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.code, "autonomy_policy_topology_mutation_disallowed");
+            assert!(
+                failure.reason.contains("topology expansion is disabled"),
+                "unexpected denial reason: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {other:?}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_policy_mutation() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-guided-policy-mutation-denied");
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-guided-policy-mutation-denied",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-guided-policy-mutation";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "external_skills.policy",
+        json!({
+            "action": "set",
+            "policy_update_approved": true,
+            "enabled": true,
+            "allowed_domains": ["skills.sh"]
+        }),
+        session_id,
+        "turn-autonomy-guided-policy-mutation",
+        "call-autonomy-guided-policy-mutation",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    let approval_request_id = match result {
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(
+                requirement.tool_name.as_deref(),
+                Some("external_skills.policy")
+            );
+            assert_eq!(
+                requirement.approval_key.as_deref(),
+                Some("tool:external_skills.policy")
+            );
+            requirement
+                .approval_request_id
+                .expect("approval request id should be persisted")
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected NeedsApproval, got {other:?}");
+        }
+    };
+
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let stored_request = repo
+        .load_approval_request(&approval_request_id)
+        .expect("load approval request")
+        .expect("approval request should exist");
+    let governance_snapshot = stored_request.governance_snapshot_json;
+    assert_eq!(stored_request.tool_name, "external_skills.policy");
+    assert_eq!(stored_request.approval_key, "tool:external_skills.policy");
+    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
+    assert_eq!(
+        governance_snapshot["capability_action_class"],
+        "policy_mutation"
+    );
+    assert_eq!(
+        governance_snapshot["rule_id"],
+        "autonomy_policy_policy_mutation_requires_approval"
+    );
+    assert_eq!(
+        governance_snapshot["reason_code"],
+        "autonomy_policy_policy_mutation_requires_approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_session_mutation() {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let mut config = test_config();
+    config.memory.sqlite_path =
+        unique_memory_sqlite_path("autonomy-bounded-session-mutation-denied");
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+    config.tools.sessions.allow_mutation = true;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-bounded-session-mutation-denied",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+    let session_id = "session-autonomy-bounded-session-mutation";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "session_archive",
+        json!({
+            "session_id": "child-session"
+        }),
+        session_id,
+        "turn-autonomy-bounded-session-mutation",
+        "call-autonomy-bounded-session-mutation",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    let approval_request_id = match result {
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(requirement.tool_name.as_deref(), Some("session_archive"));
+            assert_eq!(
+                requirement.approval_key.as_deref(),
+                Some("tool:session_archive")
+            );
+            requirement
+                .approval_request_id
+                .expect("approval request id should be persisted")
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::ToolDenied(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected NeedsApproval, got {other:?}");
+        }
+    };
+
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let stored_request = repo
+        .load_approval_request(&approval_request_id)
+        .expect("load approval request")
+        .expect("approval request should exist");
+    let governance_snapshot = stored_request.governance_snapshot_json;
+    assert_eq!(stored_request.tool_name, "session_archive");
+    assert_eq!(stored_request.approval_key, "tool:session_archive");
+    assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
+    assert_eq!(
+        governance_snapshot["capability_action_class"],
+        "session_mutation"
+    );
+    assert_eq!(
+        governance_snapshot["rule_id"],
+        "autonomy_policy_session_mutation_requires_approval"
+    );
+    assert_eq!(
+        governance_snapshot["reason_code"],
+        "autonomy_policy_session_mutation_requires_approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_approval_required_tool_decision() {
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-telemetry", "guided-install-approval");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-guided-approval");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::GuidedAcquisition;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-guided",
+                "turn-autonomy-telemetry-guided",
+                "call-autonomy-telemetry-guided",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-guided",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-guided",
+            "install the demo skill",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("guided autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 0);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-guided"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "approval_required");
+    assert_eq!(decision["allow"], false);
+    assert_eq!(decision["deny"], false);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "guided_acquisition");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+    assert_eq!(
+        decision["rule_id"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+    assert_eq!(
+        decision["reason_code"],
+        "autonomy_policy_capability_acquisition_requires_approval"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_denied_tool_decision() {
+    let workspace_root_name = unique_acp_test_id(
+        "conversation-autonomy-telemetry",
+        "discovery-install-denied",
+    );
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-discovery-denied");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::DiscoveryOnly;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-discovery",
+                "turn-autonomy-telemetry-discovery",
+                "call-autonomy-telemetry-discovery",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-discovery",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-discovery",
+            "install the demo skill",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("discovery autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 0);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-discovery"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "deny");
+    assert_eq!(decision["allow"], false);
+    assert_eq!(decision["deny"], true);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "discovery_only");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+    assert_eq!(
+        decision["rule_id"],
+        "autonomy_policy_capability_acquisition_disallowed"
+    );
+    assert_eq!(
+        decision["reason_code"],
+        "autonomy_policy_capability_acquisition_disallowed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_telemetry_handle_turn_persists_allow_decision_and_tool_outcome() {
+    let workspace_root_name =
+        unique_acp_test_id("conversation-autonomy-telemetry", "bounded-install-allow");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    let _skill_root = write_test_external_skill(&workspace_root, "source/demo-skill");
+
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("autonomy-telemetry-bounded-allow");
+    config.tools.file_root = Some(workspace_root.display().to_string());
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Install the demo skill.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "external_skills.install",
+                json!({
+                    "path": "source/demo-skill"
+                }),
+                "session-autonomy-telemetry-bounded",
+                "turn-autonomy-telemetry-bounded",
+                "call-autonomy-telemetry-bounded",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Ok("unused".to_owned()),
+    );
+    let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
+        "autonomy-telemetry-bounded",
+        60,
+        &config,
+    )
+    .expect("bootstrap kernel context");
+
+    let _reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "session-autonomy-telemetry-bounded",
+            "install the demo skill and show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("bounded autonomy turn should complete");
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let decisions = persisted_internal_records_by_type(&persisted, "tool_decision");
+    let outcomes = persisted_internal_records_by_type(&persisted, "tool_outcome");
+
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(outcomes.len(), 1);
+
+    let decision = &decisions[0]["decision"];
+    assert!(
+        decisions[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        decisions[0]["tool_call_id"],
+        "call-autonomy-telemetry-bounded"
+    );
+    assert_eq!(decision["tool_name"], "external_skills.install");
+    assert_eq!(decision["decision_kind"], "allow");
+    assert_eq!(decision["allow"], true);
+    assert_eq!(decision["deny"], false);
+    assert_eq!(decision["policy_source"], "autonomy_policy");
+    assert_eq!(decision["autonomy_profile"], "bounded_autonomous");
+    assert_eq!(decision["capability_action_class"], "capability_install");
+
+    let outcome = &outcomes[0]["outcome"];
+    assert!(
+        outcomes[0]["turn_id"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+    assert_eq!(
+        outcomes[0]["tool_call_id"],
+        "call-autonomy-telemetry-bounded"
+    );
+    assert_eq!(outcome["tool_name"], "external_skills.install");
+    assert_eq!(outcome["status"], "ok");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
     use crate::conversation::turn_engine::{ProviderTurn, TurnEngine, TurnResult};
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
@@ -11127,11 +12383,15 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
             request: ToolCoreRequest,
         ) -> Result<ToolCoreOutcome, ToolPlaneError> {
             let (tool_name, _arguments) = effective_tool_request(&request);
+            let instructions = "Follow the managed skill instruction. ".repeat(2_500);
+
             Ok(ToolCoreOutcome {
                 status: "ok".to_owned(),
                 payload: json!({
+                    "skill_id": "demo-skill",
+                    "display_name": "Demo Skill",
                     "tool": tool_name,
-                    "instructions": "Follow the managed skill instruction. ".repeat(200),
+                    "instructions": instructions,
                     "invocation_summary": "Loaded managed external skill instructions."
                 }),
             })
@@ -11169,6 +12429,19 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         token,
     };
 
+    let mut config = test_config();
+    config.memory.sqlite_path = unique_memory_sqlite_path("external-skill-invoke-payload");
+    config.external_skills.enabled = true;
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+    let dispatcher = crate::conversation::turn_engine::DefaultAppToolDispatcher::with_config(
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory),
+        config.clone(),
+    );
+    let session_context = crate::conversation::SessionContext::root_with_tool_view(
+        "s1",
+        crate::tools::runtime_tool_view_from_loongclaw_config(&config),
+    );
+
     let engine = TurnEngine::new(5);
     let turn = ProviderTurn {
         assistant_text: "".to_owned(),
@@ -11181,21 +12454,13 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
         )],
         raw_meta: serde_json::Value::Null,
     };
-
-    let tool_view = crate::tools::runtime_tool_view_for_runtime_config(
-        &crate::tools::runtime_config::ToolRuntimeConfig {
-            external_skills: crate::tools::runtime_config::ExternalSkillsRuntimePolicy {
-                enabled: true,
-                ..crate::tools::runtime_config::ExternalSkillsRuntimePolicy::default()
-            },
-            ..crate::tools::runtime_config::ToolRuntimeConfig::default()
-        },
-    );
     let result = engine
-        .execute_turn_in_view(
+        .execute_turn_in_context(
             &turn,
-            &tool_view,
+            &session_context,
+            &dispatcher,
             super::runtime_binding::ConversationRuntimeBinding::kernel(&ctx),
+            None,
         )
         .await;
     match result {
@@ -11209,14 +12474,25 @@ async fn turn_engine_keeps_external_skill_invoke_payloads_intact() {
             let envelope: Value =
                 serde_json::from_str(payload).expect("tool result envelope should be valid json");
             assert_eq!(envelope["tool"], "external_skills.invoke");
+            assert_eq!(
+                envelope["payload_semantics"],
+                json!("external_skill_context")
+            );
             assert_eq!(envelope["payload_truncated"], json!(false));
             assert!(
-                envelope["payload_summary"]
-                    .as_str()
-                    .expect("payload summary should be text")
-                    .contains("Follow the managed skill instruction."),
+                envelope["payload_chars"]
+                    .as_u64()
+                    .expect("payload chars should be present")
+                    > 64_000
+            );
+            let payload_summary = envelope["payload_summary"]
+                .as_str()
+                .expect("payload summary should be text");
+            assert!(
+                payload_summary.contains("Follow the managed skill instruction."),
                 "payload summary should keep invoke instructions intact: {envelope:?}"
             );
+            assert!(payload_summary.chars().count() > 64_000);
         }
         other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::NeedsApproval(_)
@@ -15277,6 +16553,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -15317,6 +16594,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-approval-normal-lane");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -15325,7 +16603,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
             "delegate this task",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("approval reply");
@@ -15376,6 +16654,8 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -15415,6 +16695,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-normal-lane");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -15423,7 +16704,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate handle turn success");
@@ -15510,6 +16791,8 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -15613,6 +16896,8 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -15693,6 +16978,8 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -15938,6 +17225,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -16007,6 +17295,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-approval-resolve-approve-always");
 
     let approval_reply = coordinator
         .handle_turn_with_runtime(
@@ -16015,7 +17304,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &approval_runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("approval resolve reply");
@@ -16077,7 +17366,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &granted_runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("granted delegate reply");
@@ -16232,6 +17521,170 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
 }
 
 #[cfg(feature = "memory-sqlite")]
+async fn wait_for_async_delegate_request_count(
+    spawner: &Arc<FakeAsyncDelegateSpawner>,
+    expected_count: usize,
+) {
+    let timeout_duration = std::time::Duration::from_secs(2);
+    let wait_result = tokio::time::timeout(timeout_duration, async {
+        loop {
+            let request_count = spawner
+                .requests
+                .lock()
+                .expect("async delegate requests lock")
+                .len();
+            if request_count == expected_count {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    wait_result.expect("timed out waiting for async delegate request");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn spawn_background_delegate_with_runtime_creates_missing_root_session_scope() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-background-task", "create-root")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+
+    let spawner = Arc::new(FakeAsyncDelegateSpawner::default());
+    let runtime = FakeRuntime::with_turns_and_completions(vec![], vec![], vec![])
+        .with_async_delegate_spawner(spawner.clone())
+        .with_durable_memory_config(memory_config.clone());
+
+    let outcome = crate::conversation::spawn_background_delegate_with_runtime(
+        &config,
+        &runtime,
+        "task-root",
+        "collect repo health",
+        Some("health-check".to_owned()),
+        Some(42),
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("background task should queue successfully");
+
+    let child_session_id = outcome.payload["child_session_id"]
+        .as_str()
+        .expect("child session id")
+        .to_owned();
+    let root_session = repo
+        .load_session("task-root")
+        .expect("load root session")
+        .expect("root session record");
+    assert_eq!(
+        root_session.kind,
+        crate::session::repository::SessionKind::Root
+    );
+    assert_eq!(root_session.parent_session_id, None);
+
+    let child_session = repo
+        .load_session(&child_session_id)
+        .expect("load child session")
+        .expect("child session record");
+    assert_eq!(
+        child_session.kind,
+        crate::session::repository::SessionKind::DelegateChild
+    );
+    assert_eq!(
+        child_session.parent_session_id.as_deref(),
+        Some("task-root")
+    );
+    assert_eq!(child_session.label.as_deref(), Some("health-check"));
+    assert_eq!(
+        child_session.state,
+        crate::session::repository::SessionState::Ready
+    );
+
+    wait_for_async_delegate_request_count(&spawner, 1).await;
+
+    let requests = spawner
+        .requests
+        .lock()
+        .expect("async delegate requests lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].parent_session_id, "task-root");
+    assert_eq!(requests[0].task, "collect repo health");
+    assert_eq!(requests[0].label.as_deref(), Some("health-check"));
+    assert_eq!(requests[0].timeout_seconds, 42);
+
+    let events = repo
+        .list_delegate_lifecycle_events(&child_session_id)
+        .expect("delegate lifecycle events");
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_kind == "delegate_queued"),
+        "queued child should persist a delegate_queued event"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitted() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-background-task", "default-timeout")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.timeout_seconds = 77;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "task-root".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let spawner = Arc::new(FakeAsyncDelegateSpawner::default());
+    let runtime = FakeRuntime::with_turns_and_completions(vec![], vec![], vec![])
+        .with_async_delegate_spawner(spawner.clone())
+        .with_durable_memory_config(memory_config.clone());
+
+    let outcome = crate::conversation::spawn_background_delegate_with_runtime(
+        &config,
+        &runtime,
+        "task-root",
+        "sync release checklist",
+        None,
+        None,
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("background task should queue successfully");
+
+    assert_eq!(outcome.payload["timeout_seconds"], 77);
+
+    wait_for_async_delegate_request_count(&spawner, 1).await;
+
+    let requests = spawner
+        .requests
+        .lock()
+        .expect("async delegate requests lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].timeout_seconds, 77);
+}
+
+#[cfg(feature = "memory-sqlite")]
 #[tokio::test]
 async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_creation() {
     let db_path = std::env::temp_dir().join(format!(
@@ -16242,6 +17695,8 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16288,6 +17743,7 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-queue-failure");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -16295,7 +17751,7 @@ async fn handle_turn_with_runtime_delegate_async_queue_failure_rolls_back_child_
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate_async queue failure reply");
@@ -16331,6 +17787,8 @@ async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     config.tools.delegate.max_active_children = 1;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -16375,6 +17833,7 @@ async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-active-child-limit");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -16382,7 +17841,7 @@ async fn handle_turn_with_runtime_delegate_async_rejects_when_active_child_limit
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate_async reply");
@@ -16422,6 +17881,8 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16458,6 +17919,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-queued");
     let queued_call = tokio::spawn(async move {
         coordinator
             .handle_turn_with_runtime(
@@ -16466,7 +17928,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
                 &runtime,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
             )
             .await
     });
@@ -16519,8 +17981,8 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
     assert_eq!(spawn_request.label.as_deref(), Some("async-child"));
     assert_eq!(spawn_request.timeout_seconds, 9);
     assert!(
-        spawn_request.kernel_context.is_none(),
-        "direct parent turns should keep async delegate children in direct mode"
+        spawn_request.kernel_context.is_some(),
+        "product-mode async delegate execution should preserve kernel binding"
     );
     assert_eq!(child.state, crate::session::repository::SessionState::Ready);
     assert_eq!(child.label.as_deref(), Some("async-child"));
@@ -16559,6 +18021,8 @@ async fn handle_turn_with_runtime_delegate_async_preserves_kernel_binding_in_spa
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16657,6 +18121,8 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16694,6 +18160,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-spawn-failed");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -16701,7 +18168,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate_async reply");
@@ -16772,6 +18239,8 @@ async fn handle_turn_with_runtime_kernel_delegate_async_spawn_failure_closes_lif
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16877,6 +18346,8 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -16911,6 +18382,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-spawn-panic");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -16918,7 +18390,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate_async reply");
@@ -16989,6 +18461,8 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -17037,6 +18511,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
     .with_durable_memory_config(memory_config.clone());
 
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-spawn-persist-recovery");
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
@@ -17044,7 +18519,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("delegate_async reply");
@@ -17122,6 +18597,8 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -17169,6 +18646,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-nested-denied");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -17177,7 +18655,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_by_defa
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("nested delegate denial reply");
@@ -17203,6 +18681,8 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -17262,6 +18742,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
         "install local async delegate runtime"
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-async-nested-denied");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -17270,7 +18751,7 @@ async fn handle_turn_with_runtime_delegate_child_cannot_reenter_delegate_async_b
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             runtime.as_ref(),
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("nested delegate_async denial reply");
@@ -17350,6 +18831,8 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     config.tools.delegate.max_depth = 2;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -17404,6 +18887,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-nested-allowed");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -17412,7 +18896,7 @@ async fn handle_turn_with_runtime_delegate_child_can_reenter_when_max_depth_allo
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("nested delegate success");

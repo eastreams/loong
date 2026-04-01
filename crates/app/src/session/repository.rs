@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use serde_json::Value;
 
+use crate::config::ToolConsentMode;
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
@@ -213,6 +214,22 @@ pub struct NewApprovalGrantRecord {
     pub scope_session_id: String,
     pub approval_key: String,
     pub created_by_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionToolConsentRecord {
+    pub scope_session_id: String,
+    pub mode: ToolConsentMode,
+    pub updated_by_session_id: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewSessionToolConsentRecord {
+    pub scope_session_id: String,
+    pub mode: ToolConsentMode,
+    pub updated_by_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1254,6 +1271,84 @@ impl SessionRepository {
         raw.map(ApprovalGrantRecord::try_from_raw).transpose()
     }
 
+    pub fn upsert_session_tool_consent(
+        &self,
+        record: NewSessionToolConsentRecord,
+    ) -> Result<SessionToolConsentRecord, String> {
+        let requested_scope_session_id =
+            normalize_required_text(&record.scope_session_id, "scope_session_id")?;
+        let scope_session_id = self
+            .lineage_root_session_id(&requested_scope_session_id)?
+            .ok_or_else(|| format!("session `{requested_scope_session_id}` not found"))?;
+        let session_exists = self
+            .load_session_summary_with_legacy_fallback(&scope_session_id)?
+            .is_some();
+        if !session_exists {
+            return Err(format!("session `{scope_session_id}` not found"));
+        }
+        let updated_by_session_id = normalize_optional_text(record.updated_by_session_id);
+        let ts = unix_ts_now();
+        let conn = self.open_connection()?;
+        conn.execute(
+            "INSERT INTO session_tool_consent(
+                scope_session_id,
+                mode,
+                updated_by_session_id,
+                created_at,
+                updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(scope_session_id) DO UPDATE SET
+                mode = excluded.mode,
+                updated_by_session_id = excluded.updated_by_session_id,
+                updated_at = excluded.updated_at",
+            params![
+                scope_session_id,
+                record.mode.as_str(),
+                updated_by_session_id,
+                ts,
+                ts
+            ],
+        )
+        .map_err(|error| format!("upsert session tool consent failed: {error}"))?;
+
+        self.load_session_tool_consent(&scope_session_id)?
+            .ok_or_else(|| {
+                format!("session tool consent `{scope_session_id}` disappeared after upsert")
+            })
+    }
+
+    pub fn load_session_tool_consent(
+        &self,
+        scope_session_id: &str,
+    ) -> Result<Option<SessionToolConsentRecord>, String> {
+        let requested_scope_session_id =
+            normalize_required_text(scope_session_id, "scope_session_id")?;
+        let scope_session_id = match self.lineage_root_session_id(&requested_scope_session_id)? {
+            Some(root_scope_session_id) => root_scope_session_id,
+            None => return Ok(None),
+        };
+        let conn = self.open_connection()?;
+        let raw = conn
+            .query_row(
+                "SELECT scope_session_id, mode, updated_by_session_id, created_at, updated_at
+                 FROM session_tool_consent
+                 WHERE scope_session_id = ?1",
+                params![scope_session_id],
+                |row| {
+                    Ok(RawSessionToolConsentRecord {
+                        scope_session_id: row.get(0)?,
+                        mode: row.get(1)?,
+                        updated_by_session_id: row.get(2)?,
+                        created_at: row.get(3)?,
+                        updated_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|error| format!("load session tool consent failed: {error}"))?;
+        raw.map(SessionToolConsentRecord::try_from_raw).transpose()
+    }
+
     pub fn upsert_session_tool_policy(
         &self,
         record: NewSessionToolPolicyRecord,
@@ -2066,6 +2161,15 @@ struct RawApprovalGrantRecord {
 }
 
 #[derive(Debug)]
+struct RawSessionToolConsentRecord {
+    scope_session_id: String,
+    mode: String,
+    updated_by_session_id: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+}
+
+#[derive(Debug)]
 struct RawSessionToolPolicyRecord {
     session_id: String,
     requested_tool_ids_json: String,
@@ -2167,6 +2271,24 @@ impl ApprovalGrantRecord {
             scope_session_id: raw.scope_session_id,
             approval_key: raw.approval_key,
             created_by_session_id: raw.created_by_session_id,
+            created_at: raw.created_at,
+            updated_at: raw.updated_at,
+        })
+    }
+}
+
+impl SessionToolConsentRecord {
+    fn try_from_raw(raw: RawSessionToolConsentRecord) -> Result<Self, String> {
+        let mode = match raw.mode.as_str() {
+            "prompt" => ToolConsentMode::Prompt,
+            "auto" => ToolConsentMode::Auto,
+            "full" => ToolConsentMode::Full,
+            value => return Err(format!("unknown session tool consent mode `{value}`")),
+        };
+        Ok(Self {
+            scope_session_id: raw.scope_session_id,
+            mode,
+            updated_by_session_id: raw.updated_by_session_id,
             created_at: raw.created_at,
             updated_at: raw.updated_at,
         })
@@ -3525,6 +3647,85 @@ mod tests {
             .expect("load approval grant")
             .expect("approval grant row");
         assert_eq!(loaded, created);
+    }
+
+    #[test]
+    fn session_tool_consent_repository_round_trips_root_mode() {
+        let config = isolated_memory_config("session-tool-consent");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+
+        let created = repo
+            .upsert_session_tool_consent(NewSessionToolConsentRecord {
+                scope_session_id: "root-session".to_owned(),
+                mode: ToolConsentMode::Full,
+                updated_by_session_id: Some("root-session".to_owned()),
+            })
+            .expect("upsert session tool consent");
+        assert_eq!(created.scope_session_id, "root-session");
+        assert_eq!(created.mode, ToolConsentMode::Full);
+        assert_eq!(
+            created.updated_by_session_id.as_deref(),
+            Some("root-session")
+        );
+
+        let loaded = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+        assert_eq!(loaded, created);
+    }
+
+    #[test]
+    fn session_tool_consent_repository_normalizes_delegate_scope_to_root() {
+        let config = isolated_memory_config("session-tool-consent-delegate-root");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child session");
+
+        let created = repo
+            .upsert_session_tool_consent(NewSessionToolConsentRecord {
+                scope_session_id: "child-session".to_owned(),
+                mode: ToolConsentMode::Auto,
+                updated_by_session_id: Some("child-session".to_owned()),
+            })
+            .expect("upsert session tool consent");
+
+        assert_eq!(created.scope_session_id, "root-session");
+        assert_eq!(created.mode, ToolConsentMode::Auto);
+
+        let loaded = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+        assert_eq!(loaded, created);
+
+        let loaded_via_child = repo
+            .load_session_tool_consent("child-session")
+            .expect("load child session tool consent")
+            .expect("child session tool consent row");
+        assert_eq!(loaded_via_child, created);
     }
 
     #[test]

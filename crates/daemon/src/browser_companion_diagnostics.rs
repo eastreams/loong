@@ -10,6 +10,7 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 2;
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +213,22 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 async fn probe_browser_companion_version(
     command: &str,
 ) -> Result<String, BrowserCompanionProbeError> {
+    for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
+        let probe_result = probe_browser_companion_version_once(command).await;
+        match probe_result {
+            Err(BrowserCompanionProbeError::TimedOut) => {}
+            result => {
+                return result;
+            }
+        }
+    }
+
+    Err(BrowserCompanionProbeError::TimedOut)
+}
+
+async fn probe_browser_companion_version_once(
+    command: &str,
+) -> Result<String, BrowserCompanionProbeError> {
     let mut probe = Command::new(command);
     probe.arg(BROWSER_COMPANION_VERSION_ARG);
     probe.kill_on_drop(true);
@@ -384,6 +401,39 @@ mod tests {
                     && observed_version == "loongclaw-browser-companion 11.5.0"
             ),
             "partial version matches should still warn as mismatches: {diagnostics:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_retries_transient_probe_timeouts() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("transient-timeout");
+        let script_path = temp_dir.join("browser-companion");
+        let state_path = temp_dir.join("probe-state");
+        let script_body = format!(
+            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  sleep 4\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            state_path.display()
+        );
+        write_browser_companion_script(&script_path, script_body.as_str());
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        assert_eq!(
+            diagnostics.install_status,
+            BrowserCompanionInstallStatus::Ready,
+            "transient probe timeouts should retry before surfacing an install warning: {diagnostics:#?}"
+        );
+        assert_eq!(
+            diagnostics.observed_version.as_deref(),
+            Some("loongclaw-browser-companion 1.5.0")
         );
     }
 

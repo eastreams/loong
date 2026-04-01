@@ -117,8 +117,52 @@ pub(super) fn redact_generic_webhook_status_url(raw_url: &str) -> Option<String>
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::TcpListener;
+    use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
+
+    fn read_test_http_request(stream: &mut TcpStream) -> Result<(), String> {
+        let read_timeout = Duration::from_millis(250);
+        stream
+            .set_read_timeout(Some(read_timeout))
+            .map_err(|error| format!("set test server read timeout: {error}"))?;
+
+        let mut request_bytes = Vec::new();
+
+        loop {
+            let mut chunk = [0_u8; 256];
+            let read_result = stream.read(&mut chunk);
+
+            match read_result {
+                Ok(0) => {
+                    return Err(
+                        "read test server request reached eof before headers completed".to_owned(),
+                    );
+                }
+                Ok(bytes_read) => {
+                    let chunk_slice = &chunk[..bytes_read];
+                    request_bytes.extend_from_slice(chunk_slice);
+
+                    let has_header_terminator =
+                        request_bytes.windows(4).any(|window| window == b"\r\n\r\n");
+
+                    if has_header_terminator {
+                        return Ok(());
+                    }
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::TimedOut
+                        || error.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Err(
+                        "read test server request timed out before headers completed".to_owned(),
+                    );
+                }
+                Err(error) => {
+                    return Err(format!("read test server request: {error}"));
+                }
+            }
+        }
+    }
 
     fn spawn_test_http_server(
         response: String,
@@ -139,8 +183,7 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
-                        let mut request_buffer = [0_u8; 1024];
-                        let _ = stream.read(&mut request_buffer);
+                        read_test_http_request(&mut stream)?;
                         stream
                             .write_all(response.as_bytes())
                             .map_err(|error| format!("write test server response: {error}"))?;

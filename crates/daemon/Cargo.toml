@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+default-run = "loong"
 
 [lib]
 name = "loongclaw_daemon"
@@ -53,6 +54,7 @@ libc = "0.2"
 
 
 [dependencies]
+axum.workspace = true
 clap.workspace = true
 clap_complete = "4.5"
 dialoguer.workspace = true
@@ -63,6 +65,7 @@ loongclaw-contracts = { path = "../contracts" }
 loongclaw-spec = { path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
+hex.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true
 tokio.workspace = true
@@ -72,10 +75,17 @@ chrono.workspace = true
 base64.workspace = true
 rand.workspace = true
 sha2.workspace = true
+semver.workspace = true
 ed25519-dalek.workspace = true
-axum.workspace = true
 futures-util.workspace = true
 dunce = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "loong"
+path = "src/main.rs"
 
 [[bin]]
 name = "loongclaw"
@@ -84,6 +94,7 @@ path = "src/main.rs"
 [dev-dependencies]
 loongclaw-spec = { path = "../spec", features = ["test-hooks"] }
 sha2.workspace = true
+tower = { version = "0.5", features = ["util"] }
 wat = "1"
 
 [lints]

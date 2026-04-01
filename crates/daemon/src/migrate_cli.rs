@@ -228,8 +228,9 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
         .unwrap_or(&error);
     if leaf == "claw.migrate requires payload.input_path" {
         return format!(
-            "`--input` is required for `loongclaw migrate --mode {}`",
-            options.mode.as_id()
+            "`--input` is required for `{} migrate --mode {}`",
+            mvp::config::active_cli_command_name(),
+            options.mode.as_id(),
         );
     }
 
@@ -240,8 +241,9 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
         )
     {
         return format!(
-            "`--output` is required for `loongclaw migrate --mode {}`",
-            options.mode.as_id()
+            "`--output` is required for `{} migrate --mode {}`",
+            mvp::config::active_cli_command_name(),
+            options.mode.as_id(),
         );
     }
 
@@ -532,8 +534,10 @@ fn render_external_skill_mapping_outcome(
     }
     if let Some(output) = options.output.as_deref() {
         println!(
-            "next step: loongclaw migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
-            input_path, output
+            "next step: {} migrate --mode apply_selected --input {} --output {} --apply-external-skills-plan --force",
+            mvp::config::active_cli_command_name(),
+            input_path,
+            output
         );
     }
     Ok(())
@@ -637,7 +641,8 @@ fn render_apply_selected_outcome(
         }
     }
     println!(
-        "next step: loongclaw ask --config '{}' --message 'Summarize this repository and suggest the best next step.'",
+        "next step: {} ask --config '{}' --message 'Summarize this repository and suggest the best next step.'",
+        mvp::config::active_cli_command_name(),
         output_path
     );
     Ok(())
@@ -714,8 +719,10 @@ fn render_apply_or_plan_outcome(
         && let Some(output_path) = output_path.or(options.output.as_deref())
     {
         println!(
-            "next step: loongclaw migrate --mode apply --input {} --output {} --force",
-            input_path, output_path
+            "next step: {} migrate --mode apply --input {} --output {} --force",
+            mvp::config::active_cli_command_name(),
+            input_path,
+            output_path
         );
     }
     Ok(())

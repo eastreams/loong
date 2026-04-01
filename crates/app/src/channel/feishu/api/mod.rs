@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod client;
 pub mod error;
+pub mod messaging_api;
 pub mod outbound;
 pub mod principal;
 pub mod resources;

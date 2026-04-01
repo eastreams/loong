@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::CliResult;
@@ -10,7 +11,6 @@ use crate::memory::{
 
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
-use super::turn_engine::{ToolDecision, ToolOutcome};
 use super::turn_shared::ReplyPersistenceMode;
 
 pub(super) fn format_provider_error_reply(error: &str) -> String {
@@ -52,15 +52,18 @@ pub(super) async fn persist_reply_turns_with_mode<R: ConversationRuntime + ?Size
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_decision"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
-pub(super) async fn persist_tool_decision<R: ConversationRuntime + ?Sized>(
+pub(super) async fn persist_tool_decision<R, D>(
     runtime: &R,
     session_id: &str,
     turn_id: &str,
     tool_call_id: &str,
-    decision: &ToolDecision,
+    decision: &D,
     binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
+) -> CliResult<()>
+where
+    R: ConversationRuntime + ?Sized,
+    D: Serialize + ?Sized,
+{
     let content = build_tool_decision_content(
         turn_id,
         tool_call_id,
@@ -74,15 +77,18 @@ pub(super) async fn persist_tool_decision<R: ConversationRuntime + ?Sized>(
 /// Uses the existing `persist_turn` mechanism so the DB schema stays unchanged.
 /// The content is a single JSON line with `"type": "tool_outcome"` plus
 /// correlation identifiers (`session_id`, `turn_id`, `tool_call_id`).
-#[allow(dead_code)] // Will be wired into TurnEngine in a follow-up task
-pub(super) async fn persist_tool_outcome<R: ConversationRuntime + ?Sized>(
+pub(super) async fn persist_tool_outcome<R, O>(
     runtime: &R,
     session_id: &str,
     turn_id: &str,
     tool_call_id: &str,
-    outcome: &ToolOutcome,
+    outcome: &O,
     binding: ConversationRuntimeBinding<'_>,
-) -> CliResult<()> {
+) -> CliResult<()>
+where
+    R: ConversationRuntime + ?Sized,
+    O: Serialize + ?Sized,
+{
     let content = build_tool_outcome_content(
         turn_id,
         tool_call_id,

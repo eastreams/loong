@@ -6,8 +6,8 @@ usage() {
 Usage: ./scripts/install.sh [--prefix <dir>] [--onboard] [--version <tag>] [--source] [--target-libc <gnu|musl>]
 
 Options:
-  --prefix <dir>   Install directory for loongclaw (default: $HOME/.local/bin)
-  --onboard        Run `loongclaw onboard` after install
+  --prefix <dir>   Install directory for loong (default: $HOME/.local/bin)
+  --onboard        Run `loong onboard` after install
   --version <tag>  Release tag to install (default: latest)
   --source         Build from local source instead of downloading a release binary
   --target-libc    Override Linux libc target selection (`gnu` or `musl`)
@@ -205,8 +205,9 @@ release_version="${LOONGCLAW_INSTALL_VERSION:-latest}"
 release_repo="${LOONGCLAW_INSTALL_REPO:-loongclaw-ai/loongclaw}"
 release_base_url="${LOONGCLAW_INSTALL_RELEASE_BASE_URL:-https://github.com/${release_repo}/releases}"
 target_libc="${LOONGCLAW_INSTALL_TARGET_LIBC:-auto}"
-package_name="loongclaw"
-bin_name="loongclaw"
+package_name="loong"
+bin_name="loong"
+legacy_bin_name="loongclaw"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -345,6 +346,16 @@ sha256_file() {
 lowercase_value() {
   local value="${1-}"
   printf '%s' "${value}" | tr '[:upper:]' '[:lower:]'
+}
+
+install_binary_pair() {
+  local source_path="${1:?source_path is required}"
+  local primary_output_name="${2:?primary_output_name is required}"
+  local legacy_output_name="${3:?legacy_output_name is required}"
+
+  mkdir -p "${prefix}"
+  install -m 755 "${source_path}" "${prefix}/${primary_output_name}"
+  install -m 755 "${source_path}" "${prefix}/${legacy_output_name}"
 }
 
 install_web_search_provider_display_name() {
@@ -740,8 +751,9 @@ release_target_for_install() {
 }
 
 install_from_source() {
-  local repo_root source_binary
+  local repo_root host_target source_binary primary_binary_name legacy_binary_name
   require_command "cargo" "Install Rust first: https://rustup.rs"
+  require_command "install" "Install coreutils or use a different shell environment."
 
   repo_root=""
   if [[ -n "${script_dir}" && -f "${script_dir}/../Cargo.toml" ]]; then
@@ -752,26 +764,29 @@ install_from_source() {
     exit 1
   fi
 
-  printf '==> Building loongclaw from source (release)\n'
+  host_target="$(release_target_for_platform "$(detect_release_host_platform)" "$(uname -m)")"
+  primary_binary_name="$(release_binary_name_for_target "${bin_name}" "${host_target}")"
+  legacy_binary_name="$(release_binary_name_for_target "${legacy_bin_name}" "${host_target}")"
+
+  printf '==> Building loong from source (release)\n'
   (
     cd "${repo_root}"
     LOONGCLAW_RELEASE_BUILD=1 \
       cargo build -p loongclaw-daemon --bin "${bin_name}" --release --locked
   )
 
-  source_binary="${repo_root}/target/release/${bin_name}"
+  source_binary="${repo_root}/target/release/${primary_binary_name}"
   if [[ ! -f "${source_binary}" ]]; then
     echo "error: built binary not found at ${source_binary}" >&2
     exit 1
   fi
 
-  mkdir -p "${prefix}"
-  install -m 755 "${source_binary}" "${prefix}/${bin_name}"
+  install_binary_pair "${source_binary}" "${primary_binary_name}" "${legacy_binary_name}"
 }
 
 install_from_release() {
   local host_platform host_arch target_tag target archive_name checksum_name
-  local archive_url checksum_url binary_name tmp_dir archive_path checksum_path
+  local archive_url checksum_url binary_name legacy_binary_name tmp_dir archive_path checksum_path
   local extract_dir installed_binary expected_sha actual_sha
 
   require_command "curl" "Install curl first or use --source inside a repository checkout."
@@ -790,6 +805,7 @@ install_from_release() {
   archive_url="${release_base_url}/download/${target_tag}/${archive_name}"
   checksum_url="${release_base_url}/download/${target_tag}/${checksum_name}"
   binary_name="$(release_binary_name_for_target "${bin_name}" "${target}")"
+  legacy_binary_name="$(release_binary_name_for_target "${legacy_bin_name}" "${target}")"
 
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "${tmp_dir}"' RETURN
@@ -798,7 +814,7 @@ install_from_release() {
   extract_dir="${tmp_dir}/extract"
   mkdir -p "${extract_dir}"
 
-  printf '==> Downloading loongclaw %s for %s\n' "${target_tag}" "${target}"
+  printf '==> Downloading loong %s for %s\n' "${target_tag}" "${target}"
   curl -fsSL --retry 3 --retry-delay 1 -o "${archive_path}" "${archive_url}"
   curl -fsSL --retry 3 --retry-delay 1 -o "${checksum_path}" "${checksum_url}"
 
@@ -822,8 +838,7 @@ install_from_release() {
     exit 1
   fi
 
-  mkdir -p "${prefix}"
-  install -m 755 "${installed_binary}" "${prefix}/${bin_name}"
+  install_binary_pair "${installed_binary}" "${binary_name}" "${legacy_binary_name}"
 }
 
 if [[ "${install_source}" -eq 1 ]]; then
@@ -832,7 +847,8 @@ else
   install_from_release
 fi
 
-printf '==> Installed loongclaw to %s\n' "${prefix}/${bin_name}"
+printf '==> Installed loong to %s\n' "${prefix}/${bin_name}"
+printf '==> Installed compatible loongclaw command to %s\n' "${prefix}/${legacy_bin_name}"
 
 if [[ "${run_onboard}" -eq 1 ]]; then
   printf '==> Running guided onboarding\n'
@@ -847,4 +863,4 @@ case ":${PATH}:" in
     ;;
 esac
 
-printf '\nDone. Try:\n  loongclaw --help\n'
+printf '\nDone. Try:\n  loong --help\n'

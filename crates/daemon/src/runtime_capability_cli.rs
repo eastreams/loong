@@ -12,6 +12,7 @@ use serde_json::json;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -19,6 +20,10 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub const RUNTIME_CAPABILITY_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 pub const RUNTIME_CAPABILITY_ARTIFACT_SURFACE: &str = "runtime_capability";
 pub const RUNTIME_CAPABILITY_ARTIFACT_PURPOSE: &str = "promotion_candidate_record";
+pub const RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_SURFACE: &str = "memory_stage_profile";
+pub const RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_PURPOSE: &str =
+    "runtime_capability_apply_output";
 
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum RuntimeCapabilityCommands {
@@ -32,6 +37,8 @@ pub enum RuntimeCapabilityCommands {
     Index(RuntimeCapabilityIndexCommandOptions),
     /// Derive one dry-run promotion plan from one indexed capability family
     Plan(RuntimeCapabilityPlanCommandOptions),
+    /// Materialize one governed memory-stage-profile artifact from one promotable capability family
+    Apply(RuntimeCapabilityApplyCommandOptions),
 }
 
 #[derive(Args, Debug, Clone, PartialEq, Eq)]
@@ -96,12 +103,24 @@ pub struct RuntimeCapabilityPlanCommandOptions {
     pub json: bool,
 }
 
+#[derive(Args, Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeCapabilityApplyCommandOptions {
+    #[arg(long)]
+    pub root: String,
+    #[arg(long)]
+    pub family_id: String,
+    #[arg(long, default_value_t = false)]
+    pub json: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeCapabilityTarget {
     ManagedSkill,
     ProgrammaticFlow,
     ProfileNoteAddendum,
+    #[value(alias = "memory_stage_profile")]
+    MemoryStageProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,14 +232,14 @@ pub struct RuntimeCapabilityMetricRange {
     pub max: f64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 pub struct RuntimeCapabilitySourceDecisionRollup {
     pub promoted: usize,
     pub rejected: usize,
     pub undecided: usize,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct RuntimeCapabilityEvidenceDigest {
     pub total_candidates: usize,
     pub reviewed_candidates: usize,
@@ -278,6 +297,40 @@ pub struct RuntimeCapabilityPromotionProvenance {
     pub latest_reviewed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityPromotionPlannedPayload {
+    pub memory_stage_profile: RuntimeCapabilityMemoryStageProfileDryRunPayload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunPayload {
+    pub schema_version: u32,
+    pub artifact_kind: String,
+    pub profile: RuntimeCapabilityMemoryStageProfileDryRunProfile,
+    pub provenance: RuntimeCapabilityMemoryStageProfileDryRunProvenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunProfile {
+    pub id: String,
+    pub summary: String,
+    pub review_scope: String,
+    pub required_capabilities: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+    pub family_id: String,
+    pub accepted_candidate_ids: Vec<String>,
+    pub evidence_digest: RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest {
+    pub changed_surfaces: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct RuntimeCapabilityPromotionPlanReport {
     pub generated_at: String,
@@ -292,6 +345,35 @@ pub struct RuntimeCapabilityPromotionPlanReport {
     pub approval_checklist: Vec<String>,
     pub rollback_hints: Vec<String>,
     pub provenance: RuntimeCapabilityPromotionProvenance,
+    pub planned_payload: Option<RuntimeCapabilityPromotionPlannedPayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument {
+    pub schema: RuntimeCapabilityArtifactSchema,
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub delivery_surface: String,
+    pub profile: RuntimeCapabilityMemoryStageProfileDryRunProfile,
+    pub provenance: RuntimeCapabilityMemoryStageProfileDryRunProvenance,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeCapabilityApplyOutcome {
+    Applied,
+    AlreadyApplied,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct RuntimeCapabilityApplyReport {
+    pub generated_at: String,
+    pub root: String,
+    pub family_id: String,
+    pub output_path: String,
+    pub outcome: RuntimeCapabilityApplyOutcome,
+    pub planned_artifact: RuntimeCapabilityPromotionArtifactPlan,
+    pub materialized_artifact: RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument,
 }
 
 pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResult<()> {
@@ -320,6 +402,11 @@ pub fn run_runtime_capability_cli(command: RuntimeCapabilityCommands) -> CliResu
             let as_json = options.json;
             let report = execute_runtime_capability_plan_command(options)?;
             emit_runtime_capability_promotion_plan(&report, as_json)
+        }
+        RuntimeCapabilityCommands::Apply(options) => {
+            let as_json = options.json;
+            let report = execute_runtime_capability_apply_command(options)?;
+            emit_runtime_capability_apply_report(&report, as_json)
         }
     }
 }
@@ -476,6 +563,42 @@ pub fn execute_runtime_capability_plan_command(
             &family_artifacts,
             &family.evidence,
         ),
+        planned_payload: build_runtime_capability_promotion_planned_payload(
+            &family.family_id,
+            &planned_artifact,
+            &family_artifacts,
+        ),
+    })
+}
+
+pub fn execute_runtime_capability_apply_command(
+    options: RuntimeCapabilityApplyCommandOptions,
+) -> CliResult<RuntimeCapabilityApplyReport> {
+    let plan_options = RuntimeCapabilityPlanCommandOptions {
+        root: options.root,
+        family_id: options.family_id,
+        json: false,
+    };
+    let plan = execute_runtime_capability_plan_command(plan_options)?;
+    validate_runtime_capability_apply_plan(&plan)?;
+
+    let planned_artifact = plan.planned_artifact.clone();
+    let root = plan.root.clone();
+    let family_id = plan.family_id.clone();
+    let root_path = PathBuf::from(&root);
+    let output_path = resolve_runtime_capability_apply_output_path(&root_path, &planned_artifact);
+    let materialized_artifact = build_runtime_capability_apply_artifact(&plan)?;
+    let outcome = persist_runtime_capability_apply_artifact(&output_path, &materialized_artifact)?;
+    let output_path = canonicalize_existing_path(&output_path)?;
+
+    Ok(RuntimeCapabilityApplyReport {
+        generated_at: now_rfc3339()?,
+        root,
+        family_id,
+        output_path,
+        outcome,
+        planned_artifact,
+        materialized_artifact,
     })
 }
 
@@ -523,6 +646,22 @@ fn emit_runtime_capability_promotion_plan(
     }
 
     println!("{}", render_runtime_capability_promotion_plan_text(report));
+    Ok(())
+}
+
+fn emit_runtime_capability_apply_report(
+    report: &RuntimeCapabilityApplyReport,
+    as_json: bool,
+) -> CliResult<()> {
+    if as_json {
+        let pretty = serde_json::to_string_pretty(report).map_err(|error| {
+            format!("serialize runtime capability apply report failed: {error}")
+        })?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    println!("{}", render_runtime_capability_apply_text(report));
     Ok(())
 }
 
@@ -790,7 +929,7 @@ fn compute_family_id(proposal: &RuntimeCapabilityProposal) -> CliResult<String> 
         "required_capabilities": required_capabilities,
     }))
     .map_err(|error| format!("serialize runtime capability family_id input failed: {error}"))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
 fn build_family_evidence_digest(
@@ -901,12 +1040,13 @@ fn evaluate_family_readiness(
     let stability = evaluate_stability(evidence);
     let accepted_source_integrity = evaluate_accepted_source_integrity(artifacts, evidence);
     let warning_pressure = evaluate_warning_pressure(evidence);
-    let checks = vec![
+    let mut checks = vec![
         review_consensus,
         stability,
         accepted_source_integrity,
         warning_pressure,
     ];
+    checks.extend(evaluate_target_specific_readiness(artifacts));
     let status = if checks
         .iter()
         .any(|check| check.status == RuntimeCapabilityFamilyReadinessCheckStatus::Blocked)
@@ -921,6 +1061,73 @@ fn evaluate_family_readiness(
         RuntimeCapabilityFamilyReadinessStatus::NotReady
     };
     RuntimeCapabilityFamilyReadiness { status, checks }
+}
+
+fn evaluate_target_specific_readiness(
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> Vec<RuntimeCapabilityFamilyReadinessCheck> {
+    let Some(target) = artifacts.first().map(|artifact| artifact.proposal.target) else {
+        return Vec::new();
+    };
+
+    match target {
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            let accepted_artifacts = artifacts
+                .iter()
+                .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+                .cloned()
+                .collect::<Vec<_>>();
+            let accepted_evidence = if accepted_artifacts.is_empty() {
+                RuntimeCapabilityEvidenceDigest::default()
+            } else {
+                build_family_evidence_digest(&accepted_artifacts)
+            };
+            vec![evaluate_memory_stage_profile_delta_evidence(
+                &accepted_evidence,
+            )]
+        }
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => Vec::new(),
+    }
+}
+
+fn evaluate_memory_stage_profile_delta_evidence(
+    evidence: &RuntimeCapabilityEvidenceDigest,
+) -> RuntimeCapabilityFamilyReadinessCheck {
+    let has_memory_surface = evidence.changed_surfaces.iter().any(|surface| {
+        matches!(
+            surface.as_str(),
+            "memory_selected"
+                | "memory_policy"
+                | "context_engine_selected"
+                | "context_engine_compaction"
+        )
+    });
+
+    let (status, summary) = if evidence.delta_candidate_count == 0 {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "memory-stage-profile families need snapshot-delta evidence from finished experiments"
+                .to_owned(),
+        )
+    } else if !has_memory_surface {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::NeedsEvidence,
+            "snapshot-delta evidence must include memory or context-engine surfaces".to_owned(),
+        )
+    } else {
+        (
+            RuntimeCapabilityFamilyReadinessCheckStatus::Pass,
+            "snapshot-delta evidence includes memory/context-engine surface changes".to_owned(),
+        )
+    };
+
+    RuntimeCapabilityFamilyReadinessCheck {
+        dimension: "memory_delta_evidence".to_owned(),
+        status,
+        summary,
+    }
 }
 
 fn evaluate_review_consensus(
@@ -1125,7 +1332,7 @@ fn compute_candidate_id(
         "required_capabilities": required_capabilities,
     }))
     .map_err(|error| format!("serialize runtime capability candidate_id input failed: {error}"))?;
-    Ok(format!("{:x}", sha2::Sha256::digest(encoded)))
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
 fn persist_runtime_capability_artifact(
@@ -1149,6 +1356,228 @@ fn persist_runtime_capability_artifact(
         format!(
             "write runtime capability artifact {} failed: {error}",
             output_path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_runtime_capability_apply_plan(
+    plan: &RuntimeCapabilityPromotionPlanReport,
+) -> CliResult<()> {
+    if !plan.promotable {
+        let readiness = render_family_readiness_status(plan.readiness.status);
+        let blockers = render_family_readiness_checks(&plan.blockers);
+        return Err(format!(
+            "runtime capability family `{}` is not promotable for apply; readiness={} blockers={}",
+            plan.family_id, readiness, blockers
+        ));
+    }
+
+    let target = plan.planned_artifact.target_kind;
+    if target != RuntimeCapabilityTarget::MemoryStageProfile {
+        let rendered_target = render_target(target);
+        return Err(format!(
+            "runtime capability apply currently supports only memory_stage_profile families; family `{}` resolves to target `{}`",
+            plan.family_id, rendered_target
+        ));
+    }
+
+    Ok(())
+}
+
+fn resolve_runtime_capability_apply_output_path(
+    root: &Path,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+) -> PathBuf {
+    let delivery_surface = &planned_artifact.delivery_surface;
+    let artifact_file_name = format!("{}.json", planned_artifact.artifact_id);
+    root.join(delivery_surface).join(artifact_file_name)
+}
+
+fn build_runtime_capability_apply_artifact(
+    plan: &RuntimeCapabilityPromotionPlanReport,
+) -> CliResult<RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument> {
+    let planned_payload = plan.planned_payload.as_ref().ok_or_else(|| {
+        format!(
+            "runtime capability apply requires a planned payload for family `{}`",
+            plan.family_id
+        )
+    })?;
+    let memory_payload = &planned_payload.memory_stage_profile;
+    let expected_schema_version =
+        RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_JSON_SCHEMA_VERSION;
+    if memory_payload.schema_version != expected_schema_version {
+        return Err(format!(
+            "runtime capability apply expected memory-stage-profile payload schema version {}; found {}",
+            expected_schema_version, memory_payload.schema_version
+        ));
+    }
+
+    let expected_artifact_kind = &plan.planned_artifact.artifact_kind;
+    if memory_payload.artifact_kind != *expected_artifact_kind {
+        return Err(format!(
+            "runtime capability apply payload artifact kind {} does not match planned artifact kind {}",
+            memory_payload.artifact_kind, expected_artifact_kind
+        ));
+    }
+
+    let expected_artifact_id = &plan.planned_artifact.artifact_id;
+    if memory_payload.profile.id != *expected_artifact_id {
+        return Err(format!(
+            "runtime capability apply payload profile id {} does not match planned artifact id {}",
+            memory_payload.profile.id, expected_artifact_id
+        ));
+    }
+
+    Ok(RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument {
+        schema: RuntimeCapabilityArtifactSchema {
+            version: RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_JSON_SCHEMA_VERSION,
+            surface: RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_SURFACE.to_owned(),
+            purpose: RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_PURPOSE.to_owned(),
+        },
+        artifact_kind: memory_payload.artifact_kind.clone(),
+        artifact_id: memory_payload.profile.id.clone(),
+        delivery_surface: plan.planned_artifact.delivery_surface.clone(),
+        profile: memory_payload.profile.clone(),
+        provenance: memory_payload.provenance.clone(),
+    })
+}
+
+fn load_runtime_capability_apply_artifact(
+    path: &Path,
+) -> CliResult<RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        format!(
+            "read runtime capability apply artifact {} failed: {error}",
+            path.display()
+        )
+    })?;
+    let artifact =
+        serde_json::from_str::<RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument>(&raw)
+            .map_err(|error| {
+                format!(
+                    "decode runtime capability apply artifact {} failed: {error}",
+                    path.display()
+                )
+            })?;
+    validate_runtime_capability_apply_artifact_schema(&artifact, path)?;
+    Ok(artifact)
+}
+
+fn validate_runtime_capability_apply_artifact_schema(
+    artifact: &RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument,
+    path: &Path,
+) -> CliResult<()> {
+    let schema = &artifact.schema;
+    if schema.version != RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_JSON_SCHEMA_VERSION {
+        return Err(format!(
+            "runtime capability apply artifact {} uses unsupported schema version {}; expected {}",
+            path.display(),
+            schema.version,
+            RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_JSON_SCHEMA_VERSION
+        ));
+    }
+    if schema.surface != RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_SURFACE {
+        return Err(format!(
+            "runtime capability apply artifact {} uses unsupported schema surface {}; expected {}",
+            path.display(),
+            schema.surface,
+            RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_SURFACE
+        ));
+    }
+    if schema.purpose != RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_PURPOSE {
+        return Err(format!(
+            "runtime capability apply artifact {} uses unsupported schema purpose {}; expected {}",
+            path.display(),
+            schema.purpose,
+            RUNTIME_CAPABILITY_MEMORY_STAGE_PROFILE_ARTIFACT_PURPOSE
+        ));
+    }
+
+    let (expected_artifact_kind, expected_delivery_surface, _) =
+        runtime_capability_promotion_target_contract(RuntimeCapabilityTarget::MemoryStageProfile);
+    if artifact.artifact_kind != expected_artifact_kind {
+        return Err(format!(
+            "runtime capability apply artifact {} uses unsupported artifact kind {}; expected {}",
+            path.display(),
+            artifact.artifact_kind,
+            expected_artifact_kind
+        ));
+    }
+    if artifact.delivery_surface != expected_delivery_surface {
+        return Err(format!(
+            "runtime capability apply artifact {} uses unsupported delivery surface {}; expected {}",
+            path.display(),
+            artifact.delivery_surface,
+            expected_delivery_surface
+        ));
+    }
+    if artifact.artifact_id != artifact.profile.id {
+        return Err(format!(
+            "runtime capability apply artifact {} has inconsistent artifact_id and profile.id fields",
+            path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn persist_runtime_capability_apply_artifact(
+    output_path: &Path,
+    artifact: &RuntimeCapabilityAppliedMemoryStageProfileArtifactDocument,
+) -> CliResult<RuntimeCapabilityApplyOutcome> {
+    match write_pretty_json_file_create_new(output_path, artifact) {
+        Ok(()) => Ok(RuntimeCapabilityApplyOutcome::Applied),
+        Err(error) if error.contains("already exists") => {
+            let existing_artifact = load_runtime_capability_apply_artifact(output_path)?;
+            if existing_artifact == *artifact {
+                Ok(RuntimeCapabilityApplyOutcome::AlreadyApplied)
+            } else {
+                Err(format!(
+                    "runtime capability apply output {} already exists with different content",
+                    output_path.display()
+                ))
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn write_pretty_json_file_create_new(path: &Path, value: &impl Serialize) -> CliResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create runtime capability apply artifact directory {} failed: {error}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let encoded = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("serialize runtime capability apply artifact failed: {error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|error| {
+            if error.kind() == ErrorKind::AlreadyExists {
+                format!(
+                    "runtime capability apply artifact {} already exists",
+                    path.display()
+                )
+            } else {
+                format!(
+                    "write runtime capability apply artifact {} failed: {error}",
+                    path.display()
+                )
+            }
+        })?;
+    file.write_all(&encoded).map_err(|error| {
+        format!(
+            "write runtime capability apply artifact {} failed: {error}",
+            path.display()
         )
     })?;
     Ok(())
@@ -1229,6 +1658,39 @@ pub fn render_runtime_capability_text(artifact: &RuntimeCapabilityArtifactDocume
                 .as_ref()
                 .map(|review| render_string_values_with_separator(&review.warnings, " | "))
                 .unwrap_or_else(|| "-".to_owned())
+        ),
+    ]
+    .join("\n")
+}
+
+pub fn render_runtime_capability_apply_text(report: &RuntimeCapabilityApplyReport) -> String {
+    let artifact = &report.materialized_artifact;
+
+    [
+        format!("family_id={}", report.family_id),
+        format!(
+            "outcome={}",
+            render_runtime_capability_apply_outcome(report.outcome)
+        ),
+        format!("artifact_kind={}", artifact.artifact_kind),
+        format!("artifact_id={}", artifact.artifact_id),
+        format!("delivery_surface={}", artifact.delivery_surface),
+        format!("output_path={}", report.output_path),
+        format!("profile_summary={}", artifact.profile.summary),
+        format!("review_scope={}", artifact.profile.review_scope),
+        format!(
+            "required_capabilities={}",
+            render_string_values(&artifact.profile.required_capabilities)
+        ),
+        format!("tags={}", render_string_values(&artifact.profile.tags)),
+        format!("provenance_family_id={}", artifact.provenance.family_id),
+        format!(
+            "accepted_candidate_ids={}",
+            render_string_values(&artifact.provenance.accepted_candidate_ids)
+        ),
+        format!(
+            "changed_surfaces={}",
+            render_string_values(&artifact.provenance.evidence_digest.changed_surfaces)
         ),
     ]
     .join("\n")
@@ -1356,6 +1818,7 @@ fn render_target(target: RuntimeCapabilityTarget) -> &'static str {
         RuntimeCapabilityTarget::ManagedSkill => "managed_skill",
         RuntimeCapabilityTarget::ProgrammaticFlow => "programmatic_flow",
         RuntimeCapabilityTarget::ProfileNoteAddendum => "profile_note_addendum",
+        RuntimeCapabilityTarget::MemoryStageProfile => "memory_stage_profile",
     }
 }
 
@@ -1371,6 +1834,13 @@ fn render_capability_decision(decision: RuntimeCapabilityDecision) -> &'static s
         RuntimeCapabilityDecision::Undecided => "undecided",
         RuntimeCapabilityDecision::Accepted => "accepted",
         RuntimeCapabilityDecision::Rejected => "rejected",
+    }
+}
+
+fn render_runtime_capability_apply_outcome(outcome: RuntimeCapabilityApplyOutcome) -> &'static str {
+    match outcome {
+        RuntimeCapabilityApplyOutcome::Applied => "applied",
+        RuntimeCapabilityApplyOutcome::AlreadyApplied => "already_applied",
     }
 }
 
@@ -1447,6 +1917,11 @@ fn runtime_capability_promotion_target_contract(
         RuntimeCapabilityTarget::ProfileNoteAddendum => {
             ("profile_note_addendum", "profile_note", "profile-note")
         }
+        RuntimeCapabilityTarget::MemoryStageProfile => (
+            "memory_stage_profile",
+            "memory_stage_profiles",
+            "memory-stage-profile",
+        ),
     }
 }
 
@@ -1494,6 +1969,10 @@ fn build_runtime_capability_approval_checklist(
             "confirm the behavior belongs in advisory profile guidance rather than executable logic"
                 .to_owned()
         }
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            "confirm the behavior belongs in a governed memory stage profile rather than live runtime mutation"
+                .to_owned()
+        }
     });
     checklist
 }
@@ -1501,11 +1980,20 @@ fn build_runtime_capability_approval_checklist(
 fn build_runtime_capability_rollback_hints(
     planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
 ) -> Vec<String> {
-    vec![
-        format!(
+    let capture_hint = match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::MemoryStageProfile => format!(
+            "capture the current `{}` state before applying this memory stage profile",
+            planned_artifact.delivery_surface
+        ),
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => format!(
             "capture the current `{}` state before applying artifact `{}`",
             planned_artifact.delivery_surface, planned_artifact.artifact_id
         ),
+    };
+    vec![
+        capture_hint,
         format!(
             "remove or revert `{}` from `{}` if downstream validation fails",
             planned_artifact.artifact_id, planned_artifact.delivery_surface
@@ -1549,10 +2037,62 @@ fn build_runtime_capability_promotion_provenance(
     }
 }
 
+fn build_runtime_capability_promotion_planned_payload(
+    family_id: &str,
+    planned_artifact: &RuntimeCapabilityPromotionArtifactPlan,
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> Option<RuntimeCapabilityPromotionPlannedPayload> {
+    match planned_artifact.target_kind {
+        RuntimeCapabilityTarget::MemoryStageProfile => {
+            Some(RuntimeCapabilityPromotionPlannedPayload {
+                memory_stage_profile: RuntimeCapabilityMemoryStageProfileDryRunPayload {
+                    schema_version: 1,
+                    artifact_kind: planned_artifact.artifact_kind.clone(),
+                    profile: RuntimeCapabilityMemoryStageProfileDryRunProfile {
+                        id: planned_artifact.artifact_id.clone(),
+                        summary: planned_artifact.summary.clone(),
+                        review_scope: planned_artifact.bounded_scope.clone(),
+                        required_capabilities: planned_artifact.required_capabilities.clone(),
+                        tags: planned_artifact.tags.clone(),
+                    },
+                    provenance: build_memory_stage_profile_dry_run_provenance(family_id, artifacts),
+                },
+            })
+        }
+        RuntimeCapabilityTarget::ManagedSkill
+        | RuntimeCapabilityTarget::ProgrammaticFlow
+        | RuntimeCapabilityTarget::ProfileNoteAddendum => None,
+    }
+}
+
+fn build_memory_stage_profile_dry_run_provenance(
+    family_id: &str,
+    artifacts: &[RuntimeCapabilityArtifactDocument],
+) -> RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+    let mut accepted_artifacts = artifacts
+        .iter()
+        .filter(|artifact| artifact.decision == RuntimeCapabilityDecision::Accepted)
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_runtime_capability_artifacts(&mut accepted_artifacts);
+    let accepted_evidence = build_family_evidence_digest(&accepted_artifacts);
+
+    RuntimeCapabilityMemoryStageProfileDryRunProvenance {
+        family_id: family_id.to_owned(),
+        accepted_candidate_ids: accepted_artifacts
+            .iter()
+            .map(|artifact| artifact.candidate_id.clone())
+            .collect(),
+        evidence_digest: RuntimeCapabilityMemoryStageProfileDryRunEvidenceDigest {
+            changed_surfaces: accepted_evidence.changed_surfaces,
+        },
+    }
+}
+
 pub fn render_runtime_capability_promotion_plan_text(
     report: &RuntimeCapabilityPromotionPlanReport,
 ) -> String {
-    [
+    let mut lines = vec![
         format!("family_id={}", report.family_id),
         format!("promotable={}", report.promotable),
         format!(
@@ -1622,8 +2162,21 @@ pub fn render_runtime_capability_promotion_plan_text(
                 " | "
             )
         ),
-    ]
-    .join("\n")
+    ];
+
+    if let Some(planned_payload) =
+        render_runtime_capability_planned_payload_summary(report.planned_payload.as_ref())
+    {
+        lines.push(format!("planned_payload={planned_payload}"));
+    }
+
+    lines.join("\n")
+}
+
+fn render_runtime_capability_planned_payload_summary(
+    payload: Option<&RuntimeCapabilityPromotionPlannedPayload>,
+) -> Option<String> {
+    payload.map(|payload| format!("profile_id={}", payload.memory_stage_profile.profile.id))
 }
 
 fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessCheck]) -> String {
@@ -1635,5 +2188,44 @@ fn render_family_readiness_checks(checks: &[RuntimeCapabilityFamilyReadinessChec
             .map(render_family_readiness_check)
             .collect::<Vec<_>>()
             .join(" | ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    }
+
+    #[test]
+    fn write_pretty_json_file_create_new_rejects_existing_path() {
+        let root = unique_temp_dir("loongclaw-runtime-capability-atomic-create");
+        fs::create_dir_all(&root).expect("create temp dir");
+        let output_path = root.join("memory_stage_profiles/profile.json");
+        fs::create_dir_all(output_path.parent().expect("parent directory"))
+            .expect("create output parent");
+        fs::write(&output_path, "{\"existing\":true}\n").expect("write existing file");
+
+        let error = write_pretty_json_file_create_new(&output_path, &json!({"new": true}))
+            .expect_err("atomic create should reject an existing path");
+
+        assert!(
+            error.contains("already exists"),
+            "expected already-exists error, got: {error}"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }

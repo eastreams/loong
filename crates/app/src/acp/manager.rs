@@ -7,10 +7,10 @@ use crate::CliResult;
 use crate::config::LoongClawConfig;
 
 use super::backend::{
-    ACP_SESSION_METADATA_ACTIVATION_ORIGIN, AcpAbortController, AcpConfigPatch, AcpDoctorReport,
-    AcpRoutingOrigin, AcpSessionBootstrap, AcpSessionHandle, AcpSessionMetadata, AcpSessionMode,
-    AcpSessionState, AcpSessionStatus, AcpTurnEventSink, AcpTurnRequest, AcpTurnResult,
-    BufferedAcpTurnEventSink, CompositeAcpTurnEventSink,
+    ACP_SESSION_METADATA_ACTIVATION_ORIGIN, ACP_TURN_METADATA_TRACE_ID, AcpAbortController,
+    AcpConfigPatch, AcpDoctorReport, AcpRoutingOrigin, AcpSessionBootstrap, AcpSessionHandle,
+    AcpSessionMetadata, AcpSessionMode, AcpSessionState, AcpSessionStatus, AcpTurnEventSink,
+    AcpTurnRequest, AcpTurnResult, BufferedAcpTurnEventSink, CompositeAcpTurnEventSink,
 };
 use super::binding::AcpSessionBindingScope;
 use super::merge_turn_events;
@@ -115,9 +115,23 @@ impl AcpSessionManager {
         self.cleanup_idle_sessions(config).await?;
 
         let selection = resolve_acp_backend_selection(config);
+        tracing::debug!(
+            target: "loongclaw.acp",
+            backend_id = %selection.id,
+            mode = ?bootstrap.mode,
+            binding = ?AcpSessionBindingScope::from_bootstrap(bootstrap),
+            has_conversation_id = bootstrap.conversation_id.is_some(),
+            "ensuring ACP session"
+        );
         if let Some(existing) =
             self.resolve_existing_session(config, selection.id.as_str(), bootstrap)?
         {
+            tracing::debug!(
+                target: "loongclaw.acp",
+                backend_id = %existing.backend_id,
+                state = ?existing.state,
+                "reused ACP session"
+            );
             return Ok(existing);
         }
 
@@ -136,6 +150,12 @@ impl AcpSessionManager {
             .get(ACP_SESSION_METADATA_ACTIVATION_ORIGIN)
             .and_then(|value| AcpRoutingOrigin::parse(value));
         self.store.upsert(metadata.clone())?;
+        tracing::debug!(
+            target: "loongclaw.acp",
+            backend_id = %metadata.backend_id,
+            activation_origin = ?metadata.activation_origin.map(AcpRoutingOrigin::as_str),
+            "created ACP session"
+        );
         Ok(metadata)
     }
 
@@ -156,11 +176,24 @@ impl AcpSessionManager {
         request: &AcpTurnRequest,
         sink: Option<&dyn AcpTurnEventSink>,
     ) -> CliResult<AcpTurnResult> {
+        let started_at = std::time::Instant::now();
         let actor_key = actor_key_for_bootstrap(bootstrap);
         let _turn_queue_guard = self.acquire_turn_queue_guard(actor_key.clone()).await?;
         self.cleanup_idle_sessions(config).await?;
 
         let mut metadata = self.ensure_session(config, bootstrap).await?;
+        let trace_id = request
+            .metadata
+            .get(ACP_TURN_METADATA_TRACE_ID)
+            .map(String::as_str);
+        tracing::debug!(
+            target: "loongclaw.acp",
+            backend_id = %metadata.backend_id,
+            input_len = request.input.chars().count(),
+            sink_enabled = sink.is_some(),
+            has_trace_id = trace_id.is_some(),
+            "starting ACP turn"
+        );
         let backend = resolve_acp_backend(Some(metadata.backend_id.as_str()))?;
         metadata.state = AcpSessionState::Busy;
         metadata.clear_error();
@@ -209,11 +242,26 @@ impl AcpSessionManager {
             Ok(mut result) => {
                 self.record_turn_completion(turn_started_ms, true)?;
                 let streamed_events = buffered_sink.snapshot()?;
+                let duration_ms = started_at.elapsed().as_millis();
+                let reported_event_count = result.events.len();
+                let streamed_event_count = streamed_events.len();
                 result.events = merge_turn_events(&result.events, &streamed_events);
                 metadata.state = result.state;
                 metadata.clear_error();
                 metadata.touch();
                 self.store.upsert(metadata)?;
+                tracing::debug!(
+                    target: "loongclaw.acp",
+                    backend_id = %handle.backend_id,
+                    state = ?result.state,
+                    stop_reason = ?result.stop_reason,
+                    reported_event_count,
+                    streamed_event_count,
+                    merged_event_count = result.events.len(),
+                    duration_ms,
+                    has_trace_id = trace_id.is_some(),
+                    "ACP turn completed"
+                );
                 Ok(result)
             }
             Err(error) => {
@@ -222,6 +270,14 @@ impl AcpSessionManager {
                 metadata.state = AcpSessionState::Error;
                 metadata.set_error(error.clone());
                 self.store.upsert(metadata)?;
+                tracing::warn!(
+                    target: "loongclaw.acp",
+                    backend_id = %handle.backend_id,
+                    duration_ms = started_at.elapsed().as_millis(),
+                    error = %crate::observability::summarize_error(error.as_str()),
+                    has_trace_id = trace_id.is_some(),
+                    "ACP turn failed"
+                );
                 Err(error)
             }
         }

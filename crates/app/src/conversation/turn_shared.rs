@@ -3,16 +3,21 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
-use super::turn_engine::{ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, TurnResult};
+use super::turn_engine::{
+    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolResultPayloadSemantics,
+    TurnResult,
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::CliResult;
 
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
@@ -230,6 +235,246 @@ impl ToolDrivenReplyPhase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ApprovalPromptMarker {
+    ToolApprovalRequired,
+    ApprovalRequired,
+}
+
+impl ApprovalPromptMarker {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolApprovalRequired => "[tool_approval_required]",
+            Self::ApprovalRequired => "[approval_required]",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPromptLocale {
+    En,
+    Cjk,
+}
+
+impl ApprovalPromptLocale {
+    pub const fn is_cjk(self) -> bool {
+        matches!(self, Self::Cjk)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPromptActionId {
+    Yes,
+    Auto,
+    Full,
+    Esc,
+}
+
+impl ApprovalPromptActionId {
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::Yes => "yes",
+            Self::Auto => "auto",
+            Self::Full => "full",
+            Self::Esc => "esc",
+        }
+    }
+
+    pub const fn numeric_alias(self) -> &'static str {
+        match self {
+            Self::Yes => "1",
+            Self::Auto => "2",
+            Self::Full => "3",
+            Self::Esc => "4",
+        }
+    }
+
+    pub const fn all() -> [Self; 4] {
+        [Self::Yes, Self::Auto, Self::Full, Self::Esc]
+    }
+
+    fn matches_normalized_input(self, normalized: &str) -> bool {
+        match self {
+            Self::Yes => matches!(
+                normalized,
+                "1" | "y"
+                    | "yes"
+                    | "run"
+                    | "once"
+                    | "run once"
+                    | "本次"
+                    | "一次"
+                    | "运行一次"
+                    | "本次运行"
+                    | "仅这次"
+            ),
+            Self::Auto => matches!(
+                normalized,
+                "2" | "auto" | "session auto" | "自动" | "本会话自动"
+            ),
+            Self::Full => matches!(
+                normalized,
+                "3" | "full"
+                    | "full auto"
+                    | "session full"
+                    | "session full auto"
+                    | "全自动"
+                    | "本会话全自动"
+            ),
+            Self::Esc => matches!(
+                normalized,
+                "4" | "esc"
+                    | "cancel"
+                    | "skip"
+                    | "skip call"
+                    | "取消"
+                    | "跳过"
+                    | "跳过这次"
+                    | "这次跳过"
+                    | "不运行"
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPromptActionEffect {
+    CurrentCallOnly,
+    SessionAuto,
+    SessionFull,
+    SkipCurrentCall,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApprovalPromptActionView {
+    pub id: ApprovalPromptActionId,
+    pub effect: ApprovalPromptActionEffect,
+    pub command: String,
+    pub numeric_alias: String,
+    pub label: String,
+    pub summary: String,
+    #[serde(default)]
+    pub detail_lines: Vec<String>,
+    #[serde(default)]
+    pub recommended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApprovalPromptView {
+    pub marker: ApprovalPromptMarker,
+    pub preface: Option<String>,
+    pub tool_name: Option<String>,
+    pub request_id: Option<String>,
+    pub rule_id: Option<String>,
+    pub reason: Option<String>,
+    pub locale: ApprovalPromptLocale,
+    #[serde(default)]
+    pub actions: Vec<ApprovalPromptActionView>,
+}
+
+impl ApprovalPromptView {
+    pub fn title(&self) -> Option<String> {
+        match self.locale {
+            ApprovalPromptLocale::Cjk => self
+                .tool_name
+                .as_ref()
+                .map(|tool_name| format!("准备调用 {tool_name}"))
+                .or_else(|| Some("工具调用需要确认".to_owned())),
+            ApprovalPromptLocale::En => self
+                .tool_name
+                .as_ref()
+                .map(|tool_name| format!("LoongClaw wants to call {tool_name}"))
+                .or_else(|| Some("Tool call needs confirmation".to_owned())),
+        }
+    }
+
+    pub fn pause_reason_title(&self) -> String {
+        if self.locale.is_cjk() {
+            "为什么停下来".to_owned()
+        } else {
+            "Why it paused".to_owned()
+        }
+    }
+
+    pub fn request_section_title(&self) -> String {
+        if self.locale.is_cjk() {
+            "当前请求".to_owned()
+        } else {
+            "Pending request".to_owned()
+        }
+    }
+
+    pub fn request_id_label(&self) -> String {
+        if self.locale.is_cjk() {
+            "请求 ID".to_owned()
+        } else {
+            "request id".to_owned()
+        }
+    }
+
+    pub fn tool_label(&self) -> String {
+        if self.locale.is_cjk() {
+            "工具".to_owned()
+        } else {
+            "tool".to_owned()
+        }
+    }
+
+    pub fn subtitle(&self) -> String {
+        if self.locale.is_cjk() {
+            "工具确认".to_owned()
+        } else {
+            "tool consent".to_owned()
+        }
+    }
+
+    pub fn action_commands_text(&self) -> String {
+        self.actions
+            .iter()
+            .map(|action| action.command.as_str())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+
+    pub fn action_numeric_aliases_text(&self) -> String {
+        self.actions
+            .iter()
+            .map(|action| action.numeric_alias.as_str())
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+
+    pub fn reply_hint_lines(&self) -> Vec<String> {
+        if self.actions.is_empty() {
+            return Vec::new();
+        }
+
+        let action_commands = self.action_commands_text();
+        match self.locale {
+            ApprovalPromptLocale::Cjk => vec![
+                format!("可直接回复：{action_commands}"),
+                self.actions
+                    .iter()
+                    .map(|action| format!("{}={}", action.command, action.summary))
+                    .collect::<Vec<_>>()
+                    .join("，"),
+            ],
+            ApprovalPromptLocale::En => vec![
+                format!("Reply with: {action_commands}"),
+                self.actions
+                    .iter()
+                    .map(|action| format!("{} = {}", action.command, action.summary))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ReplyPersistenceMode {
     Success,
     InlineProviderError,
@@ -350,18 +595,29 @@ impl<'a> ToolDrivenReplyKernel<'a> {
 
 pub fn user_requested_raw_tool_output(user_input: &str) -> bool {
     let normalized = user_input.to_ascii_lowercase();
-    [
-        "raw",
-        "json",
-        "payload",
-        "verbatim",
+    let trimmed = normalized.trim();
+
+    if trimmed == "[ok]" {
+        return true;
+    }
+
+    let explicit_signals = [
+        "raw tool output",
+        "raw output",
         "exact output",
         "full output",
-        "tool output",
-        "[ok]",
-    ]
-    .iter()
-    .any(|signal| normalized.contains(signal))
+        "verbatim",
+        "raw json",
+        "raw payload",
+        "full payload",
+        "exact payload",
+        "payload as json",
+        "output as json",
+    ];
+
+    explicit_signals
+        .iter()
+        .any(|signal| normalized.contains(signal))
 }
 
 pub fn compose_assistant_reply(
@@ -400,28 +656,287 @@ pub fn format_approval_required_reply(
     assistant_preface: &str,
     requirement: &ApprovalRequirement,
 ) -> String {
+    render_approval_prompt_view(&approval_prompt_view_from_requirement(
+        assistant_preface,
+        requirement,
+    ))
+}
+
+pub fn parse_approval_prompt_view(assistant_text: &str) -> Option<ApprovalPromptView> {
+    let (marker_index, marker) = find_approval_prompt_marker(assistant_text)?;
+    let preface = trimmed_non_empty(assistant_text.get(..marker_index).unwrap_or_default());
+    let body = assistant_text.get(marker_index..)?;
+    let locale = approval_prompt_locale_from_text(assistant_text);
+    let mut tool_name = None;
+    let mut request_id = None;
+    let mut rule_id = None;
+    let mut reason = None;
+
+    for line in body.lines() {
+        if let Some(value) = line.strip_prefix("tool: ") {
+            tool_name = trimmed_non_empty(value);
+        } else if let Some(value) = line.strip_prefix("request_id: ") {
+            request_id = trimmed_non_empty(value);
+        } else if let Some(value) = line.strip_prefix("rule_id: ") {
+            rule_id = trimmed_non_empty(value);
+        } else if let Some(value) = line.strip_prefix("reason: ") {
+            reason = trimmed_non_empty(value);
+        }
+    }
+
+    Some(ApprovalPromptView {
+        marker,
+        preface,
+        tool_name,
+        request_id,
+        rule_id,
+        reason,
+        locale,
+        actions: approval_prompt_actions(marker, locale),
+    })
+}
+
+pub fn normalize_approval_prompt_control_input(input: &str) -> String {
+    let compatibility = input.nfkc().collect::<String>();
+    let trimmed = compatibility.trim().trim_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '`' | '"'
+                    | '\''
+                    | '.'
+                    | ','
+                    | ':'
+                    | ';'
+                    | '!'
+                    | '?'
+                    | '，'
+                    | '。'
+                    | '：'
+                    | '；'
+                    | '！'
+                    | '？'
+            )
+    });
+    let lowercased = trimmed.to_lowercase();
+
+    let normalized = lowercased
+        .chars()
+        .map(|character| match character {
+            '_' | '-' => ' ',
+            other => other,
+        })
+        .collect::<String>();
+
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn parse_approval_prompt_action_input(input: &str) -> Option<ApprovalPromptActionId> {
+    let normalized = normalize_approval_prompt_control_input(input);
+    ApprovalPromptActionId::all()
+        .into_iter()
+        .find(|action| action.matches_normalized_input(normalized.as_str()))
+}
+
+fn render_approval_prompt_view(view: &ApprovalPromptView) -> String {
     let mut lines = Vec::new();
-    let marker = match requirement.kind {
-        ApprovalRequirementKind::GovernedTool => "[tool_approval_required]",
-        ApprovalRequirementKind::KernelContextRequired => "[approval_required]",
-    };
-    lines.push(marker.to_owned());
-    if let Some(tool_name) = requirement.tool_name.as_deref() {
+    lines.push(view.marker.as_str().to_owned());
+    if let Some(tool_name) = view.tool_name.as_deref() {
         lines.push(format!("tool: {tool_name}"));
     }
-    if let Some(request_id) = requirement.approval_request_id.as_deref() {
+    if let Some(request_id) = view.request_id.as_deref() {
         lines.push(format!("request_id: {request_id}"));
     }
-    if let Some(approval_key) = requirement.approval_key.as_deref() {
-        lines.push(format!("approval_key: {approval_key}"));
+    if let Some(rule_id) = view.rule_id.as_deref() {
+        lines.push(format!("rule_id: {rule_id}"));
     }
-    lines.push(format!("rule_id: {}", requirement.rule_id));
-    lines.push(format!("reason: {}", requirement.reason));
-    if requirement.kind == ApprovalRequirementKind::GovernedTool {
-        lines.push("allowed_decisions: approve_once, approve_always, deny".to_owned());
+    if let Some(reason) = view.reason.as_deref() {
+        lines.push(format!("reason: {reason}"));
+    }
+    if !view.actions.is_empty() {
+        lines.push(format!(
+            "allowed_decisions: {}",
+            view.action_commands_text()
+        ));
+        for action in &view.actions {
+            for detail_line in &action.detail_lines {
+                lines.push(detail_line.clone());
+            }
+        }
+        lines.push(String::new());
+        lines.extend(view.reply_hint_lines());
     }
     let body = lines.join("\n");
-    join_non_empty_lines(&[assistant_preface, body.as_str()])
+    join_non_empty_lines(&[view.preface.as_deref().unwrap_or_default(), body.as_str()])
+}
+
+fn approval_prompt_view_from_requirement(
+    assistant_preface: &str,
+    requirement: &ApprovalRequirement,
+) -> ApprovalPromptView {
+    let marker = match requirement.kind {
+        ApprovalRequirementKind::GovernedTool => ApprovalPromptMarker::ToolApprovalRequired,
+        ApprovalRequirementKind::KernelContextRequired => ApprovalPromptMarker::ApprovalRequired,
+    };
+    let locale = approval_prompt_locale_from_text(
+        join_non_empty_lines(&[assistant_preface, requirement.reason.as_str()]).as_str(),
+    );
+
+    ApprovalPromptView {
+        marker,
+        preface: trimmed_non_empty(assistant_preface),
+        tool_name: requirement.tool_name.clone(),
+        request_id: requirement.approval_request_id.clone(),
+        rule_id: trimmed_non_empty(requirement.rule_id.as_str()),
+        reason: trimmed_non_empty(requirement.reason.as_str()),
+        locale,
+        actions: approval_prompt_actions(marker, locale),
+    }
+}
+
+fn approval_prompt_actions(
+    marker: ApprovalPromptMarker,
+    locale: ApprovalPromptLocale,
+) -> Vec<ApprovalPromptActionView> {
+    if marker != ApprovalPromptMarker::ToolApprovalRequired {
+        return Vec::new();
+    }
+
+    let make_action = |id,
+                       effect,
+                       label_cjk: &str,
+                       label_en: &str,
+                       summary_cjk: &str,
+                       summary_en: &str,
+                       detail_cjk: &[&str],
+                       detail_en: &[&str],
+                       recommended| ApprovalPromptActionView {
+        id,
+        effect,
+        command: id.command().to_owned(),
+        numeric_alias: id.numeric_alias().to_owned(),
+        label: if locale.is_cjk() {
+            label_cjk.to_owned()
+        } else {
+            label_en.to_owned()
+        },
+        summary: if locale.is_cjk() {
+            summary_cjk.to_owned()
+        } else {
+            summary_en.to_owned()
+        },
+        detail_lines: if locale.is_cjk() {
+            detail_cjk.iter().map(|line| (*line).to_owned()).collect()
+        } else {
+            detail_en.iter().map(|line| (*line).to_owned()).collect()
+        },
+        recommended,
+    };
+
+    vec![
+        make_action(
+            ApprovalPromptActionId::Yes,
+            ApprovalPromptActionEffect::CurrentCallOnly,
+            "本次运行",
+            "Run once",
+            "仅本次运行",
+            "run once",
+            &["只运行当前这次 tool call"],
+            &["Execute only this tool call"],
+            true,
+        ),
+        make_action(
+            ApprovalPromptActionId::Auto,
+            ApprovalPromptActionEffect::SessionAuto,
+            "本会话自动",
+            "Session auto",
+            "本会话自动",
+            "session auto mode",
+            &[
+                "后续低风险工具自动运行",
+                "写文件、执行 shell、切换 provider 等仍会停下来",
+            ],
+            &[
+                "Low-risk tools continue automatically",
+                "Writes, shell exec, provider switching, and similar actions still pause",
+            ],
+            false,
+        ),
+        make_action(
+            ApprovalPromptActionId::Full,
+            ApprovalPromptActionEffect::SessionFull,
+            "本会话全自动",
+            "Session full-auto",
+            "本会话全自动",
+            "session full-auto mode",
+            &[
+                "本会话内不再询问 tool consent",
+                "仍不会绕过 governed approval、shell allowlist 等硬限制",
+            ],
+            &[
+                "Stop asking for tool consent in this session",
+                "Governed approvals and kernel hard limits still apply",
+            ],
+            false,
+        ),
+        make_action(
+            ApprovalPromptActionId::Esc,
+            ApprovalPromptActionEffect::SkipCurrentCall,
+            "跳过这次",
+            "Skip call",
+            "跳过这次",
+            "skip this call",
+            &["不执行这次 tool call"],
+            &["Do not run this tool call"],
+            false,
+        ),
+    ]
+}
+
+fn find_approval_prompt_marker(text: &str) -> Option<(usize, ApprovalPromptMarker)> {
+    let tool_marker = text.find(ApprovalPromptMarker::ToolApprovalRequired.as_str());
+    let generic_marker = text.find(ApprovalPromptMarker::ApprovalRequired.as_str());
+    match (tool_marker, generic_marker) {
+        (Some(tool_index), Some(generic_index)) if tool_index <= generic_index => {
+            Some((tool_index, ApprovalPromptMarker::ToolApprovalRequired))
+        }
+        (Some(_tool_index), Some(generic_index)) => {
+            Some((generic_index, ApprovalPromptMarker::ApprovalRequired))
+        }
+        (Some(tool_index), None) => Some((tool_index, ApprovalPromptMarker::ToolApprovalRequired)),
+        (None, Some(generic_index)) => {
+            Some((generic_index, ApprovalPromptMarker::ApprovalRequired))
+        }
+        (None, None) => None,
+    }
+}
+
+fn approval_prompt_locale_from_text(text: &str) -> ApprovalPromptLocale {
+    if contains_cjk_text(text) {
+        ApprovalPromptLocale::Cjk
+    } else {
+        ApprovalPromptLocale::En
+    }
+}
+
+fn trimmed_non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn contains_cjk_text(text: &str) -> bool {
+    text.chars().any(is_cjk_character)
+}
+
+fn is_cjk_character(character: char) -> bool {
+    matches!(
+        character as u32,
+        0x3040..=0x30ff
+            | 0x3400..=0x4dbf
+            | 0x4e00..=0x9fff
+            | 0xac00..=0xd7af
+            | 0xf900..=0xfaff
+    )
 }
 
 pub fn tool_result_contains_truncation_signal(tool_result_text: &str) -> bool {
@@ -435,9 +950,19 @@ pub fn tool_result_contains_truncation_signal(tool_result_text: &str) -> bool {
 }
 
 fn line_contains_structured_truncation_signal(line: &str) -> bool {
+    let Some(envelope) = parse_tool_result_envelope(line) else {
+        return false;
+    };
+    envelope
+        .get("payload_truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn parse_tool_result_envelope(line: &str) -> Option<Value> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
     let candidate = if trimmed.starts_with('[') {
         trimmed
@@ -448,16 +973,9 @@ fn line_contains_structured_truncation_signal(line: &str) -> bool {
         trimmed
     };
     if !(candidate.starts_with('{') || candidate.starts_with('[')) {
-        return false;
+        return None;
     }
-    let envelope = match serde_json::from_str::<Value>(candidate) {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    envelope
-        .get("payload_truncated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
+    serde_json::from_str::<Value>(candidate).ok()
 }
 
 pub fn build_tool_followup_user_prompt(
@@ -466,7 +984,14 @@ pub fn build_tool_followup_user_prompt(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
 ) -> String {
-    let mut sections = vec![TOOL_FOLLOWUP_PROMPT.to_owned()];
+    let prompt =
+        if followup_prompt_uses_discovery_guidance(tool_result_text, rendered_tool_result_text) {
+            DISCOVERY_RESULT_FOLLOWUP_PROMPT
+        } else {
+            TOOL_FOLLOWUP_PROMPT
+        };
+
+    let mut sections = vec![prompt.to_owned()];
     if let Some(reason) = loop_warning_reason {
         sections.push(format!(
             "Loop warning:\n{reason}\nAvoid repeating the same tool call with unchanged results. Try a different tool, adjust arguments, or provide a best-effort final answer if evidence is sufficient."
@@ -488,6 +1013,18 @@ fn followup_prompt_needs_truncation_hint(
         .unwrap_or(false)
         || rendered_tool_result_text
             .map(tool_result_contains_truncation_signal)
+            .unwrap_or(false)
+}
+
+fn followup_prompt_uses_discovery_guidance(
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> bool {
+    tool_result_text
+        .map(tool_result_contains_discovery_payload)
+        .unwrap_or(false)
+        || rendered_tool_result_text
+            .map(tool_result_contains_discovery_payload)
             .unwrap_or(false)
 }
 
@@ -533,6 +1070,84 @@ fn reduce_tool_result_text_for_model(text: &str) -> Option<String> {
     Some(reduced)
 }
 
+fn tool_result_contains_discovery_payload(tool_result_text: &str) -> bool {
+    tool_result_text
+        .lines()
+        .filter_map(parse_tool_result_envelope)
+        .any(|envelope| envelope_uses_discovery_semantics(&envelope))
+}
+
+fn envelope_uses_discovery_semantics(envelope: &Value) -> bool {
+    let uses_explicit_semantics =
+        envelope_has_payload_semantics(envelope, ToolResultPayloadSemantics::DiscoveryResult);
+    if uses_explicit_semantics {
+        return true;
+    }
+    envelope_contains_discovery_payload(envelope)
+}
+
+fn envelope_uses_external_skill_context(envelope: &Value) -> bool {
+    let uses_explicit_semantics =
+        envelope_has_payload_semantics(envelope, ToolResultPayloadSemantics::ExternalSkillContext);
+    if uses_explicit_semantics {
+        return true;
+    }
+
+    envelope_uses_legacy_external_skill_tool(envelope)
+}
+
+fn envelope_uses_legacy_external_skill_tool(envelope: &Value) -> bool {
+    let tool_name = envelope.get("tool").and_then(Value::as_str);
+    tool_name == Some("external_skills.invoke")
+}
+
+fn envelope_contains_discovery_payload(envelope: &Value) -> bool {
+    let Some(payload_summary) = envelope.get("payload_summary").and_then(Value::as_str) else {
+        return false;
+    };
+    let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
+        return false;
+    };
+    payload_summary_looks_like_discovery_result(&payload_json)
+}
+
+fn payload_summary_looks_like_discovery_result(payload: &Value) -> bool {
+    let Some(payload_object) = payload.as_object() else {
+        return false;
+    };
+    let Some(results) = payload_object.get("results").and_then(Value::as_array) else {
+        return false;
+    };
+
+    if results.is_empty() {
+        return payload_object.contains_key("query");
+    }
+
+    results.iter().any(|result| {
+        let Some(result_object) = result.as_object() else {
+            return false;
+        };
+        result_object
+            .get("tool_id")
+            .and_then(Value::as_str)
+            .is_some()
+            && result_object.get("lease").and_then(Value::as_str).is_some()
+    })
+}
+
+fn envelope_payload_semantics(envelope: &Value) -> Option<ToolResultPayloadSemantics> {
+    let payload_semantics_value = envelope.get("payload_semantics")?;
+    serde_json::from_value(payload_semantics_value.clone()).ok()
+}
+
+fn envelope_has_payload_semantics(
+    envelope: &Value,
+    expected_semantics: ToolResultPayloadSemantics,
+) -> bool {
+    let payload_semantics = envelope_payload_semantics(envelope);
+    payload_semantics == Some(expected_semantics)
+}
+
 fn reduce_tool_result_line_for_model(line: &str) -> String {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -547,10 +1162,6 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
     let Ok(mut envelope) = serde_json::from_str::<Value>(payload) else {
         return line.to_owned();
     };
-    let Some(tool) = envelope.get("tool").and_then(Value::as_str) else {
-        return line.to_owned();
-    };
-
     let payload_truncated = envelope
         .get("payload_truncated")
         .and_then(Value::as_bool)
@@ -559,21 +1170,23 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
         return line.to_owned();
     };
 
-    let reduction = match tool {
-        "file.read" => {
+    let reduction = match envelope.get("tool").and_then(Value::as_str) {
+        Some("file.read") => {
             let Ok(payload_json) = serde_json::from_str::<Value>(payload_summary) else {
                 return line.to_owned();
             };
             reduce_file_read_payload_summary(&payload_json).map(|summary| (summary, true))
         }
-        "shell.exec" => {
+        Some("shell.exec") => {
             let Ok(mut payload_json) = serde_json::from_str::<Value>(payload_summary) else {
                 return line.to_owned();
             };
             reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
         }
-        "tool.search" if !payload_truncated => {
-            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
+        _ if !payload_truncated => {
+            let payload_semantics = envelope_payload_semantics(&envelope);
+            compact_discovery_payload_summary_str(payload_summary, payload_semantics)
+                .map(|summary| (summary, false))
         }
         _ => None,
     };
@@ -718,14 +1331,26 @@ pub fn build_external_skill_followup_user_prompt(
     sections.join("\n\n")
 }
 
-fn compact_tool_search_payload_summary_str(payload_summary: &str) -> Option<String> {
+fn compact_discovery_payload_summary_str(
+    payload_summary: &str,
+    payload_semantics: Option<ToolResultPayloadSemantics>,
+) -> Option<String> {
     let payload_json = serde_json::from_str::<Value>(payload_summary).ok()?;
-    let compacted_summary = compact_tool_search_payload_summary(&payload_json)?;
+    let compacted_summary = compact_discovery_payload_summary(&payload_json, payload_semantics)?;
     let compacted_summary_str = serde_json::to_string(&compacted_summary).ok()?;
     (compacted_summary_str.len() < payload_summary.len()).then_some(compacted_summary_str)
 }
 
-fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
+fn compact_discovery_payload_summary(
+    payload: &Value,
+    payload_semantics: Option<ToolResultPayloadSemantics>,
+) -> Option<Value> {
+    let use_discovery_compaction = payload_semantics
+        == Some(ToolResultPayloadSemantics::DiscoveryResult)
+        || payload_summary_looks_like_discovery_result(payload);
+    if !use_discovery_compaction {
+        return None;
+    }
     let payload_object = payload.as_object()?;
     let results = payload_object.get("results")?.as_array()?;
 
@@ -738,7 +1363,7 @@ fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
         Value::Array(
             results
                 .iter()
-                .map(compact_tool_search_payload_result)
+                .map(compact_discovery_payload_result)
                 .collect(),
         ),
     );
@@ -746,7 +1371,7 @@ fn compact_tool_search_payload_summary(payload: &Value) -> Option<Value> {
     Some(Value::Object(compacted))
 }
 
-fn compact_tool_search_payload_result(result: &Value) -> Value {
+fn compact_discovery_payload_result(result: &Value) -> Value {
     let Some(result_object) = result.as_object() else {
         return result.clone();
     };
@@ -993,7 +1618,8 @@ fn parse_external_skill_invoke_context_line(line: &str) -> Option<ExternalSkillI
     }
     let payload = trimmed.strip_prefix("[ok] ")?;
     let envelope: Value = serde_json::from_str(payload).ok()?;
-    if envelope.get("tool")?.as_str()? != "external_skills.invoke" {
+    let uses_external_skill_context = envelope_uses_external_skill_context(&envelope);
+    if !uses_external_skill_context {
         return None;
     }
     if envelope
@@ -1082,6 +1708,27 @@ mod tests {
     }
 
     #[test]
+    fn raw_tool_output_detection_ignores_payload_mentions_without_output_request() {
+        assert!(!user_requested_raw_tool_output(
+            "Callback hints mention the payload JSON, but just summarize the action."
+        ));
+        assert!(!user_requested_raw_tool_output(
+            "The card callback token stays in internal payload context."
+        ));
+        assert!(user_requested_raw_tool_output(
+            "Return the payload as JSON."
+        ));
+    }
+
+    #[test]
+    fn raw_tool_output_detection_ignores_generic_json_and_tool_output_requests() {
+        assert!(!user_requested_raw_tool_output("summarize the tool output"));
+        assert!(!user_requested_raw_tool_output("answer in json"));
+        assert!(!user_requested_raw_tool_output("format the result as json"));
+        assert!(user_requested_raw_tool_output("[ok]"));
+    }
+
+    #[test]
     fn compose_assistant_reply_keeps_tool_error_inline_reason() {
         let reply = compose_assistant_reply(
             "preface",
@@ -1109,9 +1756,93 @@ mod tests {
         assert!(reply.contains("[tool_approval_required]"));
         assert!(reply.contains("delegate_async"));
         assert!(reply.contains("apr_123"));
-        assert!(reply.contains("approve_once"));
-        assert!(reply.contains("approve_always"));
-        assert!(reply.contains("deny"));
+        assert!(reply.contains("yes"));
+        assert!(reply.contains("auto"));
+        assert!(reply.contains("full"));
+        assert!(reply.contains("esc"));
+    }
+
+    #[test]
+    fn parse_approval_prompt_view_recovers_localized_action_contract() {
+        let reply = format_approval_required_reply(
+            "我准备调用 provider.switch 来切换后续会话的 provider。",
+            &ApprovalRequirement {
+                kind: ApprovalRequirementKind::GovernedTool,
+                reason: "`provider.switch` is not eligible for auto mode and needs operator confirmation"
+                    .to_owned(),
+                rule_id: "session_tool_consent_auto_blocked".to_owned(),
+                tool_name: Some("provider.switch".to_owned()),
+                approval_key: Some("tool:provider.switch".to_owned()),
+                approval_request_id: Some("apr_provider_switch".to_owned()),
+            },
+        );
+
+        let parsed = parse_approval_prompt_view(reply.as_str()).expect("parse approval prompt");
+        assert_eq!(parsed.marker, ApprovalPromptMarker::ToolApprovalRequired);
+        assert_eq!(
+            parsed.preface.as_deref(),
+            Some("我准备调用 provider.switch 来切换后续会话的 provider。")
+        );
+        assert_eq!(parsed.tool_name.as_deref(), Some("provider.switch"));
+        assert_eq!(parsed.request_id.as_deref(), Some("apr_provider_switch"));
+        assert_eq!(
+            parsed.rule_id.as_deref(),
+            Some("session_tool_consent_auto_blocked")
+        );
+        assert_eq!(parsed.locale, ApprovalPromptLocale::Cjk);
+        assert_eq!(
+            parsed
+                .actions
+                .iter()
+                .map(|action| action.command.as_str())
+                .collect::<Vec<_>>(),
+            vec!["yes", "auto", "full", "esc"]
+        );
+        assert_eq!(
+            parsed
+                .actions
+                .iter()
+                .map(|action| action.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["本次运行", "本会话自动", "本会话全自动", "跳过这次"]
+        );
+    }
+
+    #[test]
+    fn approval_prompt_action_input_parser_accepts_skip_and_localized_aliases() {
+        assert_eq!(
+            parse_approval_prompt_action_input("run once"),
+            Some(ApprovalPromptActionId::Yes)
+        );
+        assert_eq!(
+            parse_approval_prompt_action_input("session full-auto"),
+            Some(ApprovalPromptActionId::Full)
+        );
+        assert_eq!(
+            parse_approval_prompt_action_input("跳过这次"),
+            Some(ApprovalPromptActionId::Esc)
+        );
+        assert_eq!(
+            parse_approval_prompt_action_input("skip call"),
+            Some(ApprovalPromptActionId::Esc)
+        );
+        assert_eq!(parse_approval_prompt_action_input("maybe"), None);
+    }
+
+    #[test]
+    fn approval_prompt_action_input_parser_accepts_full_width_aliases() {
+        assert_eq!(
+            parse_approval_prompt_action_input("ｙｅｓ"),
+            Some(ApprovalPromptActionId::Yes)
+        );
+        assert_eq!(
+            parse_approval_prompt_action_input("３"),
+            Some(ApprovalPromptActionId::Full)
+        );
+        assert_eq!(
+            parse_approval_prompt_action_input("ｓｋｉｐ　ｃａｌｌ"),
+            Some(ApprovalPromptActionId::Esc)
+        );
     }
 
     #[test]
@@ -1389,13 +2120,13 @@ mod tests {
         assert_eq!(
             phase.raw_reply(),
             Some(
-                "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny"
+                "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\nExecute only this tool call\nLow-risk tools continue automatically\nWrites, shell exec, provider switching, and similar actions still pause\nStop asking for tool consent in this session\nGoverned approvals and kernel hard limits still apply\nDo not run this tool call\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call"
             )
         );
         assert_eq!(
             phase.decision(),
             &ToolDrivenReplyBaseDecision::FinalizeDirect {
-                reply: "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\napproval_key: tool:delegate_async\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: approve_once, approve_always, deny".to_owned(),
+                reply: "preface\n[tool_approval_required]\ntool: delegate_async\nrequest_id: apr_direct\nrule_id: governed_tool_requires_approval\nreason: operator approval required for governed tool\nallowed_decisions: yes / auto / full / esc\nExecute only this tool call\nLow-risk tools continue automatically\nWrites, shell exec, provider switching, and similar actions still pause\nStop asking for tool consent in this session\nGoverned approvals and kernel hard limits still apply\nDo not run this tool call\n\nReply with: yes / auto / full / esc\nyes = run once, auto = session auto mode, full = session full-auto mode, esc = skip this call".to_owned(),
             }
         );
     }
@@ -1466,6 +2197,33 @@ mod tests {
                     .get("content")
                     .and_then(Value::as_str)
                     .map(|content| content.contains("[tool_loop_warning]\nwarning"))
+                    .unwrap_or(false)
+        }));
+        assert!(
+            tail.iter()
+                .filter_map(|message| message.get("content").and_then(Value::as_str))
+                .all(|content| !content.contains("[tool_result]\n[ok]"))
+        );
+    }
+
+    #[test]
+    fn tool_result_followup_tail_promotes_external_skill_from_semantic_envelope() {
+        let tail = build_tool_result_followup_tail(
+            "preface",
+            r#"[ok] {"status":"ok","tool":"file.read","tool_call_id":"call-1","payload_semantics":"external_skill_context","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#,
+            "summarize note.md",
+            Some("warning"),
+            |_, _| panic!("external skill payload should bypass payload mapper"),
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("system".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| {
+                        content.contains("Follow the managed skill instruction before answering.")
+                    })
                     .unwrap_or(false)
         }));
         assert!(
@@ -1738,6 +2496,41 @@ mod tests {
     }
 
     #[test]
+    fn followup_prompt_uses_discovery_guidance_for_discovery_shaped_results() {
+        let payload_summary = json!({
+            "query": "latest ai news",
+            "results": [
+                {
+                    "tool_id": "web.search",
+                    "lease": "lease-web-search"
+                }
+            ]
+        })
+        .to_string();
+        let tool_result = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "file.read",
+                "tool_call_id": "call-search",
+                "payload_summary": payload_summary,
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        let prompt = build_tool_followup_user_prompt(
+            "find the latest ai news and summarize it",
+            None,
+            Some(tool_result.as_str()),
+            None,
+        );
+
+        assert!(prompt.contains(DISCOVERY_RESULT_FOLLOWUP_PROMPT));
+        assert!(prompt.contains("Original request:\nfind the latest ai news and summarize it"));
+    }
+
+    #[test]
     fn reduce_followup_payload_for_model_preserves_shell_payload_metadata() {
         let payload = json!({
             "adapter": "core-tools",
@@ -1900,7 +2693,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_external_skill_invoke_context_extracts_full_instructions() {
+    fn parse_external_skill_invoke_context_extracts_full_instructions_from_semantic_envelope() {
         let instructions = format!("prefix {}\nsuffix-marker", "x".repeat(256));
         let payload = json!({
             "skill_id": "demo-skill",
@@ -1911,8 +2704,9 @@ mod tests {
             "[ok] {}",
             json!({
                 "status": "ok",
-                "tool": "external_skills.invoke",
+                "tool": "file.read",
                 "tool_call_id": "call-1",
+                "payload_semantics": "external_skill_context",
                 "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
                 "payload_chars": 512,
                 "payload_truncated": false
@@ -1924,6 +2718,31 @@ mod tests {
         assert_eq!(parsed.skill_id, "demo-skill");
         assert_eq!(parsed.display_name, "Demo Skill");
         assert!(parsed.instructions.contains("suffix-marker"));
+    }
+
+    #[test]
+    fn parse_external_skill_invoke_context_requires_semantics_or_legacy_tool_name() {
+        let payload = json!({
+            "skill_id": "demo-skill",
+            "display_name": "Demo Skill",
+            "instructions": "Follow the managed skill instruction before answering.",
+        });
+        let line = format!(
+            "[ok] {}",
+            json!({
+                "status": "ok",
+                "tool": "file.read",
+                "tool_call_id": "call-1",
+                "payload_summary": serde_json::to_string(&payload).expect("encode payload"),
+                "payload_chars": 512,
+                "payload_truncated": false
+            })
+        );
+
+        assert!(
+            parse_external_skill_invoke_context(line.as_str()).is_none(),
+            "skill-shaped payloads should not activate managed skill context without semantics or the legacy tool name"
+        );
     }
 
     #[test]

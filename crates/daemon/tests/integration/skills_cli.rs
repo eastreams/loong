@@ -153,6 +153,8 @@ fn skills_install_cli_parses_global_flags_after_subcommand() {
                     assert!(replace);
                 }
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Search { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Recommend { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Fetch { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::InstallBundled { .. }
@@ -200,6 +202,8 @@ fn skills_install_bundled_cli_parses_global_flags_after_subcommand() {
                     assert!(replace);
                 }
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Search { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Recommend { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Fetch { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
@@ -214,6 +218,78 @@ fn skills_install_bundled_cli_parses_global_flags_after_subcommand() {
         }
         Some(other) => panic!("unexpected command parsed: {other:?}"),
         None => panic!("expected skills command to parse"),
+    }
+}
+
+#[test]
+fn skills_search_cli_parses_query_and_limit_after_subcommand() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "skills",
+        "search",
+        "browser",
+        "preview",
+        "--limit",
+        "7",
+        "--json",
+        "--config",
+        "/tmp/loongclaw.toml",
+    ])
+    .expect("skills search CLI should parse");
+
+    match cli.command {
+        Some(Commands::Skills {
+            config,
+            json,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(json);
+            match command {
+                loongclaw_daemon::skills_cli::SkillsCommands::Search { query, limit } => {
+                    assert_eq!(query, vec!["browser".to_owned(), "preview".to_owned()]);
+                    assert_eq!(limit, 7);
+                }
+                other => panic!("unexpected skills subcommand parsed: {other:?}"),
+            }
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn skills_recommend_cli_parses_query_and_limit_after_subcommand() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "skills",
+        "recommend",
+        "release",
+        "discipline",
+        "--limit",
+        "2",
+        "--json",
+        "--config",
+        "/tmp/loongclaw.toml",
+    ])
+    .expect("skills recommend CLI should parse");
+
+    match cli.command {
+        Some(Commands::Skills {
+            config,
+            json,
+            command,
+        }) => {
+            assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+            assert!(json);
+            match command {
+                loongclaw_daemon::skills_cli::SkillsCommands::Recommend { query, limit } => {
+                    assert_eq!(query, vec!["release".to_owned(), "discipline".to_owned()]);
+                    assert_eq!(limit, 2);
+                }
+                other => panic!("unexpected skills subcommand parsed: {other:?}"),
+            }
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
     }
 }
 
@@ -243,6 +319,8 @@ fn skills_enable_browser_preview_cli_parses_global_flags_after_subcommand() {
                     assert!(replace);
                 }
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Search { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Recommend { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Fetch { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
@@ -309,6 +387,8 @@ fn skills_policy_set_cli_parses_domain_and_approval_flags() {
                 }
             },
             other @ loongclaw_daemon::skills_cli::SkillsCommands::List
+            | other @ loongclaw_daemon::skills_cli::SkillsCommands::Search { .. }
+            | other @ loongclaw_daemon::skills_cli::SkillsCommands::Recommend { .. }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Fetch { .. }
             | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
@@ -373,6 +453,8 @@ fn skills_fetch_cli_parses_install_flags_after_subcommand() {
                     assert!(replace);
                 }
                 other @ loongclaw_daemon::skills_cli::SkillsCommands::List
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Search { .. }
+                | other @ loongclaw_daemon::skills_cli::SkillsCommands::Recommend { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Info { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::Install { .. }
                 | other @ loongclaw_daemon::skills_cli::SkillsCommands::InstallBundled { .. }
@@ -540,7 +622,7 @@ fn execute_skills_command_enable_browser_preview_quotes_follow_up_config_path() 
         .as_array()
         .expect("enable browser preview should return next_steps");
     let expected = format!(
-        "Run diagnostics: loongclaw doctor --config {}",
+        "Run diagnostics: loong doctor --config {}",
         shell_quote(&config_path.display().to_string())
     );
     assert!(
@@ -575,7 +657,7 @@ fn execute_skills_command_enable_browser_preview_hides_recipes_when_cli_is_disab
         .as_array()
         .expect("enable browser preview should return next_steps");
     let expected_doctor_step = format!(
-        "Run diagnostics: loongclaw doctor --config {}",
+        "Run diagnostics: loong doctor --config {}",
         shell_quote(&config_path.display().to_string())
     );
     assert!(
@@ -608,7 +690,7 @@ fn execute_skills_command_enable_browser_preview_hides_recipes_when_cli_is_disab
     assert!(
         !next_steps.iter().any(|step| {
             step.as_str()
-                .is_some_and(|step| step.contains("Try browser companion preview: loongclaw ask"))
+                .is_some_and(|step| step.contains("Try browser companion preview: loong ask"))
         }),
         "cli-disabled configs should not advertise ask-based preview follow-up: {next_steps:#?}"
     );
@@ -1350,6 +1432,389 @@ fn execute_skills_command_operator_inspection_still_works_when_runtime_is_disabl
 }
 
 #[test]
+fn execute_skills_command_search_surfaces_active_shadowed_and_blocked_matches() {
+    let root = unique_temp_dir("loongclaw-skills-cli-search");
+    let home = unique_temp_dir("loongclaw-skills-cli-search-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        "source/release-guard/SKILL.md",
+        "---\nname: release-guard\ndescription: Guard release discipline.\ninvocation_policy: both\n---\n\n# Release Guard\n\nKeep release flows tight.\n",
+    );
+    write_file(
+        &root,
+        ".agents/skills/release-guard/SKILL.md",
+        "---\nname: release-guard\ndescription: Project-scoped release helper.\n---\n\nProject release fallback.\n",
+    );
+    write_file(
+        &root,
+        ".agents/skills/release-broken/SKILL.md",
+        "---\nname: release-broken\ndescription: Broken release helper.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
+                path: "source/release-guard".to_owned(),
+                skill_id: None,
+                replace: false,
+            },
+        },
+    )
+    .expect("skills install should succeed");
+
+    let search = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Search {
+                query: vec!["release".to_owned()],
+                limit: 5,
+            },
+        },
+    )
+    .expect("skills search should succeed");
+
+    assert_eq!(
+        search.outcome.payload["tool_name"],
+        "external_skills.search"
+    );
+    assert_eq!(
+        search.outcome.payload["results"][0]["skill_id"],
+        "release-guard"
+    );
+    assert_eq!(search.outcome.payload["results"][0]["resolution"], "active");
+    assert!(
+        search.outcome.payload["shadowed_results"]
+            .as_array()
+            .expect("shadowed results should be an array")
+            .iter()
+            .any(|result| result["skill_id"] == "release-guard"),
+        "search should surface matching shadowed duplicates"
+    );
+    assert!(
+        search.outcome.payload["blocked_results"]
+            .as_array()
+            .expect("blocked results should be an array")
+            .iter()
+            .any(|result| result["skill_id"] == "release-broken"),
+        "search should surface blocked discovery candidates"
+    );
+
+    let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(&search)
+        .expect("search text rendering should succeed");
+    let expected_inspect = format!(
+        "inspect=loong skills info release-guard --config {}",
+        shell_quote(&config_path.display().to_string())
+    );
+    let inspect_occurrences = rendered.matches(expected_inspect.as_str()).count();
+    let shadowed_skill_md_path = root
+        .join(".agents")
+        .join("skills")
+        .join("release-guard")
+        .join("SKILL.md");
+    let expected_shadowed_path = format!("  skill_md_path={}", shadowed_skill_md_path.display());
+    assert!(
+        rendered.contains("shadowed matches:"),
+        "search text should render matching shadowed candidates: {rendered}"
+    );
+    assert!(
+        rendered.contains("blocked matches:"),
+        "search text should render matching blocked candidates: {rendered}"
+    );
+    assert_eq!(
+        inspect_occurrences, 1,
+        "only active discovery results should surface skills info handoffs: {rendered}"
+    );
+    assert!(
+        rendered.contains(expected_shadowed_path.as_str()),
+        "shadowed discovery results should point operators at the concrete skill file: {rendered}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_recommend_surfaces_manual_only_limitations() {
+    let root = unique_temp_dir("loongclaw-skills-cli-recommend");
+    let home = unique_temp_dir("loongclaw-skills-cli-recommend-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        ".agents/skills/release-checklist/SKILL.md",
+        "---\nname: release-checklist\ndescription: Manual release checklist helper.\ninvocation_policy: manual\n---\n\nReview the release checklist manually.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    let recommend = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Recommend {
+                query: vec!["release".to_owned(), "checklist".to_owned()],
+                limit: 3,
+            },
+        },
+    )
+    .expect("skills recommend should succeed");
+
+    let first_result = recommend.outcome.payload["results"][0].clone();
+    assert_eq!(first_result["skill_id"], "release-checklist");
+    assert!(
+        first_result["limitations"]
+            .as_array()
+            .expect("limitations should be an array")
+            .iter()
+            .any(|value| value.as_str() == Some("manual-only invocation")),
+        "recommend should make manual-only limitations explicit"
+    );
+
+    let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(&recommend)
+        .expect("recommend text rendering should succeed");
+    assert!(
+        rendered.contains("recommended skills:"),
+        "recommend text should render a recommendation heading: {rendered}"
+    );
+    assert!(
+        rendered.contains("manual-only invocation"),
+        "recommend text should surface manual-only limitations: {rendered}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_install_and_info_surface_first_use_guidance() {
+    let root = unique_temp_dir("loongclaw-skills-cli-follow-up");
+    let home = unique_temp_dir("loongclaw-skills-cli-follow-up-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        "source/demo-skill/SKILL.md",
+        "---\nname: demo-skill\ndescription: Demo release helper.\ninvocation_policy: both\nrequired_config:\n- external_skills.enabled\n---\n\n# Demo Skill\n\nHelp with release preparation.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    let install = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
+                path: "source/demo-skill".to_owned(),
+                skill_id: None,
+                replace: false,
+            },
+        },
+    )
+    .expect("skills install should succeed");
+
+    let install_next_steps = install.outcome.payload["next_steps"]
+        .as_array()
+        .expect("install should surface next steps");
+    let expected_inspect_step = format!(
+        "Inspect the installed skill: loong skills info demo-skill --config {}",
+        shell_quote(&config_path.display().to_string())
+    );
+    assert!(
+        install_next_steps
+            .iter()
+            .any(|step| step.as_str() == Some(expected_inspect_step.as_str())),
+        "install should surface a concrete inspect handoff: {install_next_steps:#?}"
+    );
+    assert!(
+        !install_next_steps.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|value| value.contains("Enable required config gates"))
+        }),
+        "install guidance should not claim config gates are missing when they are already enabled: {install_next_steps:#?}"
+    );
+    let install_recipes = install.outcome.payload["recipes"]
+        .as_array()
+        .expect("install should surface recipes");
+    assert!(
+        !install_recipes.is_empty(),
+        "install should surface an ask recipe for model-usable skills"
+    );
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "demo-skill".to_owned(),
+            },
+        },
+    )
+    .expect("skills info should succeed");
+
+    let info_next_steps = info.outcome.payload["next_steps"]
+        .as_array()
+        .expect("info should surface next steps");
+    let expected_ask_step = format!(
+        "Try the skill in a conversation: loong ask --config {} --message {}",
+        shell_quote(&config_path.display().to_string()),
+        shell_quote("Use the demo-skill skill to help with the current task.")
+    );
+    assert!(
+        info_next_steps
+            .iter()
+            .any(|step| step.as_str() == Some(expected_ask_step.as_str())),
+        "info should surface a concrete ask handoff: {info_next_steps:#?}"
+    );
+    assert!(
+        !info_next_steps.iter().any(|step| {
+            step.as_str()
+                .is_some_and(|value| value.contains("Enable required config gates"))
+        }),
+        "info guidance should not claim config gates are missing when they are already enabled: {info_next_steps:#?}"
+    );
+
+    let rendered = loongclaw_daemon::skills_cli::render_skills_cli_text(&info)
+        .expect("info text rendering should succeed");
+    assert!(
+        rendered.contains("next steps:"),
+        "info text should render follow-up steps: {rendered}"
+    );
+    assert!(
+        rendered.contains("recipes:"),
+        "info text should render recipes: {rendered}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_info_guidance_avoids_false_success_for_manual_or_hidden_skill() {
+    let root = unique_temp_dir("loongclaw-skills-cli-manual-guidance");
+    let home = unique_temp_dir("loongclaw-skills-cli-manual-guidance-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        ".agents/skills/manual-hidden/SKILL.md",
+        "---\nname: manual-hidden\ndescription: Operator-only release helper.\nmodel_visibility: hidden\ninvocation_policy: manual\n---\n\nApply these steps manually.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "manual-hidden".to_owned(),
+            },
+        },
+    )
+    .expect("skills info should succeed for manual-hidden skills");
+
+    let next_steps = info.outcome.payload["next_steps"]
+        .as_array()
+        .expect("manual-hidden info should surface next steps");
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str()
+                == Some(
+                    "This skill is hidden from model discovery; keep the workflow operator-driven.",
+                )
+        }),
+        "manual-hidden info should explain the operator-only path: {next_steps:#?}"
+    );
+    let recipes = info.outcome.payload["recipes"]
+        .as_array()
+        .expect("manual-hidden info should surface recipes");
+    assert!(
+        recipes.is_empty(),
+        "manual-hidden guidance should not advertise ask recipes: {recipes:#?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
+fn execute_skills_command_info_guidance_avoids_false_success_for_inactive_skill() {
+    let root = unique_temp_dir("loongclaw-skills-cli-inactive-guidance");
+    let home = unique_temp_dir("loongclaw-skills-cli-inactive-guidance-home");
+    let config_path = write_external_skills_config(&root, true);
+    fs::create_dir_all(&home).expect("create home root");
+    write_file(
+        &root,
+        "source/demo-skill/SKILL.md",
+        "# Managed Demo Skill\n\nInactive winners should not advertise ask flows.\n",
+    );
+    let _env = SkillsCliEnvironmentGuard::set(&[("HOME", Some(home.to_string_lossy().as_ref()))]);
+
+    loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Install {
+                path: "source/demo-skill".to_owned(),
+                skill_id: None,
+                replace: false,
+            },
+        },
+    )
+    .expect("skills install should succeed");
+
+    let index_path = root.join("managed-skills").join("index.json");
+    let index_raw = fs::read_to_string(&index_path).expect("read index");
+    let mut index: serde_json::Value = serde_json::from_str(&index_raw).expect("parse index");
+    let managed_entry = index["skills"]
+        .as_array_mut()
+        .expect("index skills should be an array")
+        .iter_mut()
+        .find(|skill| skill["skill_id"] == "demo-skill")
+        .expect("managed demo-skill entry should exist");
+    managed_entry["active"] = serde_json::json!(false);
+    let encoded_index = serde_json::to_string_pretty(&index).expect("encode index");
+    fs::write(&index_path, encoded_index).expect("write index");
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "demo-skill".to_owned(),
+            },
+        },
+    )
+    .expect("skills info should succeed for inactive skills");
+
+    let next_steps = info.outcome.payload["next_steps"]
+        .as_array()
+        .expect("inactive info should surface next steps");
+    assert!(
+        next_steps.iter().any(|step| {
+            step.as_str()
+                == Some(
+                    "This skill is inactive and cannot be used in a conversation until it is reactivated.",
+                )
+        }),
+        "inactive guidance should explain why ask handoffs are unavailable: {next_steps:#?}"
+    );
+    let recipes = info.outcome.payload["recipes"]
+        .as_array()
+        .expect("inactive info should surface recipes");
+    assert!(
+        recipes.is_empty(),
+        "inactive guidance should not advertise ask recipes: {recipes:#?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+    fs::remove_dir_all(&home).ok();
+}
+
+#[test]
 fn execute_skills_command_installs_bundled_browser_companion_preview() {
     let root = unique_temp_dir("loongclaw-skills-cli-bundled-install");
     let _env = SkillsCliEnvironmentGuard::set(&[]);
@@ -1833,16 +2298,16 @@ fn render_skills_cli_text_surfaces_browser_preview_guidance() {
                     "next_steps": [
                         "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
                         "Verify browser preview runtime: agent-browser open example.com",
-                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+                        "Run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
                     ],
                     "recipes": [
                         {
                             "label": "summarize a page",
-                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"
+                            "command": "loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"
                         },
                         {
                             "label": "extract page text",
-                            "command": "loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.'"
+                            "command": "loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, extract the main page text, and return the key points.'"
                         }
                     ]
                 }),
@@ -1857,11 +2322,13 @@ fn render_skills_cli_text_surfaces_browser_preview_guidance() {
     assert!(rendered.contains(
         "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
     ));
-    assert!(rendered.contains(
-        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
-    ));
+    assert!(
+        rendered.contains(
+            "Run diagnostics: loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"
+        )
+    );
     assert!(rendered.contains("recipes:"));
-    assert!(rendered.contains("- summarize a page: loongclaw ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"));
+    assert!(rendered.contains("- summarize a page: loong ask --config '/tmp/loongclaw'\"'\"'s config.toml' --message 'Use the browser companion preview to open https://example.com, snapshot the page, and summarize what is visible.'"));
 }
 
 #[test]
@@ -1884,7 +2351,7 @@ fn render_skills_cli_text_hides_browser_preview_recipes_when_cli_is_disabled() {
                     "next_steps": [
                         "Install browser preview runtime: npm install -g agent-browser && agent-browser install",
                         "Verify browser preview runtime: agent-browser open example.com",
-                        "Run diagnostics: loongclaw doctor --config '/tmp/loongclaw.toml'",
+                        "Run diagnostics: loong doctor --config '/tmp/loongclaw.toml'",
                         "Re-enable `cli.enabled` before running the preview recipes."
                     ],
                     "recipes": []

@@ -97,6 +97,13 @@ pub const WECOM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
         serve_bootstrap_agent_id: "channel-wecom",
     };
 
+pub const WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
+    ChannelRuntimeCommandDescriptor {
+        channel_id: "whatsapp",
+        platform: ChannelPlatform::WhatsApp,
+        serve_bootstrap_agent_id: "channel-whatsapp",
+    };
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelCommandFamilyDescriptor {
     pub runtime: ChannelRuntimeCommandDescriptor,
@@ -495,8 +502,8 @@ const TELEGRAM_CAPABILITIES: &[ChannelCapability] = &[
 const TELEGRAM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure telegram bot credentials and allowed chat ids in loongclaw.toml under telegram or telegram.accounts.<account>",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -659,8 +666,8 @@ const FEISHU_CAPABILITIES: &[ChannelCapability] = &[
 const FEISHU_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure feishu or lark app credentials, allowed chat ids, and either webhook secrets or mode = \"websocket\" in loongclaw.toml under feishu or feishu.accounts.<account>",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -827,8 +834,8 @@ const MATRIX_CAPABILITIES: &[ChannelCapability] = &[
 const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure matrix access tokens, homeserver base url, and allowed room ids in loongclaw.toml under matrix or matrix.accounts.<account>",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const PLANNED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
@@ -934,8 +941,8 @@ const DISCORD_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const DISCORD_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const SLACK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1043,8 +1050,8 @@ const SLACK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const SLACK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure slack bot credentials in loongclaw.toml under slack or slack.accounts.<account>; outbound direct send is shipped, while Events API or Socket Mode serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const LINE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1130,8 +1137,8 @@ const LINE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const LINE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure LINE Messaging API credentials in loongclaw.toml under line or line.accounts.<account>; outbound push send is shipped, while inbound webhook serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const WECOM_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1239,8 +1246,8 @@ const WECOM_CAPABILITIES: &[ChannelCapability] = &[
 const WECOM_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure wecom aibot long connection credentials, allowed conversation ids, and optional websocket overrides in loongclaw.toml under wecom or wecom.accounts.<account>; do not configure webhook callback mode for this surface",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const DINGTALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1323,8 +1330,8 @@ const DINGTALK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const DINGTALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure DingTalk custom robot webhook credentials in loongclaw.toml under dingtalk or dingtalk.accounts.<account>; outbound webhook send is shipped, while inbound outgoing-callback serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const WHATSAPP_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1416,7 +1423,7 @@ const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     id: CHANNEL_OPERATION_SERVE_ID,
     label: "cloud webhook service",
     command: "whatsapp-serve",
-    availability: ChannelCatalogOperationAvailability::Stub,
+    availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
@@ -1428,6 +1435,13 @@ pub const WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamil
         send: WHATSAPP_SEND_OPERATION,
         serve: WHATSAPP_SERVE_OPERATION,
     };
+
+pub const WHATSAPP_COMMAND_FAMILY_DESCRIPTOR: ChannelCommandFamilyDescriptor =
+    ChannelCommandFamilyDescriptor {
+        runtime: WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR,
+        catalog: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
+    };
+
 const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     ChannelRegistryOperationDescriptor {
         operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.send,
@@ -1435,14 +1449,30 @@ const WHATSAPP_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
     },
     ChannelRegistryOperationDescriptor {
         operation: WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve,
-        doctor_checks: &[],
+        doctor_checks: &[
+            ChannelDoctorCheckSpec {
+                name: "whatsapp serve health",
+                trigger: ChannelDoctorCheckTrigger::OperationHealth,
+            },
+            ChannelDoctorCheckSpec {
+                name: "whatsapp serve runtime",
+                trigger: ChannelDoctorCheckTrigger::ReadyRuntime,
+            },
+        ],
     },
+];
+const WHATSAPP_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::RuntimeBacked,
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
 ];
 const WHATSAPP_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
-    setup_hint: "configure whatsapp cloud api credentials in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; outbound business send is shipped, while inbound webhook serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    setup_hint: "configure whatsapp cloud api credentials (access_token, phone_number_id, verify_token, app_secret) in loongclaw.toml under whatsapp or whatsapp.accounts.<account>; both outbound business send and inbound webhook serve are shipped",
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const EMAIL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1587,8 +1617,8 @@ pub const EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDe
 const EMAIL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure smtp relay settings under email or email.accounts.<account>; outbound smtp send is shipped, while imap-backed reply-loop serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const WEBHOOK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1687,8 +1717,8 @@ const WEBHOOK_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const WEBHOOK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure generic webhook delivery in loongclaw.toml under webhook or webhook.accounts.<account>; outbound endpoint send is shipped, while inbound webhook serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const GOOGLE_CHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1763,8 +1793,8 @@ const GOOGLE_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
         setup_hint: "configure Google Chat incoming webhook credentials in loongclaw.toml under google_chat or google_chat.accounts.<account>; outbound webhook send is shipped, while interactive event serve support remains planned",
-        status_command: "loongclaw doctor",
-        repair_command: Some("loongclaw doctor --fix"),
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
     };
 
 const SIGNAL_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1860,8 +1890,8 @@ const SIGNAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const SIGNAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure signal bridge connection details in loongclaw.toml under signal or signal.accounts.<account>; outbound direct send is shipped, while inbound listener support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const TEAMS_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -1974,8 +2004,8 @@ const TEAMS_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const TEAMS_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure Microsoft Teams webhook delivery in loongclaw.toml under teams or teams.accounts.<account>; outbound incoming-webhook send is shipped, while bot-framework serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const MATTERMOST_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2077,8 +2107,8 @@ const MATTERMOST_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const MATTERMOST_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure Mattermost server and bot credentials in loongclaw.toml under mattermost or mattermost.accounts.<account>; outbound post send is shipped, while inbound websocket serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const NEXTCLOUD_TALK_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2169,8 +2199,8 @@ const NEXTCLOUD_TALK_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
         setup_hint: "configure Nextcloud Talk bot credentials in loongclaw.toml under nextcloud_talk or nextcloud_talk.accounts.<account>; outbound room send is shipped, while inbound bot callback serve support remains planned",
-        status_command: "loongclaw doctor",
-        repair_command: Some("loongclaw doctor --fix"),
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
     };
 
 const SYNOLOGY_CHAT_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2272,8 +2302,8 @@ const SYNOLOGY_CHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
         setup_hint: "configure Synology Chat incoming webhook credentials in loongclaw.toml under synology_chat or synology_chat.accounts.<account>; outbound incoming-webhook send is shipped, while inbound outgoing-webhook serve support remains planned",
-        status_command: "loongclaw doctor",
-        repair_command: Some("loongclaw doctor --fix"),
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
     };
 
 const IRC_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2357,8 +2387,8 @@ const IRC_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const IRC_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure IRC connection details in loongclaw.toml under irc or irc.accounts.<account>; outbound send is shipped, while long-lived relay-loop serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const IMESSAGE_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2457,10 +2487,9 @@ const IMESSAGE_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const IMESSAGE_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure BlueBubbles bridge credentials in loongclaw.toml under imessage or imessage.accounts.<account>; outbound chat send is shipped, while inbound bridge sync serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
-
 const TLON_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
     ChannelCatalogOperationRequirement {
         id: "enabled",
@@ -2543,8 +2572,8 @@ const TLON_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const TLON_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::ManualConfig,
     setup_hint: "configure a Tlon ship account in loongclaw.toml under tlon or tlon.accounts.<account>; outbound ship sends are shipped for DMs and chat groups, while inbound serve support remains planned",
-    status_command: "loongclaw doctor",
-    repair_command: Some("loongclaw doctor --fix"),
+    status_command: "loong doctor",
+    repair_command: Some("loong doctor --fix"),
 };
 
 const ZALO_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -2630,7 +2659,7 @@ const ZALO_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const ZALO_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
     setup_hint: "planned Zalo official account surface; catalog metadata reflects the intended app id, official account access token, and webhook secret contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
+    status_command: "loong channels --json",
     repair_command: None,
 };
 
@@ -2711,7 +2740,7 @@ const ZALO_PERSONAL_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::Planned,
         setup_hint: "planned Zalo personal bridge surface; catalog metadata reflects the intended bridge access token and contact allowlist contract, but no runtime adapter is implemented yet",
-        status_command: "loongclaw channels --json",
+        status_command: "loong channels --json",
         repair_command: None,
     };
 
@@ -2804,7 +2833,7 @@ const WEBCHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
 const WEBCHAT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboardingDescriptor {
     strategy: ChannelOnboardingStrategy::Planned,
     setup_hint: "planned web chat surface; catalog metadata reflects the intended public base url, browser session signing secret, and origin allowlist contract, but no runtime adapter is implemented yet",
-    status_command: "loongclaw channels --json",
+    status_command: "loong channels --json",
     repair_command: None,
 };
 
@@ -2938,13 +2967,15 @@ pub(crate) const LINE_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
 pub(crate) const WHATSAPP_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "whatsapp",
-        runtime: None,
+        runtime: Some(ChannelRuntimeDescriptor {
+            family: WHATSAPP_COMMAND_FAMILY_DESCRIPTOR,
+        }),
         snapshot_builder: Some(build_whatsapp_snapshots),
         selection_order: 90,
         selection_label: "business messaging app",
-        blurb: "Shipped WhatsApp Cloud API outbound surface with config-backed business sends; inbound webhook support remains planned.",
-        implementation_status: ChannelCatalogImplementationStatus::ConfigBacked,
-        capabilities: CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES,
+        blurb: "Shipped WhatsApp Cloud API surface with business send and webhook serve runtime support.",
+        implementation_status: ChannelCatalogImplementationStatus::RuntimeBacked,
+        capabilities: WHATSAPP_CAPABILITIES,
         label: "WhatsApp",
         aliases: &["wa", "whatsapp-cloud"],
         transport: "whatsapp_cloud_api",
@@ -3950,8 +3981,8 @@ fn build_dingtalk_snapshots(
 fn build_whatsapp_snapshots(
     descriptor: &ChannelRegistryDescriptor,
     config: &LoongClawConfig,
-    _runtime_dir: &Path,
-    _now_ms: u64,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> Vec<ChannelStatusSnapshot> {
     let compiled = cfg!(feature = "channel-whatsapp");
     let http_policy = super::http::outbound_http_policy_from_config(config);
@@ -3975,6 +4006,8 @@ fn build_whatsapp_snapshots(
                     is_default_account,
                     default_account_source,
                     http_policy,
+                    runtime_dir,
+                    now_ms,
                 ),
                 Err(error) => build_invalid_whatsapp_snapshot(
                     descriptor,
@@ -4741,6 +4774,8 @@ fn build_whatsapp_snapshot_for_account(
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
     http_policy: super::http::ChannelOutboundHttpPolicy,
+    runtime_dir: &Path,
+    now_ms: u64,
 ) -> ChannelStatusSnapshot {
     let mut send_issues = Vec::new();
     if resolved.access_token().is_none() {
@@ -4757,6 +4792,14 @@ fn build_whatsapp_snapshot_for_account(
         http_policy,
         &mut send_issues,
     );
+
+    let mut serve_issues = send_issues.clone();
+    if resolved.verify_token().is_none() {
+        serve_issues.push("verify_token is missing".to_owned());
+    }
+    if resolved.app_secret().is_none() {
+        serve_issues.push("app_secret is missing".to_owned());
+    }
 
     let send_operation = if !compiled {
         unsupported_operation(
@@ -4779,12 +4822,34 @@ fn build_whatsapp_snapshot_for_account(
             WHATSAPP_SERVE_OPERATION,
             "binary built without feature `channel-whatsapp`".to_owned(),
         )
-    } else {
-        unsupported_operation(
+    } else if !resolved.enabled {
+        disabled_operation(
             WHATSAPP_SERVE_OPERATION,
-            "whatsapp serve runtime is not implemented yet".to_owned(),
+            "disabled by whatsapp account configuration".to_owned(),
         )
+    } else if !serve_issues.is_empty() {
+        misconfigured_operation(WHATSAPP_SERVE_OPERATION, serve_issues)
+    } else {
+        ready_operation(WHATSAPP_SERVE_OPERATION)
     };
+    let send_operation = attach_runtime(
+        ChannelPlatform::WhatsApp,
+        WHATSAPP_SEND_OPERATION,
+        send_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
+    let serve_operation = attach_runtime(
+        ChannelPlatform::WhatsApp,
+        WHATSAPP_SERVE_OPERATION,
+        serve_operation,
+        resolved.account.id.as_str(),
+        resolved.account.label.as_str(),
+        runtime_dir,
+        now_ms,
+    );
 
     let mut notes = vec![
         format!("configured_account_id={}", resolved.configured_account_id),
@@ -6662,10 +6727,7 @@ fn build_invalid_whatsapp_snapshot(
             "binary built without feature `channel-whatsapp`".to_owned(),
         )
     } else {
-        unsupported_operation(
-            WHATSAPP_SERVE_OPERATION,
-            "whatsapp serve runtime is not implemented yet".to_owned(),
-        )
+        misconfigured_operation(WHATSAPP_SERVE_OPERATION, vec![error.clone()])
     };
 
     let mut notes = vec![
@@ -7414,7 +7476,7 @@ mod tests {
                 .iter()
                 .map(|descriptor| descriptor.id)
                 .collect::<Vec<_>>(),
-            vec!["telegram", "feishu", "matrix", "wecom"]
+            vec!["telegram", "feishu", "matrix", "wecom", "whatsapp"]
         );
         assert!(
             runtime_backed
@@ -7610,10 +7672,10 @@ mod tests {
             telegram.onboarding.strategy,
             ChannelOnboardingStrategy::ManualConfig
         );
-        assert_eq!(telegram.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(telegram.onboarding.status_command, "loong doctor");
         assert_eq!(
             telegram.onboarding.repair_command,
-            Some("loongclaw doctor --fix")
+            Some("loong doctor --fix")
         );
         assert!(telegram.onboarding.setup_hint.contains("loongclaw.toml"));
 
@@ -7621,7 +7683,7 @@ mod tests {
             lark.onboarding.strategy,
             ChannelOnboardingStrategy::ManualConfig
         );
-        assert_eq!(lark.onboarding.status_command, "loongclaw doctor");
+        assert_eq!(lark.onboarding.status_command, "loong doctor");
 
         assert_eq!(
             discord.onboarding.strategy,
@@ -7629,7 +7691,7 @@ mod tests {
         );
         assert_eq!(
             discord.onboarding.repair_command,
-            Some("loongclaw doctor --fix")
+            Some("loong doctor --fix")
         );
         assert!(
             discord
@@ -9097,6 +9159,7 @@ mod tests {
     fn feishu_status_splits_direct_send_and_webhook_readiness() {
         let mut config = LoongClawConfig::default();
         config.feishu.enabled = true;
+        config.feishu.mode = Some(FeishuChannelServeMode::Webhook);
         config.feishu.app_id = Some(loongclaw_contracts::SecretRef::Inline("app-id".to_owned()));
         config.feishu.app_secret = Some(loongclaw_contracts::SecretRef::Inline(
             "app-secret".to_owned(),
@@ -9353,7 +9416,21 @@ mod tests {
             .expect("whatsapp serve operation");
 
         assert_eq!(send.health, ChannelOperationHealth::Ready);
-        assert_eq!(serve.health, ChannelOperationHealth::Unsupported);
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("verify_token")),
+            "serve issues should mention the missing verify token"
+        );
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("app_secret")),
+            "serve issues should mention the missing app secret"
+        );
         assert_eq!(
             whatsapp.api_base_url.as_deref(),
             Some("https://graph.facebook.com/v25.0")
@@ -9366,7 +9443,7 @@ mod tests {
             "status notes should expose the resolved phone number id"
         );
         assert!(send.runtime.is_none());
-        assert!(serve.runtime.is_none());
+        assert!(serve.runtime.is_some());
     }
 
     #[test]

@@ -33,15 +33,18 @@ fn render_catalog_status_failure_message(
     max_attempts: usize,
     response_body: &serde_json::Value,
 ) -> String {
+    let support_facts = provider.support_facts();
+    let auth_support = support_facts.auth;
+    let region_endpoint_support = support_facts.region_endpoint;
     let mut message = format!(
         "provider model-list returned status {status_code} on attempt {attempt}/{max_attempts}: {response_body}"
     );
     if matches!(status_code, 401 | 403) {
-        if let Some(hint) = provider.auth_guidance_hint() {
+        if let Some(hint) = auth_support.guidance_hint {
             message.push(' ');
             message.push_str(hint.as_str());
         }
-        if let Some(hint) = provider.region_endpoint_failure_hint() {
+        if let Some(hint) = region_endpoint_support.catalog_failure_hint {
             message.push(' ');
             message.push_str(hint.as_str());
         }
@@ -241,5 +244,29 @@ mod tests {
                 case.status_code, case.attempt
             );
         }
+    }
+
+    #[test]
+    fn render_catalog_status_failure_message_includes_region_hint_for_auth_rejection() {
+        let provider = ProviderConfig {
+            kind: crate::config::ProviderKind::Minimax,
+            ..ProviderConfig::default()
+        };
+
+        let message = render_catalog_status_failure_message(
+            &provider,
+            401,
+            1,
+            3,
+            &serde_json::json!({
+                "error": {
+                    "message": "invalid api key"
+                }
+            }),
+        );
+
+        assert!(message.contains("provider model-list returned status 401"));
+        assert!(message.contains("https://api.minimaxi.com"));
+        assert!(message.contains("https://api.minimax.io"));
     }
 }

@@ -2833,7 +2833,7 @@ async fn execute_spec_enriches_plugin_bridge_metadata_and_emits_bridge_execution
 }
 
 #[tokio::test]
-async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
+async fn execute_spec_wasm_component_bridge_exchanges_request_output_when_runtime_enabled() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let unique = SystemTime::now()
@@ -2843,7 +2843,35 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
     let plugin_root = std::env::temp_dir().join(format!("loongclaw-wasm-runtime-run-{unique}"));
     fs::create_dir_all(&plugin_root).expect("create plugin root");
 
-    let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
+    let wasm_bytes = wat::parse_str(
+        r#"
+            (module
+              (import "loongclaw" "input_len" (func $input_len (result i32)))
+              (import "loongclaw" "read_input" (func $read_input (param i32 i32) (result i32)))
+              (import "loongclaw" "write_output" (func $write_output (param i32 i32) (result i32)))
+              (import "loongclaw" "log" (func $log (param i32 i32) (result i32)))
+              (func (export "run") (result i32)
+                (local $input_len i32)
+                i32.const 0
+                i32.const 5
+                call $log
+                drop
+                call $input_len
+                local.set $input_len
+                i32.const 32
+                local.get $input_len
+                call $read_input
+                drop
+                i32.const 32
+                local.get $input_len
+                call $write_output
+                drop
+                i32.const 0)
+              (memory (export "memory") 1)
+              (data (i32.const 0) "hello"))
+        "#,
+    )
+    .expect("compile wasm");
     let digest = Sha256::digest(&wasm_bytes);
     let digest_hex = hex_lower(&digest);
 
@@ -2919,8 +2947,10 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(200_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -2959,6 +2989,15 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
     };
 
     let report = execute_spec(&spec, true).await;
+    let expected_request = json!({
+        "provider_id": "wasm-runtime-provider",
+        "channel_id": "primary",
+        "operation": "invoke",
+        "payload": {
+            "input": "ping",
+        },
+    });
+
     assert_eq!(report.operation_kind, "connector_legacy");
     assert_eq!(report.outcome["outcome"]["status"], "ok");
     assert_eq!(
@@ -2972,6 +3011,26 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
     assert_eq!(
         report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["export"],
         "run"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["host_abi_enabled"],
+        true
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["entrypoint_signature"],
+        "() -> i32"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["guest_exit_code"],
+        0
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["guest_logs"],
+        json!(["hello"])
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["output_json"],
+        expected_request
     );
     assert_eq!(
         report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["fuel_limit"],
@@ -3071,6 +3130,361 @@ async fn execute_spec_wasm_component_bridge_executes_when_runtime_enabled() {
 }
 
 #[tokio::test]
+async fn execute_spec_wasm_component_bridge_executes_with_timeout_guard_and_no_cache() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-timeout-pass-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    let wasm_bytes = wat::parse_str(r#"(module (func (export "run")))"#).expect("compile wasm");
+    fs::write(plugin_root.join("plugin.wasm"), wasm_bytes).expect("write wasm module");
+    fs::write(
+        plugin_root.join("plugin.rs"),
+        r#"
+// LOONGCLAW_PLUGIN_START
+// {
+//   "plugin_id": "wasm-timeout-pass",
+//   "provider_id": "wasm-timeout-pass-provider",
+//   "connector_name": "wasm-timeout-pass-provider",
+//   "channel_id": "primary",
+//   "endpoint": "local://wasm-timeout-pass-provider/invoke",
+//   "capabilities": ["InvokeConnector"],
+//   "metadata": {
+//     "bridge_kind":"wasm_component",
+//     "component":"plugin.wasm",
+//     "entrypoint":"run",
+//     "version":"1.0.0"
+//   }
+// }
+// LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write wasm plugin manifest");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-wasm-timeout-pass".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-wasm-timeout-pass".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::WasmComponent],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: true,
+            security_scan: Some(SecurityScanSpec {
+                enabled: true,
+                block_on_high: false,
+                profile_path: None,
+                profile_sha256: None,
+                profile_signature: None,
+                siem_export: None,
+                runtime: SecurityRuntimeExecutionSpec {
+                    execute_wasm_component: true,
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
+                    fuel_limit: Some(50_000),
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: Some(250),
+                },
+                high_risk_metadata_keywords: Vec::new(),
+                wasm: WasmSecurityScanSpec {
+                    enabled: false,
+                    max_module_bytes: 128 * 1024,
+                    allow_wasi: false,
+                    blocked_import_prefixes: vec!["wasi".to_owned()],
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    require_hash_pin: false,
+                    required_sha256_by_plugin: BTreeMap::new(),
+                },
+            }),
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(true),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(5),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "wasm-timeout-pass-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            payload: json!({"input":"ping"}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "executed"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_ms"],
+        250
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_triggered"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_enabled"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_hit"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_miss"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_inserted"],
+        false
+    );
+
+    let second_report = execute_spec(&spec, true).await;
+    assert_eq!(second_report.operation_kind, "connector_legacy");
+    assert_eq!(second_report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "executed"
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_ms"],
+        250
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_triggered"],
+        false
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_enabled"],
+        false
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_hit"],
+        false
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_miss"],
+        false
+    );
+    assert_eq!(
+        second_report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_inserted"],
+        false
+    );
+}
+
+#[tokio::test]
+async fn execute_spec_wasm_component_bridge_times_out_and_reports_timeout_evidence() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock should be monotonic")
+        .as_nanos();
+    let plugin_root =
+        std::env::temp_dir().join(format!("loongclaw-wasm-runtime-timeout-fail-{unique}"));
+    fs::create_dir_all(&plugin_root).expect("create plugin root");
+
+    let wasm_bytes =
+        wat::parse_str(r#"(module (func (export "run") (loop br 0)))"#).expect("compile wasm");
+    fs::write(plugin_root.join("plugin.wasm"), wasm_bytes).expect("write wasm module");
+    fs::write(
+        plugin_root.join("plugin.rs"),
+        r#"
+// LOONGCLAW_PLUGIN_START
+// {
+//   "plugin_id": "wasm-timeout-fail",
+//   "provider_id": "wasm-timeout-fail-provider",
+//   "connector_name": "wasm-timeout-fail-provider",
+//   "channel_id": "primary",
+//   "endpoint": "local://wasm-timeout-fail-provider/invoke",
+//   "capabilities": ["InvokeConnector"],
+//   "metadata": {
+//     "bridge_kind":"wasm_component",
+//     "component":"plugin.wasm",
+//     "entrypoint":"run",
+//     "version":"1.0.0"
+//   }
+// }
+// LOONGCLAW_PLUGIN_END
+"#,
+    )
+    .expect("write wasm plugin manifest");
+
+    let spec = RunnerSpec {
+        pack: VerticalPackManifest {
+            pack_id: "spec-wasm-timeout-fail".to_owned(),
+            domain: "ops".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: Some("pi-local".to_owned()),
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::new(),
+            metadata: BTreeMap::new(),
+        },
+        agent_id: "agent-wasm-timeout-fail".to_owned(),
+        ttl_s: 120,
+        approval: None,
+        defaults: None,
+        self_awareness: None,
+        plugin_scan: Some(PluginScanSpec {
+            enabled: true,
+            roots: vec![plugin_root.display().to_string()],
+        }),
+        bridge_support: Some(BridgeSupportSpec {
+            enabled: true,
+            supported_bridges: vec![PluginBridgeKind::WasmComponent],
+            supported_adapter_families: Vec::new(),
+            supported_compatibility_modes: vec![PluginCompatibilityMode::Native],
+            supported_compatibility_shims: Vec::new(),
+            supported_compatibility_shim_profiles: Vec::new(),
+            enforce_supported: true,
+            policy_version: None,
+            expected_checksum: None,
+            expected_sha256: None,
+            execute_process_stdio: false,
+            execute_http_json: false,
+            allowed_process_commands: Vec::new(),
+            enforce_execution_success: false,
+            security_scan: Some(SecurityScanSpec {
+                enabled: true,
+                block_on_high: false,
+                profile_path: None,
+                profile_sha256: None,
+                profile_signature: None,
+                siem_export: None,
+                runtime: SecurityRuntimeExecutionSpec {
+                    execute_wasm_component: true,
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
+                    fuel_limit: None,
+                    bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: Some(100),
+                },
+                high_risk_metadata_keywords: Vec::new(),
+                wasm: WasmSecurityScanSpec {
+                    enabled: false,
+                    max_module_bytes: 128 * 1024,
+                    allow_wasi: false,
+                    blocked_import_prefixes: vec!["wasi".to_owned()],
+                    allowed_path_prefixes: vec![plugin_root.display().to_string()],
+                    require_hash_pin: false,
+                    required_sha256_by_plugin: BTreeMap::new(),
+                },
+            }),
+        }),
+        bootstrap: Some(BootstrapSpec {
+            enabled: true,
+            allow_http_json_auto_apply: Some(false),
+            allow_process_stdio_auto_apply: Some(false),
+            allow_native_ffi_auto_apply: Some(false),
+            allow_wasm_component_auto_apply: Some(true),
+            allow_mcp_server_auto_apply: Some(false),
+            allow_acp_bridge_auto_apply: Some(false),
+            allow_acp_runtime_auto_apply: Some(false),
+            block_unverified_high_risk_auto_apply: None,
+            enforce_ready_execution: Some(true),
+            max_tasks: Some(5),
+        }),
+        auto_provision: None,
+        hotfixes: Vec::new(),
+        plugin_setup_readiness: None,
+        operation: OperationSpec::ConnectorLegacy {
+            connector_name: "wasm-timeout-fail-provider".to_owned(),
+            operation: "invoke".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
+            payload: json!({"input":"ping"}),
+        },
+    };
+
+    let report = execute_spec(&spec, true).await;
+    assert_eq!(report.operation_kind, "connector_legacy");
+    assert_eq!(report.outcome["outcome"]["status"], "ok");
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["status"],
+        "failed"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["reason"],
+        "wasm execution timed out after 100ms"
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_ms"],
+        100
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["timeout_triggered"],
+        true
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_enabled"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_hit"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_miss"],
+        false
+    );
+    assert_eq!(
+        report.outcome["outcome"]["payload"]["bridge_execution"]["runtime"]["cache_inserted"],
+        false
+    );
+}
+
+#[tokio::test]
 async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatches() {
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -3155,8 +3569,10 @@ async fn execute_spec_wasm_component_bridge_blocks_when_component_sha256_mismatc
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(200_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3296,8 +3712,10 @@ async fn execute_spec_wasm_component_bridge_blocks_when_metadata_pin_conflicts_w
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(200_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3439,8 +3857,10 @@ async fn execute_spec_wasm_component_bridge_blocks_when_hash_pin_required_but_mi
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(200_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3584,8 +4004,10 @@ async fn execute_spec_wasm_component_bridge_blocks_artifact_outside_runtime_pref
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![disallowed_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(100_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3733,8 +4155,10 @@ async fn execute_spec_wasm_component_bridge_blocks_symlink_escape_under_allowed_
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(100_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -3873,8 +4297,10 @@ async fn execute_spec_wasm_component_bridge_blocks_non_regular_artifact_path() {
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(128 * 1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(100_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -4014,8 +4440,10 @@ async fn execute_spec_wasm_component_bridge_blocks_when_module_size_exceeds_runt
                     execute_wasm_component: true,
                     allowed_path_prefixes: vec![plugin_root.display().to_string()],
                     max_component_bytes: Some(8),
+                    max_output_bytes: None,
                     fuel_limit: Some(100_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {
@@ -4123,8 +4551,10 @@ async fn execute_spec_blocks_when_wasm_runtime_enabled_without_allowed_prefixes(
                     execute_wasm_component: true,
                     allowed_path_prefixes: Vec::new(),
                     max_component_bytes: Some(1024),
+                    max_output_bytes: None,
                     fuel_limit: Some(10_000),
                     bridge_circuit_breaker: ConnectorCircuitBreakerPolicy::default(),
+                    timeout_ms: None,
                 },
                 high_risk_metadata_keywords: Vec::new(),
                 wasm: WasmSecurityScanSpec {

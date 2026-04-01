@@ -108,7 +108,7 @@ contains several layers that matter to teams.
 | Separate control plane        | ACP already exists as its own control plane across backend, binding, registry, runtime, analytics, and store modules                         | future routing, collaboration, and richer agent lifecycle work have a place to live |
 | Shapeable context             | the context engine already has `bootstrap`, `ingest`, `after_turn`, `compact_context`, and subagent hooks                                    | context and memory are not hardcoded into a single prompt builder                   |
 | Runtime-truthful tool surface | the tool catalog carries risk classes, approval modes, and `Runtime / Planned` visibility                                                    | what users see is closer to what the system can actually do right now               |
-| Migration-aware setup         | `onboard` can detect current setup, Codex config, environment, and workspace guidance; the public migration CLI is now `loongclaw migrate`   | teams do not have to rebuild configuration and long-lived context from scratch      |
+| Migration-aware setup         | `onboard` can detect current setup, Codex config, environment, and workspace guidance; the public migration CLI is now `loong migrate`       | teams do not have to rebuild configuration and long-lived context from scratch      |
 | Multi-surface delivery        | beyond CLI, Telegram, Feishu / Lark, and Matrix already exist as runtime-backed surfaces with typed config, routing, and security validation | the product already reaches beyond a local terminal-only experiment                 |
 
 That is why we increasingly describe LoongClaw as an early foundation for vertical agents. The
@@ -158,7 +158,8 @@ solving team problems earlier instead of postponing them.
 ### Install Script
 
 The install script prefers the matching GitHub Release binary, verifies its SHA256 checksum,
-installs `loongclaw`, and can drop you straight into guided onboarding.
+installs `loong` as the primary command, keeps `loongclaw` as a compatibility entrypoint, and can
+drop you straight into guided onboarding.
 
 When you pass `--onboard`, the installer now seeds onboarding with a recommended
 web search default. It keeps DuckDuckGo as the general key-free fallback, and
@@ -191,7 +192,7 @@ curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/
 <summary>Windows (PowerShell)</summary>
 
 ```powershell
-$script = Join-Path $env:TEMP "loongclaw-install.ps1"
+$script = Join-Path $env:TEMP "loong-install.ps1"
 Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.ps1 -OutFile $script
 pwsh $script -Onboard
 ```
@@ -219,7 +220,7 @@ cargo install --path crates/daemon
 
 ### Shell Completion
 
-`loongclaw completions <shell>` prints a completion script to stdout. GitHub
+`loong completions <shell>` prints a completion script to stdout. GitHub
 releases also publish pre-generated completion files if you prefer to download
 them instead of generating them locally.
 
@@ -227,24 +228,24 @@ them instead of generating them locally.
 <summary>Install shell completion</summary>
 
 ```bash
-loongclaw completions bash >> ~/.bash_completion
+loong completions bash >> ~/.bash_completion
 source ~/.bash_completion
 ```
 
 ```zsh
-loongclaw completions zsh > "${fpath[1]}/_loongclaw"
+loong completions zsh > "${fpath[1]}/_loong"
 ```
 
 ```fish
-loongclaw completions fish > ~/.config/fish/completions/loongclaw.fish
+loong completions fish > ~/.config/fish/completions/loong.fish
 ```
 
 ```powershell
-loongclaw completions powershell >> $PROFILE
+loong completions powershell >> $PROFILE
 ```
 
 ```elvish
-loongclaw completions elvish >> ~/.config/elvish/rc.elv
+loong completions elvish >> ~/.config/elvish/rc.elv
 ```
 
 </details>
@@ -254,7 +255,7 @@ loongclaw completions elvish >> ~/.config/elvish/rc.elv
 1. Run guided onboarding:
 
    ```bash
-   loongclaw onboard
+   loong onboard
    ```
 
 2. Set the provider credential that onboarding selected:
@@ -269,34 +270,34 @@ loongclaw completions elvish >> ~/.config/elvish/rc.elv
 3. Get a first answer:
 
    ```bash
-   loongclaw ask --message "Summarize this repository and suggest the best next step."
+   loong ask --message "Summarize this repository and suggest the best next step."
    ```
 
 4. Continue in session when you need follow-up work:
 
    ```bash
-   loongclaw chat
+   loong chat
    ```
 
 5. Repair local health issues when needed:
 
    ```bash
-   loongclaw doctor --fix
+   loong doctor --fix
    ```
 
 6. Inspect the retained audit window when you need debugging evidence:
 
    ```bash
-   loongclaw audit recent --limit 20
-   loongclaw audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
-   loongclaw audit summary --limit 200 --json
-   loongclaw audit discovery --limit 50 --triage-label conflict
-   loongclaw audit discovery --since-epoch-s 1700010000 --until-epoch-s 1700013600
-   loongclaw audit discovery --group-by pack
-   loongclaw audit summary --pack-id sales-intel --agent-id agent-search
-   loongclaw audit summary --group-by pack
-   loongclaw audit recent --event-id evt-123 --token-id token-abc
-   loongclaw audit token-trail --token-id token-abc
+   loong audit recent --limit 20
+   loong audit recent --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
+   loong audit summary --limit 200 --json
+   loong audit discovery --limit 50 --triage-label conflict
+   loong audit discovery --since-epoch-s 1700010000 --until-epoch-s 1700013600
+   loong audit discovery --group-by pack
+   loong audit summary --pack-id sales-intel --agent-id agent-search
+   loong audit summary --group-by pack
+   loong audit recent --event-id evt-123 --token-id token-abc
+   loong audit token-trail --token-id token-abc
    ```
 
 Channel setup comes after the base CLI path is healthy.
@@ -310,19 +311,21 @@ policy denials, token lifecycle events, and other security-critical evidence
 survive process restarts.
 
 ```bash
-loongclaw doctor --config ~/.loongclaw/config.toml
-loongclaw doctor --config ~/.loongclaw/config.toml --json
-loongclaw audit recent --config ~/.loongclaw/config.toml
-loongclaw audit recent --config ~/.loongclaw/config.toml --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
-loongclaw audit summary --config ~/.loongclaw/config.toml
-loongclaw audit discovery --config ~/.loongclaw/config.toml --query-contains "trust:official" --trust-tier official
-loongclaw audit discovery --config ~/.loongclaw/config.toml --group-by agent
-loongclaw audit summary --config ~/.loongclaw/config.toml --since-epoch-s 1700010000 --until-epoch-s 1700013600
-loongclaw audit recent --config ~/.loongclaw/config.toml --pack-id sales-intel --agent-id agent-search
-loongclaw audit summary --config ~/.loongclaw/config.toml --group-by token
-loongclaw audit recent --config ~/.loongclaw/config.toml --event-id evt-123 --token-id token-abc
-loongclaw audit token-trail --config ~/.loongclaw/config.toml --token-id token-abc
-loongclaw audit recent --config ~/.loongclaw/config.toml --json
+loong doctor --config ~/.loongclaw/config.toml
+loong doctor --config ~/.loongclaw/config.toml --json
+loong doctor security --config ~/.loongclaw/config.toml
+loong doctor security --config ~/.loongclaw/config.toml --json
+loong audit recent --config ~/.loongclaw/config.toml
+loong audit recent --config ~/.loongclaw/config.toml --kind tool-search-evaluated --query-contains "trust:official" --trust-tier official
+loong audit summary --config ~/.loongclaw/config.toml
+loong audit discovery --config ~/.loongclaw/config.toml --query-contains "trust:official" --trust-tier official
+loong audit discovery --config ~/.loongclaw/config.toml --group-by agent
+loong audit summary --config ~/.loongclaw/config.toml --since-epoch-s 1700010000 --until-epoch-s 1700013600
+loong audit recent --config ~/.loongclaw/config.toml --pack-id sales-intel --agent-id agent-search
+loong audit summary --config ~/.loongclaw/config.toml --group-by token
+loong audit recent --config ~/.loongclaw/config.toml --event-id evt-123 --token-id token-abc
+loong audit token-trail --config ~/.loongclaw/config.toml --token-id token-abc
+loong audit recent --config ~/.loongclaw/config.toml --json
 if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
 
@@ -380,6 +383,14 @@ surfaces the host and port, DNS resolution results, fake-ip-style addresses,
 and a short TCP reachability check so you can separate local proxy/TUN/fake-ip
 instability from true upstream unavailability.
 
+`doctor security` complements the general health check with a security exposure
+and config hygiene audit. It reports `covered`, `partial`, `exposed`, and
+`unknown` findings across durable audit retention, shell execution posture,
+tool file-root confinement, web-fetch egress, external-skills download posture,
+secret storage hygiene, and browser automation surfaces. Use the text output
+for operator review and `--json` when you want a stable machine-readable
+contract for automation or support tooling.
+
 ## We Are Currently Working On
 
 <details>
@@ -394,10 +405,11 @@ instability from true upstream unavailability.
    - dashboard
    - onboarding
 
-   The initial product mode stays same-origin and local by default.
+   The initial product mode stays same-origin and localhost-bound by default.
 
-   That local-first boundary is the current operating slice, not the long-term
-   architecture endpoint.
+   That default bind policy is a security boundary for the current operating
+   slice, not a statement that future gateway/service expansion is out of
+   scope or the long-term architecture endpoint.
 
    The long-term direction is to keep Web UI attached to the same daemon-owned
    gateway/service runtime rather than creating a second assistant runtime.
@@ -411,7 +423,7 @@ instability from true upstream unavailability.
 
 ## Configuration
 
-`loongclaw onboard` uses `provider.api_key = { env = "..." }` to reference provider credentials, so secrets stay
+`loong onboard` uses `provider.api_key = { env = "..." }` to reference provider credentials, so secrets stay
 outside the config file:
 
 ```toml
@@ -484,7 +496,7 @@ allowed_chat_ids = ["oc_your_chat_id"]
 ```
 
 ```bash
-loongclaw feishu-serve --config ~/.loongclaw/config.toml
+loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
 LoongClaw defaults to `mode = "webhook"` and reads `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_VERIFICATION_TOKEN`, and `FEISHU_ENCRYPT_KEY`.
@@ -505,12 +517,12 @@ allowed_chat_ids = ["oc_your_chat_id"]
 ```
 
 ```bash
-loongclaw feishu-serve --config ~/.loongclaw/config.toml
+loong feishu-serve --config ~/.loongclaw/config.toml
 ```
 
 Webhook secrets are not required in websocket mode. If you are targeting Lark instead of Feishu, add `domain = "lark"`.
 
-Assistant replies sent through `loongclaw feishu-serve` use Feishu markdown cards when the reply fits the platform card payload limit, so Markdown renders natively in chat; oversized replies automatically fall back to plain text.
+Assistant replies sent through `loong feishu-serve` use Feishu markdown cards when the reply fits the platform card payload limit, so Markdown renders natively in chat; oversized replies automatically fall back to plain text.
 
 Matrix channel example:
 
@@ -527,25 +539,59 @@ allowed_room_ids = ["!ops:example.org"]
 ```
 
 ```bash
-loongclaw matrix-serve --config ~/.loongclaw/config.toml --once
+loong matrix-serve --config ~/.loongclaw/config.toml --once
 ```
 
 By default, LoongClaw reads `MATRIX_ACCESS_TOKEN`. Matrix room and user IDs often contain `:`, so the runtime preserves structured Matrix route/session IDs without relying on Matrix-specific path hacks.
 
 ### Multi-Channel Serve
 
-Use `multi-channel-serve` when you want one process to keep an interactive CLI
-session in the foreground while supervising every enabled runtime-backed
-service channel in the same runtime.
+Use `gateway run` when you want LoongClaw to claim the explicit gateway owner
+slot and supervise the enabled runtime-backed service-channel subset.
 
-Today this command is the attached runtime-owner precursor to a broader
-daemon-owned gateway service surface. The current slice keeps CLI in the
-foreground, but the longer-term direction is to decouple CLI lifecycle from
-service lifecycle and let one service host own routes, status, logs, pairing,
-and richer channel runtimes.
+The current gateway slice now includes:
+
+- `loongclaw gateway run` for the owner lifecycle
+- `loongclaw gateway status` for cross-process owner inspection
+- `loongclaw gateway stop` for cooperative shutdown
+- a localhost-only authenticated control surface that publishes status,
+  channel inventory, runtime snapshot, operator summary, and cooperative stop
+  endpoints from the same `gateway run` owner
+
+`gateway run` starts headless by default. Pass `--session` when you want the
+concurrent CLI host attached to the same runtime owner.
+
+When `gateway run` is active, it also binds a loopback-only control endpoint on
+an ephemeral localhost port and writes the actual `bind_address`, `port`, and
+`token_path` into `loongclaw gateway status --json`. Local clients such as the
+future Web UI can discover the running owner through that persisted state
+without introducing a second service lifecycle.
+
+The daemon now also carries a reusable localhost gateway client/discovery layer
+that centralizes loopback validation, bearer-token loading, and route helpers
+for `status`, `channels`, `runtime-snapshot`, `operator-summary`, and `stop`.
+That keeps dashboard and Web UI bootstrap logic out of ad-hoc file reads.
 
 ```bash
-loongclaw multi-channel-serve \
+loongclaw gateway run --config ~/.loongclaw/config.toml
+```
+
+```bash
+loongclaw gateway status --json
+```
+
+```bash
+loongclaw gateway stop
+```
+
+`multi-channel-serve` still works as the attached compatibility wrapper when
+you want one process to keep an interactive CLI session in the foreground while
+supervising every enabled runtime-backed service channel in the same runtime.
+It now rides on the same gateway owner contract rather than remaining the
+long-term product noun.
+
+```bash
+loong multi-channel-serve \
   --session cli-supervisor \
   --channel-account telegram=bot_123456 \
   --channel-account lark=alerts \
@@ -556,7 +602,11 @@ loongclaw multi-channel-serve \
 
 `--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
 
-`loongclaw channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
+The longer-term direction remains to let one gateway-owned service host
+decouple CLI lifecycle from service lifecycle and own routes, status, logs,
+pairing, and richer channel runtimes.
+
+`loong channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
 
 Tool policy stays explicit:
 
@@ -593,7 +643,7 @@ Further references:
 - `BRAVE_API_KEY`, `TAVILY_API_KEY`, `PERPLEXITY_API_KEY`, `EXA_API_KEY`, `JINA_API_KEY`, and `JINA_AUTH_TOKEN` stay supported as environment fallbacks
 - [Tool Surface Spec](docs/product-specs/tool-surface.md)
 - [Product Specs](docs/product-specs/index.md)
-- `loongclaw validate-config --config ~/.loongclaw/config.toml --json`
+- `loong validate-config --config ~/.loongclaw/config.toml --json`
 
 <a id="migrate-existing-setup"></a>
 
@@ -604,28 +654,28 @@ LoongClaw does not assume teams should start from zero.
 Today there are two migration-facing paths:
 
 - `onboard` already folds current setup, Codex config, environment settings, and workspace guidance into starting-point detection, then suggests a reusable starting point.
-- when you want explicit control, the public migration entrypoint is now `loongclaw migrate`, which handles discovery, planning, selective apply, and rollback.
+- when you want explicit control, the public migration entrypoint is now `loong migrate`, which handles discovery, planning, selective apply, and rollback.
 
 Its value is broader than copying a config file. LoongClaw distinguishes sources, recommends a primary source, and keeps migration split into narrower lanes such as prompt, profile, and external-skills state instead of blindly overwriting everything at once.
 
 ```bash
 # Discover migration candidates under a root
-loongclaw migrate --mode discover --input ~/legacy-claws
+loong migrate --mode discover --input ~/legacy-claws
 
 # Plan all sources and print a recommended primary source
-loongclaw migrate --mode plan_many --input ~/legacy-claws
+loong migrate --mode plan_many --input ~/legacy-claws
 
 # Apply one selected source to a target config
-loongclaw migrate --mode apply_selected --input ~/legacy-claws \
+loong migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml --force
 
 # Apply one selected source and bridge installable local external skills
-loongclaw migrate --mode apply_selected --input ~/legacy-claws \
+loong migrate --mode apply_selected --input ~/legacy-claws \
   --source-id openclaw --output ~/.loongclaw/config.toml \
   --apply-external-skills-plan --force
 
 # Roll back the most recent migration
-loongclaw migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
+loong migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
 Deeper migration modes also exist, including `merge_profiles` for multi-source profile merging and `map_external_skills` for external-skills artifact mapping. The bridge remains opt-in: prompt/profile import still works by default, while `--apply-external-skills-plan` adds installable local skill directories to the managed runtime without replacing unrelated managed skills.
@@ -637,20 +687,20 @@ LoongClaw's external-skills runtime is operator-visible now instead of staying h
 
 ```bash
 # Inspect resolved managed, user, and project skills with eligibility + invocation metadata
-loongclaw skills list
-loongclaw skills info release-guard
+loong skills list
+loong skills info release-guard
 
 # Download a remote skill package under the external-skills policy boundary
-loongclaw skills fetch https://skills.sh/release-guard.tgz --approve-download
+loong skills fetch https://skills.sh/release-guard.tgz --approve-download
 
 # Download and sync a remote package into the managed runtime in one step
-loongclaw skills fetch https://skills.sh/release-guard.tgz \
+loong skills fetch https://skills.sh/release-guard.tgz \
   --approve-download --install --replace
 ```
 
-`loongclaw skills list` and `loongclaw skills info` surface per-skill metadata such as
+`loong skills list` and `loong skills info` surface per-skill metadata such as
 `invocation_policy`, required env or binaries, required runtime config gates, and declared tool
-restrictions. `loongclaw skills fetch --install --replace` gives operators a thin update path over
+restrictions. `loong skills fetch --install --replace` gives operators a thin update path over
 the existing managed install lifecycle without bypassing the same runtime policy checks that govern
 downloads and installed skill execution.
 
@@ -740,6 +790,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [Architecture](ARCHITECTURE.md)                             | Crate map and layered execution overview                                                                    |
 | [Core Beliefs](docs/design-docs/core-beliefs.md)            | Core engineering principles                                                                                 |
+| [SDK Docs](docs/sdk/index.md)                               | Capability authoring, internal integration seams, validator meaning, and promotion-oriented SDK references  |
 | [Roadmap](docs/ROADMAP.md)                                  | Stage-based milestones and direction                                                                        |
 | [Product Sense](docs/PRODUCT_SENSE.md)                      | Current product contract and user journey                                                                   |
 | [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, and memory                                  |

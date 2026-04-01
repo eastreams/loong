@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::CliResult;
+use crate::{CliResult, config::active_cli_command_name};
 
 use super::{FeishuClient, FeishuGrant, FeishuTokenStore, parse_token_exchange_response};
 
@@ -180,8 +180,9 @@ pub fn resolve_selected_grant(
     let resolution = resolve_grant_selection(store, account_id, open_id)?;
     if resolution.selection_required() {
         let open_ids = resolution.available_open_ids().join(", ");
+        let cli = active_cli_command_name();
         Err(format!(
-            "multiple stored Feishu grants exist for account `{account_id}` ({open_ids}); run `loongclaw feishu auth list` or pass `--open-id`"
+            "multiple stored Feishu grants exist for account `{account_id}` ({open_ids}); run `{cli} feishu auth list` or pass `--open-id`"
         ))
     } else if resolution.missing_explicit_open_id().is_some() {
         Err(describe_grant_selection_error(account_id, &resolution)
@@ -230,15 +231,16 @@ pub fn describe_grant_selection_error_for_display(
     display_account_id: &str,
     resolution: &FeishuGrantResolution,
 ) -> Option<String> {
+    let cli = active_cli_command_name();
     if let Some(requested_open_id) = resolution.missing_explicit_open_id() {
         if resolution.inventory.grants.is_empty() {
             return Some(format!(
-                "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; run `loongclaw feishu auth start --account {display_account_id}` first"
+                "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; run `{cli} feishu auth start --account {display_account_id}` first"
             ));
         }
         let available_open_ids = resolution.available_open_ids().join(", ");
         return Some(format!(
-            "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; available open_ids: {available_open_ids}; run `loongclaw feishu auth select --account {display_account_id} --open-id <open_id>` or `loongclaw feishu auth list --account {display_account_id}`"
+            "no stored Feishu grant for account `{display_account_id}` and open_id `{requested_open_id}`; available open_ids: {available_open_ids}; run `{cli} feishu auth select --account {display_account_id} --open-id <open_id>` or `{cli} feishu auth list --account {display_account_id}`"
         ));
     }
 
@@ -251,13 +253,13 @@ pub fn describe_grant_selection_error_for_display(
             .map(|open_id| format!("stale selected open_id `{open_id}` was cleared; "))
             .unwrap_or_default();
         return Some(format!(
-            "{stale_selected_hint}multiple stored Feishu grants exist for account `{display_account_id}` ({open_ids}); run `loongclaw feishu auth select --account {display_account_id} --open-id <open_id>` or pass `open_id` explicitly"
+            "{stale_selected_hint}multiple stored Feishu grants exist for account `{display_account_id}` ({open_ids}); run `{cli} feishu auth select --account {display_account_id} --open-id <open_id>` or pass `open_id` explicitly"
         ));
     }
 
     if resolution.grant.is_none() {
         return Some(format!(
-            "no stored Feishu grant for account `{display_account_id}`; run `loongclaw feishu auth start --account {display_account_id}` first"
+            "no stored Feishu grant for account `{display_account_id}`; run `{cli} feishu auth start --account {display_account_id}` first"
         ));
     }
 
@@ -452,7 +454,7 @@ mod tests {
         let error = resolve_selected_grant(&store, "feishu_main", None)
             .expect_err("multiple grants should require explicit selection");
 
-        assert!(error.contains("loongclaw feishu auth list"));
+        assert!(error.contains("loong feishu auth list"));
         assert!(error.contains("--open-id"));
         assert!(error.contains("ou_123"));
         assert!(error.contains("ou_456"));

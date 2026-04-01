@@ -91,7 +91,7 @@ fn durable_flush_content_sha256(session_id: &str, summary_body: &str) -> String 
     hasher.update(summary_body.as_bytes());
 
     let digest = hasher.finalize();
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 fn durable_memory_log_path(workspace_root: &Path, exported_on: &str) -> PathBuf {

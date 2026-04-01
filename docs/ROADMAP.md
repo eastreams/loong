@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-27
+Last updated: 2026-03-29
 
 This roadmap is execution-focused. Every stage has:
 
@@ -90,12 +90,22 @@ Focus: runtime-grade isolation for untrusted extension execution.
 Delivered in current baseline:
 
 - WASM runtime execution lane wired into `bridge_execution` with Wasmtime backend.
+- Core-module WASM host ABI v0 for plugin data exchange:
+  - request payload delivery into guest memory
+  - structured JSON output capture from guest memory
+  - bounded guest logging surfaced in runtime evidence
+  - explicit guest abort propagation
+  - backward-compatible fallback to legacy `run() -> ()`
 - Policy-driven runtime guardrails in `bridge_support.security_scan.runtime`:
   - required `allowed_path_prefixes` when `execute_wasm_component=true` (fail closed)
   - `max_component_bytes`
+  - optional `max_output_bytes` for host ABI output capture
   - optional `fuel_limit`
+  - optional `timeout_ms` enforced through Wasmtime epoch interruption
 - Runtime isolation tests for:
   - successful wasm execution
+  - timeout-guarded execution without cache reuse
+  - timeout-triggered termination for non-returning modules
   - runtime prefix denial
   - runtime size-limit denial
   - invalid runtime policy denial
@@ -105,7 +115,6 @@ Remaining deliverables:
 - WASM runtime lane with enforced resource limits:
   - CPU budget refinement
   - memory limits
-  - timeout/termination policy
 - process bridge sandbox profile tiers (`restricted`, `balanced`, `trusted`) aligned with the
   shared execution-tier contract used by browser and WASM evidence surfaces
 - hot-reload lifecycle hooks:
@@ -284,6 +293,20 @@ Acceptance criteria:
 Status: planned
 Focus: open ecosystem without sacrificing trust boundaries.
 
+Delivered in current baseline:
+
+- `loongclaw plugins init <package_root>` scaffolds a manifest-first plugin
+  package root with a canonical `loongclaw.plugin.json`, current host
+  compatibility defaults, and a README that routes authors into shared
+  package diagnosis instead of internal crate spelunking
+- `loongclaw plugins doctor --root <package_root>` reuses the shared
+  `plugin_preflight` contract for author-facing package diagnosis, defaulting
+  to the `sdk_release` profile while surfacing setup truth, remediation
+  classes, and required operator follow-up actions
+- package-manifest runtime projection now also honors explicit
+  `metadata.source_language`, so language-specific scaffolded packages keep
+  canonical bridge, adapter-family, and preflight language semantics
+
 Planned deliverables:
 
 - multi-language plugin intake pipeline:
@@ -358,6 +381,7 @@ Delivered in current baseline:
   - `runtime-capability propose|review|show` records one run-derived capability candidate, bounded scope, required capabilities, explicit operator review, and any recorded snapshot-backed delta evidence without mutating live runtime state
   - `runtime-capability index` groups matching candidate records into deterministic capability families, emits compact evidence digests including delta-evidence coverage and changed runtime surfaces, and evaluates readiness as `ready`, `not_ready`, or `blocked`
   - `runtime-capability plan` resolves one indexed capability family into a deterministic dry-run promotion plan with artifact identity, blockers, approval checklist, rollback hints, provenance, and the same family-level delta evidence digest
+  - `runtime-capability apply` materializes one deterministic governed `memory_stage_profile` artifact from a promotable capability family, keeps the output idempotent, and rejects conflicting or unsupported apply paths instead of mutating live runtime state directly
 - modular channel/provider architecture for extension-safe evolution:
   - `app/channel/feishu/*` split into adapter/payload/webhook layers
   - Feishu encrypted webhook payload decrypt lane with signature verification
@@ -377,7 +401,20 @@ Remaining deliverables:
   - expand beyond installer scripts into package-manager distribution only after release adoption is stable
 - experiment-state operator surface follow-through:
   - use the shipped snapshot/restore/experiment/capability record layer as the prerequisite for later evaluator pipelines and automated skill-optimization loops
-  - keep the new dry-run promotion planner read-only and use it as the contract for any future promotion executor instead of jumping directly to automatic mutation
+  - keep the new promotion planner as the contract for governed executors; only the explicit `memory_stage_profile` apply lane is shipped today, and other promotion targets stay read-only until their executor contracts exist
+- runtime productization over already-shipped substrate:
+  - background task UX on top of session runtime:
+    - expose task-shaped create, inspect, wait, follow, cancel, and recover flows over the current async delegate child-session substrate
+    - surface approval-pending and tool-narrowing state as task diagnostics instead of raw session-runtime detail only
+    - keep cron, heartbeat, and service-owned scheduling out of the first slice
+  - product-mode managed skills UX:
+    - add search, recommendation, and explicit acquisition guidance over the current managed, user, and project skill inventory
+    - explain eligibility, visibility, shadowing, first-use guidance, and product-mode fit rather than requiring operators to know a `skill_id` up front
+    - keep install and invoke explicit and governed instead of drifting into blind auto-install
+  - scoped memory retrieval productization:
+    - add query-aware retrieval and broaden beyond session-summary-only hydration
+    - make provenance and injection reason operator-visible
+    - ship local text search before embedding-dependent retrieval
 - managed browser automation companion:
   - keep `browser.open`, `browser.extract`, and `browser.click` as the shipped safe browser lane
   - partial governed adapter skeleton now exists for richer page actions:
@@ -390,9 +427,10 @@ Remaining deliverables:
   - current product mode stays same-origin and localhost-only by default, but
     that operating boundary is not the long-term architecture endpoint
 - gateway service foundation:
-  - promote today's attached runtime owner (`multi-channel-serve`) into an
-    explicit daemon-owned gateway service rather than leaving service ownership
-    fragmented across `chat`, `*-serve`, Web UI, and future paired clients
+  - land the first explicit daemon-owned gateway owner contract through
+    `gateway run`, `gateway status`, and `gateway stop`, while keeping
+    `multi-channel-serve` as the attached compatibility wrapper instead of the
+    long-term runtime-owner noun
   - extract channel, ACP, and runtime-snapshot payload builders into shared
     service read models that can feed CLI, dashboard, Web UI, and future
     paired/browser/mobile clients

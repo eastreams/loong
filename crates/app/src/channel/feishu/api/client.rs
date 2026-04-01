@@ -407,6 +407,56 @@ impl FeishuClient {
         self.send_json_request_with_retry(request).await
     }
 
+    pub async fn put_json(
+        &self,
+        path: &str,
+        bearer_token: Option<&str>,
+        query_pairs: &[(String, String)],
+        body: &Value,
+    ) -> CliResult<Value> {
+        let url = self.build_open_api_url_with_query(path, query_pairs)?;
+        let request = self
+            .authorized(self.http.put(url), bearer_token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/json; charset=utf-8",
+            )
+            .json(body);
+        self.send_json_request_with_retry(request).await
+    }
+
+    pub async fn delete_json(
+        &self,
+        path: &str,
+        bearer_token: Option<&str>,
+        query_pairs: &[(String, String)],
+    ) -> CliResult<Value> {
+        let url = self.build_open_api_url_with_query(path, query_pairs)?;
+        let request = self.authorized(self.http.delete(url), bearer_token).header(
+            reqwest::header::CONTENT_TYPE,
+            "application/json; charset=utf-8",
+        );
+        self.send_json_request_with_retry(request).await
+    }
+
+    pub async fn patch_json(
+        &self,
+        path: &str,
+        bearer_token: Option<&str>,
+        query_pairs: &[(String, String)],
+        body: &Value,
+    ) -> CliResult<Value> {
+        let url = self.build_open_api_url_with_query(path, query_pairs)?;
+        let request = self
+            .authorized(self.http.patch(url), bearer_token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/json; charset=utf-8",
+            )
+            .json(body);
+        self.send_json_request_with_retry(request).await
+    }
+
     pub async fn post_multipart(
         &self,
         path: &str,

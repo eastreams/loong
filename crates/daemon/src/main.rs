@@ -1,5 +1,4 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
-use clap::Parser;
 use loongclaw_daemon::*;
 
 /// Discard any unread input from the terminal's tty input queue.
@@ -37,8 +36,17 @@ impl Drop for StdinGuard {
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
-    let cli = Cli::parse();
-    let result = match cli.command.unwrap_or_else(resolve_default_entry_command) {
+    init_tracing();
+    mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
+    let cli = parse_cli();
+    let command = cli.command.unwrap_or_else(resolve_default_entry_command);
+    let command_name = debug_variant_name(&command);
+    tracing::debug!(
+        target: "loongclaw.daemon",
+        command = %command_name,
+        "parsed CLI command"
+    );
+    let result = match command {
         Commands::Welcome => run_welcome_cli(),
         Commands::Demo => run_demo().await,
         Commands::RunTask { objective, payload } => run_task_cli(&objective, &payload).await,
@@ -226,12 +234,14 @@ async fn main() {
             fix,
             json,
             skip_model_probe,
+            command,
         } => {
             doctor_cli::run_doctor_cli(doctor_cli::DoctorCommandOptions {
                 config,
                 fix,
                 json,
                 skip_model_probe,
+                command,
             })
             .await
         }
@@ -253,6 +263,20 @@ async fn main() {
             json,
             command,
         }),
+        Commands::Tasks {
+            config,
+            json,
+            session,
+            command,
+        } => {
+            tasks_cli::run_tasks_cli(tasks_cli::TasksCommandOptions {
+                config,
+                json,
+                session,
+                command,
+            })
+            .await
+        }
         Commands::Plugins { json, command } => {
             plugins_cli::run_plugins_cli(plugins_cli::PluginsCommandOptions { json, command }).await
         }
@@ -449,9 +473,10 @@ async fn main() {
             uuid,
         } => {
             if target_kind == mvp::channel::ChannelOutboundTargetKind::MessageReply {
-                Err(
-                    "legacy `feishu-send` no longer supports `message_reply` execution; use `loongclaw feishu reply` for reply targets".to_owned(),
-                )
+                Err(format!(
+                    "legacy `feishu-send` no longer supports `message_reply` execution; use `{} feishu reply` for reply targets",
+                    mvp::config::active_cli_command_name()
+                ))
             } else {
                 mvp::channel::run_feishu_send(
                     config.as_deref(),
@@ -557,6 +582,24 @@ async fn main() {
                     once: false,
                     bind_override: None,
                     path_override: None,
+                },
+            )
+            .await
+        }
+        Commands::WhatsappServe {
+            config,
+            account,
+            bind,
+            path,
+        } => {
+            run_channel_serve_cli(
+                WHATSAPP_SERVE_CLI_SPEC,
+                ChannelServeCliArgs {
+                    config_path: config.as_deref(),
+                    account: account.as_deref(),
+                    once: false,
+                    bind_override: bind.as_deref(),
+                    path_override: path.as_deref(),
                 },
             )
             .await
@@ -926,6 +969,7 @@ async fn main() {
             session,
             channel_account,
         } => run_multi_channel_serve_cli(config.as_deref(), &session, channel_account).await,
+        Commands::Gateway { command } => gateway::service::run_gateway_cli(command).await,
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
         Commands::Web { command } => web_cli::run_web_command(command).await,
         Commands::Completions { shell } => {
@@ -935,6 +979,11 @@ async fn main() {
         }
     };
     if let Err(error) = result {
+        tracing::error!(
+            target: "loongclaw.daemon",
+            error = %error,
+            "CLI command failed"
+        );
         #[allow(clippy::print_stderr)]
         {
             eprintln!("error: {error}");

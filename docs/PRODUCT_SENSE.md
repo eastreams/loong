@@ -26,12 +26,12 @@ The current product contract is:
 1. Install LoongClaw through the documented bootstrap installer, which prefers
    checksum-verified GitHub Release binaries and keeps an explicit `--source`
    fallback from a local checkout.
-2. Run `loongclaw onboard`.
+2. Run `loong onboard`.
 3. Set provider credentials.
 4. Get first value through a concrete one-shot command such as
-   `loongclaw ask --message "Summarize this repository and suggest the best next step."`,
-   then use `loongclaw chat` for follow-up interactive work.
-5. If anything is broken, use `loongclaw doctor` or `loongclaw doctor --fix`.
+   `loong ask --message "Summarize this repository and suggest the best next step."`,
+   then use `loong chat` for follow-up interactive work.
+5. If anything is broken, use `loong doctor` or `loong doctor --fix`.
 6. Enable Telegram or Feishu only after the base CLI flow is healthy.
 
 This keeps the first-run journey legible while preserving the existing runtime architecture.

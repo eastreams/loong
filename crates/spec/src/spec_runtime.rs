@@ -3,7 +3,8 @@ use std::{
     fs,
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
+    thread,
     time::Duration,
 };
 
@@ -37,7 +38,7 @@ use tokio::time::Instant as TokioInstant;
 use tokio::time::sleep;
 use wasmtime::{
     Config as WasmtimeConfig, Engine as WasmtimeEngine, Linker as WasmtimeLinker,
-    Module as WasmtimeModule, Store as WasmtimeStore,
+    Module as WasmtimeModule, Store as WasmtimeStore, Trap as WasmtimeTrap,
 };
 
 #[cfg(any(test, feature = "test-hooks"))]
@@ -50,10 +51,11 @@ mod dynamic_catalog;
 mod http_json_bridge;
 mod plugin_contract_types;
 mod process_stdio_bridge;
-#[cfg(test)]
-mod tests;
 mod wasm_cache;
+mod wasm_host_abi;
 mod wasm_runtime_policy;
+#[cfg(test)]
+mod wasm_runtime_tests;
 pub use dynamic_catalog::{DynamicCatalogConnector, bridge_execution_payload};
 pub(crate) use dynamic_catalog::{
     default_runtime_adapter_family, normalize_runtime_source_language,
@@ -67,9 +69,13 @@ pub use process_stdio_bridge::{
 #[cfg(test)]
 use wasm_cache::WasmModuleCache;
 use wasm_cache::{
-    CachedWasmModule, WasmArtifactFileIdentity, build_wasm_module_cache_key,
+    CachedWasmModule, WasmArtifactFileIdentity, WasmModuleCacheLookup, build_wasm_module_cache_key,
     insert_cached_wasm_module, lookup_cached_wasm_module, modified_unix_nanos,
     wasm_artifact_file_identity, wasm_module_cache_capacity, wasm_module_cache_max_bytes,
+};
+use wasm_host_abi::{
+    WasmHostAbiSnapshot, WasmHostAbiStoreData, link_wasm_host_abi,
+    module_requires_wasm_host_abi_memory, module_uses_wasm_host_abi,
 };
 use wasm_runtime_policy::wasm_signals_based_traps_enabled_from_env;
 
@@ -998,7 +1004,9 @@ pub struct BridgeRuntimePolicy {
     pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
     pub wasm_allowed_path_prefixes: Vec<PathBuf>,
     pub wasm_max_component_bytes: Option<usize>,
+    pub wasm_max_output_bytes: Option<usize>,
     pub wasm_fuel_limit: Option<u64>,
+    pub wasm_timeout_ms: Option<u64>,
     pub wasm_require_hash_pin: bool,
     pub wasm_required_sha256_by_plugin: BTreeMap<String, String>,
     pub enforce_execution_success: bool,
@@ -1535,9 +1543,12 @@ pub struct SecurityRuntimeExecutionSpec {
     #[serde(default)]
     pub max_component_bytes: Option<usize>,
     #[serde(default)]
+    pub max_output_bytes: Option<usize>,
+    #[serde(default)]
     pub fuel_limit: Option<u64>,
     #[serde(default)]
     pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1881,6 +1892,7 @@ fn read_wasm_artifact_bytes(artifact_path: &Path) -> Result<WasmArtifactBytes, S
 fn compile_wasm_module(
     module_bytes: &[u8],
     fuel_enabled: bool,
+    epoch_interruption_enabled: bool,
     artifact_sha256: Option<String>,
 ) -> Result<CachedWasmModule, String> {
     let mut config = WasmtimeConfig::new();
@@ -1891,6 +1903,9 @@ fn compile_wasm_module(
     if fuel_enabled {
         config.consume_fuel(true);
     }
+    if epoch_interruption_enabled {
+        config.epoch_interruption(true);
+    }
     let engine = WasmtimeEngine::new(&config)
         .map_err(|error| format!("failed to initialize wasmtime engine: {error}"))?;
     let module = WasmtimeModule::new(&engine, module_bytes)
@@ -1900,6 +1915,224 @@ fn compile_wasm_module(
         module,
         artifact_sha256,
     })
+}
+
+#[derive(Debug)]
+struct WasmEpochDeadlineController {
+    cancel_tx: Option<mpsc::Sender<()>>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl WasmEpochDeadlineController {
+    fn start(engine: &WasmtimeEngine, timeout_ms: u64) -> Result<Self, String> {
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+        let timeout = Duration::from_millis(timeout_ms);
+        let engine = engine.clone();
+        let thread_name = "loongclaw-wasm-timeout".to_owned();
+        let worker = thread::Builder::new()
+            .name(thread_name)
+            .spawn(move || {
+                let wait_result = cancel_rx.recv_timeout(timeout);
+                let timed_out = matches!(wait_result, Err(mpsc::RecvTimeoutError::Timeout));
+                if timed_out {
+                    engine.increment_epoch();
+                }
+            })
+            .map_err(|error| format!("failed to start wasm timeout watchdog: {error}"))?;
+        Ok(Self {
+            cancel_tx: Some(cancel_tx),
+            worker: Some(worker),
+        })
+    }
+
+    fn disarm(&mut self) {
+        if let Some(cancel_tx) = self.cancel_tx.take() {
+            let _ = cancel_tx.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+impl Drop for WasmEpochDeadlineController {
+    fn drop(&mut self) {
+        self.disarm();
+    }
+}
+
+fn wasm_runtime_failure_reason(
+    error: &wasmtime::Error,
+    timeout_ms: Option<u64>,
+    context: &str,
+) -> (String, bool) {
+    let is_interrupt_trap = matches!(
+        error.downcast_ref::<WasmtimeTrap>(),
+        Some(trap) if *trap == WasmtimeTrap::Interrupt
+    );
+
+    let Some(timeout_ms) = timeout_ms else {
+        return (format!("{context}: {error}"), false);
+    };
+    if !is_interrupt_trap {
+        return (format!("{context}: {error}"), false);
+    }
+
+    let timeout_reason = format!("wasm execution timed out after {timeout_ms}ms");
+    (timeout_reason, true)
+}
+
+fn wasm_cache_lookup_disabled(
+    cache_capacity: usize,
+    cache_max_bytes: usize,
+) -> WasmModuleCacheLookup {
+    WasmModuleCacheLookup {
+        hit: false,
+        inserted: false,
+        evicted_entries: 0,
+        cache_len: 0,
+        cache_capacity,
+        cache_total_module_bytes: 0,
+        cache_max_bytes,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WasmEntrypointSignature {
+    I32,
+    Unit,
+}
+
+impl WasmEntrypointSignature {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::I32 => "() -> i32",
+            Self::Unit => "() -> ()",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct WasmRunEvidence {
+    entrypoint_signature: Option<&'static str>,
+    guest_exit_code: Option<i32>,
+    host_abi: WasmHostAbiSnapshot,
+}
+
+#[derive(Debug, Clone)]
+struct WasmRuntimeExecutionContext {
+    artifact_path: String,
+    export_name: String,
+    operation: String,
+    payload: Value,
+    request: Value,
+    module_size_bytes: usize,
+    fuel_limit: Option<u64>,
+    max_output_bytes: Option<usize>,
+    timeout_ms: Option<u64>,
+    cache_enabled: bool,
+    cache_lookup: WasmModuleCacheLookup,
+    cache_miss: bool,
+    expected_sha256: Option<String>,
+    artifact_sha256: Option<String>,
+}
+
+#[derive(Debug)]
+struct WasmRunOutcome {
+    consumed_fuel: Option<u64>,
+    timeout_triggered: bool,
+    evidence: WasmRunEvidence,
+}
+
+#[derive(Debug)]
+struct WasmRunFailure {
+    reason: String,
+    timeout_triggered: bool,
+    consumed_fuel: Option<u64>,
+    evidence: WasmRunEvidence,
+}
+
+type WasmRunResult<T> = Result<T, Box<WasmRunFailure>>;
+
+fn boxed_wasm_run_failure(
+    reason: impl Into<String>,
+    timeout_triggered: bool,
+    consumed_fuel: Option<u64>,
+    evidence: WasmRunEvidence,
+) -> Box<WasmRunFailure> {
+    Box::new(WasmRunFailure {
+        reason: reason.into(),
+        timeout_triggered,
+        consumed_fuel,
+        evidence,
+    })
+}
+
+fn wasm_bridge_request_payload(
+    provider: &kernel::ProviderConfig,
+    channel: &kernel::ChannelConfig,
+    command: &ConnectorCommand,
+) -> Value {
+    json!({
+        "provider_id": provider.provider_id,
+        "channel_id": channel.channel_id,
+        "operation": command.operation,
+        "payload": command.payload,
+    })
+}
+
+fn wasm_runtime_execution_evidence(
+    context: &WasmRuntimeExecutionContext,
+    timeout_triggered: bool,
+    fuel_consumed: Option<u64>,
+    evidence: &WasmRunEvidence,
+) -> Value {
+    let expected_sha256 = context.expected_sha256.clone();
+    let artifact_sha256 = context.artifact_sha256.clone();
+    let integrity_check_required = expected_sha256.is_some();
+    let integrity_check_passed = expected_sha256.is_none() || artifact_sha256.is_some();
+
+    json!({
+        "executor": "wasmtime_module",
+        "artifact_path": context.artifact_path,
+        "export": context.export_name,
+        "operation": context.operation,
+        "payload": context.payload,
+        "request": context.request,
+        "module_size_bytes": context.module_size_bytes,
+        "fuel_limit": context.fuel_limit,
+        "max_output_bytes": evidence.host_abi.max_output_bytes.or(context.max_output_bytes),
+        "timeout_ms": context.timeout_ms,
+        "timeout_triggered": timeout_triggered,
+        "fuel_consumed": fuel_consumed,
+        "cache_enabled": context.cache_enabled,
+        "cache_hit": context.cache_lookup.hit,
+        "cache_miss": context.cache_miss,
+        "cache_evicted_entries": context.cache_lookup.evicted_entries,
+        "cache_entries": context.cache_lookup.cache_len,
+        "cache_capacity": context.cache_lookup.cache_capacity,
+        "cache_total_module_bytes": context.cache_lookup.cache_total_module_bytes,
+        "cache_max_bytes": context.cache_lookup.cache_max_bytes,
+        "cache_inserted": context.cache_lookup.inserted,
+        "expected_sha256": expected_sha256,
+        "artifact_sha256": artifact_sha256,
+        "integrity_check_required": integrity_check_required,
+        "integrity_check_passed": integrity_check_passed,
+        "host_abi_enabled": evidence.host_abi.host_abi_enabled,
+        "entrypoint_signature": evidence.entrypoint_signature,
+        "guest_exit_code": evidence.guest_exit_code,
+        "guest_logs": evidence.host_abi.guest_logs,
+        "guest_logs_truncated": evidence.host_abi.guest_logs_truncated,
+        "output_text": evidence.host_abi.output_text,
+        "output_json": evidence.host_abi.output_json,
+    })
+}
+
+fn wasm_snapshot_from_store(
+    store: &WasmtimeStore<WasmHostAbiStoreData>,
+    host_abi_enabled: bool,
+) -> WasmHostAbiSnapshot {
+    store.data().snapshot(host_abi_enabled)
 }
 
 #[allow(clippy::indexing_slicing)] // serde_json::Value string-keyed IndexMut is infallible
@@ -2022,8 +2255,12 @@ pub fn execute_wasm_component_bridge(
 
     let export_name = resolve_wasm_export_name(provider);
     let fuel_enabled = runtime_policy.wasm_fuel_limit.is_some();
+    let timeout_ms = runtime_policy.wasm_timeout_ms;
+    let epoch_interruption_enabled = timeout_ms.is_some();
+    let cache_enabled = !epoch_interruption_enabled;
     let cache_capacity = wasm_module_cache_capacity();
     let cache_max_bytes = wasm_module_cache_max_bytes();
+    let disabled_cache_lookup = wasm_cache_lookup_disabled(cache_capacity, cache_max_bytes);
     let expected_sha256 = match resolve_expected_wasm_sha256(provider, runtime_policy) {
         Ok(pin) => pin,
         Err(reason) => {
@@ -2038,8 +2275,11 @@ pub fn execute_wasm_component_bridge(
                     "payload": command.payload,
                     "module_size_bytes": module_size_bytes,
                     "fuel_limit": runtime_policy.wasm_fuel_limit,
+                    "timeout_ms": timeout_ms,
+                    "timeout_triggered": false,
+                    "cache_enabled": cache_enabled,
                     "cache_hit": false,
-                    "cache_miss": true,
+                    "cache_miss": cache_enabled,
                     "cache_evicted_entries": 0,
                     "cache_entries": 0,
                     "cache_capacity": cache_capacity,
@@ -2055,110 +2295,126 @@ pub fn execute_wasm_component_bridge(
         }
     };
 
-    let initial_cache_key = build_wasm_module_cache_key(
-        &artifact_path,
-        module_size_bytes as u64,
-        artifact_modified_unix_ns,
-        artifact_file_identity,
-        expected_sha256.clone(),
-        fuel_enabled,
-    );
-    let (cached_module, cache_lookup) = match lookup_cached_wasm_module(&initial_cache_key) {
-        Ok(Some(hit)) => hit,
-        Ok(None) => {
-            let artifact_bytes = match read_wasm_artifact_bytes(&artifact_path) {
-                Ok(bytes) => bytes,
-                Err(error) => {
-                    execution["status"] = Value::String("failed".to_owned());
-                    execution["reason"] = Value::String(error);
-                    execution["runtime"] = with_execution_security_tier(
-                        json!({
-                            "executor": "wasmtime_module",
-                            "artifact_path": artifact_path.display().to_string(),
-                            "export": export_name,
-                            "operation": command.operation,
-                            "payload": command.payload,
-                            "module_size_bytes": module_size_bytes,
-                            "fuel_limit": runtime_policy.wasm_fuel_limit,
-                            "cache_hit": false,
-                            "cache_miss": true,
-                            "cache_evicted_entries": 0,
-                            "cache_entries": 0,
-                            "cache_capacity": cache_capacity,
-                            "cache_total_module_bytes": 0,
-                            "cache_max_bytes": cache_max_bytes,
-                            "cache_inserted": false,
-                        }),
-                        execution_tier,
-                    );
-                    return execution;
-                }
-            };
-            let module_bytes = artifact_bytes.bytes;
+    let (cached_module, cache_lookup) = if cache_enabled {
+        let initial_cache_key = build_wasm_module_cache_key(
+            &artifact_path,
+            module_size_bytes as u64,
+            artifact_modified_unix_ns,
+            artifact_file_identity,
+            expected_sha256.clone(),
+            fuel_enabled,
+            epoch_interruption_enabled,
+        );
+        match lookup_cached_wasm_module(&initial_cache_key) {
+            Ok(Some(hit)) => hit,
+            Ok(None) => {
+                let artifact_bytes = match read_wasm_artifact_bytes(&artifact_path) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        execution["status"] = Value::String("failed".to_owned());
+                        execution["reason"] = Value::String(error);
+                        execution["runtime"] = with_execution_security_tier(
+                            json!({
+                                "executor": "wasmtime_module",
+                                "artifact_path": artifact_path.display().to_string(),
+                                "export": export_name,
+                                "operation": command.operation,
+                                "payload": command.payload,
+                                "module_size_bytes": module_size_bytes,
+                                "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                "timeout_ms": timeout_ms,
+                                "timeout_triggered": false,
+                                "cache_enabled": cache_enabled,
+                                "cache_hit": false,
+                                "cache_miss": true,
+                                "cache_evicted_entries": 0,
+                                "cache_entries": 0,
+                                "cache_capacity": cache_capacity,
+                                "cache_total_module_bytes": 0,
+                                "cache_max_bytes": cache_max_bytes,
+                                "cache_inserted": false,
+                            }),
+                            execution_tier,
+                        );
+                        return execution;
+                    }
+                };
+                let module_bytes = artifact_bytes.bytes;
 
-            module_size_bytes = module_bytes.len();
-            if let Some(limit) = runtime_policy.wasm_max_component_bytes
-                && module_size_bytes > limit
-            {
-                execution["status"] = Value::String("blocked".to_owned());
-                execution["reason"] = Value::String(format!(
-                    "wasm artifact size {} exceeds runtime max_component_bytes {limit}",
-                    module_size_bytes
-                ));
-                execution["runtime"] = with_execution_security_tier(
-                    json!({
-                        "executor": "wasmtime_module",
-                        "artifact_path": artifact_path.display().to_string(),
-                        "module_size_bytes": module_size_bytes,
-                        "max_component_bytes": limit,
-                    }),
-                    execution_tier,
-                );
-                return execution;
-            }
-
-            let artifact_sha256 = if let Some(expected) = expected_sha256.as_deref() {
-                let actual = wasm_artifact_sha256_hex(&module_bytes);
-                if actual != expected {
+                module_size_bytes = module_bytes.len();
+                if let Some(limit) = runtime_policy.wasm_max_component_bytes
+                    && module_size_bytes > limit
+                {
                     execution["status"] = Value::String("blocked".to_owned());
                     execution["reason"] = Value::String(format!(
-                        "wasm artifact sha256 mismatch: expected {expected}, actual {actual}"
+                        "wasm artifact size {} exceeds runtime max_component_bytes {limit}",
+                        module_size_bytes
                     ));
                     execution["runtime"] = with_execution_security_tier(
                         json!({
                             "executor": "wasmtime_module",
                             "artifact_path": artifact_path.display().to_string(),
                             "module_size_bytes": module_size_bytes,
-                            "expected_sha256": expected,
-                            "artifact_sha256": actual,
-                            "integrity_check_required": true,
-                            "integrity_check_passed": false,
+                            "max_component_bytes": limit,
+                            "timeout_ms": timeout_ms,
+                            "timeout_triggered": false,
+                            "cache_enabled": cache_enabled,
                         }),
                         execution_tier,
                     );
                     return execution;
                 }
-                Some(actual)
-            } else {
-                None
-            };
 
-            let refreshed_cache_key = build_wasm_module_cache_key(
-                &artifact_path,
-                module_size_bytes as u64,
-                artifact_bytes
-                    .modified_unix_ns
-                    .or(artifact_modified_unix_ns),
-                artifact_bytes.file_identity.or(artifact_file_identity),
-                expected_sha256.clone(),
-                fuel_enabled,
-            );
+                let artifact_sha256 = if let Some(expected) = expected_sha256.as_deref() {
+                    let actual = wasm_artifact_sha256_hex(&module_bytes);
+                    if actual != expected {
+                        execution["status"] = Value::String("blocked".to_owned());
+                        execution["reason"] = Value::String(format!(
+                            "wasm artifact sha256 mismatch: expected {expected}, actual {actual}"
+                        ));
+                        execution["runtime"] = with_execution_security_tier(
+                            json!({
+                                "executor": "wasmtime_module",
+                                "artifact_path": artifact_path.display().to_string(),
+                                "module_size_bytes": module_size_bytes,
+                                "expected_sha256": expected,
+                                "artifact_sha256": actual,
+                                "timeout_ms": timeout_ms,
+                                "timeout_triggered": false,
+                                "cache_enabled": cache_enabled,
+                                "integrity_check_required": true,
+                                "integrity_check_passed": false,
+                            }),
+                            execution_tier,
+                        );
+                        return execution;
+                    }
+                    Some(actual)
+                } else {
+                    None
+                };
 
-            match lookup_cached_wasm_module(&refreshed_cache_key) {
-                Ok(Some(hit)) => hit,
-                Ok(None) => {
-                    let compiled =
-                        match compile_wasm_module(&module_bytes, fuel_enabled, artifact_sha256) {
+                let refreshed_cache_key = build_wasm_module_cache_key(
+                    &artifact_path,
+                    module_size_bytes as u64,
+                    artifact_bytes
+                        .modified_unix_ns
+                        .or(artifact_modified_unix_ns),
+                    artifact_bytes.file_identity.or(artifact_file_identity),
+                    expected_sha256.clone(),
+                    fuel_enabled,
+                    epoch_interruption_enabled,
+                );
+
+                match lookup_cached_wasm_module(&refreshed_cache_key) {
+                    Ok(Some(hit)) => hit,
+                    Ok(None) => {
+                        let compiled = match compile_wasm_module(
+                            &module_bytes,
+                            fuel_enabled,
+                            epoch_interruption_enabled,
+                            artifact_sha256,
+                        ) {
                             Ok(module) => Arc::new(module),
                             Err(reason) => {
                                 execution["status"] = Value::String("failed".to_owned());
@@ -2172,6 +2428,9 @@ pub fn execute_wasm_component_bridge(
                                         "payload": command.payload,
                                         "module_size_bytes": module_size_bytes,
                                         "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                        "timeout_ms": timeout_ms,
+                                        "timeout_triggered": false,
+                                        "cache_enabled": cache_enabled,
                                         "cache_hit": false,
                                         "cache_miss": true,
                                         "cache_evicted_entries": 0,
@@ -2186,112 +2445,392 @@ pub fn execute_wasm_component_bridge(
                                 return execution;
                             }
                         };
-                    let cache_lookup = match insert_cached_wasm_module(
-                        refreshed_cache_key,
-                        compiled.clone(),
-                        module_size_bytes,
-                    ) {
-                        Ok(lookup) => lookup,
-                        Err(reason) => {
-                            execution["status"] = Value::String("failed".to_owned());
-                            execution["reason"] = Value::String(reason);
-                            execution["runtime"] = with_execution_security_tier(
-                                json!({
-                                    "executor": "wasmtime_module",
-                                    "artifact_path": artifact_path.display().to_string(),
-                                    "export": export_name,
-                                    "operation": command.operation,
-                                    "payload": command.payload,
-                                    "module_size_bytes": module_size_bytes,
-                                    "fuel_limit": runtime_policy.wasm_fuel_limit,
-                                    "cache_hit": false,
-                                    "cache_miss": true,
-                                    "cache_evicted_entries": 0,
-                                    "cache_entries": 0,
-                                    "cache_capacity": cache_capacity,
-                                    "cache_total_module_bytes": 0,
-                                    "cache_max_bytes": cache_max_bytes,
-                                    "cache_inserted": false,
-                                }),
-                                execution_tier,
-                            );
-                            return execution;
-                        }
-                    };
-                    (compiled, cache_lookup)
-                }
-                Err(reason) => {
-                    execution["status"] = Value::String("failed".to_owned());
-                    execution["reason"] = Value::String(reason);
-                    execution["runtime"] = with_execution_security_tier(
-                        json!({
-                            "executor": "wasmtime_module",
-                            "artifact_path": artifact_path.display().to_string(),
-                            "export": export_name,
-                            "operation": command.operation,
-                            "payload": command.payload,
-                            "module_size_bytes": module_size_bytes,
-                            "fuel_limit": runtime_policy.wasm_fuel_limit,
-                            "cache_hit": false,
-                            "cache_miss": true,
-                            "cache_evicted_entries": 0,
-                            "cache_entries": 0,
-                            "cache_capacity": cache_capacity,
-                            "cache_total_module_bytes": 0,
-                            "cache_max_bytes": cache_max_bytes,
-                            "cache_inserted": false,
-                        }),
-                        execution_tier,
-                    );
-                    return execution;
+                        let cache_lookup = match insert_cached_wasm_module(
+                            refreshed_cache_key,
+                            compiled.clone(),
+                            module_size_bytes,
+                        ) {
+                            Ok(lookup) => lookup,
+                            Err(reason) => {
+                                execution["status"] = Value::String("failed".to_owned());
+                                execution["reason"] = Value::String(reason);
+                                execution["runtime"] = with_execution_security_tier(
+                                    json!({
+                                        "executor": "wasmtime_module",
+                                        "artifact_path": artifact_path.display().to_string(),
+                                        "export": export_name,
+                                        "operation": command.operation,
+                                        "payload": command.payload,
+                                        "module_size_bytes": module_size_bytes,
+                                        "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                        "timeout_ms": timeout_ms,
+                                        "timeout_triggered": false,
+                                        "cache_enabled": cache_enabled,
+                                        "cache_hit": false,
+                                        "cache_miss": true,
+                                        "cache_evicted_entries": 0,
+                                        "cache_entries": 0,
+                                        "cache_capacity": cache_capacity,
+                                        "cache_total_module_bytes": 0,
+                                        "cache_max_bytes": cache_max_bytes,
+                                        "cache_inserted": false,
+                                    }),
+                                    execution_tier,
+                                );
+                                return execution;
+                            }
+                        };
+                        (compiled, cache_lookup)
+                    }
+                    Err(reason) => {
+                        execution["status"] = Value::String("failed".to_owned());
+                        execution["reason"] = Value::String(reason);
+                        execution["runtime"] = with_execution_security_tier(
+                            json!({
+                                "executor": "wasmtime_module",
+                                "artifact_path": artifact_path.display().to_string(),
+                                "export": export_name,
+                                "operation": command.operation,
+                                "payload": command.payload,
+                                "module_size_bytes": module_size_bytes,
+                                "fuel_limit": runtime_policy.wasm_fuel_limit,
+                                "timeout_ms": timeout_ms,
+                                "timeout_triggered": false,
+                                "cache_enabled": cache_enabled,
+                                "cache_hit": false,
+                                "cache_miss": true,
+                                "cache_evicted_entries": 0,
+                                "cache_entries": 0,
+                                "cache_capacity": cache_capacity,
+                                "cache_total_module_bytes": 0,
+                                "cache_max_bytes": cache_max_bytes,
+                                "cache_inserted": false,
+                            }),
+                            execution_tier,
+                        );
+                        return execution;
+                    }
                 }
             }
+            Err(reason) => {
+                execution["status"] = Value::String("failed".to_owned());
+                execution["reason"] = Value::String(reason);
+                execution["runtime"] = with_execution_security_tier(
+                    json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "export": export_name,
+                        "operation": command.operation,
+                        "payload": command.payload,
+                        "module_size_bytes": module_size_bytes,
+                        "fuel_limit": runtime_policy.wasm_fuel_limit,
+                        "timeout_ms": timeout_ms,
+                        "timeout_triggered": false,
+                        "cache_enabled": cache_enabled,
+                        "cache_hit": false,
+                        "cache_miss": true,
+                        "cache_evicted_entries": 0,
+                        "cache_entries": 0,
+                        "cache_capacity": cache_capacity,
+                        "cache_total_module_bytes": 0,
+                        "cache_max_bytes": cache_max_bytes,
+                        "cache_inserted": false,
+                    }),
+                    execution_tier,
+                );
+                return execution;
+            }
         }
-        Err(reason) => {
-            execution["status"] = Value::String("failed".to_owned());
-            execution["reason"] = Value::String(reason);
+    } else {
+        let artifact_bytes = match read_wasm_artifact_bytes(&artifact_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                execution["status"] = Value::String("failed".to_owned());
+                execution["reason"] = Value::String(error);
+                execution["runtime"] = with_execution_security_tier(
+                    json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "export": export_name,
+                        "operation": command.operation,
+                        "payload": command.payload,
+                        "module_size_bytes": module_size_bytes,
+                        "fuel_limit": runtime_policy.wasm_fuel_limit,
+                        "timeout_ms": timeout_ms,
+                        "timeout_triggered": false,
+                        "cache_enabled": cache_enabled,
+                        "cache_hit": false,
+                        "cache_miss": false,
+                        "cache_evicted_entries": disabled_cache_lookup.evicted_entries,
+                        "cache_entries": disabled_cache_lookup.cache_len,
+                        "cache_capacity": disabled_cache_lookup.cache_capacity,
+                        "cache_total_module_bytes": disabled_cache_lookup.cache_total_module_bytes,
+                        "cache_max_bytes": disabled_cache_lookup.cache_max_bytes,
+                        "cache_inserted": disabled_cache_lookup.inserted,
+                    }),
+                    execution_tier,
+                );
+                return execution;
+            }
+        };
+        let module_bytes = artifact_bytes.bytes;
+
+        module_size_bytes = module_bytes.len();
+        if let Some(limit) = runtime_policy.wasm_max_component_bytes
+            && module_size_bytes > limit
+        {
+            execution["status"] = Value::String("blocked".to_owned());
+            execution["reason"] = Value::String(format!(
+                "wasm artifact size {} exceeds runtime max_component_bytes {limit}",
+                module_size_bytes
+            ));
             execution["runtime"] = with_execution_security_tier(
                 json!({
                     "executor": "wasmtime_module",
                     "artifact_path": artifact_path.display().to_string(),
-                    "export": export_name,
-                    "operation": command.operation,
-                    "payload": command.payload,
                     "module_size_bytes": module_size_bytes,
-                    "fuel_limit": runtime_policy.wasm_fuel_limit,
-                    "cache_hit": false,
-                    "cache_miss": true,
-                    "cache_evicted_entries": 0,
-                    "cache_entries": 0,
-                    "cache_capacity": cache_capacity,
-                    "cache_total_module_bytes": 0,
-                    "cache_max_bytes": cache_max_bytes,
-                    "cache_inserted": false,
+                    "max_component_bytes": limit,
+                    "timeout_ms": timeout_ms,
+                    "timeout_triggered": false,
+                    "cache_enabled": cache_enabled,
                 }),
                 execution_tier,
             );
             return execution;
         }
+
+        let artifact_sha256 = if let Some(expected) = expected_sha256.as_deref() {
+            let actual = wasm_artifact_sha256_hex(&module_bytes);
+            if actual != expected {
+                execution["status"] = Value::String("blocked".to_owned());
+                execution["reason"] = Value::String(format!(
+                    "wasm artifact sha256 mismatch: expected {expected}, actual {actual}"
+                ));
+                execution["runtime"] = with_execution_security_tier(
+                    json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "module_size_bytes": module_size_bytes,
+                        "expected_sha256": expected,
+                        "artifact_sha256": actual,
+                        "timeout_ms": timeout_ms,
+                        "timeout_triggered": false,
+                        "cache_enabled": cache_enabled,
+                        "integrity_check_required": true,
+                        "integrity_check_passed": false,
+                    }),
+                    execution_tier,
+                );
+                return execution;
+            }
+            Some(actual)
+        } else {
+            None
+        };
+
+        let compiled = match compile_wasm_module(
+            &module_bytes,
+            fuel_enabled,
+            epoch_interruption_enabled,
+            artifact_sha256,
+        ) {
+            Ok(module) => Arc::new(module),
+            Err(reason) => {
+                execution["status"] = Value::String("failed".to_owned());
+                execution["reason"] = Value::String(reason);
+                execution["runtime"] = with_execution_security_tier(
+                    json!({
+                        "executor": "wasmtime_module",
+                        "artifact_path": artifact_path.display().to_string(),
+                        "export": export_name,
+                        "operation": command.operation,
+                        "payload": command.payload,
+                        "module_size_bytes": module_size_bytes,
+                        "fuel_limit": runtime_policy.wasm_fuel_limit,
+                        "timeout_ms": timeout_ms,
+                        "timeout_triggered": false,
+                        "cache_enabled": cache_enabled,
+                        "cache_hit": false,
+                        "cache_miss": false,
+                        "cache_evicted_entries": disabled_cache_lookup.evicted_entries,
+                        "cache_entries": disabled_cache_lookup.cache_len,
+                        "cache_capacity": disabled_cache_lookup.cache_capacity,
+                        "cache_total_module_bytes": disabled_cache_lookup.cache_total_module_bytes,
+                        "cache_max_bytes": disabled_cache_lookup.cache_max_bytes,
+                        "cache_inserted": disabled_cache_lookup.inserted,
+                    }),
+                    execution_tier,
+                );
+                return execution;
+            }
+        };
+        (compiled, disabled_cache_lookup)
     };
 
-    let run_result = (|| -> Result<Option<u64>, String> {
-        let mut store = WasmtimeStore::new(&cached_module.engine, ());
+    let cache_miss = if cache_enabled {
+        !cache_lookup.hit
+    } else {
+        false
+    };
+    let request_payload = wasm_bridge_request_payload(provider, channel, command);
+    let runtime_execution_context = WasmRuntimeExecutionContext {
+        artifact_path: artifact_path.display().to_string(),
+        export_name: export_name.clone(),
+        operation: command.operation.clone(),
+        payload: command.payload.clone(),
+        request: request_payload.clone(),
+        module_size_bytes,
+        fuel_limit: runtime_policy.wasm_fuel_limit,
+        max_output_bytes: runtime_policy.wasm_max_output_bytes,
+        timeout_ms,
+        cache_enabled,
+        cache_lookup,
+        cache_miss,
+        expected_sha256,
+        artifact_sha256: cached_module.artifact_sha256.clone(),
+    };
+    let run_result = (|| -> WasmRunResult<WasmRunOutcome> {
+        let input_bytes = serde_json::to_vec(&request_payload).map_err(|error| {
+            boxed_wasm_run_failure(
+                format!("failed to serialize wasm bridge request payload: {error}"),
+                false,
+                None,
+                WasmRunEvidence::default(),
+            )
+        })?;
+        let store_data =
+            WasmHostAbiStoreData::try_new(input_bytes, runtime_policy.wasm_max_output_bytes)
+                .map_err(|reason| {
+                    boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
+                })?;
+        let mut store = WasmtimeStore::new(&cached_module.engine, store_data);
         if let Some(limit) = runtime_policy.wasm_fuel_limit {
-            store
-                .set_fuel(limit)
-                .map_err(|error| format!("failed to set wasm fuel limit: {error}"))?;
-        }
-        let linker = WasmtimeLinker::new(&cached_module.engine);
-        let instance = linker
-            .instantiate(&mut store, &cached_module.module)
-            .map_err(|error| format!("failed to instantiate wasm module: {error}"))?;
-        let func = instance
-            .get_typed_func::<(), ()>(&mut store, export_name.as_str())
-            .map_err(|error| {
-                format!("failed to resolve exported wasm function {export_name}: {error}")
+            store.set_fuel(limit).map_err(|error| {
+                boxed_wasm_run_failure(
+                    format!("failed to set wasm fuel limit: {error}"),
+                    false,
+                    None,
+                    WasmRunEvidence::default(),
+                )
             })?;
-        func.call(&mut store, ())
-            .map_err(|error| format!("wasm function call failed: {error}"))?;
+        }
+        if timeout_ms.is_some() {
+            store.epoch_deadline_trap();
+            store.set_epoch_deadline(1);
+        }
+        let host_abi_enabled = module_uses_wasm_host_abi(&cached_module.module);
+        let host_abi_requires_memory = module_requires_wasm_host_abi_memory(&cached_module.module);
+        let mut linker = WasmtimeLinker::new(&cached_module.engine);
+        link_wasm_host_abi(&mut linker).map_err(|reason| {
+            boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
+        })?;
+        let timeout_controller = match timeout_ms {
+            Some(timeout_ms) => Some(
+                WasmEpochDeadlineController::start(&cached_module.engine, timeout_ms).map_err(
+                    |reason| {
+                        boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
+                    },
+                )?,
+            ),
+            None => None,
+        };
+        let instance_result = linker.instantiate(&mut store, &cached_module.module);
+        let instance = match instance_result {
+            Ok(instance) => instance,
+            Err(error) => {
+                let store_data = store.data().clone();
+                let abort_code = store_data.abort_code;
+                let host_abi = store_data.snapshot(host_abi_enabled);
+                let evidence = WasmRunEvidence {
+                    host_abi,
+                    ..WasmRunEvidence::default()
+                };
+                let (instantiate_reason, timeout_triggered) = wasm_runtime_failure_reason(
+                    &error,
+                    timeout_ms,
+                    "failed to instantiate wasm module",
+                );
+                let reason = if let Some(code) = abort_code {
+                    format!("wasm guest aborted with code {code}")
+                } else {
+                    instantiate_reason
+                };
+                return Err(boxed_wasm_run_failure(
+                    reason,
+                    timeout_triggered,
+                    None,
+                    evidence,
+                ));
+            }
+        };
+        if host_abi_requires_memory && instance.get_memory(&mut store, "memory").is_none() {
+            let evidence = WasmRunEvidence {
+                host_abi: wasm_snapshot_from_store(&store, host_abi_enabled),
+                ..WasmRunEvidence::default()
+            };
+            return Err(boxed_wasm_run_failure(
+                "wasm host ABI requires exported memory",
+                false,
+                None,
+                evidence,
+            ));
+        }
+        let resolved_i32 = instance.get_typed_func::<(), i32>(&mut store, export_name.as_str());
+        let entrypoint_signature = if resolved_i32.is_ok() {
+            WasmEntrypointSignature::I32
+        } else {
+            WasmEntrypointSignature::Unit
+        };
+        let mut evidence = WasmRunEvidence {
+            entrypoint_signature: Some(entrypoint_signature.as_str()),
+            ..WasmRunEvidence::default()
+        };
+        let call_result = match resolved_i32 {
+            Ok(func) => {
+                let call_result = func.call(&mut store, ());
+                match call_result {
+                    Ok(code) => {
+                        evidence.guest_exit_code = Some(code);
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(first_error) => {
+                let func = instance
+                    .get_typed_func::<(), ()>(&mut store, export_name.as_str())
+                    .map_err(|second_error| {
+                        boxed_wasm_run_failure(
+                            format!(
+                                "failed to resolve exported wasm function {export_name}: {first_error}; fallback to () -> () also failed: {second_error}"
+                            ),
+                            false,
+                            None,
+                            WasmRunEvidence::default(),
+                        )
+                    })?;
+                func.call(&mut store, ())
+            }
+        };
+        drop(timeout_controller);
+        if let Err(error) = call_result {
+            let store_data = store.data().clone();
+            let abort_code = store_data.abort_code;
+            evidence.host_abi = store_data.snapshot(host_abi_enabled);
+            let (call_reason, timeout_triggered) =
+                wasm_runtime_failure_reason(&error, timeout_ms, "wasm function call failed");
+            let reason = if let Some(code) = abort_code {
+                format!("wasm guest aborted with code {code}")
+            } else {
+                call_reason
+            };
+            return Err(boxed_wasm_run_failure(
+                reason,
+                timeout_triggered,
+                None,
+                evidence,
+            ));
+        }
         let consumed_fuel = runtime_policy
             .wasm_fuel_limit
             .map(|limit| {
@@ -2300,65 +2839,72 @@ pub fn execute_wasm_component_bridge(
                     .map(|remaining| limit.saturating_sub(remaining))
             })
             .transpose()
-            .map_err(|error| format!("failed to query wasm fuel: {error}"))?;
-        Ok(consumed_fuel)
+            .map_err(|error| {
+                boxed_wasm_run_failure(
+                    format!("failed to query wasm fuel: {error}"),
+                    false,
+                    None,
+                    evidence.clone(),
+                )
+            })?;
+        let store_data = store.data().clone();
+        evidence.host_abi = store_data.snapshot(host_abi_enabled);
+        if let Some(reason) = store_data.output_error.clone() {
+            return Err(boxed_wasm_run_failure(
+                reason,
+                false,
+                consumed_fuel,
+                evidence,
+            ));
+        }
+        let output_json = store_data.parse_output_json().map_err(|reason| {
+            boxed_wasm_run_failure(reason, false, consumed_fuel, evidence.clone())
+        })?;
+        evidence.host_abi.output_json = output_json;
+        if let Some(code) = evidence.guest_exit_code
+            && code != 0
+        {
+            return Err(boxed_wasm_run_failure(
+                format!("wasm guest returned non-zero exit code {code}"),
+                false,
+                consumed_fuel,
+                evidence,
+            ));
+        }
+        Ok(WasmRunOutcome {
+            consumed_fuel,
+            timeout_triggered: false,
+            evidence,
+        })
     })();
 
     match run_result {
-        Ok(consumed_fuel) => {
+        Ok(outcome) => {
             execution["status"] = Value::String("executed".to_owned());
             execution["runtime"] = with_execution_security_tier(
-                json!({
-                    "executor": "wasmtime_module",
-                    "artifact_path": artifact_path.display().to_string(),
-                    "export": export_name,
-                    "operation": command.operation,
-                    "payload": command.payload,
-                    "module_size_bytes": module_size_bytes,
-                    "fuel_limit": runtime_policy.wasm_fuel_limit,
-                    "fuel_consumed": consumed_fuel,
-                    "cache_hit": cache_lookup.hit,
-                    "cache_miss": !cache_lookup.hit,
-                    "cache_evicted_entries": cache_lookup.evicted_entries,
-                    "cache_entries": cache_lookup.cache_len,
-                    "cache_capacity": cache_lookup.cache_capacity,
-                    "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
-                    "cache_max_bytes": cache_lookup.cache_max_bytes,
-                    "cache_inserted": cache_lookup.inserted,
-                    "expected_sha256": expected_sha256,
-                    "artifact_sha256": cached_module.artifact_sha256.clone(),
-                    "integrity_check_required": expected_sha256.is_some(),
-                    "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
-                }),
+                wasm_runtime_execution_evidence(
+                    &runtime_execution_context,
+                    outcome.timeout_triggered,
+                    outcome.consumed_fuel,
+                    &outcome.evidence,
+                ),
                 execution_tier,
             );
             execution
         }
-        Err(reason) => {
+        Err(failure) => {
+            let failure = *failure;
+            let failure_reason = failure.reason;
+            let timeout_triggered = failure.timeout_triggered;
             execution["status"] = Value::String("failed".to_owned());
-            execution["reason"] = Value::String(reason);
+            execution["reason"] = Value::String(failure_reason);
             execution["runtime"] = with_execution_security_tier(
-                json!({
-                    "executor": "wasmtime_module",
-                    "artifact_path": artifact_path.display().to_string(),
-                    "export": export_name,
-                    "operation": command.operation,
-                    "payload": command.payload,
-                    "module_size_bytes": module_size_bytes,
-                    "fuel_limit": runtime_policy.wasm_fuel_limit,
-                    "cache_hit": cache_lookup.hit,
-                    "cache_miss": !cache_lookup.hit,
-                    "cache_evicted_entries": cache_lookup.evicted_entries,
-                    "cache_entries": cache_lookup.cache_len,
-                    "cache_capacity": cache_lookup.cache_capacity,
-                    "cache_total_module_bytes": cache_lookup.cache_total_module_bytes,
-                    "cache_max_bytes": cache_lookup.cache_max_bytes,
-                    "cache_inserted": cache_lookup.inserted,
-                    "expected_sha256": expected_sha256,
-                    "artifact_sha256": cached_module.artifact_sha256.clone(),
-                    "integrity_check_required": expected_sha256.is_some(),
-                    "integrity_check_passed": expected_sha256.is_none() || cached_module.artifact_sha256.is_some(),
-                }),
+                wasm_runtime_execution_evidence(
+                    &runtime_execution_context,
+                    timeout_triggered,
+                    failure.consumed_fuel,
+                    &failure.evidence,
+                ),
                 execution_tier,
             );
             execution

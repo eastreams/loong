@@ -3,6 +3,8 @@ use std::path::Path;
 
 use loongclaw_app as mvp;
 
+use crate::provider_credential_policy;
+
 use super::channels;
 use super::discovery::{build_import_candidate, resolve_channel_import_readiness_from_config};
 use super::provider_transport;
@@ -187,7 +189,8 @@ fn compose_provider_domain(
 
     Some(DomainPreview {
         kind: SetupDomainKind::Provider,
-        status: if merged_config.provider.authorization_header().is_some() {
+        status: if provider_credential_policy::provider_is_credential_ready(&merged_config.provider)
+        {
             PreviewStatus::Ready
         } else {
             PreviewStatus::NeedsReview
@@ -266,8 +269,6 @@ fn supplement_provider_config(
     let mut source = source.clone();
     source.canonicalize_configured_auth_env_bindings();
     let default_provider = mvp::config::ProviderConfig::default();
-    let target_has_auth = target.authorization_header().is_some();
-    let source_has_auth = source.authorization_header().is_some();
     let mut changed = false;
     if (target.model.trim().is_empty() || target.model.eq_ignore_ascii_case("auto"))
         && !source.model.trim().is_empty()
@@ -276,19 +277,50 @@ fn supplement_provider_config(
         changed = true;
     }
     changed |= provider_transport::supplement_provider_transport(target, &source);
-    if (target.api_key.is_none() || (!target_has_auth && source_has_auth))
+    let target_has_auth_header =
+        provider_credential_policy::provider_has_configured_auth_header(target);
+    let target_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(target);
+    let target_has_configured_auth =
+        target.api_key.is_some() || target.oauth_access_token.is_some() || target_has_auth_header;
+    let source_has_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(&source);
+    if !target_has_auth_header
+        && (target.api_key.is_none() || (!target_has_auth && source_has_auth))
         && source.api_key.is_some()
         && target.api_key != source.api_key
     {
         target.api_key = source.api_key.clone();
         changed = true;
     }
-    if (target.oauth_access_token.is_none() || (!target_has_auth && source_has_auth))
+    if !target_has_auth_header
+        && (target.oauth_access_token.is_none() || (!target_has_auth && source_has_auth))
         && source.oauth_access_token.is_some()
         && target.oauth_access_token != source.oauth_access_token
     {
         target.oauth_access_token = source.oauth_access_token.clone();
         changed = true;
+    }
+    let target_missing_auth_config = !target_has_configured_auth;
+    let should_materialize_source_env_binding = source_has_auth && target_missing_auth_config;
+    if should_materialize_source_env_binding {
+        let source_binding =
+            provider_credential_policy::provider_available_credential_env_binding(&source);
+        let target_binding =
+            provider_credential_policy::configured_provider_credential_env_binding(target);
+        let binding_changed = source_binding != target_binding;
+        let source_binding = if binding_changed {
+            source_binding
+        } else {
+            None
+        };
+        if let Some(source_binding) = source_binding {
+            provider_credential_policy::apply_provider_credential_env_binding(
+                target,
+                &source_binding,
+            );
+            changed = true;
+        }
     }
     if target.endpoint.is_none() && source.endpoint.is_some() {
         target.endpoint = source.endpoint.clone();
@@ -418,6 +450,77 @@ mod tests {
             })
         );
         assert_eq!(merged_config.provider.api_key_env, None);
+    }
+
+    #[test]
+    fn supplement_provider_config_accepts_x_api_key_source_credentials() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Anthropic);
+        target.api_key = None;
+        target.set_api_key_env(None);
+
+        let source =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Anthropic);
+
+        let changed = supplement_provider_config(&mut target, &source);
+
+        assert!(changed);
+        assert_eq!(
+            target.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "ANTHROPIC_API_KEY".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn supplement_provider_config_preserves_explicit_target_auth_bindings() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "test-openai-key");
+
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        target.api_key = Some(loongclaw_contracts::SecretRef::Env {
+            env: "TEAM_OPENAI_KEY".to_owned(),
+        });
+
+        let source = mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+
+        let _changed = supplement_provider_config(&mut target, &source);
+
+        assert_eq!(
+            target.api_key,
+            Some(loongclaw_contracts::SecretRef::Env {
+                env: "TEAM_OPENAI_KEY".to_owned(),
+            })
+        );
+        assert_eq!(target.oauth_access_token, None);
+    }
+
+    #[test]
+    fn supplement_provider_config_preserves_target_auth_headers() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("OPENAI_API_KEY", "test-openai-key");
+
+        let mut target =
+            mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+        target.headers = std::collections::BTreeMap::from([(
+            "authorization".to_owned(),
+            "Bearer team-auth-header".to_owned(),
+        )]);
+
+        let source = mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+
+        let _changed = supplement_provider_config(&mut target, &source);
+
+        assert_eq!(target.api_key, None);
+        assert_eq!(target.oauth_access_token, None);
+        assert_eq!(
+            target.header_value("authorization"),
+            Some("Bearer team-auth-header")
+        );
     }
 }
 

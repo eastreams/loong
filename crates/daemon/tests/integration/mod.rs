@@ -88,6 +88,10 @@ mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;
 mod feishu_cli;
+mod gateway_api_events;
+mod gateway_api_health;
+mod gateway_api_turn;
+mod gateway_owner_state;
 mod gateway_read_models;
 mod import_cli;
 mod memory_context_benchmark_cli;
@@ -104,10 +108,11 @@ mod runtime_snapshot_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
+mod tasks_cli;
 
 #[test]
-fn cli_uses_loongclaw_program_name() {
-    assert_eq!(cli_command_name(), "loongclaw");
+fn cli_uses_loong_program_name() {
+    assert_eq!(cli_command_name(), "loong");
 }
 
 #[test]
@@ -123,7 +128,7 @@ fn cli_import_help_explains_explicit_power_user_flow() {
         "import help should surface the path-level disambiguation flag: {help}"
     );
     assert!(
-        help.contains("loongclaw onboard"),
+        help.contains("loong onboard"),
         "import help should direct guided users back to onboard: {help}"
     );
     assert!(
@@ -156,7 +161,7 @@ fn cli_migrate_help_explains_explicit_migration_flow() {
         "migrate help should list supported migration modes: {help}"
     );
     assert!(
-        help.contains("loongclaw onboard"),
+        help.contains("loong onboard"),
         "migrate help should direct guided users back to onboard: {help}"
     );
 }
@@ -199,7 +204,7 @@ fn cli_ask_help_mentions_one_shot_assistant_usage() {
         "ask help should require an inline message input: {help}"
     );
     assert!(
-        help.contains("loongclaw chat"),
+        help.contains("loong chat"),
         "ask help should point users to chat for the interactive path: {help}"
     );
 }
@@ -897,7 +902,7 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
         rendered.contains("capabilities=runtime_backed,multi_account,send,serve,runtime_tracking")
     );
     assert!(rendered.contains(
-        "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
+        "onboarding strategy=manual_config status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""
     ));
     assert!(rendered.contains("setup_hint=\"configure telegram bot credentials"));
     assert!(rendered.contains("target_kinds=receive_id,message_reply"));
@@ -909,7 +914,7 @@ fn render_channel_surfaces_text_reports_aliases_and_operation_health() {
         channel_send_command("feishu")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) misconfigured: allowed_chat_ids is empty; verification_token is missing; encrypt_key is missing target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
+        "op serve ({}) misconfigured: allowed_chat_ids is empty target_kinds=message_reply requirements=enabled,app_id,app_secret,mode,allowed_chat_ids,verification_token,encrypt_key",
         channel_serve_command("feishu")
     )));
     assert!(rendered.contains("WeCom [wecom]"));
@@ -1019,14 +1024,14 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         channel_serve_command("slack")
     )));
     assert!(rendered.contains(
-        "WhatsApp [whatsapp] implementation_status=config_backed selection_order=90 selection_label=\"business messaging app\" capabilities=multi_account,send aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
+        "WhatsApp [whatsapp] implementation_status=runtime_backed selection_order=90 selection_label=\"business messaging app\" capabilities=runtime_backed,multi_account,send,serve,runtime_tracking aliases=wa,whatsapp-cloud transport=whatsapp_cloud_api target_kinds=address configured_accounts=1 default_configured_account=default"
     ));
     assert!(rendered.contains(&format!(
         "op send ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id",
         channel_send_command("whatsapp")
     )));
     assert!(rendered.contains(&format!(
-        "op serve ({}) unsupported: whatsapp serve runtime is not implemented yet target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
+        "op serve ({}) disabled: disabled by whatsapp account configuration target_kinds=address requirements=enabled,access_token,phone_number_id,verify_token,app_secret",
         channel_serve_command("whatsapp")
     )));
     assert!(rendered.contains(
@@ -1105,7 +1110,7 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
         "op serve (webhook-serve) unsupported: generic webhook serve runtime is not implemented yet target_kinds=endpoint requirements=enabled,public_base_url,signing_secret"
     ));
     assert!(rendered.contains(
-        "onboarding strategy=manual_config status_command=\"loongclaw doctor\" repair_command=\"loongclaw doctor --fix\""
+        "onboarding strategy=manual_config status_command=\"loong doctor\" repair_command=\"loong doctor --fix\""
     ));
     assert!(rendered.contains(
         "setup_hint=\"configure discord bot credentials in loongclaw.toml under discord or discord.accounts.<account>; outbound direct send is shipped, while gateway-based serve support remains planned\""
@@ -1289,12 +1294,12 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("status_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw doctor")
+                        == Some("loong doctor")
                     && entry
                         .get("onboarding")
                         .and_then(|onboarding| onboarding.get("repair_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw doctor --fix")
+                        == Some("loong doctor --fix")
             })
     );
 
@@ -1320,13 +1325,13 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("status_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw doctor")
+                        == Some("loong doctor")
                     && surface
                         .get("catalog")
                         .and_then(|catalog| catalog.get("onboarding"))
                         .and_then(|onboarding| onboarding.get("repair_command"))
                         .and_then(serde_json::Value::as_str)
-                        == Some("loongclaw doctor --fix")
+                        == Some("loong doctor --fix")
             })
     );
 }
@@ -1542,7 +1547,7 @@ fn build_channels_cli_json_payload_includes_full_channel_catalog() {
                     && entry
                         .get("implementation_status")
                         .and_then(serde_json::Value::as_str)
-                        == Some("config_backed")
+                        == Some("runtime_backed")
                     && entry
                         .get("supported_target_kinds")
                         .and_then(serde_json::Value::as_array)

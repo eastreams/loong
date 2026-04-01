@@ -7,6 +7,8 @@ use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde::Deserialize;
 
+use crate::provider_credential_policy;
+
 use super::channels;
 use super::provider_transport::ImportedProviderTransport;
 use super::types::{
@@ -42,7 +44,8 @@ pub fn classify_current_setup(output_path: &Path) -> CurrentSetupState {
         return CurrentSetupState::Repairable;
     };
     let readiness = resolve_channel_import_readiness_from_config(&config);
-    let has_provider_auth = config.provider.authorization_header().is_some();
+    let has_provider_auth =
+        provider_credential_policy::provider_has_locally_available_credentials(&config.provider);
     let channel_blockers = channels::enabled_channels_have_blockers(&config, &readiness);
     if channel_blockers {
         return CurrentSetupState::Repairable;
@@ -441,11 +444,19 @@ fn default_codex_config_paths() -> Vec<PathBuf> {
     let home = PathBuf::from(home);
     let mut seen = BTreeSet::new();
     let mut paths = Vec::new();
+    let base_codex_path = home.join(".codex/config.toml");
+    let default_agent_codex_path = home
+        .join(".codex/agents")
+        .join(mvp::config::CLI_COMMAND_NAME)
+        .join("config.toml");
+    let legacy_agent_codex_path = home
+        .join(".codex/agents")
+        .join(mvp::config::LEGACY_CLI_COMMAND_NAME)
+        .join("config.toml");
     for path in [
-        home.join(".codex/config.toml"),
-        home.join(".codex/agents")
-            .join(mvp::config::CLI_COMMAND_NAME)
-            .join("config.toml"),
+        base_codex_path,
+        default_agent_codex_path,
+        legacy_agent_codex_path,
     ] {
         if path.is_file() && seen.insert(path.clone()) {
             paths.push(path);
@@ -593,7 +604,8 @@ fn codex_wire_api_looks_openai_compatible(raw: &str) -> bool {
 
 fn provider_import_surface(config: &mvp::config::LoongClawConfig) -> Option<ImportSurface> {
     let provider_changed = config.provider.differs_from_default();
-    let credentials_ready = config.provider.authorization_header().is_some();
+    let credentials_ready =
+        provider_credential_policy::provider_has_locally_available_credentials(&config.provider);
     if !provider_changed && !credentials_ready {
         return None;
     }
@@ -684,5 +696,18 @@ mod tests {
                 .any(|surface| surface.domain == SetupDomainKind::Cli),
             "changing prompt-pack personality metadata should mark the CLI domain as imported: {surfaces:#?}"
         );
+    }
+
+    #[test]
+    fn provider_import_surface_marks_x_api_key_provider_ready() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Anthropic;
+        config.provider.model = "claude-sonnet-4-5".to_owned();
+
+        let surface = provider_import_surface(&config).expect("provider surface should exist");
+
+        assert_eq!(surface.level, ImportSurfaceLevel::Ready);
     }
 }

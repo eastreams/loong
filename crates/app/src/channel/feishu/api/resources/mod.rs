@@ -1,3 +1,4 @@
+pub mod bitable;
 pub mod calendar;
 pub mod cards;
 pub mod docs;

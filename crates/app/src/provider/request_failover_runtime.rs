@@ -34,6 +34,15 @@ where
 
     let ordered_profiles =
         prioritize_provider_auth_profiles_by_health(auth_profiles, profile_state_policy);
+    tracing::debug!(
+        target: "loongclaw.provider",
+        provider_id = %provider.kind.profile().id,
+        binding = %binding.as_str(),
+        model_candidate_count = model_candidates.len(),
+        auth_profile_count = ordered_profiles.len(),
+        auto_model_mode,
+        "dispatching provider request across model candidates"
+    );
     let mut last_error = None;
     let mut last_error_snapshot = None;
     for (model_index, model) in model_candidates.iter().enumerate() {
@@ -44,6 +53,18 @@ where
                     if let Some(policy) = profile_state_policy {
                         mark_provider_profile_success(policy, profile);
                     }
+                    tracing::debug!(
+                        target: "loongclaw.provider",
+                        provider_id = %provider.kind.profile().id,
+                        binding = %binding.as_str(),
+                        model = %model,
+                        auth_profile_id = %profile.id,
+                        candidate_index = model_index + 1,
+                        candidate_count = model_candidates.len(),
+                        profile_index = profile_index + 1,
+                        profile_count = ordered_profiles.len(),
+                        "provider request succeeded"
+                    );
                     return Ok(value);
                 }
                 Err(model_error) => {
@@ -54,6 +75,8 @@ where
                         snapshot,
                         ..
                     } = model_error;
+                    let exhausted = profile_index + 1 >= ordered_profiles.len()
+                        && model_index + 1 >= model_candidates.len();
                     record_provider_failover_audit_event(
                         binding,
                         provider,
@@ -62,12 +85,31 @@ where
                         auto_model_mode,
                         model_index,
                         model_candidates.len(),
-                        profile_index + 1 >= ordered_profiles.len()
-                            && model_index + 1 >= model_candidates.len(),
+                        exhausted,
                     );
                     if let Some(policy) = profile_state_policy {
                         mark_provider_profile_failure(policy, profile, reason);
                     }
+                    tracing::warn!(
+                        target: "loongclaw.provider",
+                        provider_id = %provider.kind.profile().id,
+                        binding = %binding.as_str(),
+                        model = %snapshot.model,
+                        auth_profile_id = %profile.id,
+                        reason = %snapshot.reason.as_str(),
+                        stage = %snapshot.stage.as_str(),
+                        attempt = snapshot.attempt,
+                        max_attempts = snapshot.max_attempts,
+                        status_code = ?snapshot.status_code,
+                        try_next_model,
+                        candidate_index = model_index + 1,
+                        candidate_count = model_candidates.len(),
+                        profile_index = profile_index + 1,
+                        profile_count = ordered_profiles.len(),
+                        exhausted,
+                        error = %crate::observability::summarize_error(message.as_str()),
+                        "provider request attempt failed"
+                    );
                     last_error = Some(message);
                     last_error_snapshot = Some(snapshot);
 

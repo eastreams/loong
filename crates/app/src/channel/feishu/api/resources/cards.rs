@@ -5,19 +5,22 @@ use serde_json::Value;
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::types::FeishuCardUpdateReceipt;
-use crate::feishu::client::FeishuClient;
 
 pub fn build_markdown_card(text: &str) -> Value {
     let content = text.trim();
     serde_json::json!({
+        "schema": "2.0",
         "config": {
             "wide_screen_mode": true
         },
-        "elements": [{
-            "tag": "markdown",
-            "content": content
-        }]
+        "body": {
+            "elements": [{
+                "tag": "markdown",
+                "content": content
+            }]
+        }
     })
 }
 
@@ -108,13 +111,16 @@ mod tests {
         assert_eq!(
             build_markdown_card("  approved  "),
             json!({
+                "schema": "2.0",
                 "config": {
                     "wide_screen_mode": true
                 },
-                "elements": [{
-                    "tag": "markdown",
-                    "content": "approved"
-                }]
+                "body": {
+                    "elements": [{
+                        "tag": "markdown",
+                        "content": "approved"
+                    }]
+                }
             })
         );
     }

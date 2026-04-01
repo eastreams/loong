@@ -27,7 +27,7 @@ jobs:
         uses: dtolnay/rust-toolchain@a0b273b48ed29de4470960879e8381ff45632f26
 
       - name: Install security tools
-        uses: taiki-e/install-action@0d865d5cc6d507df4765f1f866bfae8bab4e2a73
+        uses: taiki-e/install-action@6ef672efc2b5aabc787a9e94baf4989aa02a97df
         with:
           tool: cargo-audit,cargo-deny
 

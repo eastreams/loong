@@ -866,7 +866,7 @@ pub struct PluginInventoryEntry {
     pub loaded: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginInventoryResult {
     pub manifest_api_version: Option<String>,
     pub plugin_version: Option<String>,
@@ -1035,7 +1035,7 @@ pub struct PluginPreflightBridgeShimProfileDelta {
     pub supported_source_languages: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginPreflightResult {
     pub profile: String,
     pub baseline_verdict: String,

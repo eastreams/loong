@@ -1,14 +1,14 @@
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::CliResult;
 
+use super::super::client::FeishuClient;
 use super::cards;
 use super::types::{
-    FeishuMessageDetail, FeishuMessageHistoryPage, FeishuMessageSummary, FeishuMessageWriteReceipt,
+    FeishuMessageDetail, FeishuMessageHistoryPage, FeishuMessageWriteReceipt,
     FeishuSearchMessagePage,
 };
-use crate::feishu::client::FeishuClient;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FeishuOutboundMessageBody {
@@ -17,6 +17,13 @@ pub enum FeishuOutboundMessageBody {
     Post(Value),
     Image(String),
     File(String),
+    Audio(String),
+    Media {
+        file_key: String,
+        cover_key: Option<String>,
+    },
+    ShareChat(String),
+    ShareUser(String),
 }
 
 impl FeishuOutboundMessageBody {
@@ -27,6 +34,10 @@ impl FeishuOutboundMessageBody {
             Self::Post(_) => "post",
             Self::Image(_) => "image",
             Self::File(_) => "file",
+            Self::Audio(_) => "audio",
+            Self::Media { .. } => "media",
+            Self::ShareChat(_) => "share_chat",
+            Self::ShareUser(_) => "share_user",
         }
     }
 }
@@ -209,11 +220,9 @@ pub async fn send_markdown_card_message(
         receive_id_type,
         receive_id,
         "interactive",
-        serde_json::json!({
-            "card": cards::build_markdown_card(
-                require_non_empty("feishu message send", "text", text)?.as_str()
-            )
-        }),
+        cards::build_markdown_card(
+            require_non_empty("feishu message send", "text", text)?.as_str(),
+        ),
         uuid,
     )
     .await
@@ -286,6 +295,62 @@ pub async fn send_outbound_message(
             )
             .await
         }
+        FeishuOutboundMessageBody::Audio(audio_key) => {
+            send_message(
+                client,
+                tenant_access_token,
+                receive_id_type,
+                receive_id,
+                "audio",
+                serde_json::json!({"file_key": audio_key}),
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::Media {
+            file_key,
+            cover_key,
+        } => {
+            let mut content = serde_json::Map::new();
+            content.insert("file_key".to_owned(), serde_json::json!(file_key));
+            if let Some(cover) = cover_key {
+                content.insert("cover_key".to_owned(), serde_json::json!(cover));
+            }
+            send_message(
+                client,
+                tenant_access_token,
+                receive_id_type,
+                receive_id,
+                "media",
+                serde_json::Value::Object(content),
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::ShareChat(chat_id) => {
+            send_message(
+                client,
+                tenant_access_token,
+                receive_id_type,
+                receive_id,
+                "share_chat",
+                serde_json::json!({"chat_id": chat_id}),
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::ShareUser(user_id) => {
+            send_message(
+                client,
+                tenant_access_token,
+                receive_id_type,
+                receive_id,
+                "share_user",
+                serde_json::json!({"user_id": user_id}),
+                uuid,
+            )
+            .await
+        }
     }
 }
 
@@ -322,11 +387,9 @@ pub async fn reply_markdown_card_message(
         tenant_access_token,
         message_id,
         "interactive",
-        serde_json::json!({
-            "card": cards::build_markdown_card(
-                require_non_empty("feishu message reply", "text", text)?.as_str()
-            )
-        }),
+        cards::build_markdown_card(
+            require_non_empty("feishu message reply", "text", text)?.as_str(),
+        ),
         reply_in_thread,
         uuid,
     )
@@ -400,7 +463,145 @@ pub async fn reply_outbound_message(
             )
             .await
         }
+        FeishuOutboundMessageBody::Audio(audio_key) => {
+            reply_message(
+                client,
+                tenant_access_token,
+                message_id,
+                "audio",
+                serde_json::json!({"file_key": audio_key}),
+                reply_in_thread,
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::Media {
+            file_key,
+            cover_key,
+        } => {
+            let mut content = serde_json::Map::new();
+            content.insert("file_key".to_owned(), serde_json::json!(file_key));
+            if let Some(cover) = cover_key {
+                content.insert("cover_key".to_owned(), serde_json::json!(cover));
+            }
+            reply_message(
+                client,
+                tenant_access_token,
+                message_id,
+                "media",
+                serde_json::Value::Object(content),
+                reply_in_thread,
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::ShareChat(chat_id) => {
+            reply_message(
+                client,
+                tenant_access_token,
+                message_id,
+                "share_chat",
+                serde_json::json!({"chat_id": chat_id}),
+                reply_in_thread,
+                uuid,
+            )
+            .await
+        }
+        FeishuOutboundMessageBody::ShareUser(user_id) => {
+            reply_message(
+                client,
+                tenant_access_token,
+                message_id,
+                "share_user",
+                serde_json::json!({"user_id": user_id}),
+                reply_in_thread,
+                uuid,
+            )
+            .await
+        }
     }
+}
+
+pub async fn edit_message(
+    client: &FeishuClient,
+    tenant_access_token: &str,
+    message_id: &str,
+    msg_type: &str,
+    content: Value,
+) -> CliResult<FeishuMessageWriteReceipt> {
+    let message_id = require_non_empty("feishu message edit", "message_id", message_id)?;
+    let msg_type = require_non_empty("feishu message edit", "msg_type", msg_type)?;
+
+    // PUT API only supports text and post types
+    // For interactive (card) messages, use PATCH API (update_card)
+    if msg_type != "text" && msg_type != "post" {
+        return Err(format!(
+            "feishu message edit only supports 'text' or 'post' msg_type, got '{}'. Use PATCH for interactive cards",
+            msg_type
+        ));
+    }
+
+    let mut body = serde_json::Map::new();
+    body.insert("msg_type".to_owned(), Value::String(msg_type));
+    body.insert(
+        "content".to_owned(),
+        Value::String(encode_feishu_content(&content)?),
+    );
+
+    let payload = client
+        .put_json(
+            format!("/open-apis/im/v1/messages/{message_id}").as_str(),
+            Some(tenant_access_token),
+            &[],
+            &Value::Object(body),
+        )
+        .await?;
+    parse_message_write_response(&payload)
+}
+
+pub async fn delete_message(
+    client: &FeishuClient,
+    tenant_access_token: &str,
+    message_id: &str,
+) -> CliResult<()> {
+    let message_id = require_non_empty("feishu message delete", "message_id", message_id)?;
+
+    client
+        .delete_json(
+            format!("/open-apis/im/v1/messages/{message_id}").as_str(),
+            Some(tenant_access_token),
+            &[],
+        )
+        .await?;
+    Ok(())
+}
+
+/// Update an interactive card message using PATCH API
+///
+/// PATCH API is used for updating interactive card messages (msg_type: "interactive").
+/// Unlike PUT which replaces the entire message, PATCH updates the card content.
+pub async fn update_card(
+    client: &FeishuClient,
+    tenant_access_token: &str,
+    message_id: &str,
+    card_content: &Value,
+) -> CliResult<()> {
+    let message_id = require_non_empty("feishu card update", "message_id", message_id)?;
+
+    let content_str = encode_feishu_content(card_content)?;
+    let request_body = json!({
+        "content": content_str
+    });
+
+    client
+        .patch_json(
+            format!("/open-apis/im/v1/messages/{message_id}").as_str(),
+            Some(tenant_access_token),
+            &[],
+            &request_body,
+        )
+        .await?;
+    Ok(())
 }
 
 pub fn resolve_outbound_message_body(
@@ -487,7 +688,7 @@ pub fn parse_message_history_response(payload: &Value) -> CliResult<FeishuMessag
         .map(|items| {
             items
                 .iter()
-                .filter_map(parse_message_summary)
+                .filter_map(parse_message_detail_from_item)
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -516,36 +717,9 @@ pub fn parse_message_detail_response(
         .and_then(|items| items.first())
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
-    let object = item
-        .as_object()
-        .ok_or_else(|| "feishu message detail item is not an object".to_owned())?;
 
-    Ok(FeishuMessageDetail {
-        message_id: opt_string(object.get("message_id"))
-            .unwrap_or_else(|| message_id.trim().to_owned()),
-        chat_id: opt_string(object.get("chat_id")),
-        root_id: opt_string(object.get("root_id")),
-        parent_id: opt_string(object.get("parent_id")),
-        message_type: opt_string(object.get("msg_type")),
-        create_time: opt_string(object.get("create_time")),
-        update_time: opt_string(object.get("update_time")),
-        deleted: object.get("deleted").and_then(Value::as_bool),
-        updated: object.get("updated").and_then(Value::as_bool),
-        sender_id: object
-            .get("sender")
-            .and_then(|value| value.get("id"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        sender_type: object
-            .get("sender")
-            .and_then(|value| value.get("sender_type"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned),
-        body: item,
+    parse_message_detail_from_item(&item).ok_or_else(|| {
+        format!("feishu message detail response missing message_id for {message_id}")
     })
 }
 
@@ -593,16 +767,45 @@ pub fn parse_message_write_response(payload: &Value) -> CliResult<FeishuMessageW
     })
 }
 
-fn parse_message_summary(item: &Value) -> Option<FeishuMessageSummary> {
+/// Parse a single message item into FeishuMessageDetail
+fn parse_message_detail_from_item(item: &Value) -> Option<FeishuMessageDetail> {
     let object = item.as_object()?;
-    Some(FeishuMessageSummary {
-        message_id: opt_string(object.get("message_id"))?,
+    let message_id = opt_string(object.get("message_id"))?;
+
+    // Extract and parse message body content
+    // Feishu returns content as a stringified JSON at item["body"]["content"]
+    let body = object
+        .get("body")
+        .and_then(|b| b.get("content"))
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str::<Value>(s).ok())
+        .unwrap_or(Value::Object(serde_json::Map::new()));
+
+    Some(FeishuMessageDetail {
+        message_id,
         chat_id: opt_string(object.get("chat_id")),
         root_id: opt_string(object.get("root_id")),
         parent_id: opt_string(object.get("parent_id")),
         message_type: opt_string(object.get("msg_type")),
         create_time: opt_string(object.get("create_time")),
         update_time: opt_string(object.get("update_time")),
+        deleted: object.get("deleted").and_then(Value::as_bool),
+        updated: object.get("updated").and_then(Value::as_bool),
+        sender_id: object
+            .get("sender")
+            .and_then(|value| value.get("id"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        sender_type: object
+            .get("sender")
+            .and_then(|value| value.get("sender_type"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        body,
     })
 }
 
@@ -918,5 +1121,96 @@ mod tests {
         assert!(error.contains("payload.post"));
         assert!(error.contains("payload.image_key"));
         assert!(error.contains("not both"));
+    }
+
+    #[tokio::test]
+    async fn edit_message_rejects_invalid_msg_type() {
+        let client = crate::channel::feishu::api::client::FeishuClient::new(
+            "https://open.feishu.cn",
+            "cli_xxx",
+            "secret_xxx",
+            20,
+        )
+        .expect("client");
+        let result = edit_message(
+            &client,
+            "t-xxx",
+            "om_xxx",
+            "image",
+            json!({"image_key": "img_xxx"}),
+        )
+        .await;
+
+        match result {
+            Err(error) => {
+                assert!(error.contains("only supports 'text' or 'post' msg_type"));
+                assert!(error.contains("image"));
+            }
+            _ => panic!("expected error for invalid msg_type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_message_rejects_empty_message_id() {
+        let client = crate::channel::feishu::api::client::FeishuClient::new(
+            "https://open.feishu.cn",
+            "cli_xxx",
+            "secret_xxx",
+            20,
+        )
+        .expect("client");
+        let result = edit_message(&client, "t-xxx", "", "text", json!({"text": "hello"})).await;
+
+        match result {
+            Err(error) => {
+                assert!(error.contains("message_id"));
+            }
+            _ => panic!("expected error for empty message_id"),
+        }
+    }
+
+    #[test]
+    fn parse_message_detail_extracts_body_content() {
+        let payload = json!({
+            "data": {
+                "items": [{
+                    "message_id": "om_test",
+                    "msg_type": "text",
+                    "chat_id": "oc_test",
+                    "create_time": "1704067200000",
+                    "body": {
+                        "content": "{\"text\":\"hello world\"}"
+                    },
+                    "sender": {
+                        "id": "ou_sender",
+                        "sender_type": "user"
+                    }
+                }]
+            }
+        });
+        let detail = parse_message_detail_response("om_test", &payload).unwrap();
+        assert_eq!(
+            detail.body.get("text").and_then(Value::as_str),
+            Some("hello world")
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_message_rejects_empty_message_id() {
+        let client = crate::channel::feishu::api::client::FeishuClient::new(
+            "https://open.feishu.cn",
+            "cli_xxx",
+            "secret_xxx",
+            20,
+        )
+        .expect("client");
+        let result = delete_message(&client, "t-xxx", "").await;
+
+        match result {
+            Err(error) => {
+                assert!(error.contains("message_id"));
+            }
+            _ => panic!("expected error for empty message_id"),
+        }
     }
 }

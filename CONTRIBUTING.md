@@ -164,11 +164,14 @@ cargo test --workspace --all-features
 
 ### Recipe: Add a Provider
 
-1. Copy `crates/app/src/provider/transport.rs` as a starting point
-2. Implement the HTTP transport for your provider's API
-3. Update `crates/app/src/provider/mod.rs` to route to your provider based on config
-4. Add tests in the same file
+1. Start from `crates/app/src/config/provider.rs` and add or update the static provider descriptor facts first:
+   canonical id, aliases, protocol family, auth defaults, and setup-facing defaults
+2. Update `crates/app/src/provider/contracts.rs` only for request-time behavior that genuinely belongs in the runtime contract:
+   transport mode, payload adaptation, validation rules, capability defaults, or error classification
+3. Extend the relevant runtime modules such as `transport.rs`, `provider_validation_runtime.rs`, or request/runtime helpers only after the descriptor and runtime contract seams are clear
+4. Add or extend provider-family conformance and regression tests so descriptor facts, runtime-contract derivation, and setup/auth guidance stay aligned
 5. If the provider needs a feature flag, add it to `crates/app/Cargo.toml`
+6. Read [SDK Docs](docs/sdk/index.md) and the provider convergence plan before large provider-family refactors
 
 ### Recipe: Add a Tool
 
@@ -257,11 +260,11 @@ findings, start from the built-in observability surfaces instead of external
 skill setup:
 
 ```bash
-loongclaw doctor --config ~/.loongclaw/config.toml
-loongclaw doctor --config ~/.loongclaw/config.toml --json
-loongclaw audit recent --config ~/.loongclaw/config.toml
-loongclaw audit summary --config ~/.loongclaw/config.toml
-loongclaw audit recent --config ~/.loongclaw/config.toml --json
+loong doctor --config ~/.loongclaw/config.toml
+loong doctor --config ~/.loongclaw/config.toml --json
+loong audit recent --config ~/.loongclaw/config.toml
+loong audit summary --config ~/.loongclaw/config.toml
+loong audit recent --config ~/.loongclaw/config.toml --json
 if [ -f ~/.loongclaw/audit/events.jsonl ]; then tail -n 20 ~/.loongclaw/audit/events.jsonl; else echo "audit journal is created on first audit write"; fi
 ```
 

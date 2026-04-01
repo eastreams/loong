@@ -71,7 +71,10 @@ pub(super) fn resolve_provider_switch_config_path(
         .config_path
         .clone()
         .ok_or_else(|| {
-            "provider.switch requires a resolved runtime config path; start from `loongclaw chat` / channel runtime or pass payload.config_path".to_owned()
+            format!(
+                "provider.switch requires a resolved runtime config path; start from `{} chat` / channel runtime or pass payload.config_path",
+                config::active_cli_command_name()
+            )
         })
 }
 

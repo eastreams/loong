@@ -14,11 +14,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::CliResult;
 use crate::KernelContext;
+use crate::channel::feishu::api::{FeishuClient, FeishuWsEndpointClientConfig};
 use crate::channel::{ChannelServeStopHandle, runtime_state::ChannelOperationRuntimeTracker};
 use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ResolvedFeishuChannelConfig,
 };
-use crate::feishu::{FeishuClient, FeishuWsEndpointClientConfig};
 
 use super::adapter::FeishuAdapter;
 use super::webhook::{FeishuParsedActionResponse, FeishuWebhookState, handle_feishu_parsed_action};

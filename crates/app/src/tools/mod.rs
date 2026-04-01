@@ -14,9 +14,11 @@ use loongclaw_contracts::{Capability, ToolCoreOutcome, ToolCoreRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+#[cfg(test)]
+use tool_search::searchable_entry_from_provider_definition;
 use tool_search::{
     RankedSearchableToolEntry, SearchableToolEntry, rank_searchable_entries,
-    searchable_entry_from_descriptor, searchable_entry_from_provider_definition,
+    searchable_entry_from_descriptor,
 };
 
 use crate::KernelContext;
@@ -606,20 +608,7 @@ pub fn runtime_tool_view_from_loongclaw_config(
 fn build_runtime_tool_view_for_runtime_config(
     runtime_config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
-    let catalog = tool_catalog();
-    let mut names = runtime_tool_view_for_runtime_config(runtime_config)
-        .iter(catalog)
-        .map(|descriptor| descriptor.name)
-        .collect::<Vec<_>>();
-    #[cfg(feature = "feishu-integration")]
-    if runtime_config.feishu.is_some() {
-        names.extend(
-            feishu::feishu_tool_registry_entries()
-                .into_iter()
-                .map(|entry| entry.name),
-        );
-    }
-    ToolView::from_tool_names(names)
+    runtime_tool_view_for_runtime_config(runtime_config)
 }
 
 pub(crate) fn runtime_tool_view_with_runtime_config(
@@ -671,6 +660,17 @@ pub fn execute_tool_core_with_config(
         &request.payload,
         "payload",
     )?;
+    let requested_tool_name = request.tool_name.clone();
+    let payload_kind = crate::observability::json_value_kind(&request.payload);
+    let payload_keys = crate::observability::top_level_json_keys(&request.payload);
+    if !trusted_internal_tool_payload_enabled()
+        && payload_uses_reserved_internal_tool_context(&request.payload)
+    {
+        return Err(format!(
+            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
+            request.tool_name
+        ));
+    }
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let request = ToolCoreRequest {
         tool_name: canonical_name.to_owned(),
@@ -679,11 +679,40 @@ pub fn execute_tool_core_with_config(
     let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?
         .map(|narrowing| config.narrowed(&narrowing));
     let config = effective_config.as_ref().unwrap_or(config);
-    match canonical_name {
+    let started_at = std::time::Instant::now();
+    let result = match canonical_name {
         "tool.search" => execute_tool_search_tool_with_config(request, config),
         "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
         _ => execute_discoverable_tool_core_with_config(request, config),
+    };
+    let duration_ms = started_at.elapsed().as_millis();
+    match &result {
+        Ok(outcome) => {
+            tracing::debug!(
+                target: "loongclaw.tools",
+                requested_tool_name = %requested_tool_name,
+                canonical_tool_name = %canonical_name,
+                payload_kind,
+                payload_keys = ?payload_keys,
+                status = %outcome.status,
+                duration_ms,
+                "tool execution completed"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "loongclaw.tools",
+                requested_tool_name = %requested_tool_name,
+                canonical_tool_name = %canonical_name,
+                payload_kind,
+                payload_keys = ?payload_keys,
+                duration_ms,
+                error = %crate::observability::summarize_error(error),
+                "tool execution failed"
+            );
+        }
     }
+    result
 }
 
 fn trusted_runtime_narrowing_from_payload(
@@ -777,6 +806,12 @@ fn dispatch_tool_request(
 ) -> Result<ToolCoreOutcome, String> {
     match request.tool_name.as_str() {
         "claw.migrate" => claw_migrate::execute_claw_migrate_tool_with_config(request, config),
+        "external_skills.search" => {
+            external_skills::execute_external_skills_search_tool_with_config(request, config)
+        }
+        "external_skills.recommend" => {
+            external_skills::execute_external_skills_recommend_tool_with_config(request, config)
+        }
         "external_skills.inspect" => {
             external_skills::execute_external_skills_inspect_tool_with_config(request, config)
         }
@@ -913,14 +948,6 @@ pub(crate) fn tool_registry_with_config(
             description: entry.summary,
         })
         .collect();
-    #[cfg(feature = "feishu-integration")]
-    if config.feishu.is_some() {
-        entries.extend(
-            feishu::feishu_tool_registry_entries()
-                .into_iter()
-                .filter(|entry| runtime_visible_tool_view.contains(entry.name)),
-        );
-    }
     entries.sort_by_key(|entry| entry.name);
     entries
 }
@@ -985,7 +1012,7 @@ fn provider_tool_definitions_for_view(_view: &ToolView) -> Vec<Value> {
     tools
 }
 
-#[cfg(feature = "feishu-integration")]
+#[cfg(all(test, feature = "feishu-integration"))]
 fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
     feishu::feishu_provider_tool_definitions()
         .into_iter()
@@ -1059,23 +1086,14 @@ fn runtime_discoverable_tool_entries(
         }
         None => &runtime_view,
     };
-    let mut entries = catalog::tool_catalog()
+    catalog::tool_catalog()
         .descriptors()
         .iter()
         .filter(|descriptor| descriptor.is_discoverable())
         .filter(|descriptor| visible_tool_view.contains(descriptor.name))
         .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
         .map(searchable_entry_from_descriptor)
-        .collect::<Vec<_>>();
-    #[cfg(feature = "feishu-integration")]
-    if config.feishu.is_some() {
-        entries.extend(
-            feishu_searchable_entries()
-                .into_iter()
-                .filter(|entry| visible_tool_view.contains(entry.canonical_name.as_str())),
-        );
-    }
-    entries
+        .collect::<Vec<_>>()
 }
 
 pub fn tool_parameter_schema_types() -> BTreeMap<String, BTreeMap<String, &'static str>> {
@@ -1416,13 +1434,13 @@ fn sign_tool_lease(encoded_claims: &str) -> String {
     hasher.update(b":");
     hasher.update(encoded_claims.as_bytes());
     let digest = hasher.finalize();
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 fn tool_catalog_digest() -> String {
     let payload = serde_json::to_vec(&catalog::all_tool_catalog()).unwrap_or_default();
     let digest = Sha256::digest(payload);
-    format!("{digest:x}")
+    hex::encode(digest)
 }
 
 fn tool_lease_secret() -> &'static str {
@@ -1442,7 +1460,7 @@ fn tool_lease_secret() -> &'static str {
             random_state.build_hasher().finish()
         );
         let digest = Sha256::digest(seed.as_bytes());
-        format!("{digest:x}")
+        hex::encode(digest)
     })
 }
 
@@ -4916,6 +4934,40 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn provider_tool_definitions_with_config_exposes_bitable_search_sort_as_array() {
+        let defs = feishu::feishu_provider_tool_definitions();
+        let search = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "feishu_bitable_record_search")
+            .expect("bitable search definition should exist");
+
+        assert_eq!(
+            search["function"]["parameters"]["properties"]["sort"]["type"],
+            "array"
+        );
+        assert_eq!(
+            search["function"]["parameters"]["properties"]["sort"]["items"]["type"],
+            "object"
+        );
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn provider_tool_definitions_with_config_caps_bitable_list_page_size_at_100() {
+        let defs = feishu::feishu_provider_tool_definitions();
+        let list = defs
+            .iter()
+            .find(|item| item["function"]["name"] == "feishu_bitable_list")
+            .expect("bitable list definition should exist");
+
+        assert_eq!(
+            list["function"]["parameters"]["properties"]["page_size"]["maximum"],
+            100
+        );
+    }
+
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct FeishuToolMockRequest {
@@ -4988,7 +5040,7 @@ mod tests {
         sqlite_path: &std::path::Path,
         access_token: &str,
         scopes: &[&str],
-    ) -> crate::feishu::FeishuTokenStore {
+    ) -> crate::channel::feishu::api::FeishuTokenStore {
         seed_feishu_tool_grant_for_account(
             sqlite_path,
             "feishu_main",
@@ -5005,12 +5057,12 @@ mod tests {
         open_id: &str,
         access_token: &str,
         scopes: &[&str],
-    ) -> crate::feishu::FeishuTokenStore {
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.to_path_buf());
+    ) -> crate::channel::feishu::api::FeishuTokenStore {
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.to_path_buf());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: account_id.to_owned(),
                     open_id: open_id.to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -5023,7 +5075,9 @@ mod tests {
                 },
                 access_token: access_token.to_owned(),
                 refresh_token: format!("r-{access_token}"),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(scopes.iter().copied()),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes(
+                    scopes.iter().copied(),
+                ),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
@@ -5153,11 +5207,11 @@ mod tests {
             }),
         );
         let (base_url, server) = spawn_mock_feishu_server(router).await;
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -5170,7 +5224,7 @@ mod tests {
                 },
                 access_token: "u-token-doc".to_owned(),
                 refresh_token: "r-token-doc".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes([
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
                     "offline_access",
                     "docx:document:readonly",
                 ]),
@@ -8966,11 +9020,11 @@ mod tests {
                 }),
             );
         let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
-        let now_s = crate::feishu::unix_ts_now();
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -8983,7 +9037,9 @@ mod tests {
                 },
                 access_token: "u-token-expired".to_owned(),
                 refresh_token: "r-token-old".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s - 10,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s - 3600,
@@ -9157,7 +9213,7 @@ mod tests {
         )
         .expect_err("missing Feishu grant should fail");
 
-        assert!(error.contains("loongclaw feishu auth start --account feishu_main"));
+        assert!(error.contains("loong feishu auth start --account feishu_main"));
     }
 
     #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
@@ -9207,7 +9263,7 @@ mod tests {
         )
         .expect_err("missing Feishu grant should fail");
 
-        assert!(error.contains("loongclaw feishu auth start --account work"));
+        assert!(error.contains("loong feishu auth start --account work"));
         assert!(!error.contains("--account feishu_secondary"));
     }
 
@@ -9219,11 +9275,11 @@ mod tests {
         let temp_dir = unique_feishu_tool_temp_dir("whoami-multi-grant");
         fs::create_dir_all(&temp_dir).expect("create temp dir");
         let sqlite_path = temp_dir.join("feishu.sqlite3");
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
-        let now_s = crate::feishu::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_123".to_owned()),
@@ -9236,15 +9292,17 @@ mod tests {
                 },
                 access_token: "u-token-123".to_owned(),
                 refresh_token: "r-token-123".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
             })
             .expect("save first grant");
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_456".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -9257,7 +9315,9 @@ mod tests {
                 },
                 access_token: "u-token-456".to_owned(),
                 refresh_token: "r-token-456".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s + 1,
@@ -9276,8 +9336,7 @@ mod tests {
         .expect_err("ambiguous Feishu grant selection should fail");
 
         assert!(
-            error
-                .contains("loongclaw feishu auth select --account feishu_main --open-id <open_id>")
+            error.contains("loong feishu auth select --account feishu_main --open-id <open_id>")
         );
         assert!(error.contains("ou_123"));
         assert!(error.contains("ou_456"));
@@ -9291,11 +9350,11 @@ mod tests {
         let temp_dir = unique_feishu_tool_temp_dir("whoami-missing-explicit-open-id");
         fs::create_dir_all(&temp_dir).expect("create temp dir");
         let sqlite_path = temp_dir.join("feishu.sqlite3");
-        let store = crate::feishu::FeishuTokenStore::new(sqlite_path.clone());
-        let now_s = crate::feishu::unix_ts_now();
+        let store = crate::channel::feishu::api::FeishuTokenStore::new(sqlite_path.clone());
+        let now_s = crate::channel::feishu::api::unix_ts_now();
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_123".to_owned(),
                     union_id: Some("on_123".to_owned()),
@@ -9308,15 +9367,17 @@ mod tests {
                 },
                 access_token: "u-token-123".to_owned(),
                 refresh_token: "r-token-123".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s,
             })
             .expect("save first grant");
         store
-            .save_grant(&crate::feishu::FeishuGrant {
-                principal: crate::feishu::FeishuUserPrincipal {
+            .save_grant(&crate::channel::feishu::api::FeishuGrant {
+                principal: crate::channel::feishu::api::FeishuUserPrincipal {
                     account_id: "feishu_main".to_owned(),
                     open_id: "ou_456".to_owned(),
                     union_id: Some("on_456".to_owned()),
@@ -9329,7 +9390,9 @@ mod tests {
                 },
                 access_token: "u-token-456".to_owned(),
                 refresh_token: "r-token-456".to_owned(),
-                scopes: crate::feishu::FeishuGrantScopeSet::from_scopes(["offline_access"]),
+                scopes: crate::channel::feishu::api::FeishuGrantScopeSet::from_scopes([
+                    "offline_access",
+                ]),
                 access_expires_at_s: now_s + 3600,
                 refresh_expires_at_s: now_s + 86_400,
                 refreshed_at_s: now_s + 1,
@@ -9352,8 +9415,7 @@ mod tests {
         assert!(error.contains("open_id `ou_missing`"));
         assert!(error.contains("available open_ids: ou_456, ou_123"));
         assert!(
-            error
-                .contains("loongclaw feishu auth select --account feishu_main --open-id <open_id>")
+            error.contains("loong feishu auth select --account feishu_main --open-id <open_id>")
         );
     }
 
@@ -13235,7 +13297,7 @@ mod tests {
                 .expect("next_step should be present")
                 .split_whitespace()
                 .next(),
-            Some("loongclaw")
+            Some("loong")
         );
         assert_eq!(
             outcome.payload["output_path"]

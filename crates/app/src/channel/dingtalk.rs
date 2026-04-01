@@ -1,5 +1,5 @@
 use base64::Engine;
-use hmac::Mac;
+use hmac::{KeyInit, Mac};
 use serde_json::{Value, json};
 
 use crate::{CliResult, config::ResolvedDingtalkChannelConfig};

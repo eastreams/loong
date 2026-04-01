@@ -12,7 +12,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::config::{GovernedToolApprovalMode, LoongClawConfig, SessionVisibility, ToolConfig};
+use crate::config::{
+    GovernedToolApprovalMode, LoongClawConfig, SessionVisibility, ToolConfig, ToolConsentMode,
+};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
@@ -26,6 +28,10 @@ use crate::tools::{
     tool_catalog,
 };
 
+use super::autonomy_policy::{
+    AUTONOMY_POLICY_SOURCE, AutonomyTurnBudgetState, PolicyDecision, PolicyDecisionInput,
+    evaluate_policy, render_reason,
+};
 use super::runtime::SessionContext;
 use super::runtime_binding::ConversationRuntimeBinding;
 
@@ -58,6 +64,121 @@ pub struct ToolDecision {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutcome {
+    pub status: String,
+    pub payload: serde_json::Value,
+    pub error_code: Option<String>,
+    pub human_reason: Option<String>,
+    pub audit_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDecisionKind {
+    Allow,
+    ApprovalRequired,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolDecisionTelemetry {
+    pub tool_name: String,
+    pub decision_kind: ToolDecisionKind,
+    pub allow: bool,
+    pub deny: bool,
+    pub reason: String,
+    pub rule_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autonomy_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capability_action_class: Option<String>,
+}
+
+impl ToolDecisionTelemetry {
+    fn allow(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::Allow,
+            allow: true,
+            deny: false,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn approval_required(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::ApprovalRequired,
+            allow: false,
+            deny: false,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn deny(
+        tool_name: impl Into<String>,
+        reason: impl Into<String>,
+        rule_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_name: tool_name.into(),
+            decision_kind: ToolDecisionKind::Deny,
+            allow: false,
+            deny: true,
+            reason: reason.into(),
+            rule_id: rule_id.into(),
+            reason_code: None,
+            policy_source: None,
+            autonomy_profile: None,
+            capability_action_class: None,
+        }
+    }
+
+    fn with_reason_code(mut self, reason_code: impl Into<String>) -> Self {
+        self.reason_code = Some(reason_code.into());
+        self
+    }
+
+    fn with_policy_source(mut self, policy_source: impl Into<String>) -> Self {
+        self.policy_source = Some(policy_source.into());
+        self
+    }
+
+    fn with_autonomy_profile(mut self, autonomy_profile: impl Into<String>) -> Self {
+        self.autonomy_profile = Some(autonomy_profile.into());
+        self
+    }
+
+    fn with_capability_action_class(mut self, capability_action_class: impl Into<String>) -> Self {
+        self.capability_action_class = Some(capability_action_class.into());
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ToolOutcomeTelemetry {
+    pub tool_name: String,
     pub status: String,
     pub payload: serde_json::Value,
     pub error_code: Option<String>,
@@ -101,19 +222,44 @@ impl ApprovalRequirement {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolPreflightOutcome {
+    Allow(ToolDecisionTelemetry),
+    NeedsApproval {
+        requirement: ApprovalRequirement,
+        decision: ToolDecisionTelemetry,
+    },
+    Denied {
+        failure: TurnFailure,
+        decision: ToolDecisionTelemetry,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResultEnvelope {
     pub status: String,
     pub tool: String,
     pub tool_call_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_semantics: Option<ToolResultPayloadSemantics>,
     pub payload_summary: String,
     pub payload_chars: usize,
     pub payload_truncated: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolResultPayloadSemantics {
+    DiscoveryResult,
+    ExternalSkillContext,
+}
+
 const TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 2048;
 const MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 256;
 const MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS: usize = 64_000;
+const TOOL_PREFLIGHT_ALLOW_RULE_ID: &str = "tool_preflight_allowed";
+const AUTONOMY_POLICY_ALLOW_RULE_ID: &str = "autonomy_policy_allow";
+const AUTONOMY_POLICY_ALLOW_REASON_CODE: &str = "autonomy_policy_allow";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -256,8 +402,55 @@ pub(crate) fn classify_kernel_error(error: &KernelError) -> KernelFailureClass {
     }
 }
 
+fn generic_allow_tool_decision(tool_name: &str) -> ToolDecisionTelemetry {
+    let reason = format!("tool preflight allowed `{tool_name}`");
+    ToolDecisionTelemetry::allow(tool_name, reason, TOOL_PREFLIGHT_ALLOW_RULE_ID)
+}
+
+fn approval_required_tool_decision(
+    tool_name: &str,
+    requirement: &ApprovalRequirement,
+) -> ToolDecisionTelemetry {
+    let reason = requirement.reason.clone();
+    let rule_id = requirement.rule_id.clone();
+    ToolDecisionTelemetry::approval_required(tool_name, reason, rule_id)
+}
+
+fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionTelemetry {
+    let reason = failure.reason.clone();
+    let rule_id = failure.code.clone();
+    ToolDecisionTelemetry::deny(tool_name, reason, rule_id)
+}
+
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
+    async fn preflight_tool_intent_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+        _budget_state: &AutonomyTurnBudgetState,
+    ) -> Result<ToolPreflightOutcome, String> {
+        match self
+            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .await
+        {
+            Ok(Some(requirement)) => {
+                let decision = approval_required_tool_decision(descriptor.name, &requirement);
+                Ok(ToolPreflightOutcome::NeedsApproval {
+                    requirement,
+                    decision,
+                })
+            }
+            Ok(None) => {
+                let decision = generic_allow_tool_decision(descriptor.name);
+                Ok(ToolPreflightOutcome::Allow(decision))
+            }
+            Err(reason) => Err(reason),
+        }
+    }
+
     async fn maybe_require_approval(
         &self,
         _session_context: &SessionContext,
@@ -331,6 +524,79 @@ impl DefaultAppToolDispatcher {
             crate::memory::runtime_config::get_memory_runtime_config().clone(),
             ToolConfig::default(),
         )
+    }
+
+    fn autonomy_policy_decision_base(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+    ) -> ToolDecisionTelemetry {
+        let profile = policy_snapshot.profile.as_str();
+        let action_class_name = action_class.as_str();
+        let base = ToolDecisionTelemetry::allow(tool_name, "", AUTONOMY_POLICY_ALLOW_RULE_ID);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(profile);
+        let with_action_class = with_profile.with_capability_action_class(action_class_name);
+        with_action_class.with_reason_code(AUTONOMY_POLICY_ALLOW_REASON_CODE)
+    }
+
+    fn autonomy_policy_allow_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+    ) -> ToolDecisionTelemetry {
+        let profile = policy_snapshot.profile.as_str();
+        let reason =
+            format!("autonomy policy allowed `{tool_name}` under `{profile}` product mode");
+        let base = Self::autonomy_policy_decision_base(tool_name, policy_snapshot, action_class);
+        ToolDecisionTelemetry { reason, ..base }
+    }
+
+    fn autonomy_policy_grant_satisfied_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = Self::autonomy_policy_decision_base(tool_name, policy_snapshot, action_class);
+        let decision = ToolDecisionTelemetry {
+            reason,
+            rule_id: rule_id.to_owned(),
+            ..base
+        };
+        decision.with_reason_code(reason_code)
+    }
+
+    fn autonomy_policy_approval_required_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = ToolDecisionTelemetry::approval_required(tool_name, reason, rule_id);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(policy_snapshot.profile.as_str());
+        let with_action_class = with_profile.with_capability_action_class(action_class.as_str());
+        with_action_class.with_reason_code(reason_code)
+    }
+
+    fn autonomy_policy_denied_decision(
+        tool_name: &str,
+        policy_snapshot: &crate::tools::runtime_config::AutonomyPolicySnapshot,
+        action_class: crate::tools::CapabilityActionClass,
+        rule_id: &str,
+        reason_code: &str,
+        reason: String,
+    ) -> ToolDecisionTelemetry {
+        let base = ToolDecisionTelemetry::deny(tool_name, reason, rule_id);
+        let with_source = base.with_policy_source(AUTONOMY_POLICY_SOURCE);
+        let with_profile = with_source.with_autonomy_profile(policy_snapshot.profile.as_str());
+        let with_action_class = with_profile.with_capability_action_class(action_class.as_str());
+        with_action_class.with_reason_code(reason_code)
     }
 
     fn effective_tool_config_for_session(&self, session_context: &SessionContext) -> ToolConfig {
@@ -440,6 +706,185 @@ impl DefaultAppToolDispatcher {
             }
         }
     }
+
+    fn autonomy_policy_snapshot(&self) -> crate::tools::runtime_config::AutonomyPolicySnapshot {
+        crate::tools::runtime_config::AutonomyPolicySnapshot::from_profile(
+            self.tool_config.autonomy_profile,
+        )
+    }
+
+    fn approval_key_for_descriptor(descriptor: &crate::tools::ToolDescriptor) -> String {
+        let tool_name = descriptor.name;
+        let approval_key = format!("tool:{tool_name}");
+        approval_key
+    }
+
+    fn is_tool_call_preapproved(&self, approval_key: &str) -> bool {
+        let approved_calls = &self.tool_config.approval.approved_calls;
+        approved_calls.iter().any(|entry| entry == approval_key)
+    }
+
+    fn is_tool_call_predenied(&self, approval_key: &str) -> bool {
+        let denied_calls = &self.tool_config.approval.denied_calls;
+        denied_calls.iter().any(|entry| entry == approval_key)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn approval_request_payload_json(
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+    ) -> serde_json::Value {
+        json!({
+            "session_id": session_context.session_id,
+            "parent_session_id": session_context.parent_session_id,
+            "turn_id": intent.turn_id,
+            "tool_call_id": intent.tool_call_id,
+            "tool_name": descriptor.name,
+            "args_json": intent.args_json,
+            "source": intent.source,
+            "execution_kind": match descriptor.execution_kind {
+                ToolExecutionKind::Core => "core",
+                ToolExecutionKind::App => "app",
+            },
+        })
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn persist_approval_request(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        approval_key: &str,
+        reason: &str,
+        rule_id: &str,
+        governance_snapshot_json: serde_json::Value,
+    ) -> Result<ApprovalRequirement, String> {
+        let repo = SessionRepository::new(&self.memory_config)?;
+        let kind = if session_context.parent_session_id.is_some() {
+            SessionKind::DelegateChild
+        } else {
+            SessionKind::Root
+        };
+        let _ = repo.ensure_session(NewSessionRecord {
+            session_id: session_context.session_id.clone(),
+            kind,
+            parent_session_id: session_context.parent_session_id.clone(),
+            label: None,
+            state: SessionState::Ready,
+        })?;
+
+        let approval_request_id =
+            governed_approval_request_id(session_context, descriptor.name, intent);
+        let request_payload_json =
+            Self::approval_request_payload_json(session_context, intent, descriptor);
+        let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id,
+            session_id: session_context.session_id.clone(),
+            turn_id: intent.turn_id.clone(),
+            tool_call_id: intent.tool_call_id.clone(),
+            tool_name: descriptor.name.to_owned(),
+            approval_key: approval_key.to_owned(),
+            request_payload_json,
+            governance_snapshot_json,
+        })?;
+
+        Ok(ApprovalRequirement::governed_tool(
+            descriptor.name,
+            approval_key,
+            reason,
+            rule_id,
+            Some(stored.approval_request_id),
+        ))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn has_approval_grant(
+        &self,
+        session_context: &SessionContext,
+        approval_key: &str,
+    ) -> Result<bool, String> {
+        let repo = SessionRepository::new(&self.memory_config)?;
+        let scope_session_id = Self::lineage_root_session_id(&repo, session_context)?;
+        let grant = repo.load_approval_grant(&scope_session_id, approval_key)?;
+        Ok(grant.is_some())
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn maybe_require_governed_tool_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let governance = governance_profile_for_descriptor(descriptor);
+        if descriptor.execution_kind != ToolExecutionKind::App
+            || governance.approval_mode != ToolApprovalMode::PolicyDriven
+        {
+            return Ok(None);
+        }
+
+        let requires_approval = match self.tool_config.approval.mode {
+            GovernedToolApprovalMode::Disabled => false,
+            GovernedToolApprovalMode::MediumBalanced => {
+                governance.risk_class == crate::tools::ToolRiskClass::High
+            }
+            GovernedToolApprovalMode::Strict => true,
+        };
+        if !requires_approval {
+            return Ok(None);
+        }
+
+        let approval_key = Self::approval_key_for_descriptor(descriptor);
+        let is_preapproved = self.is_tool_call_preapproved(&approval_key);
+        if is_preapproved {
+            return Ok(None);
+        }
+        let is_predenied = self.is_tool_call_predenied(&approval_key);
+        if is_predenied {
+            return Err(format!(
+                "app_tool_denied: governed tool `{approval_key}` is denied by approval policy"
+            ));
+        }
+        if self.has_approval_grant(session_context, approval_key.as_str())? {
+            return Ok(None);
+        }
+
+        let reason = format!(
+            "operator approval required before running `{}`",
+            descriptor.name
+        );
+        let rule_id = "governed_tool_requires_approval";
+        let governance_snapshot_json = json!({
+            "governance_scope": governance.scope.as_str(),
+            "risk_class": governance.risk_class.as_str(),
+            "approval_mode": governance.approval_mode.as_str(),
+            "rule_id": rule_id,
+            "reason": reason,
+        });
+        let requirement = self.persist_approval_request(
+            session_context,
+            intent,
+            descriptor,
+            approval_key.as_str(),
+            reason.as_str(),
+            rule_id,
+            governance_snapshot_json,
+        )?;
+        Ok(Some(requirement))
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    fn maybe_require_governed_tool_approval_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+    ) -> Result<Option<ApprovalRequirement>, String> {
+        let _ = (session_context, intent, descriptor);
+        Ok(None)
+    }
 }
 
 fn governed_approval_request_id(
@@ -455,7 +900,23 @@ fn governed_approval_request_id(
     hasher.update(intent.tool_call_id.as_bytes());
     hasher.update([0]);
     hasher.update(tool_name.as_bytes());
-    format!("apr_{:x}", hasher.finalize())
+    format!("apr_{}", hex::encode(hasher.finalize()))
+}
+
+fn tool_is_session_consent_exempt(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "approval_request_resolve" | "approval_request_status" | "approval_requests_list"
+    )
+}
+
+fn tool_is_auto_eligible(
+    descriptor: &crate::tools::ToolDescriptor,
+    governance: crate::tools::ToolGovernanceProfile,
+) -> bool {
+    tool_is_session_consent_exempt(descriptor.name)
+        || (governance.risk_class == crate::tools::ToolRiskClass::Low
+            && governance.approval_mode == ToolApprovalMode::Never)
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -466,6 +927,174 @@ impl Default for DefaultAppToolDispatcher {
 
 #[async_trait]
 impl AppToolDispatcher for DefaultAppToolDispatcher {
+    async fn preflight_tool_intent_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+        budget_state: &AutonomyTurnBudgetState,
+    ) -> Result<ToolPreflightOutcome, String> {
+        let policy_snapshot = self.autonomy_policy_snapshot();
+        let action_class = descriptor.capability_action_class();
+        let policy_input = PolicyDecisionInput {
+            snapshot: &policy_snapshot,
+            action_class,
+            binding,
+            budget: budget_state,
+        };
+        let autonomy_policy_applies =
+            super::autonomy_policy::action_mode(&policy_snapshot, action_class).is_some();
+        let policy_decision = evaluate_policy(policy_input);
+        let mut autonomy_allow_decision = None;
+        match policy_decision {
+            PolicyDecision::Allow => {
+                if autonomy_policy_applies {
+                    let decision = Self::autonomy_policy_allow_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                    );
+                    autonomy_allow_decision = Some(decision);
+                }
+            }
+            PolicyDecision::ApprovalRequired {
+                rule_id,
+                reason_code,
+            } => {
+                let reason =
+                    render_reason(&policy_snapshot, action_class, descriptor.name, reason_code);
+                let approval_key = Self::approval_key_for_descriptor(descriptor);
+
+                #[cfg(not(feature = "memory-sqlite"))]
+                {
+                    let _ = (session_context, intent, approval_key);
+                    let failure = TurnFailure::policy_denied(
+                        "autonomy_policy_approval_support_missing",
+                        reason.clone(),
+                    );
+                    let decision = Self::autonomy_policy_denied_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                        rule_id,
+                        reason_code,
+                        reason,
+                    );
+                    return Ok(ToolPreflightOutcome::Denied { failure, decision });
+                }
+
+                #[cfg(feature = "memory-sqlite")]
+                {
+                    let is_preapproved = self.is_tool_call_preapproved(&approval_key);
+                    let is_predenied = self.is_tool_call_predenied(&approval_key);
+                    if is_predenied {
+                        let reason =
+                            format!("governed tool `{approval_key}` is denied by approval policy");
+                        let failure = TurnFailure::policy_denied("app_tool_denied", reason);
+                        let decision = denied_tool_decision(descriptor.name, &failure);
+                        return Ok(ToolPreflightOutcome::Denied { failure, decision });
+                    }
+
+                    let has_approval_grant =
+                        self.has_approval_grant(session_context, approval_key.as_str())?;
+                    let autonomy_approval_is_satisfied = is_preapproved || has_approval_grant;
+                    if !autonomy_approval_is_satisfied {
+                        let governance_snapshot_json = json!({
+                            "policy_source": AUTONOMY_POLICY_SOURCE,
+                            "decision_kind": ToolDecisionKind::ApprovalRequired,
+                            "autonomy_profile": policy_snapshot.profile.as_str(),
+                            "capability_action_class": action_class.as_str(),
+                            "rule_id": rule_id,
+                            "reason_code": reason_code,
+                            "reason": reason,
+                        });
+                        let requirement = self.persist_approval_request(
+                            session_context,
+                            intent,
+                            descriptor,
+                            approval_key.as_str(),
+                            reason.as_str(),
+                            rule_id,
+                            governance_snapshot_json,
+                        )?;
+                        let decision = Self::autonomy_policy_approval_required_decision(
+                            descriptor.name,
+                            &policy_snapshot,
+                            action_class,
+                            rule_id,
+                            reason_code,
+                            reason,
+                        );
+                        return Ok(ToolPreflightOutcome::NeedsApproval {
+                            requirement,
+                            decision,
+                        });
+                    }
+
+                    let satisfied_reason = if is_preapproved {
+                        format!(
+                            "configured approval policy already allows `{}` under `{}` product mode",
+                            descriptor.name,
+                            policy_snapshot.profile.as_str()
+                        )
+                    } else {
+                        format!(
+                            "stored approval grant satisfied `{}` under `{}` product mode",
+                            descriptor.name,
+                            policy_snapshot.profile.as_str()
+                        )
+                    };
+                    let decision = Self::autonomy_policy_grant_satisfied_decision(
+                        descriptor.name,
+                        &policy_snapshot,
+                        action_class,
+                        rule_id,
+                        reason_code,
+                        satisfied_reason,
+                    );
+                    autonomy_allow_decision = Some(decision);
+                }
+            }
+            PolicyDecision::Deny {
+                rule_id,
+                reason_code,
+            } => {
+                let reason =
+                    render_reason(&policy_snapshot, action_class, descriptor.name, reason_code);
+                let failure = TurnFailure::policy_denied(reason_code, reason.clone());
+                let decision = Self::autonomy_policy_denied_decision(
+                    descriptor.name,
+                    &policy_snapshot,
+                    action_class,
+                    rule_id,
+                    reason_code,
+                    reason,
+                );
+                return Ok(ToolPreflightOutcome::Denied { failure, decision });
+            }
+        }
+
+        match self
+            .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .await
+        {
+            Ok(Some(requirement)) => {
+                let decision = approval_required_tool_decision(descriptor.name, &requirement);
+                Ok(ToolPreflightOutcome::NeedsApproval {
+                    requirement,
+                    decision,
+                })
+            }
+            Ok(None) => {
+                let decision = autonomy_allow_decision
+                    .unwrap_or_else(|| generic_allow_tool_decision(descriptor.name));
+                Ok(ToolPreflightOutcome::Allow(decision))
+            }
+            Err(reason) => Err(reason),
+        }
+    }
+
     async fn maybe_require_approval(
         &self,
         session_context: &SessionContext,
@@ -495,40 +1124,18 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         {
             let _ = binding;
             let governance = governance_profile_for_descriptor(descriptor);
-            if descriptor.execution_kind != ToolExecutionKind::App
-                || governance.approval_mode != ToolApprovalMode::PolicyDriven
-            {
-                return Ok(None);
-            }
-
-            let requires_approval = match self.tool_config.approval.mode {
-                GovernedToolApprovalMode::Disabled => false,
-                GovernedToolApprovalMode::MediumBalanced => {
-                    governance.risk_class == crate::tools::ToolRiskClass::High
-                }
-                GovernedToolApprovalMode::Strict => true,
-            };
-            if !requires_approval {
-                return Ok(None);
-            }
-
             let approval_key = format!("tool:{}", descriptor.name);
-            if self
-                .tool_config
-                .approval
-                .approved_calls
-                .iter()
-                .any(|entry| entry == &approval_key)
-            {
-                return Ok(None);
-            }
-            if self
-                .tool_config
-                .approval
-                .denied_calls
-                .iter()
-                .any(|entry| entry == &approval_key)
-            {
+            let governed_approval_eligible = descriptor.execution_kind == ToolExecutionKind::App
+                && governance.approval_mode == ToolApprovalMode::PolicyDriven;
+            let approval_key_is_denied = governed_approval_eligible
+                && self
+                    .tool_config
+                    .approval
+                    .denied_calls
+                    .iter()
+                    .any(|entry| entry == &approval_key);
+
+            if approval_key_is_denied {
                 return Err(format!(
                     "app_tool_denied: governed tool `{approval_key}` is denied by approval policy"
                 ));
@@ -549,58 +1156,61 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             })?;
 
             let scope_session_id = Self::lineage_root_session_id(&repo, session_context)?;
-            if repo
-                .load_approval_grant(&scope_session_id, &approval_key)?
-                .is_some()
-            {
-                return Ok(None);
-            }
+            let session_consent_mode = repo
+                .load_session_tool_consent(&scope_session_id)?
+                .map(|record| record.mode)
+                .unwrap_or(self.tool_config.consent.default_mode);
 
-            let approval_request_id =
-                governed_approval_request_id(session_context, descriptor.name, intent);
-            let reason = format!(
-                "operator approval required before running `{}`",
-                descriptor.name
-            );
-            let rule_id = "governed_tool_requires_approval";
-            let request_payload_json = json!({
-                "session_id": session_context.session_id,
-                "parent_session_id": session_context.parent_session_id,
-                "turn_id": intent.turn_id,
-                "tool_call_id": intent.tool_call_id,
-                "tool_name": descriptor.name,
-                "args_json": intent.args_json,
-                "source": intent.source,
-                "execution_kind": match descriptor.execution_kind {
-                    ToolExecutionKind::Core => "core",
-                    ToolExecutionKind::App => "app",
-                },
-            });
+            let session_consent_requirement = if tool_is_session_consent_exempt(descriptor.name) {
+                None
+            } else {
+                match session_consent_mode {
+                    ToolConsentMode::Prompt => Some((
+                        "session_tool_consent_prompt_mode",
+                        format!(
+                            "session confirmation required before running `{}`",
+                            descriptor.name
+                        ),
+                    )),
+                    ToolConsentMode::Auto if !tool_is_auto_eligible(descriptor, governance) => {
+                        Some((
+                            "session_tool_consent_auto_blocked",
+                            format!(
+                                "`{}` is not eligible for auto mode and needs operator confirmation",
+                                descriptor.name
+                            ),
+                        ))
+                    }
+                    ToolConsentMode::Auto | ToolConsentMode::Full => None,
+                }
+            };
+            let Some((rule_id, reason)) = session_consent_requirement else {
+                return self.maybe_require_governed_tool_approval_with_binding(
+                    session_context,
+                    intent,
+                    descriptor,
+                );
+            };
+
             let governance_snapshot_json = json!({
                 "governance_scope": governance.scope.as_str(),
                 "risk_class": governance.risk_class.as_str(),
                 "approval_mode": governance.approval_mode.as_str(),
+                "session_consent_mode": session_consent_mode.as_str(),
                 "rule_id": rule_id,
                 "reason": reason,
             });
-            let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
-                approval_request_id,
-                session_id: session_context.session_id.clone(),
-                turn_id: intent.turn_id.clone(),
-                tool_call_id: intent.tool_call_id.clone(),
-                tool_name: descriptor.name.to_owned(),
-                approval_key: approval_key.clone(),
-                request_payload_json,
-                governance_snapshot_json,
-            })?;
-
-            Ok(Some(ApprovalRequirement::governed_tool(
-                descriptor.name,
-                approval_key,
-                reason,
+            let requirement = self.persist_approval_request(
+                session_context,
+                intent,
+                descriptor,
+                approval_key.as_str(),
+                reason.as_str(),
                 rule_id,
-                Some(stored.approval_request_id),
-            )))
+                governance_snapshot_json,
+            )?;
+
+            Ok(Some(requirement))
         }
     }
 
@@ -651,6 +1261,13 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     } else {
         KernelFailureClass::RetryableExecution
     }
+}
+
+fn render_app_tool_denied_reason(reason: &str) -> String {
+    reason
+        .strip_prefix("app_tool_denied: ")
+        .unwrap_or(reason)
+        .to_owned()
 }
 
 fn with_runtime_ready_browser_companion_tools(
@@ -855,31 +1472,103 @@ fn build_tool_result_envelope(
     payload_summary_limit_chars: usize,
 ) -> ToolResultEnvelope {
     let effective_tool_name = effective_result_tool_name(intent);
-    let normalized_limit = effective_payload_summary_limit(intent, payload_summary_limit_chars)
-        .clamp(
-            MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-            MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
-        );
+    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+    let normalized_limit = payload_summary_limit_chars.clamp(
+        MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+    );
     let payload_text = serde_json::to_string(&outcome.payload)
         .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
     let (payload_summary, payload_chars, payload_truncated) =
-        truncate_by_chars(payload_text.as_str(), normalized_limit);
+        summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
 
     ToolResultEnvelope {
         status: outcome.status.clone(),
         tool: effective_tool_name,
         tool_call_id: intent.tool_call_id.clone(),
+        payload_semantics,
         payload_summary,
         payload_chars,
         payload_truncated,
     }
 }
 
-fn effective_payload_summary_limit(intent: &ToolIntent, default_limit: usize) -> usize {
-    if effective_result_tool_name(intent) == "external_skills.invoke" {
-        return MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS;
+fn summarize_tool_result_payload(
+    payload_text: &str,
+    payload_semantics: Option<ToolResultPayloadSemantics>,
+    payload_summary_limit_chars: usize,
+) -> (String, usize, bool) {
+    if payload_semantics.is_some() {
+        let payload_chars = payload_text.chars().count();
+        let payload_summary = payload_text.to_owned();
+        return (payload_summary, payload_chars, false);
     }
-    default_limit
+
+    truncate_by_chars(payload_text, payload_summary_limit_chars)
+}
+
+fn detect_tool_result_payload_semantics(
+    payload: &serde_json::Value,
+) -> Option<ToolResultPayloadSemantics> {
+    let looks_like_discovery_result = payload_looks_like_discovery_result(payload);
+    if looks_like_discovery_result {
+        return Some(ToolResultPayloadSemantics::DiscoveryResult);
+    }
+
+    let looks_like_external_skill_context = payload_looks_like_external_skill_context(payload);
+    if looks_like_external_skill_context {
+        return Some(ToolResultPayloadSemantics::ExternalSkillContext);
+    }
+
+    None
+}
+
+fn payload_looks_like_discovery_result(payload: &serde_json::Value) -> bool {
+    let Some(payload_object) = payload.as_object() else {
+        return false;
+    };
+    let Some(results) = payload_object
+        .get("results")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+
+    if results.is_empty() {
+        return payload_object.contains_key("query");
+    }
+
+    results.iter().any(|result| {
+        let Some(result_object) = result.as_object() else {
+            return false;
+        };
+        result_object
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+            && result_object
+                .get("lease")
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+    })
+}
+
+fn payload_looks_like_external_skill_context(payload: &serde_json::Value) -> bool {
+    let Some(payload_object) = payload.as_object() else {
+        return false;
+    };
+    payload_object
+        .get("skill_id")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+        && payload_object
+            .get("display_name")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        && payload_object
+            .get("instructions")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
 }
 
 pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
@@ -898,6 +1587,83 @@ pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .filter(|tool_name| !crate::tools::is_provider_exposed_tool_name(tool_name))
         .unwrap_or(canonical_tool_name)
         .to_owned()
+}
+
+fn build_tool_decision_trace_record(
+    intent: &ToolIntent,
+    decision: ToolDecisionTelemetry,
+) -> ToolDecisionTraceRecord {
+    ToolDecisionTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        decision,
+    }
+}
+
+fn build_success_tool_outcome_trace_record(
+    intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> ToolOutcomeTraceRecord {
+    let tool_name = effective_result_tool_name(intent);
+    let outcome = ToolOutcomeTelemetry {
+        tool_name,
+        status: outcome.status.clone(),
+        payload: build_bounded_tool_outcome_payload(intent, outcome),
+        error_code: None,
+        human_reason: None,
+        audit_event_id: None,
+    };
+    ToolOutcomeTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        outcome,
+    }
+}
+
+fn build_bounded_tool_outcome_payload(
+    _intent: &ToolIntent,
+    outcome: &ToolCoreOutcome,
+) -> serde_json::Value {
+    let payload_semantics = detect_tool_result_payload_semantics(&outcome.payload);
+    let normalized_limit = TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS.clamp(
+        MIN_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+        MAX_TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS,
+    );
+    let payload_text = serde_json::to_string(&outcome.payload)
+        .unwrap_or_else(|_| "[tool_payload_unserializable]".to_owned());
+    let (payload_summary, payload_chars, payload_truncated) =
+        summarize_tool_result_payload(payload_text.as_str(), payload_semantics, normalized_limit);
+
+    if !payload_truncated {
+        return outcome.payload.clone();
+    }
+
+    json!({
+        "payload_summary": payload_summary,
+        "payload_chars": payload_chars,
+        "payload_truncated": true,
+    })
+}
+
+fn build_failure_tool_outcome_trace_record(
+    intent: &ToolIntent,
+    turn_result: &TurnResult,
+) -> Option<ToolOutcomeTraceRecord> {
+    let failure = turn_result.failure()?;
+    let tool_name = effective_result_tool_name(intent);
+    let outcome = ToolOutcomeTelemetry {
+        tool_name,
+        status: "error".to_owned(),
+        payload: serde_json::Value::Null,
+        error_code: Some(failure.code.clone()),
+        human_reason: Some(failure.reason.clone()),
+        audit_event_id: None,
+    };
+    Some(ToolOutcomeTraceRecord {
+        turn_id: intent.turn_id.clone(),
+        tool_call_id: intent.tool_call_id.clone(),
+        outcome,
+    })
 }
 
 fn build_tool_intent_completed_trace(
@@ -1130,6 +1896,20 @@ pub(crate) struct ToolBatchExecutionIntentTrace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolDecisionTraceRecord {
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub decision: ToolDecisionTelemetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolOutcomeTraceRecord {
+    pub turn_id: String,
+    pub tool_call_id: String,
+    pub outcome: ToolOutcomeTelemetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolBatchExecutionTrace {
     pub total_intents: usize,
     pub parallel_execution_enabled: bool,
@@ -1137,6 +1917,8 @@ pub(crate) struct ToolBatchExecutionTrace {
     pub observed_peak_in_flight: usize,
     pub observed_wall_time_ms: u64,
     pub segments: Vec<ToolBatchExecutionSegmentTrace>,
+    pub decision_records: Vec<ToolDecisionTraceRecord>,
+    pub outcome_records: Vec<ToolOutcomeTraceRecord>,
     pub intent_outcomes: Vec<ToolBatchExecutionIntentTrace>,
 }
 
@@ -1148,6 +1930,10 @@ impl ToolBatchExecutionSegmentTrace {
 }
 
 impl ToolBatchExecutionTrace {
+    pub(crate) fn has_execution_segments(&self) -> bool {
+        !self.segments.is_empty()
+    }
+
     fn finish_observation(&mut self, observed_wall_time_ms: u64) {
         self.observed_wall_time_ms = observed_wall_time_ms;
         self.observed_peak_in_flight = self
@@ -1230,8 +2016,17 @@ struct PreparedToolIntent {
     intent: ToolIntent,
     request: ToolCoreRequest,
     execution_kind: ToolExecutionKind,
+    capability_action_class: crate::tools::CapabilityActionClass,
     scheduling_class: ToolSchedulingClass,
     trusted_internal_context: bool,
+    decision: ToolDecisionTelemetry,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedToolIntentFailure {
+    intent: ToolIntent,
+    turn_result: TurnResult,
+    decision: ToolDecisionTelemetry,
 }
 
 impl TurnEngine {
@@ -1470,18 +2265,45 @@ impl TurnEngine {
             Ok(TurnValidation::ToolExecutionRequired) => {}
         }
 
+        let mut trace = self.trace_empty_batch(turn.tool_intents.len());
         let mut prepared = Vec::new();
+        let mut autonomy_budget_state = AutonomyTurnBudgetState::default();
         for intent in &turn.tool_intents {
             match self
-                .prepare_tool_intent(intent, session_context, app_dispatcher, binding, ingress)
+                .prepare_tool_intent(
+                    intent,
+                    session_context,
+                    app_dispatcher,
+                    binding,
+                    &autonomy_budget_state,
+                    ingress,
+                )
                 .await
             {
-                Ok(prepared_intent) => prepared.push(prepared_intent),
-                Err(result) => return (result, None),
+                Ok(prepared_intent) => {
+                    let decision_record = build_tool_decision_trace_record(
+                        &prepared_intent.intent,
+                        prepared_intent.decision.clone(),
+                    );
+                    trace.decision_records.push(decision_record);
+                    autonomy_budget_state.record_action(prepared_intent.capability_action_class);
+                    prepared.push(prepared_intent);
+                }
+                Err(failure) => {
+                    let decision_record =
+                        build_tool_decision_trace_record(&failure.intent, failure.decision);
+                    trace.decision_records.push(decision_record);
+                    let intent_outcome =
+                        build_tool_intent_failure_trace(&failure.intent, &failure.turn_result);
+                    if let Some(intent_outcome) = intent_outcome {
+                        trace.intent_outcomes.push(intent_outcome);
+                    }
+                    return (failure.turn_result, Some(trace));
+                }
             }
         }
         let batch_segments = self.prepared_batch_segments(&prepared);
-        let mut trace = self.trace_prepared_batch(&prepared, &batch_segments);
+        self.populate_trace_segments(&mut trace, &batch_segments);
 
         let outputs = match self
             .execute_prepared_batch(
@@ -1529,6 +2351,7 @@ impl TurnEngine {
                             app_dispatcher,
                             binding,
                             &mut trace.intent_outcomes,
+                            &mut trace.outcome_records,
                             trace_segment,
                         )
                         .await?
@@ -1540,6 +2363,7 @@ impl TurnEngine {
                             app_dispatcher,
                             binding,
                             &mut trace.intent_outcomes,
+                            &mut trace.outcome_records,
                             trace_segment,
                         )
                         .await?
@@ -1556,31 +2380,39 @@ impl TurnEngine {
         result
     }
 
-    fn trace_prepared_batch(
-        &self,
-        prepared: &[PreparedToolIntent],
-        batch_segments: &[PreparedBatchSegment],
-    ) -> ToolBatchExecutionTrace {
+    fn trace_empty_batch(&self, total_intents: usize) -> ToolBatchExecutionTrace {
         ToolBatchExecutionTrace {
-            total_intents: prepared.len(),
+            total_intents,
             parallel_execution_enabled: self.parallel_tool_execution_enabled,
             parallel_execution_max_in_flight: self.parallel_tool_execution_max_in_flight,
             observed_peak_in_flight: 0,
             observed_wall_time_ms: 0,
-            segments: batch_segments
-                .iter()
-                .enumerate()
-                .map(|(segment_index, segment)| ToolBatchExecutionSegmentTrace {
-                    segment_index,
-                    scheduling_class: segment.scheduling_class,
-                    execution_mode: segment.execution_mode,
-                    intent_count: segment.len,
-                    observed_peak_in_flight: None,
-                    observed_wall_time_ms: None,
-                })
-                .collect(),
+            segments: Vec::new(),
+            decision_records: Vec::new(),
+            outcome_records: Vec::new(),
             intent_outcomes: Vec::new(),
         }
+    }
+
+    fn populate_trace_segments(
+        &self,
+        trace: &mut ToolBatchExecutionTrace,
+        batch_segments: &[PreparedBatchSegment],
+    ) {
+        trace.parallel_execution_enabled = self.parallel_tool_execution_enabled;
+        trace.parallel_execution_max_in_flight = self.parallel_tool_execution_max_in_flight;
+        trace.segments = batch_segments
+            .iter()
+            .enumerate()
+            .map(|(segment_index, segment)| ToolBatchExecutionSegmentTrace {
+                segment_index,
+                scheduling_class: segment.scheduling_class,
+                execution_mode: segment.execution_mode,
+                intent_count: segment.len,
+                observed_peak_in_flight: None,
+                observed_wall_time_ms: None,
+            })
+            .collect();
     }
 
     fn prepared_batch_segments(
@@ -1629,6 +2461,7 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
+        outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -1646,6 +2479,13 @@ impl TurnEngine {
                 {
                     Ok(outcome) => outcome,
                     Err(turn_result) => {
+                        let outcome_record = build_failure_tool_outcome_trace_record(
+                            &prepared_intent.intent,
+                            &turn_result,
+                        );
+                        if let Some(outcome_record) = outcome_record {
+                            outcome_records.push(outcome_record);
+                        }
                         let intent_outcome =
                             build_tool_intent_failure_trace(&prepared_intent.intent, &turn_result);
                         if let Some(intent_outcome) = intent_outcome {
@@ -1654,6 +2494,9 @@ impl TurnEngine {
                         return Err(turn_result);
                     }
                 };
+                let outcome_record =
+                    build_success_tool_outcome_trace_record(&prepared_intent.intent, &outcome);
+                outcome_records.push(outcome_record);
                 let intent_outcome =
                     build_tool_intent_completed_trace(&prepared_intent.intent, &outcome);
                 intent_outcomes.push(intent_outcome);
@@ -1680,6 +2523,7 @@ impl TurnEngine {
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
         intent_outcomes: &mut Vec<ToolBatchExecutionIntentTrace>,
+        outcome_records: &mut Vec<ToolOutcomeTraceRecord>,
         trace_segment: &mut ToolBatchExecutionSegmentTrace,
     ) -> Result<Vec<String>, TurnResult> {
         let started_at = Instant::now();
@@ -1708,18 +2552,26 @@ impl TurnEngine {
                                 &outcome,
                                 payload_summary_limit_chars,
                             );
+                            let outcome_record = build_success_tool_outcome_trace_record(
+                                &prepared_intent.intent,
+                                &outcome,
+                            );
                             let intent_outcome = build_tool_intent_completed_trace(
                                 &prepared_intent.intent,
                                 &outcome,
                             );
-                            (output, intent_outcome)
+                            (output, intent_outcome, outcome_record)
                         })
                         .map_err(|turn_result| {
                             let intent_outcome = build_tool_intent_failure_trace(
                                 &prepared_intent.intent,
                                 &turn_result,
                             );
-                            (turn_result, intent_outcome)
+                            let outcome_record = build_failure_tool_outcome_trace_record(
+                                &prepared_intent.intent,
+                                &turn_result,
+                            );
+                            (turn_result, intent_outcome, outcome_record)
                         });
                     in_flight.fetch_sub(1, Ordering::Relaxed);
                     (index, result)
@@ -1731,13 +2583,17 @@ impl TurnEngine {
         let result = async {
             while let Some((index, result)) = executions.next().await {
                 match result {
-                    Ok((output, intent_outcome)) => {
+                    Ok((output, intent_outcome, outcome_record)) => {
                         intent_outcomes.push(intent_outcome);
+                        outcome_records.push(outcome_record);
                         results.push((index, output));
                     }
-                    Err((turn_result, intent_outcome)) => {
+                    Err((turn_result, intent_outcome, outcome_record)) => {
                         if let Some(intent_outcome) = intent_outcome {
                             intent_outcomes.push(intent_outcome);
+                        }
+                        if let Some(outcome_record) = outcome_record {
+                            outcome_records.push(outcome_record);
                         }
                         return Err(turn_result);
                     }
@@ -1762,11 +2618,19 @@ impl TurnEngine {
         session_context: &SessionContext,
         app_dispatcher: &D,
         binding: ConversationRuntimeBinding<'_>,
+        budget_state: &AutonomyTurnBudgetState,
         ingress: Option<&ConversationIngressContext>,
-    ) -> Result<PreparedToolIntent, TurnResult> {
+    ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
         let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
             let reason = format!("tool_not_found: {}", intent.tool_name);
-            return Err(TurnResult::policy_denied("tool_not_found", reason));
+            let turn_result = TurnResult::policy_denied("tool_not_found", reason.clone());
+            let decision =
+                ToolDecisionTelemetry::deny(intent.tool_name.as_str(), reason, "tool_not_found");
+            return Err(PreparedToolIntentFailure {
+                intent: intent.clone(),
+                turn_result,
+                decision,
+            });
         };
         let injected = inject_internal_tool_ingress(
             resolved_tool.canonical_name,
@@ -1786,12 +2650,10 @@ impl TurnEngine {
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload,
         };
-        let (effective_execution_kind, effective_request, effective_intent) =
+        let (effective_execution_kind, effective_request, effective_intent, effective_tool_name) =
             if resolved_tool.canonical_name == "tool.invoke" {
                 match crate::tools::resolve_tool_invoke_request(&request) {
-                    Ok((inner_resolved, inner_request))
-                        if inner_resolved.execution_kind == ToolExecutionKind::App =>
-                    {
+                    Ok((inner_resolved, inner_request)) => {
                         let inner_intent = ToolIntent {
                             tool_name: inner_resolved.canonical_name.to_owned(),
                             args_json: inner_request.payload.clone(),
@@ -1800,65 +2662,158 @@ impl TurnEngine {
                             turn_id: intent.turn_id.clone(),
                             tool_call_id: intent.tool_call_id.clone(),
                         };
-                        (ToolExecutionKind::App, inner_request, inner_intent)
+                        if inner_resolved.execution_kind == ToolExecutionKind::App {
+                            (
+                                ToolExecutionKind::App,
+                                inner_request,
+                                inner_intent,
+                                inner_resolved.canonical_name.to_owned(),
+                            )
+                        } else {
+                            (
+                                resolved_tool.execution_kind,
+                                request,
+                                inner_intent,
+                                inner_resolved.canonical_name.to_owned(),
+                            )
+                        }
                     }
-                    _ => (resolved_tool.execution_kind, request, intent.clone()),
+                    Err(_) => (
+                        resolved_tool.execution_kind,
+                        request,
+                        intent.clone(),
+                        resolved_tool.canonical_name.to_owned(),
+                    ),
                 }
             } else {
-                (resolved_tool.execution_kind, request, intent.clone())
+                (
+                    resolved_tool.execution_kind,
+                    request,
+                    intent.clone(),
+                    resolved_tool.canonical_name.to_owned(),
+                )
             };
         let catalog = crate::tools::tool_catalog();
-        let Some(descriptor) = catalog.resolve(effective_request.tool_name.as_str()) else {
-            let reason = format!("tool_descriptor_missing: {}", effective_request.tool_name);
-            return Err(TurnResult::non_retryable_tool_error(
-                "tool_descriptor_missing",
+        // Some feature-scoped discoverable tools still execute through
+        // `tool.invoke` without a typed catalog descriptor. Fall back to the
+        // executable wrapper descriptor so existing runtime-only tools keep
+        // working while typed autonomy policy applies where metadata exists.
+        let descriptor = catalog.resolve(effective_tool_name.as_str()).or_else(|| {
+            if effective_request.tool_name == effective_tool_name {
+                return None;
+            }
+
+            catalog.resolve(effective_request.tool_name.as_str())
+        });
+        let Some(descriptor) = descriptor else {
+            let reason = format!("tool_descriptor_missing: {}", effective_tool_name);
+            let turn_result =
+                TurnResult::non_retryable_tool_error("tool_descriptor_missing", reason.clone());
+            let decision = ToolDecisionTelemetry::deny(
+                effective_tool_name.as_str(),
                 reason,
-            ));
+                "tool_descriptor_missing",
+            );
+            return Err(PreparedToolIntentFailure {
+                intent: effective_intent,
+                turn_result,
+                decision,
+            });
         };
+        let capability_action_class = descriptor.capability_action_class();
         let scheduling_class = descriptor.scheduling_class();
+
+        let decision = match app_dispatcher
+            .preflight_tool_intent_with_binding(
+                session_context,
+                &effective_intent,
+                descriptor,
+                binding,
+                budget_state,
+            )
+            .await
+        {
+            Ok(ToolPreflightOutcome::Allow(decision)) => decision,
+            Ok(ToolPreflightOutcome::NeedsApproval {
+                requirement,
+                decision,
+            }) => {
+                let turn_result = TurnResult::NeedsApproval(requirement);
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
+            }
+            Ok(ToolPreflightOutcome::Denied { failure, decision }) => {
+                let turn_result = TurnResult::ToolDenied(failure);
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
+            }
+            Err(reason) if reason.starts_with("app_tool_denied:") => {
+                let human_reason = render_app_tool_denied_reason(reason.as_str());
+                let turn_result =
+                    TurnResult::policy_denied("app_tool_denied", human_reason.clone());
+                let decision = ToolDecisionTelemetry::deny(
+                    effective_tool_name.as_str(),
+                    human_reason,
+                    "app_tool_denied",
+                );
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
+            }
+            Err(reason) => {
+                let turn_result =
+                    TurnResult::non_retryable_tool_error("tool_preflight_failed", reason.clone());
+                let decision = ToolDecisionTelemetry::deny(
+                    effective_tool_name.as_str(),
+                    reason,
+                    "tool_preflight_failed",
+                );
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision,
+                });
+            }
+        };
 
         match effective_execution_kind {
             ToolExecutionKind::Core => {
                 if binding.kernel_context().is_none() {
-                    return Err(TurnResult::policy_denied(
+                    let turn_result =
+                        TurnResult::policy_denied("no_kernel_context", "no_kernel_context");
+                    let decision = ToolDecisionTelemetry::deny(
+                        effective_tool_name.as_str(),
                         "no_kernel_context",
                         "no_kernel_context",
-                    ));
+                    );
+                    return Err(PreparedToolIntentFailure {
+                        intent: effective_intent,
+                        turn_result,
+                        decision,
+                    });
                 }
             }
-            ToolExecutionKind::App => {
-                match app_dispatcher
-                    .maybe_require_approval_with_binding(
-                        session_context,
-                        &effective_intent,
-                        descriptor,
-                        binding,
-                    )
-                    .await
-                {
-                    Ok(Some(requirement)) => return Err(TurnResult::NeedsApproval(requirement)),
-                    Ok(None) => {}
-                    Err(reason) if reason.starts_with("app_tool_denied:") => {
-                        return Err(TurnResult::policy_denied("app_tool_denied", reason));
-                    }
-                    Err(reason) => {
-                        return Err(TurnResult::non_retryable_tool_error(
-                            "app_tool_preflight_failed",
-                            reason,
-                        ));
-                    }
-                }
-            }
+            ToolExecutionKind::App => {}
         }
 
         Ok(PreparedToolIntent {
-            intent: intent.clone(),
+            intent: effective_intent,
             request: effective_request,
             execution_kind: effective_execution_kind,
+            capability_action_class,
             scheduling_class,
             trusted_internal_context: injected.trusted_internal_context
                 || (!injected_payload_uses_reserved_internal_context
                     && augmented_payload_uses_reserved_internal_context),
+            decision,
         })
     }
 
@@ -1903,7 +2858,8 @@ impl TurnEngine {
                     Err(TurnResult::policy_denied("app_tool_disabled", reason))
                 }
                 Err(reason) if reason.starts_with("app_tool_denied:") => {
-                    Err(TurnResult::policy_denied("app_tool_denied", reason))
+                    let human_reason = render_app_tool_denied_reason(reason.as_str());
+                    Err(TurnResult::policy_denied("app_tool_denied", human_reason))
                 }
                 Err(reason) => Err(TurnResult::non_retryable_tool_error(
                     "app_tool_execution_failed",
@@ -1933,9 +2889,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::{GovernedToolApprovalMode, ToolConfig};
+    use crate::config::{AutonomyProfile, GovernedToolApprovalMode, ToolConfig};
     use crate::session::repository::{
-        ApprovalRequestStatus, NewSessionRecord, SessionKind, SessionRepository, SessionState,
+        ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionRecord, SessionKind,
+        SessionRepository, SessionState,
     };
 
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
@@ -1950,6 +2907,11 @@ mod tests {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         }
+    }
+
+    fn kernel_context(agent_id: &str) -> KernelContext {
+        crate::context::bootstrap_test_kernel_context(agent_id, 60)
+            .expect("bootstrap test kernel context")
     }
 
     fn delegate_async_turn(session_id: &str, turn_id: &str, tool_call_id: &str) -> ProviderTurn {
@@ -1983,6 +2945,34 @@ mod tests {
         delegate_async_turn(session_id, turn_id, tool_call_id)
     }
 
+    fn external_skills_policy_get_turn(
+        session_id: &str,
+        turn_id: &str,
+        tool_call_id: &str,
+    ) -> ProviderTurn {
+        let payload = json!({
+            "action": "get"
+        });
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            "external_skills.policy",
+            payload,
+            Some(session_id),
+            Some(turn_id),
+        );
+        ProviderTurn {
+            assistant_text: "reading external skills policy".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name,
+                args_json,
+                source: "assistant".to_owned(),
+                session_id: session_id.to_owned(),
+                turn_id: turn_id.to_owned(),
+                tool_call_id: tool_call_id.to_owned(),
+            }],
+            raw_meta: json!({}),
+        }
+    }
+
     fn browser_companion_click_turn(
         session_id: &str,
         turn_id: &str,
@@ -2000,6 +2990,33 @@ mod tests {
         );
         ProviderTurn {
             assistant_text: "clicking through browser companion".to_owned(),
+            tool_intents: vec![ToolIntent {
+                tool_name,
+                args_json,
+                source: "assistant".to_owned(),
+                session_id: session_id.to_owned(),
+                turn_id: turn_id.to_owned(),
+                tool_call_id: tool_call_id.to_owned(),
+            }],
+            raw_meta: json!({}),
+        }
+    }
+
+    fn provider_tool_turn(
+        tool_name: &str,
+        args_json: serde_json::Value,
+        session_id: &str,
+        turn_id: &str,
+        tool_call_id: &str,
+    ) -> ProviderTurn {
+        let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
+            tool_name,
+            args_json,
+            Some(session_id),
+            Some(turn_id),
+        );
+        ProviderTurn {
+            assistant_text: format!("calling {tool_name}"),
             tool_intents: vec![ToolIntent {
                 tool_name,
                 args_json,
@@ -2196,7 +3213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn governed_tool_approval_request_is_persisted_for_delegate_async() {
+    async fn autonomy_policy_approval_request_is_persisted_for_delegate_async() {
         let memory_config = isolated_memory_config("persist");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -2208,18 +3225,21 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let mut tool_config = ToolConfig::default();
-        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        let tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-persist");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &delegate_async_turn("root-session", "turn-1", "call-1"),
                 &session_context,
                 &dispatcher,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
             )
             .await;
@@ -2233,7 +3253,7 @@ mod tests {
                 );
                 assert_eq!(
                     requirement.rule_id.as_str(),
-                    "governed_tool_requires_approval"
+                    "autonomy_policy_topology_mutation_requires_approval"
                 );
                 requirement
                     .approval_request_id
@@ -2258,10 +3278,18 @@ mod tests {
         assert_eq!(stored.tool_call_id, "call-1");
         assert_eq!(stored.turn_id, "turn-1");
         assert_eq!(stored.approval_key, "tool:delegate_async");
+        assert_eq!(
+            stored.governance_snapshot_json["policy_source"],
+            "autonomy_policy"
+        );
+        assert_eq!(
+            stored.governance_snapshot_json["capability_action_class"],
+            "topology_expand"
+        );
     }
 
     #[tokio::test]
-    async fn governed_tool_approval_request_is_persisted_for_discovered_delegate_async() {
+    async fn autonomy_policy_approval_request_is_persisted_for_discovered_delegate_async() {
         let memory_config = isolated_memory_config("persist-discovered");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -2273,11 +3301,14 @@ mod tests {
         })
         .expect("ensure root session");
 
-        let mut tool_config = ToolConfig::default();
-        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        let tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-persist-discovered");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
@@ -2288,7 +3319,7 @@ mod tests {
                 ),
                 &session_context,
                 &dispatcher,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
             )
             .await;
@@ -2333,8 +3364,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn governed_tool_approval_request_reuses_deterministic_id_for_same_blocked_call() {
-        let memory_config = isolated_memory_config("reuse");
+    async fn auto_mode_requires_approval_for_high_risk_core_tool() {
+        let memory_config = isolated_memory_config("claw-migrate-core-approval");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -2346,18 +3377,311 @@ mod tests {
         .expect("ensure root session");
 
         let mut tool_config = ToolConfig::default();
+        tool_config.consent.default_mode = ToolConsentMode::Auto;
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-claw-migrate-auto");
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &provider_tool_turn(
+                    "claw.migrate",
+                    json!({}),
+                    "root-session",
+                    "turn-claw-migrate-auto",
+                    "call-claw-migrate-auto",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(requirement.tool_name.as_deref(), Some("claw.migrate"));
+        assert_eq!(
+            requirement.approval_key.as_deref(),
+            Some("tool:claw.migrate")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_auto_blocked"
+        );
+        let approval_request_id = requirement
+            .approval_request_id
+            .expect("approval request id should be present");
+
+        let stored = repo
+            .load_approval_request(&approval_request_id)
+            .expect("load approval request")
+            .expect("approval request row");
+        assert_eq!(stored.status, ApprovalRequestStatus::Pending);
+        assert_eq!(stored.tool_name, "claw.migrate");
+        assert_eq!(stored.request_payload_json["execution_kind"], "core");
+    }
+
+    #[tokio::test]
+    async fn full_session_consent_skips_approval_for_high_risk_core_tool() {
+        let memory_config = isolated_memory_config("claw-migrate-core-full");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.upsert_session_tool_consent(crate::session::repository::NewSessionToolConsentRecord {
+            scope_session_id: "root-session".to_owned(),
+            mode: ToolConsentMode::Full,
+            updated_by_session_id: Some("root-session".to_owned()),
+        })
+        .expect("persist full session consent");
+
+        let tool_config = ToolConfig::default();
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-claw-migrate-full");
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &provider_tool_turn(
+                    "claw.migrate",
+                    json!({}),
+                    "root-session",
+                    "turn-claw-migrate-full",
+                    "call-claw-migrate-full",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::ToolError(failure) = result else {
+            panic!("expected direct tool execution, got {result:?}");
+        };
+        assert!(
+            failure
+                .reason
+                .contains("claw.migrate requires payload.input_path"),
+            "expected execution to reach the core tool, got: {failure:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_session_consent_still_requires_approval_for_governed_app_tool() {
+        let memory_config = isolated_memory_config("browser-companion-governed-full");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.upsert_session_tool_consent(crate::session::repository::NewSessionToolConsentRecord {
+            scope_session_id: "root-session".to_owned(),
+            mode: ToolConsentMode::Full,
+            updated_by_session_id: Some("root-session".to_owned()),
+        })
+        .expect("persist full session consent");
+
+        let mut tool_config = ToolConfig::default();
         tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-governed-full",
+                    "call-browser-companion-governed-full",
+                    "browser-companion-governed-full",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "governed_tool_requires_approval"
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_approval_allowlist_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("browser-companion-allowlist-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        tool_config
+            .approval
+            .approved_calls
+            .push("tool:browser.companion.click".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-allowlist",
+                    "call-browser-companion-allowlist",
+                    "browser-companion-allowlist",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_approval_grant_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("browser-companion-grant-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.upsert_approval_grant(NewApprovalGrantRecord {
+            scope_session_id: "root-session".to_owned(),
+            approval_key: "tool:browser.companion.click".to_owned(),
+            created_by_session_id: Some("root-session".to_owned()),
+        })
+        .expect("persist approval grant");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-grant",
+                    "call-browser-companion-grant",
+                    "browser-companion-grant",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("browser.companion.click")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_approval_request_reuses_deterministic_id_for_same_blocked_call() {
+        let memory_config = isolated_memory_config("reuse");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
         let turn = delegate_async_turn("root-session", "turn-reuse", "call-reuse");
+        let kernel_ctx = kernel_context("turn-engine-autonomy-reuse");
 
         let first = TurnEngine::new(4)
             .execute_turn_in_context(
                 &turn,
                 &session_context,
                 &dispatcher,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
             )
             .await;
@@ -2366,7 +3690,7 @@ mod tests {
                 &turn,
                 &session_context,
                 &dispatcher,
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
                 None,
             )
             .await;
@@ -2405,6 +3729,259 @@ mod tests {
             .expect("list approval requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].approval_request_id, first_request_id);
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_preapproved_call_executes_without_persisting_request() {
+        let memory_config = isolated_memory_config("preapproved");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let approval_key = "tool:external_skills.policy".to_owned();
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        let approved_calls = &mut tool_config.approval.approved_calls;
+        approved_calls.push(approval_key);
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-preapproved");
+        let turn =
+            external_skills_policy_get_turn("root-session", "turn-preapproved", "call-preapproved");
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let reply = match result {
+            TurnResult::FinalText(reply) => reply,
+            other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolDenied(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
+                panic!("expected FinalText, got {other:?}")
+            }
+        };
+
+        assert!(
+            reply.contains("\"tool\":\"external_skills.policy\""),
+            "reply should include executed external_skills.policy output: {reply}"
+        );
+        assert!(
+            reply.contains("\"status\":\"ok\""),
+            "reply should surface a successful external_skills.policy outcome: {reply}"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert!(requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_predenied_call_returns_policy_denial_without_persisting_request() {
+        let memory_config = isolated_memory_config("predenied");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let denial_key = "tool:external_skills.policy".to_owned();
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        let denied_calls = &mut tool_config.approval.denied_calls;
+        denied_calls.push(denial_key);
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-predenied");
+        let turn =
+            external_skills_policy_get_turn("root-session", "turn-predenied", "call-predenied");
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let failure = match result {
+            TurnResult::ToolDenied(failure) => failure,
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
+                panic!("expected ToolDenied, got {other:?}")
+            }
+        };
+
+        assert_eq!(failure.code, "app_tool_denied");
+        assert!(
+            failure.reason.contains("tool:external_skills.policy"),
+            "denial should reference the statically denied approval key: {failure:?}"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert!(requests.is_empty());
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_allowlist_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("autonomy-allowlist-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+        let approved_calls = &mut tool_config.approval.approved_calls;
+        approved_calls.push("tool:external_skills.policy".to_owned());
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-allowlist-prompt");
+        let turn = external_skills_policy_get_turn(
+            "root-session",
+            "turn-autonomy-allowlist-prompt",
+            "call-autonomy-allowlist-prompt",
+        );
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("external_skills.policy")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tool_name, "external_skills.policy");
+        assert_eq!(requests[0].approval_key, "tool:external_skills.policy");
+    }
+
+    #[tokio::test]
+    async fn autonomy_policy_grant_does_not_bypass_prompt_session_consent() {
+        let memory_config = isolated_memory_config("autonomy-grant-prompt");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        repo.upsert_approval_grant(NewApprovalGrantRecord {
+            scope_session_id: "root-session".to_owned(),
+            approval_key: "tool:external_skills.policy".to_owned(),
+            created_by_session_id: Some("root-session".to_owned()),
+        })
+        .expect("persist approval grant");
+
+        let mut tool_config = ToolConfig {
+            autonomy_profile: AutonomyProfile::GuidedAcquisition,
+            ..ToolConfig::default()
+        };
+        tool_config.consent.default_mode = ToolConsentMode::Prompt;
+
+        let tool_view = runtime_tool_view_for_config(&tool_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+        let kernel_ctx = kernel_context("turn-engine-autonomy-grant-prompt");
+        let turn = external_skills_policy_get_turn(
+            "root-session",
+            "turn-autonomy-grant-prompt",
+            "call-autonomy-grant-prompt",
+        );
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &turn,
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
+                None,
+            )
+            .await;
+
+        let TurnResult::NeedsApproval(requirement) = result else {
+            panic!("expected NeedsApproval, got {result:?}");
+        };
+        assert_eq!(
+            requirement.tool_name.as_deref(),
+            Some("external_skills.policy")
+        );
+        assert_eq!(
+            requirement.rule_id.as_str(),
+            "session_tool_consent_prompt_mode"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tool_name, "external_skills.policy");
+        assert_eq!(requests[0].approval_key, "tool:external_skills.policy");
     }
 
     #[tokio::test]
@@ -2483,6 +4060,80 @@ mod tests {
             stored.request_payload_json["args_json"]["selector"],
             "#submit"
         );
+    }
+
+    #[tokio::test]
+    async fn governed_tool_predenied_reason_omits_internal_prefix() {
+        let memory_config = isolated_memory_config("browser-companion-click-predenied");
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+
+        let mut tool_config = ToolConfig::default();
+        tool_config.approval.mode = GovernedToolApprovalMode::Strict;
+        tool_config.browser_companion.enabled = true;
+        tool_config.browser_companion.command = Some("browser-companion".to_owned());
+        tool_config
+            .approval
+            .denied_calls
+            .push("tool:browser.companion.click".to_owned());
+
+        let mut runtime_config = crate::tools::runtime_config::ToolRuntimeConfig::default();
+        runtime_config.browser_companion.enabled = true;
+        runtime_config.browser_companion.ready = true;
+        runtime_config.browser_companion.command = Some("browser-companion".to_owned());
+
+        let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
+        let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
+        let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
+
+        let result = TurnEngine::new(4)
+            .execute_turn_in_context(
+                &browser_companion_click_turn(
+                    "root-session",
+                    "turn-browser-companion-predenied",
+                    "call-browser-companion-predenied",
+                    "browser-companion-123",
+                ),
+                &session_context,
+                &dispatcher,
+                ConversationRuntimeBinding::direct(),
+                None,
+            )
+            .await;
+
+        let failure = match result {
+            TurnResult::ToolDenied(failure) => failure,
+            other @ TurnResult::FinalText(_)
+            | other @ TurnResult::NeedsApproval(_)
+            | other @ TurnResult::ToolError(_)
+            | other @ TurnResult::ProviderError(_)
+            | other @ TurnResult::StreamingText(_)
+            | other @ TurnResult::StreamingDone(_) => {
+                panic!("expected ToolDenied, got {other:?}")
+            }
+        };
+
+        assert_eq!(failure.code, "app_tool_denied");
+        assert!(
+            !failure.reason.starts_with("app_tool_denied:"),
+            "human-facing denial reason should not expose the transport prefix: {failure:?}"
+        );
+        assert!(
+            failure.reason.contains("tool:browser.companion.click"),
+            "denial should still identify the governed tool: {failure:?}"
+        );
+
+        let requests = repo
+            .list_approval_requests_for_session("root-session", None)
+            .expect("list approval requests");
+        assert!(requests.is_empty());
     }
 
     #[tokio::test]
@@ -2936,6 +4587,48 @@ mod tests {
                 .is_some_and(|detail| detail.contains("simulated observed tool failure")),
             "expected failure detail in trace, got {:?}",
             trace.intent_outcomes[1].detail
+        );
+    }
+
+    #[test]
+    fn success_outcome_trace_record_bounds_large_payloads() {
+        let intent = provider_app_tool_intent(
+            "file.read",
+            json!({"path": "note.md"}),
+            "session-bounded-payload",
+            "turn-bounded-payload",
+            "call-bounded-payload",
+        );
+        let large_payload = json!({
+            "contents": "x".repeat(TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS + 128),
+        });
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: large_payload,
+        };
+
+        let record = build_success_tool_outcome_trace_record(&intent, &outcome);
+
+        assert_eq!(record.outcome.tool_name, "file.read");
+        assert_eq!(record.outcome.status, "ok");
+        assert_eq!(record.turn_id, "turn-bounded-payload");
+        assert_eq!(record.tool_call_id, "call-bounded-payload");
+        assert_eq!(record.outcome.payload["payload_truncated"], json!(true));
+        let payload_summary = record.outcome.payload["payload_summary"]
+            .as_str()
+            .expect("expected truncated payload summary");
+        let payload_chars = record.outcome.payload["payload_chars"]
+            .as_u64()
+            .expect("expected original payload char count");
+        assert!(
+            payload_summary.len() < payload_chars as usize,
+            "expected bounded payload summary, got {:?}",
+            record.outcome.payload
+        );
+        assert!(
+            payload_chars > TOOL_RESULT_PAYLOAD_SUMMARY_LIMIT_CHARS as u64,
+            "expected original payload char count, got {:?}",
+            record.outcome.payload
         );
     }
 

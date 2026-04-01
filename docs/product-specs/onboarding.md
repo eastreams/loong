@@ -8,11 +8,11 @@ next.
 
 ## Acceptance Criteria
 
-- [ ] `loongclaw onboard` is the default first-run path called out in product docs.
+- [ ] `loong onboard` is the default first-run path called out in product docs.
 - [ ] Onboarding detects reusable provider, channel, or workspace settings when
       available and explains what it found before writing config.
 - [ ] The happy path ends with explicit next-step guidance for:
-      a concrete `loongclaw ask --message "..."` example and `loongclaw chat`.
+      a concrete `loong ask --message "..."` example and `loong chat`.
 - [ ] The success summary leads with a runnable `start here` handoff before the
       saved provider, prompt, memory, and channel inventory.
 - [ ] The primary post-onboard handoff prefers a one-shot `ask` example before
@@ -40,10 +40,10 @@ next.
       the user explicitly opts into a destructive path such as `--force`.
 - [ ] Onboarding uses the same provider, memory, and channel configuration
       surfaces that the runtime uses after setup.
-- [ ] When preflight checks fail, onboarding points users to `loongclaw doctor`
-      or `loongclaw doctor --fix` as the repair path.
+- [ ] When preflight checks fail, onboarding points users to `loong doctor`
+      or `loong doctor --fix` as the repair path.
 - [ ] Onboarding preflight reuses the same browser companion diagnostics as
-      `loongclaw doctor`, surfacing optional managed-lane blockers before write
+      `loong doctor`, surfacing optional managed-lane blockers before write
       without redefining runtime truth inside onboarding.
 - [ ] Providers with a reviewed onboarding default model, such as MiniMax and
       DeepSeek, can complete setup with an explicit model even when model

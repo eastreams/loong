@@ -643,12 +643,12 @@ fn load_turn_checkpoint_identity(checkpoint: &Value) -> Option<TurnCheckpointIde
 }
 
 fn sha256_hex(input: &str) -> String {
-    format!("{:x}", Sha256::digest(input.as_bytes()))
+    hex::encode(Sha256::digest(input.as_bytes()))
 }
 
 pub(super) fn checkpoint_context_fingerprint_sha256(messages: &[Value]) -> String {
     let serialized = Value::Array(messages.to_vec()).to_string();
-    format!("{:x}", Sha256::digest(serialized.as_bytes()))
+    hex::encode(Sha256::digest(serialized.as_bytes()))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]

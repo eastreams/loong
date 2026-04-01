@@ -1,5 +1,5 @@
+use crate::channel::feishu::api::FeishuUserPrincipal;
 use crate::channel::{ChannelDeliveryResource, ChannelOutboundTarget, ChannelSession};
-use crate::feishu::FeishuUserPrincipal;
 use serde_json::Value;
 
 #[derive(Debug, Clone)]

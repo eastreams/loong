@@ -1378,6 +1378,10 @@ pub struct WhatsappAccountConfig {
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub webhook_bind: Option<String>,
+    #[serde(default)]
+    pub webhook_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1395,8 +1399,9 @@ pub struct ResolvedWhatsappChannelConfig {
     pub app_secret: Option<SecretRef>,
     pub app_secret_env: Option<String>,
     pub api_base_url: Option<String>,
+    pub webhook_bind: Option<String>,
+    pub webhook_path: Option<String>,
 }
-
 impl ResolvedWhatsappChannelConfig {
     pub fn access_token(&self) -> Option<String> {
         resolve_secret_with_legacy_env(self.access_token.as_ref(), self.access_token_env.as_deref())
@@ -1421,9 +1426,27 @@ impl ResolvedWhatsappChannelConfig {
         self.api_base_url
             .as_deref()
             .map(str::trim)
-            .filter(|value| !value.is_empty())
+            .filter(|v| !v.is_empty())
             .map(str::to_owned)
             .unwrap_or_else(default_whatsapp_api_base_url)
+    }
+
+    pub fn resolved_webhook_bind(&self) -> String {
+        self.webhook_bind
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "127.0.0.1:8080".to_owned())
+    }
+
+    pub fn resolved_webhook_path(&self) -> String {
+        self.webhook_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| "/webhook".to_owned())
     }
 }
 
@@ -1842,6 +1865,10 @@ pub struct WhatsappChannelConfig {
     pub app_secret_env: Option<String>,
     #[serde(default)]
     pub api_base_url: Option<String>,
+    #[serde(default)]
+    pub webhook_bind: Option<String>,
+    #[serde(default)]
+    pub webhook_path: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub accounts: BTreeMap<String, WhatsappAccountConfig>,
 }
@@ -2149,7 +2176,7 @@ impl Default for FeishuChannelConfig {
             app_secret_env: Some(FEISHU_APP_SECRET_ENV.to_owned()),
             domain: FeishuDomain::Feishu,
             base_url: None,
-            mode: None,
+            mode: Some(FeishuChannelServeMode::Websocket),
             receive_id_type: default_feishu_receive_id_type(),
             webhook_bind: default_feishu_webhook_bind(),
             webhook_path: default_feishu_webhook_path(),
@@ -2432,6 +2459,8 @@ impl Default for WhatsappChannelConfig {
             app_secret: None,
             app_secret_env: Some(WHATSAPP_APP_SECRET_ENV.to_owned()),
             api_base_url: Some(default_whatsapp_api_base_url()),
+            webhook_bind: None,
+            webhook_path: None,
             accounts: BTreeMap::new(),
         }
     }
@@ -2697,7 +2726,7 @@ impl FeishuChannelConfig {
             app_secret_env: merged.app_secret_env,
             domain: merged.domain,
             base_url: merged.base_url,
-            mode: merged.mode.unwrap_or_default(),
+            mode: merged.mode.unwrap_or(FeishuChannelServeMode::Websocket),
             receive_id_type: merged.receive_id_type,
             webhook_bind: merged.webhook_bind,
             webhook_path: merged.webhook_path,
@@ -6075,6 +6104,12 @@ impl WhatsappChannelConfig {
             api_base_url: account_override
                 .and_then(|account| account.api_base_url.clone())
                 .or_else(|| self.api_base_url.clone()),
+            webhook_bind: account_override
+                .and_then(|account| account.webhook_bind.clone())
+                .or_else(|| self.webhook_bind.clone()),
+            webhook_path: account_override
+                .and_then(|account| account.webhook_path.clone())
+                .or_else(|| self.webhook_path.clone()),
             accounts: BTreeMap::new(),
         };
         let account = merged.resolved_account_identity();
@@ -6093,6 +6128,8 @@ impl WhatsappChannelConfig {
             app_secret: merged.app_secret,
             app_secret_env: merged.app_secret_env,
             api_base_url: merged.api_base_url,
+            webhook_bind: merged.webhook_bind,
+            webhook_path: merged.webhook_path,
         })
     }
 
@@ -8208,7 +8245,7 @@ mod tests {
     }
 
     #[test]
-    fn feishu_mode_defaults_to_webhook_when_not_configured() {
+    fn feishu_mode_defaults_to_websocket_when_not_configured() {
         let config: FeishuChannelConfig = serde_json::from_value(json!({
             "enabled": true,
             "app_id": "cli_a1b2c3",
@@ -8220,7 +8257,7 @@ mod tests {
             .resolve_account(None)
             .expect("resolve default feishu account");
 
-        assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
+        assert_eq!(resolved.mode, FeishuChannelServeMode::Websocket);
     }
 
     #[test]

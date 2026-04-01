@@ -24,6 +24,7 @@ pub(super) struct WasmModuleCacheKey {
     artifact_file_identity: Option<WasmArtifactFileIdentity>,
     expected_sha256: Option<String>,
     fuel_enabled: bool,
+    epoch_interruption_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -228,6 +229,7 @@ pub(super) fn build_wasm_module_cache_key(
     artifact_file_identity: Option<WasmArtifactFileIdentity>,
     expected_sha256: Option<String>,
     fuel_enabled: bool,
+    epoch_interruption_enabled: bool,
 ) -> WasmModuleCacheKey {
     WasmModuleCacheKey {
         artifact_path: artifact_path.to_path_buf(),
@@ -236,6 +238,7 @@ pub(super) fn build_wasm_module_cache_key(
         artifact_file_identity,
         expected_sha256,
         fuel_enabled,
+        epoch_interruption_enabled,
     }
 }
 

@@ -82,8 +82,8 @@ pub(super) const TWITCH_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor =
     ChannelOnboardingDescriptor {
         strategy: ChannelOnboardingStrategy::ManualConfig,
         setup_hint: "configure a Twitch user access token in loongclaw.toml under twitch or twitch.accounts.<account>; outbound chat sends are shipped via the Twitch Chat API, while inbound EventSub or chat-listener support remains planned",
-        status_command: "loongclaw doctor",
-        repair_command: Some("loongclaw doctor --fix"),
+        status_command: "loong doctor",
+        repair_command: Some("loong doctor --fix"),
     };
 
 pub(super) fn build_twitch_snapshots(

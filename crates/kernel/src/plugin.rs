@@ -15,7 +15,7 @@ use crate::{
     pack::VerticalPackManifest,
 };
 
-const PACKAGE_MANIFEST_FILE_NAME: &str = "loongclaw.plugin.json";
+pub const PACKAGE_MANIFEST_FILE_NAME: &str = "loongclaw.plugin.json";
 const OPENCLAW_PACKAGE_MANIFEST_FILE_NAME: &str = "openclaw.plugin.json";
 const PACKAGE_JSON_FILE_NAME: &str = "package.json";
 const OPENCLAW_MODERN_COMPATIBILITY_ADAPTER_FAMILY: &str = "openclaw-modern-compat";

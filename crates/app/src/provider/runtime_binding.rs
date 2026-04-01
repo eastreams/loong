@@ -23,7 +23,30 @@ impl<'a> ProviderRuntimeBinding<'a> {
         }
     }
 
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kernel(_) => "kernel",
+            Self::Direct => "direct",
+        }
+    }
+
     pub const fn is_kernel_bound(self) -> bool {
         matches!(self, Self::Kernel(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderRuntimeBinding;
+
+    #[test]
+    fn provider_runtime_binding_labels_are_stable() {
+        let kernel_context =
+            crate::context::bootstrap_test_kernel_context("runtime-binding-test", 60)
+                .expect("kernel context should bootstrap");
+        let binding = ProviderRuntimeBinding::kernel(&kernel_context);
+
+        assert_eq!(ProviderRuntimeBinding::direct().as_str(), "direct");
+        assert_eq!(binding.as_str(), "kernel");
     }
 }

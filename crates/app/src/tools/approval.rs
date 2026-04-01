@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::payload::{optional_payload_limit, optional_payload_string, required_payload_string};
 
-#[cfg(feature = "memory-sqlite")]
-use crate::config::SessionVisibility;
 use crate::config::ToolConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::config::{SessionVisibility, ToolConsentMode};
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -30,6 +30,7 @@ struct ApprovalRequestsListRequest {
 struct ApprovalRequestResolveRequest {
     approval_request_id: String,
     decision: ApprovalDecision,
+    session_consent_mode: Option<ToolConsentMode>,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -38,6 +39,7 @@ pub(crate) struct ApprovalResolutionRequest {
     pub current_session_id: String,
     pub approval_request_id: String,
     pub decision: ApprovalDecision,
+    pub session_consent_mode: Option<ToolConsentMode>,
     pub visibility: SessionVisibility,
 }
 
@@ -533,6 +535,7 @@ async fn execute_approval_request_resolve(
             current_session_id: current_session_id.to_owned(),
             approval_request_id: request.approval_request_id,
             decision: request.decision,
+            session_consent_mode: request.session_consent_mode,
             visibility: tool_config.sessions.visibility,
         })
         .await?;
@@ -727,6 +730,7 @@ fn approval_attention_summary_json(requests: &[ApprovalRequestView]) -> Value {
 #[cfg(feature = "memory-sqlite")]
 fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
     let record = &view.record;
+    let snapshot = &record.governance_snapshot_json;
     json!({
         "approval_request_id": record.approval_request_id,
         "session_id": record.session_id,
@@ -745,10 +749,14 @@ fn approval_request_summary_json(view: &ApprovalRequestView) -> Value {
             .governance_snapshot_json
             .get("reason")
             .and_then(Value::as_str),
-        "rule_id": record
-            .governance_snapshot_json
-            .get("rule_id")
+        "policy_source": snapshot.get("policy_source").and_then(Value::as_str),
+        "autonomy_profile": snapshot.get("autonomy_profile").and_then(Value::as_str),
+        "capability_action_class": snapshot
+            .get("capability_action_class")
             .and_then(Value::as_str),
+        "decision_kind": snapshot.get("decision_kind").and_then(Value::as_str),
+        "rule_id": snapshot.get("rule_id").and_then(Value::as_str),
+        "reason_code": snapshot.get("reason_code").and_then(Value::as_str),
         "execution_integrity": view.attention.execution_integrity_json(),
         "grant_review": view.attention.grant_review_json(),
         "grant_attention": view.attention.grant_attention_json(),
@@ -806,18 +814,37 @@ fn parse_approval_requests_list_request(
 fn parse_approval_request_resolve_request(
     payload: &Value,
 ) -> Result<ApprovalRequestResolveRequest, String> {
+    let approval_request_id =
+        required_payload_string(payload, "approval_request_id", "approval tool")?;
+    let decision_value = required_payload_string(payload, "decision", "approval tool")?;
+    let decision = parse_approval_decision(&decision_value)?;
+    let session_consent_mode = optional_payload_string(payload, "session_consent_mode")
+        .map(|value| parse_session_consent_mode(value.as_str()))
+        .transpose()?;
+
+    if session_consent_mode.is_some() && decision != ApprovalDecision::ApproveOnce {
+        return Err(
+            "approval_request_resolve_invalid_request: session_consent_mode requires decision `approve_once`"
+                .to_owned(),
+        );
+    }
+
     Ok(ApprovalRequestResolveRequest {
-        approval_request_id: required_payload_string(
-            payload,
-            "approval_request_id",
-            "approval tool",
-        )?,
-        decision: parse_approval_decision(&required_payload_string(
-            payload,
-            "decision",
-            "approval tool",
-        )?)?,
+        approval_request_id,
+        decision,
+        session_consent_mode,
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_session_consent_mode(value: &str) -> Result<ToolConsentMode, String> {
+    match value {
+        "auto" => Ok(ToolConsentMode::Auto),
+        "full" => Ok(ToolConsentMode::Full),
+        _ => Err(format!(
+            "approval_request_resolve_invalid_request: unknown session_consent_mode `{value}`"
+        )),
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1502,6 +1529,74 @@ mod tests {
         assert!(
             error.contains("unknown grant_attention `unknown`"),
             "expected invalid grant attention error, got: {error}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn approval_request_tool_query_list_surfaces_autonomy_fields_in_summary() {
+        let config = isolated_memory_config("approval-summary-autonomy-fields");
+        let repo = SessionRepository::new(&config).expect("repository");
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+
+        repo.ensure_approval_request(NewApprovalRequestRecord {
+            approval_request_id: "apr-autonomy-summary".to_owned(),
+            session_id: "root-session".to_owned(),
+            turn_id: "turn-autonomy-summary".to_owned(),
+            tool_call_id: "call-autonomy-summary".to_owned(),
+            tool_name: "external_skills.install".to_owned(),
+            approval_key: "tool:external_skills.install".to_owned(),
+            request_payload_json: json!({
+                "session_id": "root-session",
+                "tool_name": "external_skills.install",
+                "args_json": {
+                    "path": "source/demo-skill"
+                },
+            }),
+            governance_snapshot_json: json!({
+                "policy_source": "autonomy_policy",
+                "autonomy_profile": "guided_acquisition",
+                "capability_action_class": "capability_install",
+                "decision_kind": "approval_required",
+                "rule_id": "autonomy_policy_capability_acquisition_requires_approval",
+                "reason_code": "autonomy_policy_capability_acquisition_requires_approval",
+                "reason": "operator approval required before running `external_skills.install` under `guided_acquisition` product mode",
+            }),
+        })
+        .expect("seed approval request");
+
+        let outcome = crate::tools::execute_app_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "approval_requests_list".to_owned(),
+                payload: json!({}),
+            },
+            "root-session",
+            &config,
+            &ToolConfig::default(),
+        )
+        .expect("approval_requests_list outcome");
+
+        let requests = outcome.payload["requests"]
+            .as_array()
+            .expect("requests array");
+        assert_eq!(requests.len(), 1);
+
+        let request = &requests[0];
+        assert_eq!(request["policy_source"], "autonomy_policy");
+        assert_eq!(request["autonomy_profile"], "guided_acquisition");
+        assert_eq!(request["capability_action_class"], "capability_install");
+        assert_eq!(request["decision_kind"], "approval_required");
+        assert_eq!(
+            request["rule_id"],
+            "autonomy_policy_capability_acquisition_requires_approval"
+        );
+        assert_eq!(
+            request["reason_code"],
+            "autonomy_policy_capability_acquisition_requires_approval"
+        );
+        assert_eq!(
+            request["reason"],
+            "operator approval required before running `external_skills.install` under `guided_acquisition` product mode"
         );
     }
 

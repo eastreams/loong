@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use loongclaw_app as mvp;
 
+use crate::provider_credential_policy;
+
 use super::{ImportCandidate, ImportSourceKind, PreviewStatus, SetupDomainKind};
 
 pub const PROVIDER_SELECTOR_PLACEHOLDER: &str = mvp::config::PROVIDER_SELECTOR_PLACEHOLDER;
@@ -399,7 +401,9 @@ fn provider_choice_status_rank(status: PreviewStatus) -> u8 {
 }
 
 fn provider_status_for_choice(choice: &ImportedProviderChoice) -> PreviewStatus {
-    if choice.config.authorization_header().is_some() {
+    let credentials_ready =
+        provider_credential_policy::provider_has_locally_available_credentials(&choice.config);
+    if credentials_ready {
         PreviewStatus::Ready
     } else {
         PreviewStatus::NeedsReview
@@ -597,5 +601,24 @@ mod tests {
             })
         );
         assert_eq!(resolved.api_key_env, None);
+    }
+
+    #[test]
+    fn provider_status_for_choice_marks_x_api_key_provider_ready() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
+        let choice = ImportedProviderChoice {
+            profile_id: "anthropic".to_owned(),
+            kind: mvp::config::ProviderKind::Anthropic,
+            source: "environment".to_owned(),
+            summary: String::new(),
+            config: mvp::config::ProviderConfig::fresh_for_kind(
+                mvp::config::ProviderKind::Anthropic,
+            ),
+        };
+
+        let status = provider_status_for_choice(&choice);
+
+        assert_eq!(status, PreviewStatus::Ready);
     }
 }
