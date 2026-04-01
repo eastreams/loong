@@ -204,16 +204,13 @@ pub async fn load_fast_lane_tool_batch_event_summary(
 pub async fn load_discovery_first_event_summary(
     session_id: &str,
     limit: usize,
-    kernel_ctx: Option<&KernelContext>,
+    binding: ConversationRuntimeBinding<'_>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
     load_discovery_first_event_summary_with_binding(
         session_id,
         limit,
-        kernel_ctx.map_or_else(
-            ConversationRuntimeBinding::direct,
-            ConversationRuntimeBinding::kernel,
-        ),
+        binding,
         #[cfg(feature = "memory-sqlite")]
         memory_config,
     )
@@ -226,10 +223,14 @@ pub async fn load_discovery_first_event_summary_with_kernel_context(
     kernel_ctx: Option<&KernelContext>,
     #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<DiscoveryFirstEventSummary> {
+    let binding = kernel_ctx.map_or_else(
+        ConversationRuntimeBinding::direct,
+        ConversationRuntimeBinding::kernel,
+    );
     load_discovery_first_event_summary(
         session_id,
         limit,
-        kernel_ctx,
+        binding,
         #[cfg(feature = "memory-sqlite")]
         memory_config,
     )

@@ -433,11 +433,14 @@ impl ConversationContextEngine for DefaultContextEngine {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if !binding.is_kernel_bound() {
-            let projected = crate::provider::build_projected_context_for_session(
+            let provider_binding = crate::provider::ProviderRuntimeBinding::advisory_only();
+            let projected = crate::provider::build_projected_context_for_session_with_binding(
                 config,
                 session_id,
                 include_system_prompt,
-            )?;
+                provider_binding,
+            )
+            .await?;
             return Ok(AssembledConversationContext {
                 messages: projected.messages,
                 artifacts: projected.artifacts,

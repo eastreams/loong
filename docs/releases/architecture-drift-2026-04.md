@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-01T14:18:36Z
+- Generated at: 2026-04-01T14:44:31Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -22,8 +22,7 @@
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9798 | 9800 | 2 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | 0.0% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6976 | 7300 | 324 | 147 | 160 | 13 | 95.6% | TIGHT | 6936 | 0.6% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1779 | 6400 | 4621 | 0 | 110 | 110 | 27.8% | HEALTHY | 1779 | 0.0% | PASS | 0 |
-<<<<<<< HEAD
-| turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10901 | 11200 | 299 | 98 | 120 | 22 | 97.3% | TIGHT | 10831 | 0.6% | PASS | 98 |
+| turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10902 | 11200 | 298 | 98 | 120 | 22 | 97.3% | TIGHT | 10831 | 0.7% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14567 | 15000 | 433 | 54 | 70 | 16 | 97.1% | TIGHT | 14472 | 0.7% | PASS | 54 |
 | daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6340 | 6500 | 160 | 210 | 210 | 0 | 100.0% | TIGHT | 6324 | 0.3% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9519 | 9800 | 281 | 228 | 250 | 22 | 97.1% | TIGHT | 9519 | 0.0% | PASS | 228 |
@@ -68,7 +67,7 @@
 <!-- arch-hotspot key=channel_config lines=9798 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6976 functions=147 -->
 <!-- arch-hotspot key=channel_mod lines=1779 functions=0 -->
-<!-- arch-hotspot key=turn_coordinator lines=10901 functions=98 -->
+<!-- arch-hotspot key=turn_coordinator lines=10902 functions=98 -->
 <!-- arch-hotspot key=tools_mod lines=14567 functions=54 -->
 <!-- arch-hotspot key=daemon_lib lines=6340 functions=210 -->
 <!-- arch-hotspot key=onboard_cli lines=9519 functions=228 -->

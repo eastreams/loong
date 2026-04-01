@@ -439,19 +439,22 @@ pub(super) fn build_messages_for_session(
     .map(|projected| projected.messages)
 }
 
-pub(crate) fn build_projected_context_for_session(
+pub(crate) async fn build_projected_context_for_session_with_binding(
     config: &LoongClawConfig,
     session_id: &str,
     include_system_prompt: bool,
+    binding: ProviderRuntimeBinding<'_>,
 ) -> CliResult<ProjectedMessageContext> {
     let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
 
-    build_projected_context_for_session_in_view(
+    build_projected_context_for_session_in_view_with_binding(
         config,
         session_id,
         include_system_prompt,
         &runtime_tool_view,
+        binding,
     )
+    .await
 }
 
 pub(crate) fn build_projected_context_for_session_in_view(
@@ -496,6 +499,48 @@ pub(crate) fn build_projected_context_for_session_in_view(
             artifacts: Vec::new(),
             prompt_fragments,
         })
+    }
+}
+
+pub(crate) async fn build_projected_context_for_session_in_view_with_binding(
+    config: &LoongClawConfig,
+    session_id: &str,
+    include_system_prompt: bool,
+    tool_view: &ToolView,
+    binding: ProviderRuntimeBinding<'_>,
+) -> CliResult<ProjectedMessageContext> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let mem_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let workspace_root = resolved_workspace_root(config);
+        let hydrated = memory::hydrate_memory_context_with_workspace_root(
+            session_id,
+            workspace_root.as_deref(),
+            &mem_config,
+        )
+        .map_err(|error| format!("hydrate prompt memory context failed: {error}"))?;
+        Ok(project_hydrated_memory_context_for_view_with_binding(
+            config,
+            include_system_prompt,
+            tool_view,
+            binding,
+            &hydrated,
+        )
+        .await)
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = session_id;
+        let projected = project_hydrated_memory_context_for_view_with_binding(
+            config,
+            include_system_prompt,
+            tool_view,
+            binding,
+        )
+        .await;
+        Ok(projected)
     }
 }
 

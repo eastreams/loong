@@ -2989,8 +2989,15 @@ async fn default_runtime_build_context_matches_builtin_summary_projection() {
         )
         .await
         .expect("build context from default runtime");
-    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
-        .expect("build provider messages");
+    let provider_messages = crate::provider::build_projected_context_for_session_with_binding(
+        &config,
+        &session_id,
+        true,
+        crate::provider::ProviderRuntimeBinding::advisory_only(),
+    )
+    .await
+    .expect("build provider messages")
+    .messages;
 
     assert_eq!(
         assembled.messages, provider_messages,
@@ -3281,8 +3288,15 @@ async fn default_runtime_build_context_explicit_builtin_system_preserves_profile
         )
         .await
         .expect("build context from default runtime");
-    let provider_messages = crate::provider::build_messages_for_session(&config, &session_id, true)
-        .expect("build provider messages");
+    let provider_messages = crate::provider::build_projected_context_for_session_with_binding(
+        &config,
+        &session_id,
+        true,
+        crate::provider::ProviderRuntimeBinding::advisory_only(),
+    )
+    .await
+    .expect("build provider messages")
+    .messages;
 
     assert_eq!(
         assembled.messages, provider_messages,
@@ -10761,6 +10775,9 @@ async fn app_tool_dispatcher_preserves_optional_kernel_approval_hook_compatibili
 #[test]
 fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_binding_from_optional_kernel()
  {
+    // This source-level check protects the approval-boundary contract itself:
+    // benign refactors may move code around, but the coordinator must not
+    // reintroduce an optional-kernel approval seam or rebuild binding from it.
     let source = include_str!("turn_coordinator.rs");
 
     assert!(
@@ -13041,6 +13058,72 @@ async fn autonomy_policy_turn_engine_bounded_autonomous_requires_approval_for_se
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg(feature = "memory-sqlite")]
+async fn autonomy_policy_turn_engine_advisory_binding_denies_session_mutation_before_persisting_approval_request()
+ {
+    use crate::conversation::turn_engine::{
+        DefaultAppToolDispatcher, ProviderTurn, TurnEngine, TurnResult,
+    };
+
+    let mut config = test_config();
+    config.memory.sqlite_path =
+        unique_memory_sqlite_path("autonomy-advisory-session-mutation-denied");
+    config.tools.autonomy_profile = AutonomyProfile::BoundedAutonomous;
+    config.tools.sessions.allow_mutation = true;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = SessionRepository::new(&memory_config).expect("session repository");
+    let dispatcher = DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone());
+    let session_id = "session-autonomy-advisory-session-mutation";
+    let session_context = autonomy_runtime_session_context(session_id, &config);
+    let tool_intent = provider_tool_intent(
+        "session_archive",
+        json!({
+            "session_id": "child-session"
+        }),
+        session_id,
+        "turn-autonomy-advisory-session-mutation",
+        "call-autonomy-advisory-session-mutation",
+    );
+    let turn = ProviderTurn {
+        assistant_text: String::new(),
+        tool_intents: vec![tool_intent],
+        raw_meta: Value::Null,
+    };
+    let engine = TurnEngine::new(5);
+    let binding = ConversationRuntimeBinding::direct();
+    let result = engine
+        .execute_turn_in_context(&turn, &session_context, &dispatcher, binding, None)
+        .await;
+
+    match result {
+        TurnResult::ToolDenied(failure) => {
+            assert_eq!(failure.code, "autonomy_policy_binding_missing");
+            assert!(
+                failure.reason.contains("kernel-bound"),
+                "unexpected denial reason: {failure:?}"
+            );
+        }
+        other @ TurnResult::FinalText(_)
+        | other @ TurnResult::StreamingText(_)
+        | other @ TurnResult::StreamingDone(_)
+        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolError(_)
+        | other @ TurnResult::ProviderError(_) => {
+            panic!("expected ToolDenied, got {other:?}");
+        }
+    }
+
+    let approval_requests = repo
+        .list_approval_requests_for_session(session_id, None)
+        .expect("list approval requests");
+    assert!(
+        approval_requests.is_empty(),
+        "advisory binding should fail closed before persisting approval requests"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(feature = "memory-sqlite")]
 async fn autonomy_policy_telemetry_handle_turn_persists_approval_required_tool_decision() {
     let workspace_root_name =
         unique_acp_test_id("conversation-autonomy-telemetry", "guided-install-approval");
@@ -14839,7 +14922,7 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
         &payloads,
     );
 
-    let direct_summary = super::session_history::load_discovery_first_event_summary_with_binding(
+    let direct_summary = load_discovery_first_event_summary(
         "session-discovery-first-direct",
         32,
         ConversationRuntimeBinding::direct(),
@@ -14859,7 +14942,7 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
     let (kernel_ctx, invocations) =
         build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
 
-    let kernel_summary = super::session_history::load_discovery_first_event_summary_with_binding(
+    let kernel_summary = load_discovery_first_event_summary(
         "session-discovery-first-kernel",
         48,
         ConversationRuntimeBinding::kernel(&kernel_ctx),
@@ -14889,7 +14972,7 @@ async fn load_discovery_first_event_summary_accepts_explicit_runtime_binding() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn load_discovery_first_event_summary_preserves_kernel_context_compatibility_shim() {
+async fn load_discovery_first_event_summary_with_kernel_context_preserves_compatibility_shim() {
     let payloads = [
         json!({
             "type": "conversation_event",
@@ -14923,7 +15006,7 @@ async fn load_discovery_first_event_summary_preserves_kernel_context_compatibili
         &payloads,
     );
 
-    let direct_summary = load_discovery_first_event_summary(
+    let direct_summary = load_discovery_first_event_summary_with_kernel_context(
         "session-discovery-first-compat-direct",
         16,
         None,
@@ -14942,7 +15025,7 @@ async fn load_discovery_first_event_summary_preserves_kernel_context_compatibili
     let (kernel_ctx, invocations) =
         build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
 
-    let kernel_summary = load_discovery_first_event_summary(
+    let kernel_summary = load_discovery_first_event_summary_with_kernel_context(
         "session-discovery-first-compat-kernel",
         24,
         Some(&kernel_ctx),
@@ -22236,6 +22319,41 @@ fn default_context_engine_metadata_advertises_context_compaction() {
             .capabilities
             .contains(&ContextEngineCapability::ContextCompaction)
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_advisory_context_includes_governed_runtime_binding_section() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let workspace_root_name =
+        unique_acp_test_id("default-context-engine", "advisory-binding-system-message");
+    let workspace_root = std::env::temp_dir().join(workspace_root_name);
+    let _ = std::fs::remove_dir_all(&workspace_root);
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+
+    let mut config = test_config();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+
+    let engine = DefaultContextEngine;
+    let assembled = engine
+        .assemble_context(
+            &config,
+            "default-context-engine-advisory",
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("assemble advisory context");
+    let system = assembled
+        .messages
+        .first()
+        .and_then(|message| message["content"].as_str())
+        .expect("system message content");
+
+    assert!(system.contains("## Governed Runtime Binding"));
+    assert!(system.contains("session_mode: advisory_only"));
+    assert!(system.contains("kernel_binding: absent"));
 }
 
 #[cfg(feature = "memory-sqlite")]
