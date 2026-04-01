@@ -50,17 +50,17 @@ LoongClaw starts from a runnable assistant path, but it is already structured as
 
 Today that means three concrete things:
 
-- **Runnable operator path**: `loong onboard`, `loong ask`, `loong chat`, and `loong doctor` are the shortest supported route to a useful result.
-- **Operator-visible runtime surface**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are public-facing commands rather than hidden internal machinery.
-- **Governed foundation**: provider selection, tools, memory, delivery surfaces, approvals, policy, and audit stay behind explicit runtime boundaries.
+- **🚀 Runnable operator path**: `loong onboard`, `loong ask`, `loong chat`, and `loong doctor` are the shortest supported route to a useful result.
+- **👀 Operator-visible runtime surface**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are public-facing commands rather than hidden internal machinery.
+- **🛡️ Governed foundation**: provider selection, tools, memory, delivery surfaces, approvals, policy, and audit stay behind explicit runtime boundaries.
 
 <a id="when-loongclaw-fits"></a>
 ## When LoongClaw Fits
 
-- **You want something you can actually run first**: the project starts with a usable operator path instead of asking teams to assemble a system from framework primitives.
-- **You care about truthful public contracts**: local assistant flow, gateway ownership, reply-loop surfaces, and outbound-only delivery are kept separate instead of being marketed as one thing.
-- **You need visible extension seams**: providers, tools, channels, memory, and policy are explicit boundaries rather than accidental coupling points.
-- **You expect the runtime to grow with the team**: the design targets longer-lived team workflows, not just a single local prompt loop.
+- **⚡ You want something you can actually run first**: the project starts with a usable operator path instead of asking teams to assemble a system from framework primitives.
+- **🧭 You care about truthful public contracts**: local assistant flow, gateway ownership, reply-loop surfaces, and outbound-only delivery are kept separate instead of being marketed as one thing.
+- **🔌 You need visible extension seams**: providers, tools, channels, memory, and policy are explicit boundaries rather than accidental coupling points.
+- **🌱 You expect the runtime to grow with the team**: the design targets longer-lived team workflows, not just a single local prompt loop.
 
 The README is intentionally a landing page. Provider walkthroughs, channel
 recipes, and deeper source-level references now live in docs instead of being
