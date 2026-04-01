@@ -64,6 +64,7 @@
         "group": "Reference",
         "pages": [
           "reference/overview",
+          "reference/why-loongclaw",
           "reference/roadmap-and-product",
           "reference/documentation-policy",
           "reference/security-and-reliability",

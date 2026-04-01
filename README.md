@@ -70,6 +70,9 @@ The README is intentionally a landing page. Provider walkthroughs, channel
 recipes, and deeper source-level references now live in docs instead of being
 stacked into the repository front page.
 
+If you want the longer public rationale behind this positioning, read
+[Why LoongClaw](site/reference/why-loongclaw.mdx).
+
 ## Sponsors
 
 <p align="center">
@@ -161,6 +164,7 @@ material that Mintlify deploys.
 | If you want to... | Start here |
 | --- | --- |
 | get first value quickly | [Get Started](site/get-started/overview.mdx) |
+| understand why the project exists and what stance shapes it | [Why LoongClaw](site/reference/why-loongclaw.mdx) |
 | follow one complete rollout path without stitching docs together | [Common Setups](site/use-loongclaw/common-setups.mdx) |
 | understand the shared public config shape first | [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx) |
 | follow the practical provider and channel setup paths | [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) and [Channel Recipes](site/use-loongclaw/channel-recipes.mdx) |

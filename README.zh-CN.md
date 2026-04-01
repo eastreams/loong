@@ -70,6 +70,9 @@ README 现在只保留 landing page 该有的内容。provider 实操、channel
 教程和更深的 source-level reference，已经从首页里挪出去，放到 docs
 里分层展开。
 
+如果你想读更完整的公开定位和产品立场，可以看
+[Why LoongClaw](site/reference/why-loongclaw.mdx)。
+
 ## 赞助商
 
 <p align="center">
@@ -160,6 +163,7 @@ loong doctor --fix
 | 如果你想…… | 从这里开始 |
 | --- | --- |
 | 快速拿到第一条有效结果 | [Get Started](site/get-started/overview.mdx) |
+| 理解项目为什么存在，以及它背后的产品立场 | [Why LoongClaw](site/reference/why-loongclaw.mdx) |
 | 不自己拼接文档，直接跟一条完整 rollout path 走 | [Common Setups](site/use-loongclaw/common-setups.mdx) |
 | 先理解共享的公开配置形态 | [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx) |
 | 直接看 provider / channel 的实操路径 | [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) 与 [Channel Recipes](site/use-loongclaw/channel-recipes.mdx) |
