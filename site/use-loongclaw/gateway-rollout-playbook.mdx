@@ -1,0 +1,148 @@
+---
+title: Gateway Rollout
+description: Move from one healthy service channel to explicit multi-channel gateway ownership.
+---
+
+# Gateway Rollout
+
+Use this playbook when each service channel already works on its own and the
+next job is giving one host explicit runtime ownership.
+
+This page is not a shortcut around the earlier steps. It assumes:
+
+- the base CLI path already works
+- each selected runtime-backed surface already survived its own `serve` loop
+- named accounts already exist for any channel family that needs selectors
+
+## What This Playbook Covers
+
+| Covered here | Not covered here |
+| --- | --- |
+| `gateway run`, `gateway status`, and `gateway stop` | provider first-run setup |
+| `multi-channel-serve` as the foreground compatibility wrapper | single-channel smoke tests from zero |
+| selector syntax such as `lark=work` or `wecom=alerts` | outbound-only surfaces pretending to join the same reply-loop owner |
+
+## Use A Different Playbook If
+
+| If you actually need... | Go here instead |
+| --- | --- |
+| one hosted provider plus a Feishu or Lark room from near-zero | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| WeCom as the main enterprise lane from near-zero | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| BytePlus Coding plus one Telegram bot from near-zero | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+
+## Step 1: Confirm The Precondition
+
+Before introducing gateway ownership, each service channel should already work
+with its own foreground loop.
+
+Shortest preflight loop:
+
+```bash
+loong doctor
+loong channels
+```
+
+If ownership is already unclear from another shell:
+
+```bash
+loong gateway status --json
+```
+
+## Step 2: Make Account Ids Explicit
+
+Example config shape:
+
+```toml
+[feishu]
+enabled = true
+mode = "websocket"
+default_account = "work"
+
+[feishu.accounts.work]
+domain = "lark"
+app_id = { env = "LARK_WORK_APP_ID" }
+app_secret = { env = "LARK_WORK_APP_SECRET" }
+allowed_chat_ids = ["oc_ops_room"]
+
+[telegram]
+enabled = true
+default_account = "bot_123456"
+
+[telegram.accounts.bot_123456]
+bot_token = { env = "TELEGRAM_BOT_TOKEN" }
+allowed_chat_ids = [123456789]
+
+[wecom]
+enabled = true
+default_account = "alerts"
+
+[wecom.accounts.alerts]
+bot_id = { env = "WECOM_ALERTS_BOT_ID" }
+secret = { env = "WECOM_ALERTS_SECRET" }
+allowed_conversation_ids = ["group_alerts"]
+```
+
+Why this step exists:
+
+- selectors are meant to point at `accounts.<id>`
+- `default_account` keeps the fallback lane explicit
+- rewriting one top-level secret block is the wrong preparation for gateway
+  ownership
+
+## Step 3: Choose Foreground Or Persisted Ownership
+
+Foreground compatibility wrapper:
+
+```bash
+loong multi-channel-serve \
+  --session cli-supervisor \
+  --channel-account lark=work \
+  --channel-account telegram=bot_123456 \
+  --channel-account wecom=alerts
+```
+
+Persisted owner contract:
+
+```bash
+loong gateway run \
+  --session daemon-gateway \
+  --channel-account lark=work \
+  --channel-account telegram=bot_123456 \
+  --channel-account wecom=alerts
+```
+
+How to choose:
+
+| Need | Better command |
+| --- | --- |
+| one visible foreground shell while rolling out | `multi-channel-serve` |
+| one persisted owner that another process can inspect or stop | `gateway run` |
+
+## Step 4: Control And Inspect Ownership
+
+```bash
+loong gateway status
+loong gateway status --json
+loong gateway stop
+```
+
+Use `status --json` whenever another process or operator needs the shortest
+machine-readable view of the current owner state.
+
+## Common Failure Modes
+
+| Symptom | What to check |
+| --- | --- |
+| startup fails immediately on a selector | the selector must be `CHANNEL=ACCOUNT`, and the account id must exist |
+| two selectors target the same family | one channel family can only appear once in the selector list |
+| an outbound-only surface is expected to join the gateway | that surface does not belong in this runtime-backed owner model |
+| single-channel serve never worked, but gateway rollout started anyway | go back and validate each service channel in isolation first |
+
+## Continue Reading
+
+- Continue to [Gateway And Supervision](/use-loongclaw/gateway-and-supervision)
+  for the owner contract without the rollout framing.
+- Continue to [Common Setups](/use-loongclaw/common-setups) for the broader
+  end-to-end setup hub.
+- Continue to [Channel Recipes](/use-loongclaw/channel-recipes) if one of the
+  underlying service channels still needs its own smoke test path.

@@ -92,6 +92,7 @@ make_fixture_repo() {
   mkdir -p \
     "$fixture/scripts" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
 
@@ -99,7 +100,8 @@ make_fixture_repo() {
   cp "$REPO_ROOT/scripts/release_artifact_lib.sh" "$fixture/scripts/release_artifact_lib.sh"
   chmod +x "$fixture/scripts/check-docs.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"
   cp "$REPO_ROOT/.github/workflows/release.yml" "$fixture/.github/workflows/release.yml"
 
@@ -149,6 +151,7 @@ make_prerelease_fixture_repo() {
   mkdir -p \
     "$fixture/scripts" \
     "$fixture/docs/releases" \
+    "$fixture/docs/releases/support" \
     "$fixture/.github/ISSUE_TEMPLATE" \
     "$fixture/.github/workflows"
 
@@ -156,7 +159,8 @@ make_prerelease_fixture_repo() {
   cp "$REPO_ROOT/scripts/release_artifact_lib.sh" "$fixture/scripts/release_artifact_lib.sh"
   chmod +x "$fixture/scripts/check-docs.sh"
   cp "$REPO_ROOT/docs/releases/README.md" "$fixture/docs/releases/README.md"
-  cp "$REPO_ROOT/docs/releases/TEMPLATE.md" "$fixture/docs/releases/TEMPLATE.md"
+  cp "$REPO_ROOT/docs/releases/support/README.md" "$fixture/docs/releases/support/README.md"
+  cp "$REPO_ROOT/docs/releases/support/TEMPLATE.md" "$fixture/docs/releases/support/TEMPLATE.md"
   cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/config.yml" "$fixture/.github/ISSUE_TEMPLATE/config.yml"
   cp "$REPO_ROOT/.github/workflows/release.yml" "$fixture/.github/workflows/release.yml"
 

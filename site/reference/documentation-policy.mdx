@@ -1,0 +1,76 @@
+---
+title: Documentation Policy
+description: How the public docs surface is scoped, written, and deployed.
+---
+
+# Documentation Policy
+
+LoongClaw keeps its public documentation intentionally focused so readers can
+find the right layer quickly.
+
+## Public Docs Boundary
+
+- The repository README is a landing page, not a full product manual.
+- The Mintlify site under `site/` is the main public docs surface.
+- Repository markdown under `docs/` remains public as supporting reference material and source-facing documentation, not as a second landing surface.
+- Internal plans, comparative studies, and backlog-heavy working material should stay out of the OSS docs navigation.
+
+## Reader Path
+
+Use the public docs in this order:
+
+1. Start with `README.md` or `README.zh-CN.md` when you need orientation.
+2. Move to Mintlify pages under `site/` for walkthroughs, recipes, and public navigation.
+3. Use repository `docs/` when you need source-facing contracts, specs, or supporting references behind the site.
+
+## Route Documents By Audience
+
+| Document shape | Put it here | Why |
+| --- | --- | --- |
+| landing-page positioning and repo entry guidance | `README.md` and `README.zh-CN.md` | keep the front page short and scannable |
+| public walkthroughs, setup guides, and reader-facing docs | Mintlify source under `site/` | this is the main public docs surface |
+| source-level public specs and supporting reference markdown | repository `docs/` | these files support builders and source readers without becoming a second homepage |
+| repository-native docs routing and audience maps | `docs/README.md` and `docs/references/README.md` | they keep source readers oriented without promoting maintainer support material into the normal public path |
+| backlog packages, internal comparison notes, and working design bundles | outside the public docs navigation | they are not reader-facing product docs |
+
+## Language Policy
+
+- The main repository supports Simplified Chinese only for `README.zh-CN.md`.
+- The Mintlify docs source is English-only for now.
+- If docs i18n is added later, it should be introduced at the docs-site layer rather than by expanding repository-wide markdown translation.
+
+## If Docs i18n Is Added Later
+
+- Keep `README.zh-CN.md` as the only repository-native translation unless the
+  repository language policy itself is intentionally changed.
+- Add new locales at the Mintlify layer first, starting with the
+  reader-facing pages under `site/`.
+- Treat English docs source as the canonical authoring base unless an explicit
+  per-locale workflow is introduced and maintained.
+- Do not start by translating repository-native source indexes, maintainer
+  support files, or release-governance helpers.
+- Translate operator-facing overviews, setup guides, and playbooks before
+  translating deeper reference material.
+
+## Publishing Model
+
+- The docs site is designed to deploy from this repository as a monorepo subdirectory.
+- The Mintlify source of truth lives in `site/`.
+- Public docs changes should prefer improving the site itself instead of adding more repository-only landing pages.
+- Repository-native docs maps should prefer routing readers toward the site or the correct source index instead of recreating another landing surface inside `docs/`.
+
+## Editorial Rule
+
+- Keep the first-run path short.
+- Keep shipped behavior separate from planned behavior.
+- Keep runtime-backed surfaces, outbound-only surfaces, and catalog-only entries clearly distinguished.
+- Prefer truthful public contracts over aspirational product copy.
+
+## Use This Policy When
+
+- you are deciding whether a document belongs in the public docs flow at all
+- you are considering new docs translations
+- you are unsure whether a README section should stay on the landing page or move into focused docs
+
+If you want the practical workflow for validating and shipping docs from this
+repository, continue to [Docs Workflow](/build-on-loongclaw/docs-workflow).

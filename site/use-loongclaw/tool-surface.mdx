@@ -1,0 +1,75 @@
+---
+title: Tool Surface
+description: How LoongClaw keeps runtime-visible tools truthful and governed.
+---
+
+# Tool Surface
+
+LoongClaw treats the visible tool catalog as part of the product contract.
+
+The assistant should advertise what the current runtime can actually execute, not
+what a future build or a different config might someday expose.
+
+## Public Rule
+
+- compiled-out tools should not be advertised as callable
+- config-disabled tools should not be advertised as callable
+- surface-specific tools should follow the current runtime surface instead of a global marketing list
+- high-risk tools should stay behind policy, approval, and audit boundaries even when visible
+
+## Current Public Tool Families
+
+The exact catalog still depends on the active runtime, but the current public
+story is capability-first rather than adapter-first.
+
+| Family | What operators should expect |
+| --- | --- |
+| browser actions | bounded page open, extract, and follow-up navigation behavior when the browser runtime is enabled |
+| file access | governed read, write, and edit behavior instead of unrestricted filesystem mutation |
+| shell execution | policy-bound command execution rather than an always-open raw shell lane |
+| web fetch and search | public-web retrieval that follows the runtime's outbound trust policy |
+| external skills enablement | explicit policy and install boundaries rather than silent capability widening |
+
+## Truth Before Breadth
+
+What matters publicly is not the largest possible catalog. What matters is:
+
+- the assistant only offers tools that are actually usable now
+- capability snapshots, provider tool schemas, and conversation-visible tools tell the same story
+- the runtime does not flatten shipped tools, gated tools, and still-planned tools into one vague capability claim
+
+## Browser Automation Boundary
+
+Browser capability is intentionally bounded.
+
+Publicly that means:
+
+- browser-style actions are part of the governed tool model, not a separate sidecar story
+- they should follow the same public-web safety model as other outbound web surfaces
+- richer desktop-grade automation, arbitrary JavaScript, or login-heavy flows should not be implied unless the current runtime actually exposes them
+
+## Enablement Surfaces
+
+Some surfaces exist to enable a capability rather than to expose its full
+lifecycle by default.
+
+That distinction matters because:
+
+- the runtime may need policy or install steps before a capability becomes callable
+- operators should be able to tell the difference between "this can be enabled"
+  and "this is already available right now"
+- public docs should preserve that line instead of advertising dormant surfaces
+  as if they were always-on
+
+## What This Page Does Not Promise
+
+- a universal always-on tool catalog
+- identical visible tools across every provider or runtime surface
+- unrestricted browser or shell automation
+- planned tools being described as already shipped
+
+## Continue Reading
+
+- Go to [Tools And Memory](/use-loongclaw/tools-and-memory) for the higher-level governed-capability overview.
+- Go to [Memory Profiles](/use-loongclaw/memory-profiles) for continuity behavior and profile selection.
+- Go to [Security And Reliability](/reference/security-and-reliability) if you want the public safety and posture references behind these boundaries.

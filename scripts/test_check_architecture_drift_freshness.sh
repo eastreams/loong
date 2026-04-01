@@ -26,7 +26,7 @@ make_fixture_repo() {
     "$fixture/crates/spec/src" \
     "$fixture/crates/spec" \
     "$fixture/crates/daemon/src" \
-    "$fixture/docs/releases"
+    "$fixture/docs/releases/support"
 
   cp "$REPO_ROOT/scripts/architecture_budget_lib.sh" "$fixture/scripts/architecture_budget_lib.sh"
   cp "$REPO_ROOT/scripts/generate_architecture_drift_report.sh" "$fixture/scripts/generate_architecture_drift_report.sh"
@@ -88,7 +88,7 @@ run_fresh_report_passes_test() {
   fixture="$(make_fixture_repo)"
   trap 'rm -rf "$fixture"' RETURN
 
-  local report_file="$fixture/docs/releases/architecture-drift-2099-01.md"
+  local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
     LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
@@ -112,7 +112,7 @@ run_stale_report_fails_test() {
   fixture="$(make_fixture_repo)"
   trap 'rm -rf "$fixture"' RETURN
 
-  local report_file="$fixture/docs/releases/architecture-drift-2099-01.md"
+  local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   (
     cd "$fixture"
     LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
@@ -147,7 +147,7 @@ run_untracked_report_fails_test() {
   fixture="$(make_fixture_repo)"
   trap 'rm -rf "$fixture"' RETURN
 
-  local report_file="$fixture/docs/releases/architecture-drift-2099-01.md"
+  local report_file="$fixture/docs/releases/support/architecture-drift-2099-01.md"
   local output_file="$fixture/untracked.out"
   if (
     cd "$fixture" &&

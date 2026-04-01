@@ -1,5 +1,24 @@
 # Release vX.Y.Z or vX.Y.Z-alpha.N
 
+This template remains in the public repository because release-governance automation and release
+document checks depend on it. It supports public release artifacts but is not intended to behave
+like a primary reader-facing product doc.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read public release history | the top-level `../vX.Y.Z*.md` or `../*-announcement.md` files |
+| prepare a new release document | this template |
+| understand the release-support file boundary | [`README.md`](README.md) |
+
+## Read This File When
+
+- you are preparing or reviewing a tracked release note
+- you need the repository-side shape that release-doc checks enforce
+- you are validating whether a release document still matches the current
+  release-governance contract
+
 ## Summary
 - Generated at:
 - Release status:
@@ -47,9 +66,18 @@
 - Publish superseding patch release and link it here.
 
 ## Detail Links
-- [Changelog entry](../../CHANGELOG.md)
+- [Changelog entry](../../../CHANGELOG.md)
 - [Release workflow run](https://github.com/loongclaw-ai/loongclaw/actions/runs/<id>)
 - [GitHub release page](https://github.com/loongclaw-ai/loongclaw/releases/tag/vX.Y.Z[-suffix])
-- [Release workflow definition](../../.github/workflows/release.yml)
+- [Release workflow definition](../../../.github/workflows/release.yml)
 - Trace directory: `.docs/traces/<timestamp>-<command>-<tag>-<trace-id>`
 - Local debug log: `.docs/releases/vX.Y.Z[-suffix]-debug.md`
+
+## Do Not Use This Template For
+
+- public release-history reading that should use top-level `../vX.Y.Z*.md` files
+  or GitHub Releases
+- incident notes, private planning bundles, or scratch release checklists that
+  do not belong in the tracked OSS release-doc path
+- changing the public product docs navigation; this template is release-support
+  material only

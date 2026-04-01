@@ -1,0 +1,57 @@
+---
+title: Tools And Memory
+description: Public overview of governed capabilities and continuity behavior.
+---
+
+# Tools And Memory
+
+LoongClaw's public operator model is built around governed capability exposure.
+
+This page is the bridge between the short product story and the deeper
+capability-specific pages.
+
+## Tools
+
+- visible tools should reflect actual runtime availability
+- higher-risk actions stay inside policy, approval, and audit boundaries
+- browser and web surfaces are governed runtime tools, not scattered helper scripts
+- the public story is capability-first: the assistant should not advertise tools that are compiled out, disabled, or unavailable on the current surface
+
+Current public examples include browser actions, file access, shell execution, web fetch, and search-related work, but the exact visible set should follow the active runtime and config instead of being hardcoded into docs copy.
+
+## Memory
+
+The public repository keeps memory documentation focused on shipped behavior:
+
+- selectable memory profiles
+- advisory continuity rather than identity override
+- operator-visible setup and first-run expectations
+- continuity that helps the operator without pretending memory is a second authority for runtime identity
+
+The current public profiles include:
+
+| Profile | What it keeps | Good default for |
+| --- | --- | --- |
+| `window_only` | only the active conversation window | short, bounded work where persistence is unnecessary |
+| `window_plus_summary` | active window plus rolling summary | longer conversations that need continuity without full profile memory |
+| `profile_plus_window` | active window plus operator profile memory | assistant paths that need durable user context across sessions |
+
+## Why These Two Stories Belong Together
+
+- Tools and memory both need truthful public representation.
+- Both should follow the actual runtime boundary instead of aspirational product copy.
+- Both affect day-to-day operator trust more than long-range product vision statements do.
+
+## Read By Depth
+
+| If you want... | Start here |
+| --- | --- |
+| the visible-tool contract | [Tool Surface](/use-loongclaw/tool-surface) |
+| continuity and profile selection | [Memory Profiles](/use-loongclaw/memory-profiles) |
+| the supporting safety posture | [Security And Reliability](/reference/security-and-reliability) |
+
+## Where To Go Next
+
+- Continue to [Tool Surface](/use-loongclaw/tool-surface) for the truthful visible-tool contract.
+- Continue to [Memory Profiles](/use-loongclaw/memory-profiles) for the public continuity contract.
+- Continue to [Reference](/reference/overview) if you want the supporting roadmap, reliability, and release material.

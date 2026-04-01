@@ -84,7 +84,7 @@ jobs:
           bash scripts/test_stress_daemon_tests.sh
 
       - name: Fresh architecture drift report
-        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/architecture-drift-$(date -u +%Y-%m).md
+        run: bash scripts/check_architecture_drift_freshness.sh docs/releases/support/architecture-drift-$(date -u +%Y-%m).md
 
       - name: Bootstrap local release artifacts
         run: scripts/bootstrap_release_local_artifacts.sh

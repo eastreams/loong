@@ -1,0 +1,72 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "LoongClaw",
+  "description": "Public documentation for LoongClaw, the Rust foundation for vertical AI agents.",
+  "colors": {
+    "primary": "#0F766E",
+    "light": "#CCFBF1",
+    "dark": "#042F2E"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": [
+          "index"
+        ]
+      },
+      {
+        "group": "Get Started",
+        "pages": [
+          "get-started/overview",
+          "get-started/installation",
+          "get-started/first-run",
+          "get-started/doctor-and-health"
+        ]
+      },
+      {
+        "group": "Use LoongClaw",
+        "pages": [
+          "use-loongclaw/overview",
+          "use-loongclaw/common-setups",
+          "use-loongclaw/volcengine-feishu-lark-playbook",
+          "use-loongclaw/wecom-rollout-playbook",
+          "use-loongclaw/byteplus-coding-telegram-playbook",
+          "use-loongclaw/local-outbound-playbook",
+          "use-loongclaw/gateway-rollout-playbook",
+          "use-loongclaw/providers-and-models",
+          "use-loongclaw/provider-recipes",
+          "use-loongclaw/channels",
+          "use-loongclaw/channel-recipes",
+          "use-loongclaw/channel-setup",
+          "use-loongclaw/gateway-and-supervision",
+          "use-loongclaw/tools-and-memory",
+          "use-loongclaw/tool-surface",
+          "use-loongclaw/memory-profiles"
+        ]
+      },
+      {
+        "group": "Build On LoongClaw",
+        "pages": [
+          "build-on-loongclaw/overview",
+          "build-on-loongclaw/architecture",
+          "build-on-loongclaw/contributing",
+          "build-on-loongclaw/contribution-workflow",
+          "build-on-loongclaw/docs-workflow",
+          "build-on-loongclaw/contribution-areas"
+        ]
+      },
+      {
+        "group": "Reference",
+        "pages": [
+          "reference/overview",
+          "reference/roadmap-and-product",
+          "reference/documentation-policy",
+          "reference/security-and-reliability",
+          "reference/releases"
+        ]
+      }
+    ]
+  }
+}

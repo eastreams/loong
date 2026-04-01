@@ -1,0 +1,83 @@
+---
+title: Common Setups
+description: End-to-end setup playbooks that combine providers, channels, and gateway ownership.
+---
+
+# Common Setups
+
+Use this page when `onboard`, `ask`, or `chat` already makes sense and you want
+one practical setup shape instead of reading provider, channel, and gateway
+pages separately.
+
+This page is now the setup hub, not another long cookbook. The detailed
+operational steps live in dedicated playbooks.
+
+## Start With The Common Cases
+
+If you want the shortest path to a complete rollout, start with these first:
+
+- [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) for the clearest hosted plus team-chat route
+- [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) when WeCom should own the enterprise lane
+
+Then branch out to the narrower coding, local, or multi-channel routes only if those match the real target stack better.
+
+All routes here stay inside the current public contract:
+
+- runtime-backed service channels are still Feishu / Lark, Telegram, Matrix,
+  and WeCom
+- outbound-only surfaces stay outbound-only
+- `gateway run` remains the explicit owner contract for longer-lived service
+  supervision
+
+## Choose A Playbook
+
+| If you want... | Start here | Why |
+| --- | --- | --- |
+| one hosted provider plus a Feishu or Lark team room | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) | it keeps the primary hosted and team-chat path together |
+| WeCom as the long-lived enterprise lane | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) | it matches the shipped AIBot long-connection contract |
+| a dedicated coding lane plus a lightweight bot surface | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) | coding traffic and runtime delivery stay explicit |
+| a local model plus governed outbound delivery | [Local Model Plus Outbound Delivery](/use-loongclaw/local-outbound-playbook) | local inference and outbound notifications stay separate from reply-loop runtimes |
+| several runtime-backed channels on one host | [Gateway Rollout](/use-loongclaw/gateway-rollout-playbook) | it moves from one healthy surface to explicit gateway ownership |
+
+If you still just need one provider to work locally, go back to
+[First Run](/get-started/first-run) and
+[Provider Recipes](/use-loongclaw/provider-recipes) instead of treating this
+hub like a provider-only guide.
+
+## Shared Validation Loop
+
+Use the same short loop after each setup slice:
+
+```bash
+loong doctor
+loong list-models
+loong channels
+```
+
+When gateway ownership is involved, add:
+
+```bash
+loong gateway status --json
+```
+
+## Reading Rules
+
+- Start with the base CLI path first. Do not treat a channel or gateway setup
+  as step zero.
+- Use a dedicated playbook when the rollout shape is already clear.
+- Use provider-only or channel-only recipe pages when the setup is still narrow.
+- Move to gateway selectors only after named `accounts.<id>` entries exist.
+
+## Continue Reading
+
+| If you want to... | Go here |
+| --- | --- |
+| stay on the main hosted team-chat lane | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| follow the WeCom-specific enterprise path | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| follow the dedicated coding-plus-bot route | [BytePlus Coding Plus Telegram](/use-loongclaw/byteplus-coding-telegram-playbook) |
+| use a local model without overclaiming delivery support | [Local Model Plus Outbound Delivery](/use-loongclaw/local-outbound-playbook) |
+| supervise several runtime-backed channels | [Gateway Rollout](/use-loongclaw/gateway-rollout-playbook) |
+| step back to provider-only setup | [Provider Recipes](/use-loongclaw/provider-recipes) |
+| step back to channel-only setup | [Channel Recipes](/use-loongclaw/channel-recipes) |
+| inspect the owner contract directly | [Gateway And Supervision](/use-loongclaw/gateway-and-supervision) |
+| return to the wider runtime map | [Use LoongClaw](/use-loongclaw/overview) |

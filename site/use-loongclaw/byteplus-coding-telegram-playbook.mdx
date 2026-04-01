@@ -1,0 +1,151 @@
+---
+title: BytePlus Coding Plus Telegram
+description: Keep BytePlus coding traffic explicit while Telegram owns the shipped reply-loop surface.
+---
+
+# BytePlus Coding Plus Telegram
+
+Use this playbook when coding traffic should stay on the dedicated BytePlus
+Coding lane while Telegram owns the lightweight live reply-loop surface.
+
+This page keeps three boundaries explicit:
+
+- BytePlus general traffic and BytePlus Coding traffic are not the same lane
+- Telegram is a shipped runtime-backed bot surface
+- gateway ownership only comes after the Telegram loop already works
+
+## When This Is The Right Playbook
+
+- coding quota or pricing should stay on the dedicated coding route
+- one Telegram bot should own the reply loop
+- you still want a separate general BytePlus profile available for other work
+- the team wants explicit profile switching instead of one profile being
+  rewritten repeatedly
+
+## Use A Different Playbook If
+
+| If you actually need... | Go here instead |
+| --- | --- |
+| Volcengine plus Feishu or Lark | [Volcengine Plus Feishu Or Lark](/use-loongclaw/volcengine-feishu-lark-playbook) |
+| Volcengine plus WeCom | [WeCom Rollout](/use-loongclaw/wecom-rollout-playbook) |
+| several already-healthy runtime-backed channels on one host | [Gateway Rollout](/use-loongclaw/gateway-rollout-playbook) |
+
+## Step 1: Keep General And Coding Profiles Separate
+
+```toml
+active_provider = "coding"
+
+[providers.byteplus_main]
+kind = "byteplus"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "auto"
+
+[providers.coding]
+kind = "byteplus_coding"
+api_key = { env = "BYTEPLUS_API_KEY" }
+model = "your-reviewed-coding-model"
+```
+
+Why this matters:
+
+- `byteplus` belongs to the general `/api/v3` lane
+- `byteplus_coding` belongs to `/api/coding/v3`
+- keeping both profiles visible is cleaner than patching one profile back and
+  forth with ad-hoc route overrides
+
+## Step 2: Confirm The Active Coding Lane
+
+```bash
+loong doctor
+loong ask --message "Confirm that the active provider is the dedicated coding lane."
+```
+
+If you want to inspect the general profile separately later, switch
+`active_provider` deliberately instead of changing the `kind` on the active
+profile in place.
+
+## Step 3: Add The Telegram Bot Surface
+
+Single-account config:
+
+```toml
+[telegram]
+enabled = true
+bot_token = { env = "TELEGRAM_BOT_TOKEN" }
+allowed_chat_ids = [123456789]
+```
+
+Smoke-test it:
+
+```bash
+loong telegram-send --target "123456789" --text "hello from loong"
+loong telegram-serve
+```
+
+Operational notes:
+
+- `allowed_chat_ids` is the trust boundary
+- Telegram is the smallest runtime-backed reply-loop lane in the current public
+  docs set
+
+## Step 4: Move To Named Bot Accounts If Needed
+
+If one config should hold several Telegram identities, move to named accounts
+before introducing gateway selectors.
+
+```toml
+[telegram]
+enabled = true
+default_account = "bot_123456"
+
+[telegram.accounts.bot_123456]
+bot_token = { env = "TELEGRAM_BOT_TOKEN" }
+allowed_chat_ids = [123456789]
+
+[telegram.accounts.ops]
+bot_token = { env = "TELEGRAM_OPS_BOT_TOKEN" }
+allowed_chat_ids = [987654321]
+```
+
+Now the selector story is explicit:
+
+```bash
+loong gateway run --channel-account telegram=bot_123456
+loong gateway status --json
+```
+
+## Step 5: Choose Foreground Or Persisted Ownership
+
+Foreground loop:
+
+```bash
+loong telegram-serve
+```
+
+Persisted owner contract:
+
+```bash
+loong gateway run --channel-account telegram=bot_123456
+loong gateway status --json
+loong gateway stop
+```
+
+Use the foreground loop first during rollout. Use gateway ownership only after
+the bot path already behaves correctly.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| the runtime behaves like the general BytePlus lane instead of the coding lane | confirm `active_provider = "coding"` and keep `byteplus_main` separate |
+| the coding profile is pointed at a generic `/api/v3` path | switch back to `byteplus_coding` instead of forcing the route with ad-hoc URL overrides |
+| `telegram-send` works but `telegram-serve` is not stable | review `allowed_chat_ids` and make sure the bot identity is the one you expect |
+| `gateway run --channel-account telegram=bot_123456` fails | add `default_account` and `accounts.bot_123456` first, or run `gateway run` without a selector |
+
+## Continue Reading
+
+- Continue to [Common Setups](/use-loongclaw/common-setups) for the setup hub.
+- Continue to [Provider Recipes](/use-loongclaw/provider-recipes) for the
+  provider-only cookbook.
+- Continue to [Channel Recipes](/use-loongclaw/channel-recipes) for the
+  channel-only cookbook.

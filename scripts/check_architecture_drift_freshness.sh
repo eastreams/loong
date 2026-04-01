@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 REPORT_MONTH="${LOONGCLAW_ARCH_REPORT_MONTH:-$(date -u +%Y-%m)}"
-REPORT_PATH="${1:-docs/releases/architecture-drift-${REPORT_MONTH}.md}"
+REPORT_PATH="${1:-docs/releases/support/architecture-drift-${REPORT_MONTH}.md}"
 TEMP_REPORT="$(mktemp)"
 NORMALIZED_TRACKED="$(mktemp)"
 NORMALIZED_GENERATED="$(mktemp)"

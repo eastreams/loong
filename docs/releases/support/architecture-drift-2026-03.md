@@ -1,7 +1,26 @@
 # Architecture Drift Report 2026-03
 
+This report is a repository maintenance artifact for architecture-governance and
+release review. It is not part of the primary public release trail.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read public release history | the top-level `../vX.Y.Z*.md` and `../*-announcement.md` files |
+| inspect architecture-maintenance and release-governance evidence | this report |
+| understand the release-support file boundary | [`README.md`](README.md) |
+
+## Read This File When
+
+- you are reviewing release-support architecture evidence for `2026-03`
+- you need the generated hotspot and boundary-check snapshot behind release
+  governance
+- you are validating whether release-support automation still matches the
+  repository's current architecture boundaries
+
 ## Summary
-- Generated at: 2026-03-31T13:47:49Z
+- Generated at: 2026-03-31T16:25:18Z
 - Report month: `2026-03`
 - Baseline report: none
 - Hotspots tracked: 14
@@ -49,13 +68,21 @@
 
 ## Refactor Budget Policy
 - Monthly drift report command: `scripts/generate_architecture_drift_report.sh`
-- Release checklist budget field lives in `docs/releases/TEMPLATE.md`.
+- Release checklist budget field lives in `docs/releases/support/TEMPLATE.md`.
 - Rule: each release must name at least one hotspot metric paid down or explicitly state why no paydown happened.
 
 ## Detail Links
-- [Architecture gate](../../scripts/check_architecture_boundaries.sh)
+- [Architecture gate](../../../scripts/check_architecture_boundaries.sh)
 - [Release template](TEMPLATE.md)
-- [CI workflow](../../.github/workflows/ci.yml)
+- [CI workflow](../../../.github/workflows/ci.yml)
+
+## Do Not Use This File For
+
+- public release-history reading that should start from `vX.Y.Z*.md`,
+  `*-announcement.md`, `CHANGELOG.md`, or GitHub Releases
+- temporary maintainer scratch notes or architecture experiments that should
+  live outside the tracked release-doc path
+- backlog planning packages that do not belong in the OSS repository
 
 <!-- arch-hotspot key=spec_runtime lines=3455 functions=65 -->
 <!-- arch-hotspot key=spec_execution lines=3547 functions=43 -->
