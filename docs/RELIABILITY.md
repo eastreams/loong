@@ -2,6 +2,33 @@
 
 Reliability expectations and invariants for LoongClaw.
 
+The public reader-facing summary for this material lives in
+[`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx).
+This file remains the repository-native reliability and invariant reference.
+
+## Route By Audience
+
+| If you are trying to... | Start here |
+| --- | --- |
+| read the public summary first | [`../site/reference/security-and-reliability.mdx`](../site/reference/security-and-reliability.mdx) |
+| inspect repository-native invariants and verification expectations | this file |
+| understand the broader repository docs layering | [`README.md`](README.md) |
+
+## Read This File When
+
+- you need the source-level invariant and verification contract
+- you are checking whether a change weakens an existing reliability guarantee
+- you need the repository-native commands and guardrails behind the public summary
+
+## Reliability Areas
+
+| Area | What this file covers |
+| --- | --- |
+| build invariants | CI-parity commands that must stay green |
+| runtime guardrails | execution behavior that should not silently degrade |
+| architecture guardrails | machine-checkable boundary and complexity rules |
+| kernel and channel invariants | fail-closed and persistence behavior that should remain stable |
+
 ## Build Invariants
 
 These must hold at every commit on every branch:
@@ -38,9 +65,9 @@ optional `scripts/pre-commit` hook mirrors these cargo gates locally.
 
 ## MVP Channel Invariants
 
-1. **Kernel context is bootstrapped at startup** — CLI chat, Telegram, and Feishu channels all create `KernelContext` before processing messages.
+1. **Kernel context is bootstrapped at startup** — the base CLI loop and shipped service-channel runtimes create `KernelContext` before processing messages.
 2. **Memory persistence failures are surfaced** — `persist_turn` errors propagate to the caller, never silently swallowed.
-3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per channel.
+3. **Provider errors have two modes** — `Propagate` (return error) or `InlineMessage` (synthetic reply). Behavior is explicit per operator or channel surface.
 
 ## Test Expectations
 

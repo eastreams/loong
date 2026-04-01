@@ -18,6 +18,6 @@ contact_links:
   - name: Contribution guide
     url: https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md
     about: Read the active dev-branch contribution workflow before opening a PR.
-  - name: GitHub collaboration reference
-    url: https://github.com/loongclaw-ai/loongclaw/blob/dev/docs/references/github-collaboration.md
-    about: See labels, branch model, and intake/review rules for the active collaboration baseline.
+  - name: Documentation overview
+    url: https://github.com/loongclaw-ai/loongclaw/blob/dev/docs/README.md
+    about: Start with the repo docs map, public docs overview, and setup playbook routes before filing a docs or setup issue.

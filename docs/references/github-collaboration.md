@@ -7,13 +7,6 @@ It is repository-native support material for maintainers, issue triage, and
 GitHub automation. Normal contributors should usually start with
 `CONTRIBUTING.md` or the public contribution pages under `site/`.
 
-## Read This File When
-
-- you need the repository's active GitHub branch and promotion baseline
-- you are maintaining labels, issue intake, or GitHub automation wiring
-- you are validating whether a GitHub workflow change still matches the current
-  collaboration contract
-
 ## Route By Audience
 
 | If you are trying to... | Start here | Why |
@@ -21,13 +14,6 @@ GitHub automation. Normal contributors should usually start with
 | follow the normal public contribution path | [`../../site/build-on-loongclaw/contribution-workflow.mdx`](../../site/build-on-loongclaw/contribution-workflow.mdx) and [`../../CONTRIBUTING.md`](../../CONTRIBUTING.md) | those are the primary contributor-facing guides |
 | understand where your background is most useful | [`contribution-areas.md`](contribution-areas.md) | this is the contributor-facing reference |
 | inspect maintainer intake wiring, branch governance, labels, and automation | this file | this is the repository support reference used by templates and automation |
-
-## What This File Governs
-
-- the active branch and promotion model for public collaboration
-- the repository-side CI and promotion gates that protect that model
-- issue intake routes and label taxonomy used by templates and automation
-- the maintainer baseline for pull requests and default-branch behavior
 
 ## Active Branch Model
 
@@ -174,10 +160,3 @@ GitHub serves public issue forms from the default branch. In this repository, th
 `dev`, which is also the active collaboration baseline. Keep contributor-facing templates, contact
 links, and references aligned on `dev` so public intake stays consistent with the actual review
 flow.
-
-## Do Not Use This File For
-
-- normal contributor onboarding that should live in `CONTRIBUTING.md` or
-  Mintlify contribution pages
-- temporary maintainer scratch notes or one-off incident logs
-- private planning or governance material that does not belong in the OSS repo
