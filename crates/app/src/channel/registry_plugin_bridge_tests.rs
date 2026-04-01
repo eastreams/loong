@@ -48,6 +48,30 @@ fn sample_channel_bridge_manifest_with_metadata(
     }
 }
 
+fn sample_channel_bridge_manifest_with_setup(
+    channel_id: Option<&str>,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_kernel::PluginSetup>,
+) -> loongclaw_kernel::PluginManifest {
+    let normalized_channel_id = channel_id.map(str::to_owned);
+
+    loongclaw_kernel::PluginManifest {
+        plugin_id: "sample-bridge".to_owned(),
+        provider_id: "sample-provider".to_owned(),
+        connector_name: "sample-connector".to_owned(),
+        channel_id: normalized_channel_id,
+        endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
+        capabilities: BTreeSet::new(),
+        metadata,
+        summary: None,
+        tags: Vec::new(),
+        input_examples: Vec::new(),
+        output_examples: Vec::new(),
+        defer_loading: false,
+        setup,
+    }
+}
+
 fn write_plugin_package_manifest(
     root: &Path,
     directory_name: &str,
@@ -73,6 +97,26 @@ fn compatible_bridge_metadata(
     metadata.insert("target_contract".to_owned(), target_contract.to_owned());
 
     metadata
+}
+
+fn bridge_setup_with_docs_and_remediation(
+    surface: &str,
+    docs_urls: Vec<&str>,
+    remediation: Option<&str>,
+) -> loongclaw_kernel::PluginSetup {
+    let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
+    let normalized_remediation = remediation.map(str::to_owned);
+
+    loongclaw_kernel::PluginSetup {
+        mode: loongclaw_kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(surface.to_owned()),
+        required_env_vars: Vec::new(),
+        recommended_env_vars: Vec::new(),
+        required_config_keys: Vec::new(),
+        default_env_var: None,
+        docs_urls: normalized_docs_urls,
+        remediation: normalized_remediation,
+    }
 }
 
 #[test]
@@ -340,4 +384,56 @@ fn channel_inventory_reports_managed_bridge_scan_failures() {
         Some(expected_install_root.as_str())
     );
     assert!(discovery.scan_issue.is_some());
+}
+
+#[test]
+fn channel_inventory_reports_managed_bridge_ambiguity_and_setup_guidance() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let compatible_setup = bridge_setup_with_docs_and_remediation(
+        "channel",
+        vec!["https://example.test/docs/weixin-bridge"],
+        Some("Run the ClawBot setup flow before enabling this bridge."),
+    );
+    let first_manifest = sample_channel_bridge_manifest_with_setup(
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(compatible_setup.clone()),
+    );
+    let second_manifest = sample_channel_bridge_manifest_with_setup(
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(compatible_setup),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+    let first_plugin = discovery.plugins.first().expect("first discovered plugin");
+
+    assert_eq!(
+        discovery.ambiguity_status,
+        Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins)
+    );
+    assert_eq!(discovery.compatible_plugin_ids.len(), 2);
+    assert_eq!(
+        first_plugin.setup_docs_urls,
+        vec!["https://example.test/docs/weixin-bridge".to_owned()]
+    );
+    assert_eq!(
+        first_plugin.setup_remediation.as_deref(),
+        Some("Run the ClawBot setup flow before enabling this bridge.")
+    );
 }

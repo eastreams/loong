@@ -363,6 +363,20 @@ impl ChannelPluginBridgeDiscoveryStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeDiscoveryAmbiguityStatus {
+    MultipleCompatiblePlugins,
+}
+
+impl ChannelPluginBridgeDiscoveryAmbiguityStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MultipleCompatiblePlugins => "multiple_compatible_plugins",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ChannelDiscoveredPluginBridgeStatus {
     CompatibleReady,
     CompatibleIncompleteContract,
@@ -395,6 +409,12 @@ pub struct ChannelDiscoveredPluginBridge {
     pub status: ChannelDiscoveredPluginBridgeStatus,
     pub issues: Vec<String>,
     pub missing_fields: Vec<String>,
+    pub required_env_vars: Vec<String>,
+    pub recommended_env_vars: Vec<String>,
+    pub required_config_keys: Vec<String>,
+    pub default_env_var: Option<String>,
+    pub setup_docs_urls: Vec<String>,
+    pub setup_remediation: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -402,7 +422,9 @@ pub struct ChannelPluginBridgeDiscovery {
     pub managed_install_root: Option<String>,
     pub status: ChannelPluginBridgeDiscoveryStatus,
     pub scan_issue: Option<String>,
+    pub ambiguity_status: Option<ChannelPluginBridgeDiscoveryAmbiguityStatus>,
     pub compatible_plugins: usize,
+    pub compatible_plugin_ids: Vec<String>,
     pub incomplete_plugins: usize,
     pub incompatible_plugins: usize,
     pub plugins: Vec<ChannelDiscoveredPluginBridge>,

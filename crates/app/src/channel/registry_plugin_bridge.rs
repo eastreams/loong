@@ -167,7 +167,9 @@ fn build_not_configured_discovery_by_id(
             managed_install_root: None,
             status: ChannelPluginBridgeDiscoveryStatus::NotConfigured,
             scan_issue: None,
+            ambiguity_status: None,
             compatible_plugins: 0,
+            compatible_plugin_ids: Vec::new(),
             incomplete_plugins: 0,
             incompatible_plugins: 0,
             plugins: Vec::new(),
@@ -191,7 +193,9 @@ fn build_scan_failed_discovery_by_id(
             managed_install_root: Some(managed_install_root.clone()),
             status: ChannelPluginBridgeDiscoveryStatus::ScanFailed,
             scan_issue: Some(scan_issue.clone()),
+            ambiguity_status: None,
             compatible_plugins: 0,
+            compatible_plugin_ids: Vec::new(),
             incomplete_plugins: 0,
             incompatible_plugins: 0,
             plugins: Vec::new(),
@@ -214,6 +218,8 @@ fn build_matches_discovery_by_id(
         let grouped_plugins = grouped_matches.get(channel_id);
         let plugins = grouped_plugins.cloned().unwrap_or_default();
         let compatible_plugins = count_compatible_plugins(&plugins);
+        let compatible_plugin_ids = compatible_plugin_ids(&plugins);
+        let ambiguity_status = discovery_ambiguity_status(&compatible_plugin_ids);
         let incomplete_plugins = count_incomplete_plugins(&plugins);
         let incompatible_plugins = count_incompatible_plugins(&plugins);
         let has_plugins = !plugins.is_empty();
@@ -225,7 +231,9 @@ fn build_matches_discovery_by_id(
             managed_install_root: Some(managed_install_root.clone()),
             status,
             scan_issue: None,
+            ambiguity_status,
             compatible_plugins,
+            compatible_plugin_ids,
             incomplete_plugins,
             incompatible_plugins,
             plugins,
@@ -251,6 +259,34 @@ fn count_compatible_plugins(plugins: &[ChannelDiscoveredPluginBridge]) -> usize 
     }
 
     compatible_plugins
+}
+
+fn compatible_plugin_ids(plugins: &[ChannelDiscoveredPluginBridge]) -> Vec<String> {
+    let mut compatible_plugin_ids = Vec::new();
+
+    for plugin in plugins {
+        let is_compatible = plugin.status == ChannelDiscoveredPluginBridgeStatus::CompatibleReady;
+
+        if !is_compatible {
+            continue;
+        }
+
+        compatible_plugin_ids.push(plugin.plugin_id.clone());
+    }
+
+    compatible_plugin_ids
+}
+
+fn discovery_ambiguity_status(
+    compatible_plugin_ids: &[String],
+) -> Option<ChannelPluginBridgeDiscoveryAmbiguityStatus> {
+    let has_multiple_compatible_plugins = compatible_plugin_ids.len() > 1;
+
+    if !has_multiple_compatible_plugins {
+        return None;
+    }
+
+    Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins)
 }
 
 fn count_incomplete_plugins(plugins: &[ChannelDiscoveredPluginBridge]) -> usize {
@@ -381,6 +417,7 @@ fn discovered_plugin_match_from_descriptor(
     let target_contract = channel_bridge_target_contract(channel_bridge);
     let account_scope = channel_bridge_account_scope(channel_bridge);
     let missing_fields = channel_bridge_missing_fields(channel_bridge);
+    let setup_details = plugin_bridge_setup_details(&descriptor.manifest);
     let manifest_status = validation.status;
     let status = discovered_plugin_bridge_status_from_validation(manifest_status, channel_bridge);
 
@@ -397,6 +434,44 @@ fn discovered_plugin_match_from_descriptor(
         status,
         issues: validation.issues,
         missing_fields,
+        required_env_vars: setup_details.required_env_vars,
+        recommended_env_vars: setup_details.recommended_env_vars,
+        required_config_keys: setup_details.required_config_keys,
+        default_env_var: setup_details.default_env_var,
+        setup_docs_urls: setup_details.setup_docs_urls,
+        setup_remediation: setup_details.setup_remediation,
+    }
+}
+
+#[derive(Debug, Default)]
+struct PluginBridgeSetupDetails {
+    required_env_vars: Vec<String>,
+    recommended_env_vars: Vec<String>,
+    required_config_keys: Vec<String>,
+    default_env_var: Option<String>,
+    setup_docs_urls: Vec<String>,
+    setup_remediation: Option<String>,
+}
+
+fn plugin_bridge_setup_details(manifest: &PluginManifest) -> PluginBridgeSetupDetails {
+    let Some(setup) = manifest.setup.as_ref() else {
+        return PluginBridgeSetupDetails::default();
+    };
+
+    let required_env_vars = setup.required_env_vars.clone();
+    let recommended_env_vars = setup.recommended_env_vars.clone();
+    let required_config_keys = setup.required_config_keys.clone();
+    let default_env_var = setup.default_env_var.clone();
+    let setup_docs_urls = setup.docs_urls.clone();
+    let setup_remediation = setup.remediation.clone();
+
+    PluginBridgeSetupDetails {
+        required_env_vars,
+        recommended_env_vars,
+        required_config_keys,
+        default_env_var,
+        setup_docs_urls,
+        setup_remediation,
     }
 }
 

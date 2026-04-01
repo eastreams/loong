@@ -3638,16 +3638,27 @@ pub fn push_channel_surface_managed_plugin_bridge_discovery(
     let managed_install_root = discovery.managed_install_root.as_deref().unwrap_or("-");
     let scan_issue = discovery.scan_issue.as_deref().unwrap_or("-");
     let status = discovery.status.as_str();
+    let ambiguity_status = discovery
+        .ambiguity_status
+        .map(|value| value.as_str())
+        .unwrap_or("-");
     let compatible_plugins = discovery.compatible_plugins;
+    let compatible_plugin_ids = if discovery.compatible_plugin_ids.is_empty() {
+        "-".to_owned()
+    } else {
+        discovery.compatible_plugin_ids.join(",")
+    };
     let incomplete_plugins = discovery.incomplete_plugins;
     let incompatible_plugins = discovery.incompatible_plugins;
 
     lines.push(format!(
-        "  managed_plugin_bridge_discovery status={} managed_install_root={} scan_issue={} compatible={} incomplete={} incompatible={}",
+        "  managed_plugin_bridge_discovery status={} managed_install_root={} scan_issue={} compatible={} compatible_plugin_ids={} ambiguity_status={} incomplete={} incompatible={}",
         status,
         managed_install_root,
         scan_issue,
         compatible_plugins,
+        compatible_plugin_ids,
+        ambiguity_status,
         incomplete_plugins,
         incompatible_plugins,
     ));
@@ -3674,9 +3685,34 @@ pub fn render_channel_surface_discovered_plugin_line(
     } else {
         plugin.issues.join("|")
     };
+    let required_env_vars = if plugin.required_env_vars.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin.required_env_vars.join(",")
+    };
+    let recommended_env_vars = if plugin.recommended_env_vars.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin.recommended_env_vars.join(",")
+    };
+    let required_config_keys = if plugin.required_config_keys.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin.required_config_keys.join(",")
+    };
+    let default_env_var = plugin.default_env_var.as_deref().unwrap_or("-");
+    let setup_docs_urls = if plugin.setup_docs_urls.is_empty() {
+        "-".to_owned()
+    } else {
+        plugin.setup_docs_urls.join(",")
+    };
+    let setup_remediation = match plugin.setup_remediation.as_deref() {
+        Some(value) => render_line_safe_text_value(value),
+        None => "-".to_owned(),
+    };
 
     format!(
-        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={}",
+        "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
         plugin.plugin_id,
         plugin.status.as_str(),
         plugin.bridge_kind,
@@ -3689,7 +3725,20 @@ pub fn render_channel_surface_discovered_plugin_line(
         package_manifest_path,
         missing_fields,
         issues,
+        required_env_vars,
+        recommended_env_vars,
+        required_config_keys,
+        default_env_var,
+        setup_docs_urls,
+        setup_remediation,
     )
+}
+
+pub(crate) fn render_line_safe_text_value(raw: &str) -> String {
+    match serde_json::to_string(raw) {
+        Ok(value) => value,
+        Err(_) => "\"<unrenderable-text>\"".to_owned(),
+    }
 }
 
 pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
