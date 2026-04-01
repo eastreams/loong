@@ -1364,6 +1364,65 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
 }
 
 #[test]
+fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("manifest_channel_id"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("required_setup_surface"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("channel")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("runtime_owner"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("external_plugin")
+            })
+    );
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("qqbot")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("supported_operations"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|operations| {
+                            operations
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["send", "serve"])
+            })
+    );
+}
+
+#[test]
 fn build_channels_cli_json_payload_includes_full_channel_catalog() {
     let config = mvp::config::LoongClawConfig::default();
     let inventory = mvp::channel::channel_inventory(&config);

@@ -39,10 +39,19 @@ use super::{
 #[path = "registry_bridge.rs"]
 mod bridge;
 
+#[path = "registry_plugin_bridge.rs"]
+mod plugin_bridge;
+
+#[cfg(test)]
+#[path = "registry_plugin_bridge_tests.rs"]
+mod plugin_bridge_tests;
+
 use bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
     WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
 };
+use plugin_bridge::plugin_bridge_contract_from_descriptor;
+pub use plugin_bridge::validate_plugin_channel_bridge_manifest;
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
@@ -290,6 +299,7 @@ pub struct ChannelCatalogEntry {
     pub aliases: Vec<&'static str>,
     pub transport: &'static str,
     pub onboarding: ChannelOnboardingDescriptor,
+    pub plugin_bridge_contract: Option<ChannelPluginBridgeContract>,
     pub supported_target_kinds: Vec<ChannelCatalogTargetKind>,
     pub operations: Vec<ChannelCatalogOperation>,
 }
@@ -298,6 +308,32 @@ impl ChannelCatalogEntry {
     pub fn operation(&self, id: &str) -> Option<&ChannelCatalogOperation> {
         self.operations.iter().find(|operation| operation.id == id)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeContract {
+    pub manifest_channel_id: &'static str,
+    pub required_setup_surface: &'static str,
+    pub runtime_owner: &'static str,
+    pub supported_operations: Vec<&'static str>,
+    pub recommended_metadata_keys: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeManifestStatus {
+    Compatible,
+    UnknownChannel,
+    MissingSetupSurface,
+    UnsupportedChannelSurface,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeManifestValidation {
+    pub channel_id: String,
+    pub status: ChannelPluginBridgeManifestStatus,
+    pub issues: Vec<String>,
+    pub recommended_metadata_keys: Vec<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -860,6 +896,17 @@ const PLUGIN_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
     ChannelCapability::Send,
     ChannelCapability::Serve,
     ChannelCapability::RuntimeTracking,
+];
+
+const PLUGIN_BRIDGE_REQUIRED_SETUP_SURFACE: &str = "channel";
+const PLUGIN_BRIDGE_RUNTIME_OWNER: &str = "external_plugin";
+const PLUGIN_BRIDGE_RECOMMENDED_METADATA_KEYS: &[&str] = &[
+    "bridge_kind",
+    "adapter_family",
+    "entrypoint",
+    "transport_family",
+    "target_contract",
+    "account_scope",
 ];
 
 const CONFIG_BACKED_SEND_CHANNEL_CAPABILITIES: &[ChannelCapability] =
@@ -3309,6 +3356,8 @@ fn channel_catalog_entry_from_descriptor(
         }
     }
 
+    let plugin_bridge_contract = plugin_bridge_contract_from_descriptor(descriptor);
+
     ChannelCatalogEntry {
         id: descriptor.id,
         label: descriptor.label,
@@ -3320,6 +3369,7 @@ fn channel_catalog_entry_from_descriptor(
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
         onboarding: descriptor.onboarding,
+        plugin_bridge_contract,
         supported_target_kinds,
         operations: descriptor
             .operations
@@ -9515,6 +9565,7 @@ mod tests {
                 aliases: vec![],
                 transport: "telegram_bot_api_polling",
                 onboarding: TELEGRAM_ONBOARDING_DESCRIPTOR,
+                plugin_bridge_contract: None,
                 supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
                 operations: vec![
                     ChannelCatalogOperation {
@@ -9548,6 +9599,7 @@ mod tests {
                 aliases: vec![],
                 transport: "discord_http_api",
                 onboarding: DISCORD_ONBOARDING_DESCRIPTOR,
+                plugin_bridge_contract: None,
                 supported_target_kinds: vec![ChannelCatalogTargetKind::Conversation],
                 operations: vec![
                     ChannelCatalogOperation {

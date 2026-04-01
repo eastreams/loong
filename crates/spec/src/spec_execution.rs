@@ -1658,12 +1658,26 @@ fn filter_scan_report_by_keys(
     }
 }
 
+#[derive(Clone)]
+struct PluginTranslationMetadataSnapshot {
+    bridge_kind: String,
+    adapter_family: String,
+    entrypoint_hint: String,
+    source_language: String,
+    channel_id: Option<String>,
+    channel_bridge_transport_family: Option<String>,
+    channel_bridge_target_contract: Option<String>,
+    channel_bridge_account_scope: Option<String>,
+    channel_bridge_ready: Option<bool>,
+    channel_bridge_missing_fields: Vec<String>,
+}
+
 fn enrich_scan_report_with_translation(
     report: &PluginScanReport,
     translation: &PluginTranslationReport,
     activation: Option<&PluginActivationPlan>,
 ) -> PluginScanReport {
-    let mut runtime_by_key: BTreeMap<(String, String), (String, String, String, String)> =
+    let mut runtime_by_key: BTreeMap<(String, String), PluginTranslationMetadataSnapshot> =
         BTreeMap::new();
     let mut activation_contracts_by_key: BTreeMap<
         (String, String),
@@ -1671,14 +1685,35 @@ fn enrich_scan_report_with_translation(
     > = BTreeMap::new();
 
     for entry in &translation.entries {
+        let channel_bridge = entry.channel_bridge.as_ref();
+        let channel_id = channel_bridge
+            .and_then(|bridge| bridge.channel_id.clone())
+            .or_else(|| entry.channel_id.clone());
+        let channel_bridge_transport_family =
+            channel_bridge.and_then(|bridge| bridge.transport_family.clone());
+        let channel_bridge_target_contract =
+            channel_bridge.and_then(|bridge| bridge.target_contract.clone());
+        let channel_bridge_account_scope =
+            channel_bridge.and_then(|bridge| bridge.account_scope.clone());
+        let channel_bridge_ready = channel_bridge.map(|bridge| bridge.readiness.ready);
+        let channel_bridge_missing_fields = channel_bridge
+            .map(|bridge| bridge.readiness.missing_fields.clone())
+            .unwrap_or_default();
+
         runtime_by_key.insert(
             (entry.source_path.clone(), entry.plugin_id.clone()),
-            (
-                entry.runtime.bridge_kind.as_str().to_owned(),
-                entry.runtime.adapter_family.clone(),
-                entry.runtime.entrypoint_hint.clone(),
-                entry.runtime.source_language.clone(),
-            ),
+            PluginTranslationMetadataSnapshot {
+                bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
+                adapter_family: entry.runtime.adapter_family.clone(),
+                entrypoint_hint: entry.runtime.entrypoint_hint.clone(),
+                source_language: entry.runtime.source_language.clone(),
+                channel_id,
+                channel_bridge_transport_family,
+                channel_bridge_target_contract,
+                channel_bridge_account_scope,
+                channel_bridge_ready,
+                channel_bridge_missing_fields,
+            },
         );
     }
 
@@ -1793,33 +1828,41 @@ fn enrich_scan_report_with_translation(
                     .remove("component_resolved_path");
             }
 
-            if let Some((bridge_kind, adapter_family, entrypoint_hint, source_language)) =
-                runtime_by_key.get(&(
-                    descriptor.path.clone(),
-                    descriptor.manifest.plugin_id.clone(),
-                ))
-            {
+            if let Some(runtime_snapshot) = runtime_by_key.get(&(
+                descriptor.path.clone(),
+                descriptor.manifest.plugin_id.clone(),
+            )) {
+                let bridge_kind = runtime_snapshot.bridge_kind.clone();
+                let adapter_family = runtime_snapshot.adapter_family.clone();
+                let entrypoint_hint = runtime_snapshot.entrypoint_hint.clone();
+                let source_language = runtime_snapshot.source_language.clone();
                 descriptor
                     .manifest
                     .metadata
-                    .insert("bridge_kind".to_owned(), bridge_kind.clone());
+                    .entry("bridge_kind".to_owned())
+                    .or_insert(bridge_kind);
                 descriptor
                     .manifest
                     .metadata
-                    .insert("adapter_family".to_owned(), adapter_family.clone());
+                    .entry("adapter_family".to_owned())
+                    .or_insert(adapter_family);
                 descriptor
                     .manifest
                     .metadata
-                    .insert("entrypoint_hint".to_owned(), entrypoint_hint.clone());
+                    .entry("entrypoint_hint".to_owned())
+                    .or_insert(entrypoint_hint);
                 descriptor
                     .manifest
                     .metadata
-                    .insert("source_language".to_owned(), source_language.clone());
+                    .entry("source_language".to_owned())
+                    .or_insert(source_language);
+
+                insert_plugin_channel_bridge_metadata(
+                    &mut descriptor.manifest.metadata,
+                    Some(runtime_snapshot),
+                );
             } else {
-                descriptor.manifest.metadata.remove("bridge_kind");
-                descriptor.manifest.metadata.remove("adapter_family");
-                descriptor.manifest.metadata.remove("entrypoint_hint");
-                descriptor.manifest.metadata.remove("source_language");
+                insert_plugin_channel_bridge_metadata(&mut descriptor.manifest.metadata, None);
             }
             insert_plugin_activation_runtime_contract_metadata(
                 &mut descriptor.manifest.metadata,
@@ -1977,6 +2020,86 @@ fn insert_plugin_setup_metadata(
     } else {
         metadata.remove("plugin_setup_remediation");
     }
+}
+
+fn insert_plugin_channel_bridge_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    snapshot: Option<&PluginTranslationMetadataSnapshot>,
+) {
+    let Some(snapshot) = snapshot else {
+        remove_plugin_channel_bridge_metadata(metadata);
+        return;
+    };
+
+    upsert_or_remove_metadata_value(metadata, "plugin_channel_id", snapshot.channel_id.as_ref());
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_transport_family",
+        snapshot.channel_bridge_transport_family.as_ref(),
+    );
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_target_contract",
+        snapshot.channel_bridge_target_contract.as_ref(),
+    );
+    upsert_or_remove_metadata_value(
+        metadata,
+        "plugin_channel_bridge_account_scope",
+        snapshot.channel_bridge_account_scope.as_ref(),
+    );
+
+    if let Some(channel_bridge_ready) = snapshot.channel_bridge_ready {
+        let ready_key = "plugin_channel_bridge_ready".to_owned();
+        let ready_value = channel_bridge_ready.to_string();
+        metadata.insert(ready_key, ready_value);
+    } else {
+        metadata.remove("plugin_channel_bridge_ready");
+    }
+
+    upsert_or_remove_json_string_list_metadata(
+        metadata,
+        "plugin_channel_bridge_missing_fields_json",
+        &snapshot.channel_bridge_missing_fields,
+    );
+}
+
+fn remove_plugin_channel_bridge_metadata(metadata: &mut BTreeMap<String, String>) {
+    metadata.remove("plugin_channel_id");
+    metadata.remove("plugin_channel_bridge_transport_family");
+    metadata.remove("plugin_channel_bridge_target_contract");
+    metadata.remove("plugin_channel_bridge_account_scope");
+    metadata.remove("plugin_channel_bridge_ready");
+    metadata.remove("plugin_channel_bridge_missing_fields_json");
+}
+
+fn upsert_or_remove_metadata_value(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    value: Option<&String>,
+) {
+    let Some(value) = value else {
+        metadata.remove(key);
+        return;
+    };
+
+    let metadata_key = key.to_owned();
+    let metadata_value = value.clone();
+    metadata.insert(metadata_key, metadata_value);
+}
+
+fn upsert_or_remove_json_string_list_metadata(
+    metadata: &mut BTreeMap<String, String>,
+    key: &str,
+    values: &[String],
+) {
+    let serialized = serde_json::to_string(values);
+    let Ok(serialized) = serialized else {
+        metadata.remove(key);
+        return;
+    };
+
+    let metadata_key = key.to_owned();
+    metadata.insert(metadata_key, serialized);
 }
 
 fn insert_plugin_setup_string_list_metadata(
@@ -2986,8 +3109,7 @@ mod plugin_metadata_tests {
                 package_manifest_path: descriptor.package_manifest_path.clone(),
                 diagnostic_findings: Vec::new(),
                 setup: descriptor.manifest.setup.clone(),
-                slot_claims: descriptor.manifest.slot_claims.clone(),
-                compatibility: descriptor.manifest.compatibility.clone(),
+                channel_bridge: None,
                 runtime: PluginRuntimeProfile {
                     source_language: descriptor.language.clone(),
                     bridge_kind: PluginBridgeKind::HttpJson,
@@ -2998,32 +3120,79 @@ mod plugin_metadata_tests {
         }
     }
 
-    fn ready_activation_plan(descriptor: &PluginDescriptor) -> PluginActivationPlan {
-        PluginActivationPlan {
-            total_plugins: 1,
-            ready_plugins: 1,
-            setup_incomplete_plugins: 0,
-            blocked_plugins: 0,
-            candidates: vec![PluginActivationCandidate {
+    fn test_channel_bridge_descriptor(source_kind: PluginSourceKind) -> PluginDescriptor {
+        let mut descriptor = test_descriptor(source_kind);
+
+        descriptor.manifest.plugin_id = "weixin-clawbot-bridge".to_owned();
+        descriptor.manifest.provider_id = "weixin-bridge".to_owned();
+        descriptor.manifest.connector_name = "weixin-clawbot-http".to_owned();
+        descriptor.manifest.channel_id = Some("weixin".to_owned());
+        descriptor.manifest.endpoint = Some("http://127.0.0.1:8091/bridge".to_owned());
+        descriptor.manifest.metadata = BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+            ("account_scope".to_owned(), "multi_account".to_owned()),
+        ]);
+        descriptor.manifest.setup = Some(PluginSetup {
+            mode: PluginSetupMode::MetadataOnly,
+            surface: Some("channel".to_owned()),
+            required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+            recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+            required_config_keys: vec![
+                "weixin.enabled".to_owned(),
+                "weixin.bridge_url".to_owned(),
+                "weixin.bridge_access_token".to_owned(),
+            ],
+            default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+            docs_urls: vec!["https://docs.example.com/weixin-bridge".to_owned()],
+            remediation: Some("configure the sanctioned weixin bridge contract".to_owned()),
+        });
+
+        descriptor
+    }
+
+    fn test_channel_bridge_translation(descriptor: &PluginDescriptor) -> PluginTranslationReport {
+        PluginTranslationReport {
+            translated_plugins: 1,
+            bridge_distribution: BTreeMap::from([("http_json".to_owned(), 1)]),
+            entries: vec![PluginIR {
                 plugin_id: descriptor.manifest.plugin_id.clone(),
+                provider_id: descriptor.manifest.provider_id.clone(),
+                connector_name: descriptor.manifest.connector_name.clone(),
+                channel_id: descriptor.manifest.channel_id.clone(),
+                endpoint: descriptor.manifest.endpoint.clone(),
+                capabilities: descriptor.manifest.capabilities.clone(),
+                metadata: descriptor.manifest.metadata.clone(),
                 source_path: descriptor.path.clone(),
                 source_kind: descriptor.source_kind,
                 package_root: descriptor.package_root.clone(),
                 package_manifest_path: descriptor.package_manifest_path.clone(),
-                trust_tier: descriptor.manifest.trust_tier,
-                compatibility_mode: descriptor.compatibility_mode,
-                compatibility_shim: None,
-                compatibility_shim_support: None,
-                compatibility_shim_support_mismatch_reasons: Vec::new(),
-                bridge_kind: PluginBridgeKind::HttpJson,
-                adapter_family: "http-adapter".to_owned(),
-                slot_claims: descriptor.manifest.slot_claims.clone(),
-                diagnostic_findings: Vec::new(),
-                status: PluginActivationStatus::Ready,
-                reason: "plugin runtime profile is supported by current runtime matrix".to_owned(),
-                missing_required_env_vars: Vec::new(),
-                missing_required_config_keys: Vec::new(),
-                bootstrap_hint: "spawn python worker and then wire http adapter".to_owned(),
+                setup: descriptor.manifest.setup.clone(),
+                channel_bridge: Some(kernel::PluginChannelBridgeContract {
+                    channel_id: Some("weixin".to_owned()),
+                    setup_surface: Some("channel".to_owned()),
+                    transport_family: Some("wechat_clawbot_ilink_bridge".to_owned()),
+                    target_contract: Some(
+                        "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+                    ),
+                    account_scope: Some("multi_account".to_owned()),
+                    readiness: kernel::PluginChannelBridgeReadiness {
+                        ready: true,
+                        missing_fields: Vec::new(),
+                    },
+                }),
+                runtime: PluginRuntimeProfile {
+                    source_language: descriptor.language.clone(),
+                    bridge_kind: PluginBridgeKind::HttpJson,
+                    adapter_family: "channel-bridge".to_owned(),
+                    entrypoint_hint: "http://127.0.0.1:8091/bridge".to_owned(),
+                },
             }],
         }
     }
@@ -3338,342 +3507,51 @@ mod plugin_metadata_tests {
     }
 
     #[test]
-    fn enrich_scan_report_removes_stale_host_projected_metadata_when_authoritative_values_absent() {
-        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
-        descriptor.manifest.setup = None;
-        descriptor.manifest.defer_loading = true;
-        descriptor
-            .manifest
-            .metadata
-            .insert("plugin_id".to_owned(), "forged-plugin-id".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("defer_loading".to_owned(), "false".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("plugin_setup_mode".to_owned(), "legacy".to_owned());
-        descriptor.manifest.metadata.insert(
-            "plugin_setup_required_env_vars_json".to_owned(),
-            "[\"LEGACY_KEY\"]".to_owned(),
-        );
-        descriptor.manifest.metadata.insert(
-            "component_resolved_path".to_owned(),
-            "/tmp/forged-component".to_owned(),
-        );
-        descriptor
-            .manifest
-            .metadata
-            .insert("bridge_kind".to_owned(), "process_stdio".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("adapter_family".to_owned(), "legacy-adapter".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("entrypoint_hint".to_owned(), "stdio://legacy".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("source_language".to_owned(), "legacy".to_owned());
-
+    fn enrich_scan_report_adds_channel_bridge_contract_metadata() {
+        let descriptor = test_channel_bridge_descriptor(PluginSourceKind::PackageManifest);
         let report = PluginScanReport {
             scanned_files: 1,
             matched_plugins: 1,
-            diagnostic_findings: Vec::new(),
-            descriptors: vec![descriptor],
-        };
-
-        let enriched =
-            enrich_scan_report_with_translation(&report, &PluginTranslationReport::default(), None);
-        let metadata = &enriched.descriptors[0].manifest.metadata;
-
-        assert_eq!(
-            metadata.get("plugin_id").map(String::as_str),
-            Some("search-plugin")
-        );
-        assert_eq!(
-            metadata.get("defer_loading").map(String::as_str),
-            Some("true")
-        );
-        assert!(!metadata.contains_key("plugin_setup_mode"));
-        assert!(!metadata.contains_key("plugin_setup_required_env_vars_json"));
-        assert!(!metadata.contains_key("component_resolved_path"));
-        assert!(!metadata.contains_key("bridge_kind"));
-        assert!(!metadata.contains_key("adapter_family"));
-        assert!(!metadata.contains_key("entrypoint_hint"));
-        assert!(!metadata.contains_key("source_language"));
-    }
-
-    #[test]
-    fn enrich_scan_report_overwrites_forged_runtime_projection_metadata() {
-        let mut descriptor = test_descriptor(PluginSourceKind::PackageManifest);
-        descriptor
-            .manifest
-            .metadata
-            .insert("bridge_kind".to_owned(), "process_stdio".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("adapter_family".to_owned(), "legacy-adapter".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("entrypoint_hint".to_owned(), "stdio://legacy".to_owned());
-        descriptor
-            .manifest
-            .metadata
-            .insert("source_language".to_owned(), "legacy".to_owned());
-        let report = PluginScanReport {
-            scanned_files: 1,
-            matched_plugins: 1,
-            diagnostic_findings: Vec::new(),
             descriptors: vec![descriptor.clone()],
         };
-        let translation = test_translation(&descriptor);
+        let translation = test_channel_bridge_translation(&descriptor);
 
-        let enriched = enrich_scan_report_with_translation(&report, &translation, None);
+        let enriched = enrich_scan_report_with_translation(&report, &translation);
         let metadata = &enriched.descriptors[0].manifest.metadata;
 
         assert_eq!(
-            metadata.get("bridge_kind").map(String::as_str),
-            Some("http_json")
+            metadata.get("plugin_channel_id").map(String::as_str),
+            Some("weixin")
         );
-        assert_eq!(
-            metadata.get("adapter_family").map(String::as_str),
-            Some("http-adapter")
-        );
-        assert_eq!(
-            metadata.get("entrypoint_hint").map(String::as_str),
-            Some("https://example.com/search")
-        );
-        assert_eq!(
-            metadata.get("source_language").map(String::as_str),
-            Some("manifest")
-        );
-    }
-
-    #[test]
-    fn enrich_scan_report_attaches_activation_runtime_contract_metadata() {
-        let descriptor = test_descriptor(PluginSourceKind::EmbeddedSource);
-        let report = PluginScanReport {
-            scanned_files: 1,
-            matched_plugins: 1,
-            diagnostic_findings: Vec::new(),
-            descriptors: vec![descriptor.clone()],
-        };
-        let translation = test_translation(&descriptor);
-        let activation = ready_activation_plan(&descriptor);
-
-        let enriched =
-            enrich_scan_report_with_translation(&report, &translation, Some(&activation));
-        let metadata = &enriched.descriptors[0].manifest.metadata;
-        let raw_contract = metadata
-            .get(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_METADATA_KEY)
-            .expect("activation contract metadata should be stamped");
-        let contract = parse_plugin_activation_runtime_contract(raw_contract)
-            .expect("activation contract should decode");
-        let checksum = activation_runtime_contract_checksum_hex(raw_contract.as_bytes());
-
-        assert_eq!(contract.plugin_id, "search-plugin");
-        assert_eq!(contract.source_path, "/tmp/pkg/plugin.py");
-        assert_eq!(contract.source_kind, PluginSourceKind::EmbeddedSource);
-        assert_eq!(
-            contract.dialect,
-            PluginContractDialect::LoongClawEmbeddedSource
-        );
-        assert_eq!(contract.bridge_kind, PluginBridgeKind::HttpJson);
-        assert_eq!(contract.adapter_family, "http-adapter");
-        assert_eq!(contract.entrypoint_hint, "https://example.com/search");
-        assert_eq!(contract.source_language, "py");
         assert_eq!(
             metadata
-                .get(PLUGIN_ACTIVATION_RUNTIME_CONTRACT_CHECKSUM_METADATA_KEY)
+                .get("plugin_channel_bridge_transport_family")
                 .map(String::as_str),
-            Some(checksum.as_str())
-        );
-    }
-}
-
-#[cfg(test)]
-mod plugin_trust_summary_tests {
-    use super::build_plugin_trust_summary;
-    use kernel::{
-        BootstrapReport, BootstrapTask, BootstrapTaskStatus, Capability, PluginActivationCandidate,
-        PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginDescriptor,
-        PluginManifest, PluginScanReport, PluginSourceKind, PluginTrustTier,
-    };
-    use std::collections::{BTreeMap, BTreeSet};
-
-    fn descriptor(
-        plugin_id: &str,
-        source_path: &str,
-        trust_tier: PluginTrustTier,
-    ) -> PluginDescriptor {
-        PluginDescriptor {
-            path: source_path.to_owned(),
-            source_kind: PluginSourceKind::EmbeddedSource,
-            dialect: kernel::PluginContractDialect::LoongClawEmbeddedSource,
-            dialect_version: Some("v1alpha1".to_owned()),
-            compatibility_mode: kernel::PluginCompatibilityMode::Native,
-            package_root: "/tmp/plugins".to_owned(),
-            package_manifest_path: None,
-            language: "python".to_owned(),
-            manifest: PluginManifest {
-                api_version: Some("v1alpha1".to_owned()),
-                version: Some("0.1.0".to_owned()),
-                plugin_id: plugin_id.to_owned(),
-                provider_id: plugin_id.to_owned(),
-                connector_name: plugin_id.to_owned(),
-                channel_id: Some("primary".to_owned()),
-                endpoint: Some(format!("local://{plugin_id}")),
-                capabilities: BTreeSet::from([Capability::InvokeConnector]),
-                trust_tier,
-                metadata: BTreeMap::new(),
-                summary: None,
-                tags: Vec::new(),
-                input_examples: Vec::new(),
-                output_examples: Vec::new(),
-                defer_loading: false,
-                setup: None,
-                slot_claims: Vec::new(),
-                compatibility: None,
-            },
-        }
-    }
-
-    #[test]
-    fn build_plugin_trust_summary_counts_tiers_and_review_required_plugins() {
-        let official = descriptor(
-            "official-http",
-            "/tmp/plugins/official.rs",
-            PluginTrustTier::Official,
-        );
-        let unverified = descriptor(
-            "stdio-review",
-            "/tmp/plugins/stdio.py",
-            PluginTrustTier::Unverified,
-        );
-        let scan_report = PluginScanReport {
-            scanned_files: 2,
-            matched_plugins: 2,
-            diagnostic_findings: Vec::new(),
-            descriptors: vec![official, unverified],
-        };
-        let activation_plan = PluginActivationPlan {
-            total_plugins: 2,
-            ready_plugins: 2,
-            setup_incomplete_plugins: 0,
-            blocked_plugins: 0,
-            candidates: vec![
-                PluginActivationCandidate {
-                    plugin_id: "official-http".to_owned(),
-                    source_path: "/tmp/plugins/official.rs".to_owned(),
-                    source_kind: PluginSourceKind::EmbeddedSource,
-                    package_root: "/tmp/plugins".to_owned(),
-                    package_manifest_path: None,
-                    trust_tier: PluginTrustTier::Official,
-                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
-                    compatibility_shim: None,
-                    compatibility_shim_support: None,
-                    compatibility_shim_support_mismatch_reasons: Vec::new(),
-                    bridge_kind: PluginBridgeKind::HttpJson,
-                    adapter_family: "http-adapter".to_owned(),
-                    slot_claims: Vec::new(),
-                    diagnostic_findings: Vec::new(),
-                    status: PluginActivationStatus::Ready,
-                    reason: "ready".to_owned(),
-                    missing_required_env_vars: Vec::new(),
-                    missing_required_config_keys: Vec::new(),
-                    bootstrap_hint: "register provider".to_owned(),
-                },
-                PluginActivationCandidate {
-                    plugin_id: "stdio-review".to_owned(),
-                    source_path: "/tmp/plugins/stdio.py".to_owned(),
-                    source_kind: PluginSourceKind::EmbeddedSource,
-                    package_root: "/tmp/plugins".to_owned(),
-                    package_manifest_path: None,
-                    trust_tier: PluginTrustTier::Unverified,
-                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
-                    compatibility_shim: None,
-                    compatibility_shim_support: None,
-                    compatibility_shim_support_mismatch_reasons: Vec::new(),
-                    bridge_kind: PluginBridgeKind::ProcessStdio,
-                    adapter_family: "python-stdio-adapter".to_owned(),
-                    slot_claims: Vec::new(),
-                    diagnostic_findings: Vec::new(),
-                    status: PluginActivationStatus::Ready,
-                    reason: "ready".to_owned(),
-                    missing_required_env_vars: Vec::new(),
-                    missing_required_config_keys: Vec::new(),
-                    bootstrap_hint: "spawn stdio worker".to_owned(),
-                },
-            ],
-        };
-        let bootstrap_report = BootstrapReport {
-            total_tasks: 2,
-            applied_tasks: 1,
-            deferred_tasks: 1,
-            skipped_tasks: 0,
-            blocked: true,
-            block_reason: Some(
-                "bootstrap policy blocked 1 ready plugin(s) that were not auto-applied"
-                    .to_owned(),
-            ),
-            applied_plugin_keys: BTreeSet::from([(
-                "/tmp/plugins/official.rs".to_owned(),
-                "official-http".to_owned(),
-            )]),
-            tasks: vec![
-                BootstrapTask {
-                    plugin_id: "official-http".to_owned(),
-                    source_path: "/tmp/plugins/official.rs".to_owned(),
-                    trust_tier: PluginTrustTier::Official,
-                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
-                    compatibility_shim: None,
-                    bridge_kind: PluginBridgeKind::HttpJson,
-                    adapter_family: "http-adapter".to_owned(),
-                    bootstrap_hint: "register provider".to_owned(),
-                    status: BootstrapTaskStatus::Applied,
-                    reason: "bridge is allowed for automatic bootstrap apply".to_owned(),
-                },
-                BootstrapTask {
-                    plugin_id: "stdio-review".to_owned(),
-                    source_path: "/tmp/plugins/stdio.py".to_owned(),
-                    trust_tier: PluginTrustTier::Unverified,
-                    compatibility_mode: kernel::PluginCompatibilityMode::Native,
-                    compatibility_shim: None,
-                    bridge_kind: PluginBridgeKind::ProcessStdio,
-                    adapter_family: "python-stdio-adapter".to_owned(),
-                    bootstrap_hint: "spawn stdio worker".to_owned(),
-                    status: BootstrapTaskStatus::DeferredUnsupportedAutoApply,
-                    reason:
-                        "bridge is ready but auto-apply is blocked by bootstrap trust policy for unverified high-risk plugins"
-                            .to_owned(),
-                },
-            ],
-        };
-
-        let summary =
-            build_plugin_trust_summary(&[scan_report], &[activation_plan], &[bootstrap_report]);
-
-        assert_eq!(summary.scanned_plugins, 2);
-        assert_eq!(summary.official_plugins, 1);
-        assert_eq!(summary.unverified_plugins, 1);
-        assert_eq!(summary.high_risk_plugins, 1);
-        assert_eq!(summary.high_risk_unverified_plugins, 1);
-        assert_eq!(summary.blocked_auto_apply_plugins, 1);
-        assert_eq!(summary.review_required_plugins.len(), 1);
-        assert_eq!(summary.review_required_plugins[0].plugin_id, "stdio-review");
-        assert_eq!(
-            summary.review_required_plugins[0].provenance_summary,
-            "embedded_source:/tmp/plugins/stdio.py"
+            Some("wechat_clawbot_ilink_bridge")
         );
         assert_eq!(
-            summary.review_required_plugins[0].bootstrap_status,
-            Some(BootstrapTaskStatus::DeferredUnsupportedAutoApply)
+            metadata
+                .get("plugin_channel_bridge_target_contract")
+                .map(String::as_str),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_account_scope")
+                .map(String::as_str),
+            Some("multi_account")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_ready")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            metadata
+                .get("plugin_channel_bridge_missing_fields_json")
+                .map(String::as_str),
+            Some("[]")
         );
     }
 }

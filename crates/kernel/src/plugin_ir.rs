@@ -56,15 +56,39 @@ pub struct PluginRuntimeProfile {
     pub entrypoint_hint: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginRuntimeScaffoldDefaults {
-    pub source_language: Option<String>,
-    pub bridge_kind: PluginBridgeKind,
-    pub adapter_family: String,
-    pub entrypoint_hint: String,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginChannelBridgeReadiness {
+    pub ready: bool,
+    #[serde(default)]
+    pub missing_fields: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+impl Default for PluginChannelBridgeReadiness {
+    fn default() -> Self {
+        Self {
+            ready: true,
+            missing_fields: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginChannelBridgeContract {
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    #[serde(default)]
+    pub setup_surface: Option<String>,
+    #[serde(default)]
+    pub transport_family: Option<String>,
+    #[serde(default)]
+    pub target_contract: Option<String>,
+    #[serde(default)]
+    pub account_scope: Option<String>,
+    #[serde(default)]
+    pub readiness: PluginChannelBridgeReadiness,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginIR {
     pub manifest_api_version: Option<String>,
     pub plugin_version: Option<String>,
@@ -90,9 +114,7 @@ pub struct PluginIR {
     pub diagnostic_findings: Vec<PluginDiagnosticFinding>,
     pub setup: Option<PluginSetup>,
     #[serde(default)]
-    pub slot_claims: Vec<PluginSlotClaim>,
-    pub compatibility: Option<PluginCompatibility>,
-    #[serde(default)]
+    pub channel_bridge: Option<PluginChannelBridgeContract>,
     pub runtime: PluginRuntimeProfile,
 }
 
@@ -265,8 +287,7 @@ pub enum PluginActivationStatus {
     Ready,
     /// The runtime surface is supported, but declared setup requirements are not.
     SetupIncomplete,
-    BlockedCompatibilityMode,
-    BlockedIncompatibleHost,
+    BlockedInvalidManifestContract,
     BlockedUnsupportedBridge,
     BlockedUnsupportedAdapterFamily,
     BlockedSlotClaimConflict,
@@ -710,6 +731,7 @@ impl PluginTranslator {
     #[must_use]
     pub fn translate_descriptor(&self, descriptor: &PluginDescriptor) -> PluginIR {
         let runtime = infer_runtime_profile(&descriptor.language, &descriptor.manifest);
+        let channel_bridge = derive_channel_bridge_contract(&descriptor.manifest);
 
         PluginIR {
             manifest_api_version: descriptor.manifest.api_version.clone(),
@@ -731,8 +753,7 @@ impl PluginTranslator {
             package_manifest_path: descriptor.package_manifest_path.clone(),
             diagnostic_findings: Vec::new(),
             setup: descriptor.manifest.setup.clone(),
-            slot_claims: descriptor.manifest.slot_claims.clone(),
-            compatibility: descriptor.manifest.compatibility.clone(),
+            channel_bridge,
             runtime,
         }
     }
@@ -772,62 +793,12 @@ impl PluginTranslator {
             let setup_readiness =
                 evaluate_plugin_setup_readiness(ir.setup.as_ref(), setup_readiness_context);
             let setup_is_incomplete = !setup_readiness.ready;
-            let slot_conflict_key = (ir.source_path.clone(), ir.plugin_id.clone());
-            let (status, reason) = if !matrix.is_compatibility_mode_supported(ir.compatibility_mode)
-            {
-                let shim_clause = compatibility_shim
-                    .as_ref()
-                    .map(|shim| format!(" via shim `{}` ({})", shim.shim_id, shim.family))
-                    .unwrap_or_default();
-                (
-                    PluginActivationStatus::BlockedCompatibilityMode,
-                    format!(
-                        "compatibility mode {} requires a host shim that is not enabled in the current runtime matrix{}",
-                        ir.compatibility_mode.as_str(),
-                        shim_clause
-                    ),
-                )
-            } else if !matrix.is_compatibility_shim_supported(compatibility_shim.as_ref()) {
-                let maybe_shim = compatibility_shim.as_ref();
-                let missing_shim_reason = format!(
-                    "compatibility mode {} did not resolve a canonical shim before runtime-matrix evaluation",
-                    ir.compatibility_mode.as_str()
-                );
-                let reason = match maybe_shim {
-                    Some(shim) => {
-                        let shim_id = shim.shim_id.as_str();
-                        let shim_family = shim.family.as_str();
+            let invalid_manifest_contract = plugin_manifest_contract_is_invalid(ir);
 
-                        format!(
-                            "compatibility mode {} requires compatibility shim `{}` ({}) that is not enabled in the current runtime matrix",
-                            ir.compatibility_mode.as_str(),
-                            shim_id,
-                            shim_family
-                        )
-                    }
-                    None => missing_shim_reason,
-                };
-
-                (PluginActivationStatus::BlockedCompatibilityMode, reason)
-            } else if let Some(reason) = plugin_host_compatibility_issue(ir.compatibility.as_ref())
-            {
-                (PluginActivationStatus::BlockedIncompatibleHost, reason)
-            } else if let Some(reason) = compatibility_shim
-                .as_ref()
-                .zip(compatibility_shim_support.as_ref())
-                .and_then(|(shim, profile)| {
-                    compatibility_shim_support_issue(
-                        shim,
-                        profile,
-                        &compatibility_shim_support_mismatch_reasons,
-                    )
-                })
-            {
-                (PluginActivationStatus::BlockedCompatibilityMode, reason)
-            } else if let Some(reason) = slot_conflicts.get(&slot_conflict_key) {
+            let (status, reason) = if invalid_manifest_contract {
                 (
-                    PluginActivationStatus::BlockedSlotClaimConflict,
-                    reason.clone(),
+                    PluginActivationStatus::BlockedInvalidManifestContract,
+                    format_invalid_manifest_contract_reason(ir),
                 )
             } else if !matrix.is_bridge_supported(ir.runtime.bridge_kind) {
                 (
@@ -869,12 +840,9 @@ impl PluginTranslator {
                 PluginActivationStatus::SetupIncomplete => {
                     plan.setup_incomplete_plugins = plan.setup_incomplete_plugins.saturating_add(1)
                 }
-                PluginActivationStatus::BlockedCompatibilityMode
+                PluginActivationStatus::BlockedInvalidManifestContract
                 | PluginActivationStatus::BlockedUnsupportedBridge
-                | PluginActivationStatus::BlockedIncompatibleHost
-                | PluginActivationStatus::BlockedUnsupportedAdapterFamily
-                | PluginActivationStatus::BlockedSlotClaimConflict
-                | PluginActivationStatus::Unknown => {
+                | PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
                     plan.blocked_plugins = plan.blocked_plugins.saturating_add(1)
                 }
             }
@@ -940,56 +908,25 @@ fn format_plugin_setup_incomplete_reason(readiness: &PluginSetupReadiness) -> St
     format!("plugin setup is incomplete: {combined_reasons}")
 }
 
-fn activation_diagnostic_finding(
-    ir: &PluginIR,
-    status: PluginActivationStatus,
-    reason: &str,
-) -> Option<PluginDiagnosticFinding> {
-    let (code, field_path, remediation) = match status {
-        PluginActivationStatus::Ready => return None,
-        PluginActivationStatus::SetupIncomplete => return None,
-        PluginActivationStatus::BlockedCompatibilityMode => (
-            PluginDiagnosticCode::CompatibilityShimRequired,
-            Some("compatibility_mode".to_owned()),
-            Some(
-                "enable or widen the required compatibility shim support policy in the runtime bridge matrix, or migrate the plugin to the native LoongClaw contract before activation"
-                    .to_owned(),
-            ),
-        ),
-        PluginActivationStatus::BlockedIncompatibleHost => (
-            PluginDiagnosticCode::IncompatibleHost,
-            Some("compatibility".to_owned()),
-            Some(
-                "align `compatibility.host_api` / `compatibility.host_version_req` with the current host, or upgrade LoongClaw before activation"
-                    .to_owned(),
-            ),
-        ),
-        PluginActivationStatus::BlockedUnsupportedBridge => (
-            PluginDiagnosticCode::UnsupportedBridge,
-            Some("metadata.bridge_kind".to_owned()),
-            Some(
-                "switch the plugin to a supported bridge kind or widen the runtime bridge support policy before activation"
-                    .to_owned(),
-            ),
-        ),
-        PluginActivationStatus::BlockedUnsupportedAdapterFamily => (
-            PluginDiagnosticCode::UnsupportedAdapterFamily,
-            Some("metadata.adapter_family".to_owned()),
-            Some(
-                "switch the plugin adapter family to one supported by the current runtime matrix"
-                    .to_owned(),
-            ),
-        ),
-        PluginActivationStatus::BlockedSlotClaimConflict => (
-            PluginDiagnosticCode::SlotClaimConflict,
-            Some("slot_claims".to_owned()),
-            Some(
-                "choose a different slot/key pair or relax ownership to shared/advisory only when the surface is intentionally multi-owner"
-                    .to_owned(),
-            ),
-        ),
-        PluginActivationStatus::Unknown => return None,
+fn plugin_manifest_contract_is_invalid(ir: &PluginIR) -> bool {
+    let Some(channel_bridge) = ir.channel_bridge.as_ref() else {
+        return false;
     };
+
+    !channel_bridge.readiness.ready
+}
+
+fn format_invalid_manifest_contract_reason(ir: &PluginIR) -> String {
+    let Some(channel_bridge) = ir.channel_bridge.as_ref() else {
+        return "plugin manifest contract is invalid".to_owned();
+    };
+
+    let missing_fields = channel_bridge.readiness.missing_fields.join(", ");
+    format!("plugin channel bridge contract is incomplete: {missing_fields}")
+}
+
+fn infer_runtime_profile(language: &str, manifest: &PluginManifest) -> PluginRuntimeProfile {
+    let source_language = normalize_language(language);
 
     Some(PluginDiagnosticFinding {
         code,
@@ -1190,70 +1127,97 @@ fn infer_runtime_profile_from_parts(
     }
 }
 
-pub fn plugin_runtime_scaffold_defaults(
-    bridge_kind: PluginBridgeKind,
-    source_language: Option<&str>,
-) -> Result<PluginRuntimeScaffoldDefaults, String> {
-    if matches!(bridge_kind, PluginBridgeKind::Unknown) {
-        return Err("plugin scaffold does not support bridge_kind `unknown`".to_owned());
+fn derive_channel_bridge_contract(
+    manifest: &PluginManifest,
+) -> Option<PluginChannelBridgeContract> {
+    let channel_id = normalized_optional_value(manifest.channel_id.as_deref());
+    let setup_surface = normalized_optional_value(
+        manifest
+            .setup
+            .as_ref()
+            .and_then(|setup| setup.surface.as_deref()),
+    );
+    let transport_family = normalized_manifest_metadata_value(manifest, "transport_family");
+    let target_contract = normalized_manifest_metadata_value(manifest, "target_contract");
+    let account_scope = normalized_manifest_metadata_value(manifest, "account_scope");
+    let adapter_family = normalized_manifest_metadata_value(manifest, "adapter_family");
+
+    let setup_declares_channel_surface = setup_surface.as_deref() == Some("channel");
+    let has_channel_bridge_metadata =
+        transport_family.is_some() || target_contract.is_some() || account_scope.is_some();
+    let adapter_declares_channel_bridge = adapter_family.as_deref() == Some("channel-bridge");
+    let declares_channel_bridge = setup_declares_channel_surface
+        || has_channel_bridge_metadata
+        || (channel_id.is_some() && adapter_declares_channel_bridge);
+
+    if !declares_channel_bridge {
+        return None;
     }
 
-    let normalized_source_language = source_language
-        .map(normalize_language)
-        .filter(|value| value != "unknown" && value != "manifest");
-
-    let source_language_is_required = matches!(
-        bridge_kind,
-        PluginBridgeKind::ProcessStdio | PluginBridgeKind::NativeFfi
+    let readiness = evaluate_channel_bridge_readiness(
+        channel_id.as_deref(),
+        setup_surface.as_deref(),
+        transport_family.as_deref(),
+        target_contract.as_deref(),
     );
 
-    if source_language_is_required && normalized_source_language.is_none() {
-        return Err(format!(
-            "plugin scaffold requires an explicit source language for bridge_kind `{}`",
-            bridge_kind.as_str()
-        ));
-    }
-
-    let adapter_language = normalized_source_language.as_deref().unwrap_or("unknown");
-    let adapter_family = default_adapter_family(adapter_language, bridge_kind);
-    let entrypoint_hint =
-        default_entrypoint_hint(bridge_kind, None).unwrap_or_else(|| "invoke".to_owned());
-
-    Ok(PluginRuntimeScaffoldDefaults {
-        source_language: normalized_source_language,
-        bridge_kind,
-        adapter_family,
-        entrypoint_hint,
+    Some(PluginChannelBridgeContract {
+        channel_id,
+        setup_surface,
+        transport_family,
+        target_contract,
+        account_scope,
+        readiness,
     })
 }
 
-fn legacy_plugin_ir_dialect(source_kind: PluginSourceKind) -> PluginContractDialect {
-    match source_kind {
-        PluginSourceKind::PackageManifest => PluginContractDialect::LoongClawPackageManifest,
-        PluginSourceKind::EmbeddedSource => PluginContractDialect::LoongClawEmbeddedSource,
+fn evaluate_channel_bridge_readiness(
+    channel_id: Option<&str>,
+    setup_surface: Option<&str>,
+    transport_family: Option<&str>,
+    target_contract: Option<&str>,
+) -> PluginChannelBridgeReadiness {
+    let mut missing_fields = Vec::new();
+
+    if channel_id.is_none() {
+        missing_fields.push("channel_id".to_owned());
+    }
+
+    if setup_surface != Some("channel") {
+        missing_fields.push("setup.surface".to_owned());
+    }
+
+    if transport_family.is_none() {
+        missing_fields.push("metadata.transport_family".to_owned());
+    }
+
+    if target_contract.is_none() {
+        missing_fields.push("metadata.target_contract".to_owned());
+    }
+
+    let ready = missing_fields.is_empty();
+
+    PluginChannelBridgeReadiness {
+        ready,
+        missing_fields,
     }
 }
 
-fn legacy_plugin_ir_runtime_profile(
-    source_path: &str,
-    source_kind: PluginSourceKind,
-    metadata: &BTreeMap<String, String>,
-    endpoint: Option<&str>,
-) -> PluginRuntimeProfile {
-    let source_language = legacy_plugin_ir_source_language(source_path, source_kind);
-    infer_runtime_profile_from_parts(&source_language, metadata, endpoint)
+fn normalized_manifest_metadata_value(manifest: &PluginManifest, key: &str) -> Option<String> {
+    let value = manifest.metadata.get(key);
+    let value = value.map(String::as_str);
+    normalized_optional_value(value)
 }
 
-fn legacy_plugin_ir_source_language(source_path: &str, source_kind: PluginSourceKind) -> String {
-    if source_kind == PluginSourceKind::PackageManifest {
-        return "unknown".to_owned();
+fn normalized_optional_value(raw: Option<&str>) -> Option<String> {
+    let value = raw?;
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return None;
     }
 
-    let extension = Path::new(source_path)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    normalize_language(extension)
+    Some(trimmed.to_owned())
 }
 
 fn normalize_language(language: &str) -> String {
@@ -1461,11 +1425,26 @@ mod tests {
         }
     }
 
-    fn verified_setup_readiness_context() -> PluginSetupReadinessContext {
-        PluginSetupReadinessContext {
-            verified_env_vars: BTreeSet::from(["TAVILY_API_KEY".to_owned()]),
-            verified_config_keys: BTreeSet::from(["tools.web_search.default_provider".to_owned()]),
-        }
+    fn channel_bridge_descriptor(metadata: BTreeMap<String, String>) -> PluginDescriptor {
+        let mut descriptor = descriptor("manifest", metadata);
+
+        descriptor.manifest.channel_id = Some("weixin".to_owned());
+        descriptor.manifest.setup = Some(PluginSetup {
+            mode: PluginSetupMode::MetadataOnly,
+            surface: Some("channel".to_owned()),
+            required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+            recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+            required_config_keys: vec![
+                "weixin.enabled".to_owned(),
+                "weixin.bridge_url".to_owned(),
+                "weixin.bridge_access_token".to_owned(),
+            ],
+            default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+            docs_urls: vec!["https://docs.example.com/weixin-bridge".to_owned()],
+            remediation: Some("configure the sanctioned weixin bridge contract".to_owned()),
+        });
+
+        descriptor
     }
 
     #[test]
@@ -1561,32 +1540,66 @@ mod tests {
     }
 
     #[test]
-    fn plugin_runtime_scaffold_defaults_require_source_language_for_process_stdio() {
-        let error = plugin_runtime_scaffold_defaults(PluginBridgeKind::ProcessStdio, None)
-            .expect_err("process bridge scaffold should require source language");
+    fn translator_derives_channel_bridge_contract_from_manifest_conventions() {
+        let descriptor = channel_bridge_descriptor(BTreeMap::from([
+            (
+                "transport_family".to_owned(),
+                "wechat_clawbot_ilink_bridge".to_owned(),
+            ),
+            (
+                "target_contract".to_owned(),
+                "weixin:<account>:contact:<id> | weixin:<account>:room:<id>".to_owned(),
+            ),
+            ("account_scope".to_owned(), "multi_account".to_owned()),
+        ]));
 
-        assert!(error.contains("source language"));
-        assert!(error.contains("process_stdio"));
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
+
+        let channel_bridge = ir
+            .channel_bridge
+            .as_ref()
+            .expect("channel bridge contract should exist");
+
+        assert_eq!(channel_bridge.channel_id.as_deref(), Some("weixin"));
+        assert_eq!(channel_bridge.setup_surface.as_deref(), Some("channel"));
+        assert_eq!(
+            channel_bridge.transport_family.as_deref(),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            channel_bridge.target_contract.as_deref(),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert_eq!(
+            channel_bridge.account_scope.as_deref(),
+            Some("multi_account")
+        );
+        assert!(channel_bridge.readiness.ready);
+        assert!(channel_bridge.readiness.missing_fields.is_empty());
     }
 
     #[test]
-    fn plugin_runtime_scaffold_defaults_require_source_language_for_native_ffi() {
-        let error = plugin_runtime_scaffold_defaults(PluginBridgeKind::NativeFfi, None)
-            .expect_err("native ffi scaffold should require source language");
+    fn translator_marks_declared_channel_bridge_contract_incomplete_when_required_fields_are_missing()
+     {
+        let descriptor = channel_bridge_descriptor(BTreeMap::new());
 
-        assert!(error.contains("source language"));
-        assert!(error.contains("native_ffi"));
-    }
+        let translator = PluginTranslator::new();
+        let ir = translator.translate_descriptor(&descriptor);
 
-    #[test]
-    fn plugin_runtime_scaffold_defaults_normalize_python_process_bridge() {
-        let defaults = plugin_runtime_scaffold_defaults(PluginBridgeKind::ProcessStdio, Some("py"))
-            .expect("python process bridge scaffold defaults should resolve");
+        let channel_bridge = ir
+            .channel_bridge
+            .as_ref()
+            .expect("channel bridge contract should exist");
 
-        assert_eq!(defaults.source_language.as_deref(), Some("python"));
-        assert_eq!(defaults.bridge_kind, PluginBridgeKind::ProcessStdio);
-        assert_eq!(defaults.adapter_family, "python-stdio-adapter");
-        assert_eq!(defaults.entrypoint_hint, "stdin/stdout::invoke");
+        assert!(!channel_bridge.readiness.ready);
+        assert_eq!(
+            channel_bridge.readiness.missing_fields,
+            vec![
+                "metadata.transport_family".to_owned(),
+                "metadata.target_contract".to_owned(),
+            ]
+        );
     }
 
     #[test]
@@ -1702,6 +1715,51 @@ mod tests {
         assert_eq!(
             plan.candidates[0].missing_required_config_keys,
             vec!["tools.web_search.default_provider".to_owned()]
+        );
+    }
+
+    #[test]
+    fn activation_plan_blocks_declared_channel_bridge_when_manifest_contract_fields_are_missing() {
+        let descriptor = channel_bridge_descriptor(BTreeMap::new());
+        let translator = PluginTranslator::new();
+        let translation = translator.translate_scan_report(&PluginScanReport {
+            scanned_files: 1,
+            matched_plugins: 1,
+            descriptors: vec![descriptor],
+        });
+
+        let matrix = BridgeSupportMatrix {
+            supported_bridges: BTreeSet::from([PluginBridgeKind::HttpJson]),
+            supported_adapter_families: BTreeSet::new(),
+        };
+        let setup_readiness_context = PluginSetupReadinessContext {
+            verified_env_vars: BTreeSet::from(["WEIXIN_BRIDGE_URL".to_owned()]),
+            verified_config_keys: BTreeSet::from([
+                "weixin.enabled".to_owned(),
+                "weixin.bridge_url".to_owned(),
+                "weixin.bridge_access_token".to_owned(),
+            ]),
+        };
+        let plan = translator.plan_activation(&translation, &matrix, &setup_readiness_context);
+
+        assert_eq!(plan.ready_plugins, 0);
+        assert_eq!(plan.setup_incomplete_plugins, 0);
+        assert_eq!(plan.blocked_plugins, 1);
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::BlockedInvalidManifestContract
+        ));
+        assert!(
+            plan.candidates[0]
+                .reason
+                .contains("metadata.transport_family"),
+            "reason should surface missing transport family"
+        );
+        assert!(
+            plan.candidates[0]
+                .reason
+                .contains("metadata.target_contract"),
+            "reason should surface missing target contract"
         );
     }
 
