@@ -1815,7 +1815,9 @@ mod tests {
     #[test]
     fn bash_governance_runtime_preserves_rule_load_error_for_broken_rule_file() {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let rules_dir = tempdir.path().join(".loongclaw").join("rules");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", tempdir.path());
+        let rules_dir = crate::config::default_loongclaw_home().join("rules");
         std::fs::create_dir_all(&rules_dir).expect("create rules dir");
         std::fs::write(rules_dir.join("broken.rules"), "not valid starlark")
             .expect("write broken rule file");
