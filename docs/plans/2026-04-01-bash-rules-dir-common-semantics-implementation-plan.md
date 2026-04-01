@@ -127,8 +127,8 @@ fn tool_runtime_config_keeps_relative_bash_rules_dir_override_relative() {
 
 Run:
 
-- `cargo test -p loongclaw-app bash_tool_config_defaults_to_loongclaw_home_rules_dir --lib -- --exact --nocapture`
-- `cargo test -p loongclaw-app bash_tool_config_resolves_relative_rules_dir_like_other_path_fields --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app config::tools::tests::bash_tool_config_defaults_to_loongclaw_home_rules_dir --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app config::tools::tests::bash_tool_config_resolves_relative_rules_dir_like_other_path_fields --lib -- --exact --nocapture`
 - `cargo test -p loongclaw-app tools::runtime_config::tests::tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset --lib -- --exact --nocapture`
 - `cargo test -p loongclaw-app tools::runtime_config::tests::tool_runtime_config_keeps_relative_bash_rules_dir_override_relative --lib -- --exact --nocapture`
 
@@ -167,9 +167,9 @@ In `crates/app/src/tools/runtime_config.rs`:
 Run:
 
 - `cargo test -p loongclaw-app bash_tool_config_ --lib -- --nocapture`
-- `cargo test -p loongclaw-app tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset --lib -- --exact --nocapture`
-- `cargo test -p loongclaw-app tool_runtime_config_keeps_relative_bash_rules_dir_override_relative --lib -- --exact --nocapture`
-- `cargo test -p loongclaw-app bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app tools::runtime_config::tests::tool_runtime_config_uses_loongclaw_home_rules_dir_when_unset --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app tools::runtime_config::tests::tool_runtime_config_keeps_relative_bash_rules_dir_override_relative --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app tools::runtime_config::tests::bash_governance_runtime_treats_missing_rules_dir_as_empty_rule_set --lib -- --exact --nocapture`
 
 Expected:
 
