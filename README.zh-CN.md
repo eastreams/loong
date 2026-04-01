@@ -1,4 +1,4 @@
-# 🐉 LoongClaw - 面向垂域智能体的 Rust 基座
+# 🐉 LoongClaw - 面向垂域智能体的安全基座
 
 <p align="center">
   <picture>
@@ -7,7 +7,7 @@
     <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
   </picture>
 </p>
-<h3 align="center"><em>"Originated from the East, here to benefit the world"</em></h3>
+<h3 align="center"><em>“发轫于东，以会群友”</em></h3>
 
 <p align="center">
   <strong>LoongClaw 是一套基于 Rust 构建的安全、可扩展、可持续演进的 Claw 基座。</strong><br/>
