@@ -1,6 +1,7 @@
 #![allow(unsafe_code)]
 
 use super::*;
+use rusqlite::{Connection, params};
 use std::{
     ffi::OsString,
     fs,
@@ -258,6 +259,66 @@ pub(super) fn load_session_repository(
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
     mvp::session::repository::SessionRepository::new(&memory_config).expect("session repository")
+}
+
+fn load_memory_runtime_config(
+    config_path: &Path,
+) -> mvp::memory::runtime_config::MemoryRuntimeConfig {
+    let loaded =
+        mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
+    let config = loaded.1;
+    mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory)
+}
+
+fn append_tasks_session_turn(config_path: &Path, session_id: &str, role: &str, content: &str) {
+    let memory_config = load_memory_runtime_config(config_path);
+    mvp::memory::append_turn_direct(session_id, role, content, &memory_config)
+        .expect("append tasks session turn");
+}
+
+fn open_tasks_test_connection(config_path: &Path) -> Connection {
+    let loaded =
+        mvp::config::load(Some(config_path.to_string_lossy().as_ref())).expect("load config");
+    let config = loaded.1;
+    let sqlite_path = PathBuf::from(config.memory.sqlite_path);
+    Connection::open(sqlite_path).expect("open tasks test sqlite connection")
+}
+
+fn set_tasks_test_session_updated_at(config_path: &Path, session_id: &str, updated_at: i64) {
+    let conn = open_tasks_test_connection(config_path);
+    conn.execute(
+        "UPDATE sessions
+         SET updated_at = ?2
+         WHERE session_id = ?1",
+        params![session_id, updated_at],
+    )
+    .expect("set tasks test session updated_at");
+}
+
+fn set_tasks_test_turn_timestamps(config_path: &Path, session_id: &str, ts: i64) {
+    let conn = open_tasks_test_connection(config_path);
+    conn.execute(
+        "UPDATE turns
+         SET ts = ?2
+         WHERE session_id = ?1",
+        params![session_id, ts],
+    )
+    .expect("set tasks test turn timestamps");
+}
+
+fn archive_tasks_test_session(config_path: &Path, session_id: &str, archived_at: i64) {
+    let conn = open_tasks_test_connection(config_path);
+    conn.execute(
+        "INSERT INTO session_events(
+            session_id,
+            event_kind,
+            actor_session_id,
+            payload_json,
+            ts
+         ) VALUES (?1, ?2, NULL, ?3, ?4)",
+        params![session_id, "session_archived", "{}", archived_at],
+    )
+    .expect("insert tasks test archive event");
 }
 
 #[test]
@@ -584,6 +645,158 @@ async fn execute_tasks_command_create_returns_queued_outcome_when_task_hydration
     assert!(
         rendered.contains("task_lookup_error:"),
         "rendered create output should surface hydration warning: {rendered}"
+    );
+}
+
+#[tokio::test]
+async fn execute_tasks_command_create_latest_session_selector_resolves_newest_resumable_root() {
+    let root = TempDirGuard::new("loongclaw-tasks-cli-create-latest");
+    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let config_path = write_tasks_config(root.path());
+    let repo = load_session_repository(&config_path);
+
+    ensure_root_session(&repo, "ops-root-old");
+    append_tasks_session_turn(&config_path, "ops-root-old", "user", "older root");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-old", 100);
+    set_tasks_test_turn_timestamps(&config_path, "ops-root-old", 100);
+
+    ensure_root_session(&repo, "ops-root-selected");
+    append_tasks_session_turn(&config_path, "ops-root-selected", "user", "selected root");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-selected", 200);
+    set_tasks_test_turn_timestamps(&config_path, "ops-root-selected", 200);
+
+    ensure_root_session(&repo, "ops-root-empty");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-empty", 300);
+
+    ensure_root_session(&repo, "ops-root-archived");
+    append_tasks_session_turn(
+        &config_path,
+        "ops-root-archived",
+        "assistant",
+        "archived root",
+    );
+    set_tasks_test_session_updated_at(&config_path, "ops-root-archived", 400);
+    set_tasks_test_turn_timestamps(&config_path, "ops-root-archived", 400);
+    archive_tasks_test_session(&config_path, "ops-root-archived", 500);
+
+    let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
+        loongclaw_daemon::tasks_cli::TasksCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "latest".to_owned(),
+            command: loongclaw_daemon::tasks_cli::TasksCommands::Create {
+                task: "research release readiness".to_owned(),
+                label: Some("Release Check".to_owned()),
+                timeout_seconds: Some(45),
+            },
+        },
+    )
+    .await
+    .expect("tasks create with latest selector should succeed");
+
+    let created_task_id = execution.payload["task"]["task_id"]
+        .as_str()
+        .expect("created task id");
+    let created_task = repo
+        .load_session(created_task_id)
+        .expect("load created task session")
+        .expect("created task session");
+
+    assert_eq!(execution.payload["command"], "create");
+    assert_eq!(execution.current_session_id, "ops-root-selected");
+    assert_eq!(execution.payload["current_session_id"], "ops-root-selected");
+    assert_eq!(
+        execution.payload["task"]["scope_session_id"],
+        "ops-root-selected"
+    );
+    assert_eq!(
+        created_task.parent_session_id.as_deref(),
+        Some("ops-root-selected")
+    );
+}
+
+#[tokio::test]
+async fn execute_tasks_command_latest_session_selector_rejects_missing_resumable_root() {
+    let root = TempDirGuard::new("loongclaw-tasks-cli-latest-missing");
+    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let config_path = write_tasks_config(root.path());
+    let repo = load_session_repository(&config_path);
+
+    ensure_root_session(&repo, "ops-root-empty");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-empty", 100);
+
+    let result = loongclaw_daemon::tasks_cli::execute_tasks_command(
+        loongclaw_daemon::tasks_cli::TasksCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "latest".to_owned(),
+            command: loongclaw_daemon::tasks_cli::TasksCommands::List {
+                limit: 20,
+                state: None,
+                overdue_only: false,
+                include_archived: false,
+            },
+        },
+    )
+    .await;
+
+    let error = match result {
+        Ok(_) => panic!("latest selector should fail without a resumable root session"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.contains("latest"),
+        "expected latest selector error, got: {error}"
+    );
+}
+
+#[tokio::test]
+async fn execute_tasks_command_list_latest_session_selector_uses_selected_root_scope() {
+    let root = TempDirGuard::new("loongclaw-tasks-cli-list-latest");
+    let _env = TasksCliEnvironmentGuard::set(&[]);
+    let config_path = write_tasks_config(root.path());
+    let repo = load_session_repository(&config_path);
+
+    ensure_root_session(&repo, "ops-root-old");
+    append_tasks_session_turn(&config_path, "ops-root-old", "user", "older root");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-old", 100);
+    set_tasks_test_turn_timestamps(&config_path, "ops-root-old", 100);
+    seed_background_task_record(&repo, "ops-root-old", "delegate:old-task", false);
+
+    ensure_root_session(&repo, "ops-root-selected");
+    append_tasks_session_turn(&config_path, "ops-root-selected", "user", "selected root");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-selected", 200);
+    set_tasks_test_turn_timestamps(&config_path, "ops-root-selected", 200);
+    seed_background_task_record(&repo, "ops-root-selected", "delegate:selected-task", false);
+
+    ensure_root_session(&repo, "ops-root-empty");
+    set_tasks_test_session_updated_at(&config_path, "ops-root-empty", 300);
+
+    let execution = loongclaw_daemon::tasks_cli::execute_tasks_command(
+        loongclaw_daemon::tasks_cli::TasksCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            session: "latest".to_owned(),
+            command: loongclaw_daemon::tasks_cli::TasksCommands::List {
+                limit: 20,
+                state: None,
+                overdue_only: false,
+                include_archived: false,
+            },
+        },
+    )
+    .await
+    .expect("tasks list with latest selector should succeed");
+
+    assert_eq!(execution.payload["command"], "list");
+    assert_eq!(execution.current_session_id, "ops-root-selected");
+    assert_eq!(execution.payload["current_session_id"], "ops-root-selected");
+    assert_eq!(execution.payload["matched_count"], 1);
+    assert_eq!(execution.payload["returned_count"], 1);
+    assert_eq!(
+        execution.payload["tasks"][0]["task_id"],
+        "delegate:selected-task"
     );
 }
 

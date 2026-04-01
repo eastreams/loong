@@ -7,6 +7,8 @@ use loongclaw_contracts::ToolCoreOutcome;
 use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
 
+const TASKS_SESSION_SELECTOR_LATEST: &str = "latest";
+
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum TasksCommands {
     /// Queue one async background task on top of the current session runtime
@@ -103,9 +105,9 @@ pub async fn execute_tasks_command(
     let (resolved_path, config) = mvp::config::load(config.as_deref())?;
     mvp::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
 
-    let current_session_id = normalize_session_scope(&session)?;
     let memory_config =
         mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let current_session_id = resolve_session_scope(&session, &memory_config)?;
     let tool_config = &config.tools;
 
     let payload = match command {
@@ -534,6 +536,25 @@ fn normalize_session_scope(raw: &str) -> CliResult<String> {
         return Err("tasks CLI requires a non-empty session scope".to_owned());
     }
     Ok(session.to_owned())
+}
+
+fn resolve_session_scope(
+    raw: &str,
+    memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
+) -> CliResult<String> {
+    let session = normalize_session_scope(raw)?;
+    let should_resolve_latest = session == TASKS_SESSION_SELECTOR_LATEST;
+    if !should_resolve_latest {
+        return Ok(session);
+    }
+
+    let repo = mvp::session::repository::SessionRepository::new(memory_config)?;
+    let latest_session = repo.latest_resumable_root_session_summary()?;
+    let latest_session = latest_session.ok_or_else(|| {
+        "tasks CLI session selector `latest` did not find any resumable root session".to_owned()
+    })?;
+
+    Ok(latest_session.session_id)
 }
 
 fn execute_app_tool_request(
