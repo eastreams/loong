@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::analytics::parse_conversation_event;
+use crate::tools::ToolView;
 
 pub(crate) const TOOL_DISCOVERY_REFRESHED_EVENT_NAME: &str = "tool_discovery_refreshed";
 const TOOL_DISCOVERY_SCHEMA_VERSION: u8 = 1;
@@ -170,6 +171,36 @@ impl ToolDiscoveryState {
         sections.push(entry_lines.join("\n"));
         sections.join("\n\n")
     }
+
+    pub(crate) fn filtered_for_tool_view(&self, tool_view: &ToolView) -> Option<Self> {
+        let filtered_entries = self
+            .entries
+            .iter()
+            .filter(|entry| tool_view.contains(entry.tool_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let filtered_exact_tool_id = self
+            .exact_tool_id
+            .as_deref()
+            .filter(|tool_id| tool_view.contains(tool_id))
+            .map(str::to_owned);
+        let has_state = self.query.is_some()
+            || filtered_exact_tool_id.is_some()
+            || self.diagnostics.is_some()
+            || !filtered_entries.is_empty();
+
+        if !has_state {
+            return None;
+        }
+
+        Some(Self {
+            schema_version: self.schema_version,
+            query: self.query.clone(),
+            exact_tool_id: filtered_exact_tool_id,
+            entries: filtered_entries,
+            diagnostics: self.diagnostics.clone(),
+        })
+    }
 }
 
 pub(crate) fn latest_tool_discovery_state_from_assistant_contents(
@@ -319,7 +350,8 @@ mod state_recovery_tests {
     use serde_json::json;
 
     use super::{
-        TOOL_DISCOVERY_REFRESHED_EVENT_NAME, latest_tool_discovery_state_from_assistant_contents,
+        TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryDiagnostics, ToolDiscoveryEntry,
+        ToolDiscoveryState, latest_tool_discovery_state_from_assistant_contents,
     };
 
     #[test]
@@ -365,6 +397,41 @@ mod state_recovery_tests {
         assert_eq!(state.query.as_deref(), Some("latest query"));
         assert_eq!(state.entries.len(), 1);
         assert_eq!(state.entries[0].tool_id, "web.fetch");
+    }
+
+    #[test]
+    fn filtered_for_tool_view_drops_hidden_entries_and_exact_targets() {
+        let state = ToolDiscoveryState {
+            schema_version: 1,
+            query: Some("read note.md".to_owned()),
+            exact_tool_id: Some("file.read".to_owned()),
+            entries: vec![ToolDiscoveryEntry {
+                tool_id: "file.read".to_owned(),
+                summary: "Read a file.".to_owned(),
+                search_hint: None,
+                argument_hint: None,
+                required_fields: vec!["path".to_owned()],
+                required_field_groups: vec![vec!["path".to_owned()]],
+            }],
+            diagnostics: Some(ToolDiscoveryDiagnostics {
+                reason: "fallback".to_owned(),
+            }),
+        };
+        let tool_view = crate::tools::ToolView::from_tool_names(["tool.search", "tool.invoke"]);
+        let filtered = state
+            .filtered_for_tool_view(&tool_view)
+            .expect("query and diagnostics should keep advisory state alive");
+
+        assert_eq!(filtered.query.as_deref(), Some("read note.md"));
+        assert_eq!(filtered.exact_tool_id, None);
+        assert!(filtered.entries.is_empty());
+        assert_eq!(
+            filtered
+                .diagnostics
+                .as_ref()
+                .map(|diagnostics| diagnostics.reason.as_str()),
+            Some("fallback")
+        );
     }
 }
 

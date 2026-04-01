@@ -1,4 +1,5 @@
 use super::context_engine::ContextArtifactKind;
+use super::tool_discovery_state::ToolDiscoveryState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PromptLane {
@@ -35,6 +36,7 @@ pub struct PromptFragment {
     pub maskable: bool,
     pub cacheable: bool,
     pub dedupe_key: Option<String>,
+    pub(crate) tool_discovery_state: Option<ToolDiscoveryState>,
 }
 
 impl PromptFragment {
@@ -57,6 +59,7 @@ impl PromptFragment {
             maskable: false,
             cacheable: false,
             dedupe_key: None,
+            tool_discovery_state: None,
         }
     }
 
@@ -77,6 +80,15 @@ impl PromptFragment {
     #[must_use]
     pub fn with_cacheable(mut self, cacheable: bool) -> Self {
         self.cacheable = cacheable;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_tool_discovery_state(
+        mut self,
+        tool_discovery_state: ToolDiscoveryState,
+    ) -> Self {
+        self.tool_discovery_state = Some(tool_discovery_state);
         self
     }
 }
