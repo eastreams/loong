@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import { isApiAbortError, isApiRequestError } from "../lib/api/client";
 import { getApiBaseUrl } from "../lib/config/env";
 import {
@@ -300,6 +300,19 @@ export function useWebSessionManager() {
       refreshOnboardingStatus: () => {
         setOnboardingRevision((current) => current + 1);
       },
+      restartOnboarding: () => {
+        persistOnboardingValidationKey(null);
+        persistOnboardingAcknowledgedKey(null);
+        setOnboardingStatus((current) =>
+          current
+            ? {
+                ...current,
+                blockingStage: "provider_setup",
+                nextAction: "configure_provider",
+              }
+            : current,
+        );
+      },
       autoPairingInProgress,
       tokenPath: authInfo?.tokenPath ?? null,
       tokenEnv: authInfo?.tokenEnv ?? null,
@@ -348,3 +361,4 @@ export function useWebSessionManager() {
 
   return value;
 }
+

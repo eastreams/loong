@@ -892,19 +892,6 @@ html {
   position: relative;
 }
 
-.composer-tool-assist {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-  color: var(--color-text-secondary);
-  font-size: 0.8rem;
-}
-
-.composer-tool-assist input {
-  margin: 0;
-}
-
 .composer-input {
   width: 100%;
   resize: none;

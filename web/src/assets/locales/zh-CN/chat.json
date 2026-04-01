@@ -39,12 +39,6 @@
     "sessionLoaded": "会话已加载",
     "waitingForSession": "等待选择会话"
   },
-  "toolAssist": {
-    "label": "工具辅助",
-    "enabled": "已开启",
-    "disabled": "已关闭",
-    "hint": "对于文件、命令、仓库搜索和网页任务，Web 会追加一段仅本轮生效的轻量提示。"
-  },
   "errors": {
     "providerHostFallback": "当前 provider 域名",
     "transportFailure": "连接 {{host}} 时发生了 provider 传输失败。如果你开启了代理，建议先给这个域名单独配置 DIRECT，并加入 fake-ip-filter。你也可以到 Runtime console > Provider 路由 里查看当前诊断结果。"

@@ -9,8 +9,6 @@ import { dashboardApi } from "../../dashboard/api";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { useChatStream } from "../hooks/useChatStream";
 
-const TOOL_ASSIST_STORAGE_KEY = "loongclaw.web.toolAssist";
-
 function renderInlineBreaks(text: string): ReactNode[] {
   return text.split("\n").flatMap((line, index, lines) => {
     const nodes: ReactNode[] = [line];
@@ -109,14 +107,6 @@ export default function ChatPage() {
   const [currentModel, setCurrentModel] = useState("");
   const [currentProvider, setCurrentProvider] = useState<string | null>(null);
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
-  const [toolAssistEnabled, setToolAssistEnabled] = useState<boolean>(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    const stored = window.localStorage.getItem(TOOL_ASSIST_STORAGE_KEY);
-    return stored === "true";
-  });
-
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
 
@@ -148,7 +138,6 @@ export default function ChatPage() {
     authMode: connection.authMode,
     tokenPath: connection.tokenPath,
     tokenEnv: connection.tokenEnv,
-    toolAssistEnabled,
     updateSessionViewState,
     selectSession,
     upsertSession,
@@ -206,13 +195,6 @@ export default function ChatPage() {
       window.clearInterval(intervalId);
     };
   }, [loadingPhrases.length, streamPhase]);
-
-
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(TOOL_ASSIST_STORAGE_KEY, toolAssistEnabled ? "true" : "false");
-  }, [toolAssistEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -402,17 +384,6 @@ export default function ChatPage() {
               }}
             >
               <div className="composer-shell">
-                <label className="composer-tool-assist">
-                  <input
-                    type="checkbox"
-                    checked={toolAssistEnabled}
-                    onChange={(event) => {
-                      setToolAssistEnabled(event.target.checked);
-                    }}
-                    disabled={isSubmitting || !canAccessProtectedApi}
-                  />
-                  <span>{t("chat.toolAssist.label")}</span>
-                </label>
                 <textarea
                   className="composer-input"
                   rows={3}

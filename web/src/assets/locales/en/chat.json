@@ -39,12 +39,6 @@
     "sessionLoaded": "Live session loaded",
     "waitingForSession": "Waiting for session"
   },
-  "toolAssist": {
-    "label": "Tool assist",
-    "enabled": "On",
-    "disabled": "Off",
-    "hint": "Add a small Web-only hint for file, shell, repo-search, and webpage tasks."
-  },
   "errors": {
     "providerHostFallback": "the provider host",
     "transportFailure": "Provider connection failed while contacting {{host}}. If you use a proxy, route this host DIRECT and add it to fake-ip-filter. You can confirm the current diagnosis in Runtime console > Provider route."

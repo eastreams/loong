@@ -1,15 +1,17 @@
-import { Languages, MoonStar, SunMedium } from "lucide-react";
+import { Languages, LogOut, MoonStar, SunMedium } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ConnectionBadge } from "../status/ConnectionBadge";
 import { useTheme } from "../../hooks/useTheme";
 import { useLocale } from "../../hooks/useLocale";
+import { useWebConnection } from "../../hooks/useWebConnection";
 import brandIcon from "../../assets/brand/icon.svg";
 
 export default function NavBar() {
   const { t } = useTranslation();
   const { theme, toggleTheme } = useTheme();
   const { locale, toggleLocale } = useLocale();
+  const { restartOnboarding } = useWebConnection();
 
   return (
     <header className="navbar">
@@ -43,6 +45,7 @@ export default function NavBar() {
           className="navbar-btn"
           onClick={toggleLocale}
           aria-label={`${t("nav.language")}: ${locale}`}
+          title={t("nav.language")}
         >
           <Languages size={16} />
         </button>
@@ -51,8 +54,18 @@ export default function NavBar() {
           className="navbar-btn"
           onClick={toggleTheme}
           aria-label={`${t("nav.theme")}: ${theme}`}
+          title={t("nav.theme")}
         >
           {theme === "dark" ? <SunMedium size={16} /> : <MoonStar size={16} />}
+        </button>
+        <button
+          type="button"
+          className="navbar-btn"
+          onClick={restartOnboarding}
+          aria-label={t("nav.restartOnboarding")}
+          title={t("nav.restartOnboarding")}
+        >
+          <LogOut size={16} />
         </button>
       </div>
     </header>

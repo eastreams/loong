@@ -4,7 +4,8 @@
     "chat": "Chat",
     "dashboard": "Dashboard",
     "theme": "Theme",
-    "language": "Language"
+    "language": "Language",
+    "restartOnboarding": "Return to onboarding"
   },
   "status": {
     "connected": "Connected",
@@ -29,7 +30,7 @@
     "clear": "Clear"
   },
   "onboarding": {
-    "eyebrow": "First run",
+    "eyebrow": "Onboard",
     "loadingTitle": "Checking local setup",
     "loadingBody": "Trying local runtime, token pairing, config, and provider readiness.",
     "tokenPairingAutoInProgress": "Trying lightweight auto pairing now. If you already have the local token, you can still paste it below.",
@@ -80,7 +81,8 @@
       "save": "Save provider setup",
       "savePending": "Saving...",
       "errors": {
-        "saveFailed": "Provider setup could not be saved."
+        "saveFailed": "Provider setup could not be saved.",
+        "apiKeyRequired": "Enter an API key before saving provider setup."
       }
     },
     "preferences": {

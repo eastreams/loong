@@ -4,7 +4,8 @@
     "chat": "对话",
     "dashboard": "仪表盘",
     "theme": "主题",
-    "language": "语言"
+    "language": "语言",
+    "restartOnboarding": "返回首次进入"
   },
   "status": {
     "connected": "已连接",
@@ -29,7 +30,7 @@
     "clear": "清除"
   },
   "onboarding": {
-    "eyebrow": "首次进入",
+    "eyebrow": "引导",
     "loadingTitle": "正在检查本地环境",
     "loadingBody": "正在检查 runtime、token 配对、配置文件和 provider 可用性。",
     "tokenPairingAutoInProgress": "正在尝试自动配对；如果你手头已有本地 token，也可以直接在下面粘贴。",
@@ -77,10 +78,11 @@
       "apiKeyPlaceholderConfigured": "留空可继续沿用当前 key",
       "apiKeyHelper": "O2 第一版会把这里输入的 key 连同本地 provider 配置一起保存。",
       "apiKeyHelperConfigured": "如果不想改当前 key，可以留空；如果要替换，就在这里粘贴新的 key。",
-      "save": "保存 provider 配置",
+      "save": "保存配置",
       "savePending": "保存中...",
       "errors": {
-        "saveFailed": "provider 配置保存失败。"
+        "saveFailed": "provider 配置保存失败。",
+        "apiKeyRequired": "请先填写 API Key，再保存 provider 配置。"
       }
     },
     "preferences": {

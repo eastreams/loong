@@ -54,10 +54,16 @@ export function useOnboardingFlow({
   }, [onboardingStatus?.blockingStage]);
 
   async function handleSaveProvider(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+    event?.preventDefault();
     setSaveError(null);
     setValidationMessage(null);
     setValidationError(null);
+
+    if (!onboardingStatus?.apiKeyConfigured && !providerForm.apiKey.trim()) {
+      setSaveError(t("onboarding.form.errors.apiKeyRequired"));
+      return;
+    }
+
     setIsSaving(true);
     try {
       const result = await onboardingApi.applyProvider(
@@ -86,7 +92,7 @@ export function useOnboardingFlow({
   }
 
   function handleSubmitToken(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+    event?.preventDefault();
     const normalized = tokenInput.trim();
     if (!normalized) {
       return;
@@ -117,8 +123,8 @@ export function useOnboardingFlow({
     }
   }
 
-  async function handleSavePreferences(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function handleSavePreferences(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     setPreferencesError(null);
     setPreferencesNotice(null);
     setIsSavingPreferences(true);

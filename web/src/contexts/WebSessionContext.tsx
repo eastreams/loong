@@ -16,6 +16,7 @@ export interface WebSessionContextValue {
   acceptValidatedOnboardingStatus: (status: OnboardingStatus) => void;
   clearOnboardingValidation: () => void;
   refreshOnboardingStatus: () => void;
+  restartOnboarding: () => void;
   autoPairingInProgress: boolean;
   tokenPath: string | null;
   tokenEnv: string | null;
@@ -37,4 +38,3 @@ export function WebSessionProvider({ children }: PropsWithChildren) {
     </WebSessionContext.Provider>
   );
 }
-

@@ -79,9 +79,6 @@ type CreateTurnResponse = ChatTurnAccepted;
 
 interface CreateTurnRequest {
   input: string;
-  // Temporary Web-side assist hint. Keep optional so rollback is a one-line
-  // removal once discovery/runtime behavior is fixed at the source.
-  toolAssistHint?: string;
 }
 
 interface StreamHandlers {
@@ -135,15 +132,11 @@ export const chatApi = {
   async createTurn(
     sessionId: string,
     input: string,
-    toolAssistHint?: string,
     request?: ApiRequestOptions,
   ): Promise<ChatTurnAccepted> {
     return apiPostData<CreateTurnResponse, CreateTurnRequest>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/turn`,
-      {
-        input,
-        ...(toolAssistHint ? { toolAssistHint } : {}),
-      },
+      { input },
       withDefaultTimeout(request, CHAT_WRITE_TIMEOUT_MS),
     );
   },

@@ -348,9 +348,6 @@ struct CreateChatSessionPayload {
 #[serde(rename_all = "camelCase")]
 struct ChatTurnRequest {
     input: String,
-    // Temporary Web-only hint used to nudge discovery-first tool flows without
-    // rewriting the user's visible message or changing shared CLI behavior.
-    tool_assist_hint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -950,19 +947,12 @@ async fn chat_turn(
     let session_id = id.clone();
     let turn_id_for_task = turn_id.clone();
     let input_owned = input.to_owned();
-    let tool_assist_hint = payload
-        .tool_assist_hint
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
     tokio::spawn(async move {
         let _ = run_chat_turn_stream(
             state_for_turn,
             session_id,
             turn_id_for_task,
             input_owned,
-            tool_assist_hint,
             sender,
         )
         .await;
@@ -1763,7 +1753,6 @@ async fn run_chat_turn_stream(
     session_id: String,
     turn_id: String,
     input: String,
-    tool_assist_hint: Option<String>,
     sender: mpsc::UnboundedSender<String>,
 ) -> Result<(), WebApiError> {
     let stream_result: Result<(), WebApiError> = async {
@@ -1797,20 +1786,10 @@ async fn run_chat_turn_stream(
             &snapshot.config,
         )
         .map_err(WebApiError::internal)?;
-        let mut turn_config = snapshot
+        let turn_config = snapshot
             .config
             .reload_provider_runtime_state_from_path(snapshot.resolved_path.as_path())
             .map_err(WebApiError::internal)?;
-        if let Some(hint) = tool_assist_hint.as_deref() {
-            // Keep this Web-only workaround easy to remove once tool discovery
-            // reliability is addressed in runtime/provider behavior.
-            turn_config.cli.system_prompt = format!(
-                "{}\n\n[web_tool_assist]\n{}\n[/web_tool_assist]",
-                turn_config.cli.resolved_system_prompt(),
-                hint
-            );
-            turn_config.cli.system_prompt_addendum = None;
-        }
         let address = mvp::conversation::ConversationSessionAddress::from_session_id(&session_id);
         let coordinator = mvp::conversation::ConversationTurnCoordinator::new();
         let emitted_text = Arc::new(AtomicBool::new(false));
