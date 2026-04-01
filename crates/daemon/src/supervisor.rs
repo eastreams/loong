@@ -1500,11 +1500,7 @@ mod tests {
             .spawn(|| {
                 let deep_recursion_limit = 100_000;
                 fn recursive_fn(n: usize) -> usize {
-                    if n == 0 {
-                        1
-                    } else {
-                        1 + recursive_fn(n - 1)
-                    }
+                    if n == 0 { 1 } else { 1 + recursive_fn(n - 1) }
                 }
                 recursive_fn(deep_recursion_limit)
             })
@@ -1517,15 +1513,12 @@ mod tests {
             super::GATEWAY_CLI_STACK_SIZE / 1024 / 1024
         );
 
-        assert_eq!(
-            super::GATEWAY_CLI_STACK_SIZE,
-            8 * 1024 * 1024,
-        );
+        assert_eq!(super::GATEWAY_CLI_STACK_SIZE, 8 * 1024 * 1024,);
 
         assert_eq!(
             super::GATEWAY_CLI_STACK_SIZE,
             8 * 1024 * 1024,
-            "production stack size constant must be 8MB to prevent gateway stack overflow (issue #804)"
+            "production stack size constant must be 8MB to prevent gateway stack overflow"
         );
     }
 }
