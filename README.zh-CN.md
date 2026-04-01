@@ -220,7 +220,10 @@ contracts  (stable contract vocabulary)
 ## Star History
 
 <p align="center">
-  <a href="https://www.star-history.com/#loongclaw-ai/loongclaw&Date">
-    <img src="https://api.star-history.com/svg?repos=loongclaw-ai/loongclaw&type=Date" alt="Star History Chart" />
+  <a href="https://star-history.com/#loongclaw-ai/loongclaw&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=loongclaw-ai/loongclaw&type=Date&theme=dark"/>
+      <img src="https://api.star-history.com/svg?repos=loongclaw-ai/loongclaw&type=Date" alt="Star History Chart"/>
+    </picture>
   </a>
 </p>
