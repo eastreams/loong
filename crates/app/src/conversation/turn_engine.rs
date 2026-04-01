@@ -10,15 +10,16 @@ use futures_util::stream::{self, StreamExt};
 use loongclaw_contracts::{KernelError, ToolCoreOutcome, ToolCoreRequest, ToolPlaneError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::config::{GovernedToolApprovalMode, LoongClawConfig, SessionVisibility, ToolConfig};
 use crate::context::KernelContext;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::{
-    NewApprovalRequestRecord, NewSessionRecord, SessionKind, SessionRepository, SessionState,
-};
+use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
+#[cfg(feature = "memory-sqlite")]
+use crate::operator::session_graph::OperatorSessionGraph;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::repository::{SessionKind, SessionRepository};
 use crate::tools::{
     ToolApprovalMode, ToolExecutionKind, ToolSchedulingClass, ToolView,
     delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
@@ -347,10 +348,11 @@ impl DefaultAppToolDispatcher {
         session_context: &SessionContext,
     ) -> Result<ToolView, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
+        let session_graph = OperatorSessionGraph::new(&repo);
         if let Some(session) = repo.load_session(&session_context.session_id)? {
             if session.parent_session_id.is_some() {
-                let depth = repo
-                    .session_lineage_depth(&session_context.session_id)
+                let depth = session_graph
+                    .lineage_depth(&session_context.session_id)
                     .map_err(|error| {
                         format!(
                             "compute session lineage depth for dispatcher tool view failed: {error}"
@@ -416,46 +418,6 @@ impl DefaultAppToolDispatcher {
         )
         .await
     }
-
-    #[cfg(feature = "memory-sqlite")]
-    fn lineage_root_session_id(
-        repo: &SessionRepository,
-        session_context: &SessionContext,
-    ) -> Result<String, String> {
-        let mut current_session_id = session_context.session_id.clone();
-        let mut visited = BTreeSet::new();
-
-        loop {
-            if !visited.insert(current_session_id.clone()) {
-                return Err(format!(
-                    "session_lineage_cycle_detected: `{current_session_id}` reappeared while resolving approval grant scope"
-                ));
-            }
-            let Some(session) = repo.load_session(&current_session_id)? else {
-                return Ok(current_session_id);
-            };
-            match session.parent_session_id {
-                Some(parent_session_id) => current_session_id = parent_session_id,
-                None => return Ok(current_session_id),
-            }
-        }
-    }
-}
-
-fn governed_approval_request_id(
-    session_context: &SessionContext,
-    tool_name: &str,
-    intent: &ToolIntent,
-) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(session_context.session_id.as_bytes());
-    hasher.update([0]);
-    hasher.update(intent.turn_id.as_bytes());
-    hasher.update([0]);
-    hasher.update(intent.tool_call_id.as_bytes());
-    hasher.update([0]);
-    hasher.update(tool_name.as_bytes());
-    format!("apr_{:x}", hasher.finalize())
 }
 
 impl Default for DefaultAppToolDispatcher {
@@ -512,7 +474,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 return Ok(None);
             }
 
-            let approval_key = format!("tool:{}", descriptor.name);
+            let approval_key = OperatorApprovalRuntime::approval_key_for_tool_name(descriptor.name);
             if self
                 .tool_config
                 .approval
@@ -535,64 +497,37 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             }
 
             let repo = SessionRepository::new(&self.memory_config)?;
-            let kind = if session_context.parent_session_id.is_some() {
-                SessionKind::DelegateChild
-            } else {
-                SessionKind::Root
-            };
-            let _ = repo.ensure_session(NewSessionRecord {
-                session_id: session_context.session_id.clone(),
-                kind,
-                parent_session_id: session_context.parent_session_id.clone(),
-                label: None,
-                state: SessionState::Ready,
-            })?;
-
-            let scope_session_id = Self::lineage_root_session_id(&repo, session_context)?;
-            if repo
-                .load_approval_grant(&scope_session_id, &approval_key)?
-                .is_some()
-            {
+            let approval_runtime = OperatorApprovalRuntime::new(&repo);
+            let existing_runtime_grant = approval_runtime.load_runtime_grant_for_context(
+                &session_context.session_id,
+                session_context.parent_session_id.as_deref(),
+                &approval_key,
+            )?;
+            if existing_runtime_grant.is_some() {
                 return Ok(None);
             }
 
-            let approval_request_id =
-                governed_approval_request_id(session_context, descriptor.name, intent);
             let reason = format!(
                 "operator approval required before running `{}`",
                 descriptor.name
             );
             let rule_id = "governed_tool_requires_approval";
-            let request_payload_json = json!({
-                "session_id": session_context.session_id,
-                "parent_session_id": session_context.parent_session_id,
-                "turn_id": intent.turn_id,
-                "tool_call_id": intent.tool_call_id,
-                "tool_name": descriptor.name,
-                "args_json": intent.args_json,
-                "source": intent.source,
-                "execution_kind": match descriptor.execution_kind {
-                    ToolExecutionKind::Core => "core",
-                    ToolExecutionKind::App => "app",
-                },
-            });
-            let governance_snapshot_json = json!({
-                "governance_scope": governance.scope.as_str(),
-                "risk_class": governance.risk_class.as_str(),
-                "approval_mode": governance.approval_mode.as_str(),
-                "rule_id": rule_id,
-                "reason": reason,
-            });
-            let stored = repo.ensure_approval_request(NewApprovalRequestRecord {
-                approval_request_id,
-                session_id: session_context.session_id.clone(),
-                turn_id: intent.turn_id.clone(),
-                tool_call_id: intent.tool_call_id.clone(),
-                tool_name: descriptor.name.to_owned(),
-                approval_key: approval_key.clone(),
-                request_payload_json,
-                governance_snapshot_json,
-            })?;
+            let approval_request = GovernedToolApprovalRequest {
+                session_id: &session_context.session_id,
+                parent_session_id: session_context.parent_session_id.as_deref(),
+                turn_id: &intent.turn_id,
+                tool_call_id: &intent.tool_call_id,
+                tool_name: descriptor.name,
+                args_json: intent.args_json.clone(),
+                source: &intent.source,
+                governance_scope: governance.scope.as_str(),
+                risk_class: governance.risk_class.as_str(),
+                approval_mode: governance.approval_mode.as_str(),
+                reason: &reason,
+                rule_id,
+            };
+            let stored =
+                approval_runtime.ensure_governed_tool_approval_request(approval_request)?;
 
             Ok(Some(ApprovalRequirement::governed_tool(
                 descriptor.name,

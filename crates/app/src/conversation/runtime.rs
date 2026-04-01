@@ -7,6 +7,8 @@ use serde_json::Value;
 
 use crate::CliResult;
 use crate::KernelContext;
+#[cfg(feature = "memory-sqlite")]
+use crate::operator::session_graph::OperatorSessionGraph;
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
@@ -871,12 +873,13 @@ where
         {
             let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
             if let Ok(repo) = SessionRepository::new(&memory_config) {
+                let session_graph = OperatorSessionGraph::new(&repo);
                 if let Some(session) = repo
                     .load_session(session_id)
                     .map_err(|error| format!("load session tool-view context failed: {error}"))?
                 {
                     if session.parent_session_id.is_some() {
-                        let depth = match repo.session_lineage_depth(session_id) {
+                        let depth = match session_graph.lineage_depth(session_id) {
                             Ok(depth) => depth,
                             Err(error)
                                 if error.starts_with("session_lineage_broken:")

@@ -1179,9 +1179,6 @@ impl SessionRepository {
         let scope_session_id =
             normalize_required_text(&record.scope_session_id, "scope_session_id")?;
         let approval_key = normalize_required_text(&record.approval_key, "approval_key")?;
-        if self.load_session(&scope_session_id)?.is_none() {
-            return Err(format!("session `{scope_session_id}` not found"));
-        }
         let created_by_session_id = normalize_optional_text(record.created_by_session_id);
         let ts = unix_ts_now();
         let conn = self.open_connection()?;
