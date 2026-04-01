@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-01T05:52:20Z
+- Generated at: 2026-04-01T06:21:52Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14

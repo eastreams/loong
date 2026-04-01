@@ -202,9 +202,9 @@ pub fn parse_document_metadata_response(payload: &Value) -> CliResult<FeishuDocu
         .get("data")
         .and_then(|value| value.get("document"))
         .and_then(Value::as_object)
-        .ok_or_else(|| "feishu document create payload missing data.document".to_owned())?;
+        .ok_or_else(|| "feishu document metadata payload missing data.document".to_owned())?;
     let document_id = object_string(document, "document_id").ok_or_else(|| {
-        "feishu document create payload missing data.document.document_id".to_owned()
+        "feishu document metadata payload missing data.document.document_id".to_owned()
     })?;
 
     Ok(FeishuDocumentMetadata {

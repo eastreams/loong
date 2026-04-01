@@ -640,12 +640,17 @@ impl DocumentsApi for FeishuAdapter {
             create_feishu_document(&self.client, &token, Some(title), parent_id).await,
         )?;
 
-        let document = convert_feishu_document_metadata_to_document(metadata)?;
+        let mut document = convert_feishu_document_metadata_to_document(metadata);
 
         // If content is provided, append it to the document
         if let Some(content) = content {
-            self.append_document_content_with_token(&token, &document.id, content)
+            let document_id = document.id.clone();
+            let initial_content = content.clone();
+
+            self.append_document_content_with_token(&token, &document_id, content)
                 .await?;
+
+            document.content = Some(initial_content);
         }
 
         Ok(document)
@@ -807,8 +812,8 @@ impl DocumentsApi for FeishuAdapter {
 /// owner_id, created_at, updated_at are not available from Feishu API.
 fn convert_feishu_document_metadata_to_document(
     metadata: crate::channel::feishu::api::resources::types::FeishuDocumentMetadata,
-) -> ApiResult<Document> {
-    Ok(Document {
+) -> Document {
+    Document {
         id: metadata.document_id,
         title: metadata.title,
         owner_id: None,   // Feishu doesn't return owner
@@ -820,7 +825,7 @@ fn convert_feishu_document_metadata_to_document(
             "revision_id": metadata.revision_id,
             "url": metadata.url,
         })),
-    })
+    }
 }
 
 /// Convert FeishuDocumentContent to generic Document
@@ -1370,6 +1375,10 @@ mod tests {
         assert_eq!(document.id, "doxcnCreated");
         assert_eq!(document.title.as_deref(), Some("Release Plan"));
         assert_eq!(document.doc_type, DocumentType::Docx);
+        assert_eq!(
+            document.content,
+            Some(DocumentContent::Markdown("# Release Plan".to_owned()))
+        );
 
         let requests = requests.lock().await.clone();
         assert_eq!(requests.len(), 4);
