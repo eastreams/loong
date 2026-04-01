@@ -1807,15 +1807,13 @@ mod tests {
         body: &str,
     ) -> PathBuf {
         let script_path = temp_dir.join(script_name);
-        write_executable_script_atomically(
-            &script_path,
-            &format!(
-                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
-                log_path.display(),
-                body
-            ),
-        )
-        .expect("write fake acpx script");
+        let script_source = format!(
+            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
+            log_path.display(),
+            body
+        );
+        write_executable_script_atomically(&script_path, &script_source)
+            .expect("write fake acpx script");
         script_path
     }
 
@@ -2415,6 +2413,94 @@ exit 0
 
     #[tokio::test]
     #[cfg(unix)]
+    async fn runtime_backend_executes_session_turn_and_controls_when_path_is_narrowed() {
+        let temp_dir = unique_temp_dir("loongclaw-acpx-runtime-narrow-path");
+        let log_path = temp_dir.join("calls.log");
+        let script_path = write_fake_acpx_script(
+            &temp_dir,
+            "fake-acpx",
+            &log_path,
+            r#"
+case "$*" in
+  "--version")
+    echo 'acpx 0.1.16'
+    exit 0
+    ;;
+esac
+
+if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+  echo '{"acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
+  exit 0
+fi
+
+if printf '%s' "$*" | grep -q 'prompt --session'; then
+  cat >/dev/null
+  echo '{"type":"text","content":"hello "}'
+  echo '{"type":"text","content":"world"}'
+  echo '{"type":"usage_update","used":7,"size":128}'
+  echo '{"type":"done"}'
+  exit 0
+fi
+
+if printf '%s' "$*" | grep -q 'status --session'; then
+  echo '{"status":"ready","acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
+  exit 0
+fi
+
+exit 0
+"#,
+        );
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("PATH", &temp_dir);
+        let config = fake_acpx_config(&script_path, &temp_dir);
+        let backend = AcpxCliProbeBackend;
+        let bootstrap = AcpSessionBootstrap {
+            session_key: "agent:codex:session-42".to_owned(),
+            conversation_id: Some("telegram:42".to_owned()),
+            binding: Some(crate::acp::AcpSessionBindingScope {
+                route_session_id: "telegram:bot_123456:42".to_owned(),
+                channel_id: Some("telegram".to_owned()),
+                account_id: Some("bot_123456".to_owned()),
+                conversation_id: Some("42".to_owned()),
+                thread_id: Some("thread-42".to_owned()),
+            }),
+            working_directory: Some(temp_dir.clone()),
+            initial_prompt: None,
+            mode: Some(AcpSessionMode::Interactive),
+            mcp_servers: Vec::new(),
+            metadata: BTreeMap::new(),
+        };
+
+        let handle = backend
+            .ensure_session(&config, &bootstrap)
+            .await
+            .expect("ensure session");
+        let result = backend
+            .run_turn(
+                &config,
+                &handle,
+                &AcpTurnRequest {
+                    session_key: bootstrap.session_key.clone(),
+                    input: "hello runtime".to_owned(),
+                    working_directory: None,
+                    metadata: BTreeMap::new(),
+                },
+            )
+            .await
+            .expect("run turn");
+
+        assert_eq!(result.output_text, "hello world");
+        assert_eq!(
+            result.usage,
+            Some(serde_json::json!({
+                "used": 7,
+                "size": 128,
+            }))
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
     async fn runtime_backend_supports_local_abort_for_running_prompt() {
         let temp_dir = unique_temp_dir("loongclaw-acpx-abort");
         let log_path = temp_dir.join("calls.log");
@@ -2508,6 +2594,97 @@ exit 0
                 .and_then(|event| value_string(event, "stopReason")),
             Some("cancelled".to_owned())
         );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn runtime_backend_supports_local_abort_when_path_is_narrowed() {
+        let temp_dir = unique_temp_dir("loongclaw-acpx-abort-narrow-path");
+        let log_path = temp_dir.join("calls.log");
+        let script_path = write_fake_acpx_script(
+            &temp_dir,
+            "fake-acpx",
+            &log_path,
+            r#"
+case "$*" in
+  "--version")
+    echo 'acpx 0.1.16'
+    exit 0
+    ;;
+esac
+
+if printf '%s' "$*" | grep -q 'sessions ensure --name'; then
+  echo '{"acpxSessionId":"sess-abort","agentSessionId":"agent-abort","acpxRecordId":"record-abort"}'
+  exit 0
+fi
+
+if printf '%s' "$*" | grep -q 'prompt --session'; then
+  cat >/dev/null
+  sleep 30
+  exit 0
+fi
+
+exit 0
+"#,
+        );
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.set("PATH", &temp_dir);
+        let config = fake_acpx_config(&script_path, &temp_dir);
+        let backend = AcpxCliProbeBackend;
+        let bootstrap = AcpSessionBootstrap {
+            session_key: "agent:codex:session-abort".to_owned(),
+            conversation_id: Some("telegram:abort".to_owned()),
+            binding: None,
+            working_directory: Some(temp_dir.clone()),
+            initial_prompt: None,
+            mode: Some(AcpSessionMode::Interactive),
+            mcp_servers: Vec::new(),
+            metadata: BTreeMap::new(),
+        };
+        let handle = backend
+            .ensure_session(&config, &bootstrap)
+            .await
+            .expect("ensure abortable session");
+
+        let abort_controller = crate::acp::AcpAbortController::new();
+        let abort_signal = abort_controller.signal();
+        let turn_task = {
+            let backend = AcpxCliProbeBackend;
+            let config = config.clone();
+            let handle = handle.clone();
+            let session_key = bootstrap.session_key.clone();
+            tokio::spawn(async move {
+                backend
+                    .run_turn_with_sink(
+                        &config,
+                        &handle,
+                        &AcpTurnRequest {
+                            session_key,
+                            input: "abort me".to_owned(),
+                            working_directory: None,
+                            metadata: BTreeMap::new(),
+                        },
+                        Some(abort_signal),
+                        None,
+                    )
+                    .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        abort_controller.abort();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), async {
+            turn_task
+                .await
+                .expect("abortable turn join should succeed")
+                .expect("abortable turn result should resolve")
+        })
+        .await
+        .expect("aborted prompt should stop promptly");
+
+        assert_eq!(result.stop_reason, Some(AcpTurnStopReason::Cancelled));
+        assert_eq!(result.output_text, "");
     }
 
     #[tokio::test]
