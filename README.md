@@ -50,7 +50,7 @@
 
 LoongClaw already presents itself as more than a runnable assistant path.
 You can start with `loong onboard`, `loong ask`, or `loong chat`, but the more important point is that the project already exposes the runtime surfaces teams eventually need to inspect, operate, and extend.
-The README keeps that public surface intentionally compact. What it exposes today is a concrete public shape: a usable operator path, an operator-visible runtime surface, and a governed foundation for longer-lived team workflows.
+Today that public shape is already concrete: a usable operator path, an operator-visible runtime surface, and a governed foundation for longer-lived team workflows.
 
 Today that means three concrete things:
 
@@ -65,10 +65,6 @@ Today that means three concrete things:
 - **🧭 You care about truthful public contracts**: local assistant flow, gateway ownership, reply-loop surfaces, and outbound-only delivery are kept separate instead of being marketed as one thing.
 - **🔌 You need visible extension seams**: providers, tools, channels, memory, and policy are explicit boundaries rather than accidental coupling points.
 - **🌱 You expect the runtime to grow with the team**: the design targets longer-lived team workflows, not just a single local prompt loop.
-
-The README is intentionally a landing page. Provider walkthroughs, channel
-recipes, and deeper source-level references now live in docs instead of being
-stacked into the repository front page.
 
 If you want the longer public rationale behind this positioning, read
 [Why LoongClaw](site/reference/why-loongclaw.mdx).
@@ -156,16 +152,11 @@ api_key = { env = "OPENAI_API_KEY" }
 | add delivery surfaces without overclaiming support | [Channels](site/use-loongclaw/channels.mdx), [Gateway And Supervision](site/use-loongclaw/gateway-and-supervision.mdx), [Channel Recipes](site/use-loongclaw/channel-recipes.mdx), and the full [Channel Setup](docs/product-specs/channel-setup.md) contract |
 | understand the current runtime surface and governed extension seams | [Use LoongClaw](site/use-loongclaw/overview.mdx), [Tools And Memory](site/use-loongclaw/tools-and-memory.mdx), [ARCHITECTURE.md](ARCHITECTURE.md), and [Contributing](CONTRIBUTING.md) |
 
-This keeps the README at the “where to begin” layer instead of turning it into the latest full command and surface matrix.
-
 <a id="documentation"></a>
 ## Documentation
 
-The public docs now work in three deliberate layers:
-
-- this README is the landing page
-- `site/` is the reader-facing docs source that Mintlify deploys
-- `docs/` keeps public source specs and supporting reference markdown
+Start in `site/` for the reader-facing docs that Mintlify deploys. Keep `docs/`
+for public source specs and supporting reference markdown.
 
 When you open the repository directly, the docs links below point into the
 checked-in docs source on purpose so repository readers can start from the same
@@ -177,13 +168,14 @@ material that Mintlify deploys.
 | understand why the project exists and what stance shapes it | [Why LoongClaw](site/reference/why-loongclaw.mdx) |
 | follow one complete rollout path without stitching docs together | [Common Setups](site/use-loongclaw/common-setups.mdx) |
 | understand the shared public config shape first | [Configuration Patterns](site/use-loongclaw/configuration-patterns.mdx) |
-| follow the practical provider and channel setup paths | [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) and [Channel Recipes](site/use-loongclaw/channel-recipes.mdx) |
+| follow the practical provider and channel setup paths | [Provider Guides](site/use-loongclaw/provider-guides/index.mdx), [Provider Recipes](site/use-loongclaw/provider-recipes.mdx), [Channel Guides](site/use-loongclaw/channel-guides/index.mdx), and [Channel Recipes](site/use-loongclaw/channel-recipes.mdx) |
 | understand the current operator model | [Use LoongClaw](site/use-loongclaw/overview.mdx) |
 | evaluate the architecture and extension seams | [Build On LoongClaw](site/build-on-loongclaw/overview.mdx) |
 | check roadmap, policy, reliability, and releases | [Reference](site/reference/overview.mdx) |
 | read the source-level public contracts in the repo | [ARCHITECTURE.md](ARCHITECTURE.md), [Channel Setup](docs/product-specs/channel-setup.md), [Roadmap](docs/ROADMAP.md), and [Reliability](docs/RELIABILITY.md) |
 
-If you are reading through repository source rather than a deployed docs site, start at [Docs Overview](site/index.mdx). That page is the checked-in docs landing surface for repository readers, not another attempt to turn the README into a giant matrix.
+If you are reading through repository source rather than a deployed docs site,
+start at [Docs Overview](site/index.mdx).
 
 <a id="architecture"></a>
 ## Architecture At A Glance
