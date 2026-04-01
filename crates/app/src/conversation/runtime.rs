@@ -27,7 +27,7 @@ use super::context_engine_registry::{
 };
 use super::prompt_orchestrator::seed_prompt_fragments_from_context;
 use super::prompt_orchestrator::sync_prompt_fragments_into_context;
-use super::runtime_binding::ConversationRuntimeBinding;
+use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
 use super::turn_middleware::{
@@ -315,7 +315,7 @@ pub struct AsyncDelegateSpawnRequest {
     pub execution: ConstrainedSubagentExecution,
     pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
     pub timeout_seconds: u64,
-    pub kernel_context: Option<KernelContext>,
+    pub binding: OwnedConversationRuntimeBinding,
 }
 
 #[async_trait]
@@ -342,11 +342,22 @@ impl DefaultAsyncDelegateSpawner {
 #[async_trait]
 impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
-        let execution_timeout_seconds = request.execution.timeout_seconds;
-        if request.timeout_seconds != execution_timeout_seconds {
+        let AsyncDelegateSpawnRequest {
+            child_session_id,
+            parent_session_id,
+            task,
+            label,
+            execution,
+            runtime_self_continuity,
+            timeout_seconds,
+            binding,
+        } = request;
+
+        let execution_timeout_seconds = execution.timeout_seconds;
+        if timeout_seconds != execution_timeout_seconds {
             return Err(format!(
                 "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
-                request.timeout_seconds, execution_timeout_seconds
+                timeout_seconds, execution_timeout_seconds
             ));
         }
 
@@ -354,50 +365,48 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
             &self.config.memory,
         ))?;
         let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
+        let runtime_ref = &runtime;
+        let child_session_id_for_spawn = child_session_id.clone();
+        let parent_session_id_for_spawn = parent_session_id.clone();
+        let child_binding = binding.clone();
         super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
-            &runtime,
-            &request.parent_session_id,
-            &request.child_session_id,
-            ConversationRuntimeBinding::from_optional_kernel_context(
-                request.kernel_context.as_ref(),
-            ),
-            || async {
+            runtime_ref,
+            &parent_session_id,
+            &child_session_id,
+            binding.as_borrowed(),
+            move || async move {
                 let started = repo.transition_session_with_event_if_current(
-                    &request.child_session_id,
+                    &child_session_id_for_spawn,
                     TransitionSessionWithEventIfCurrentRequest {
                         expected_state: SessionState::Ready,
                         next_state: SessionState::Running,
                         last_error: None,
                         event_kind: "delegate_started".to_owned(),
-                        actor_session_id: Some(request.parent_session_id.clone()),
-                        event_payload_json: request
-                            .execution
-                            .spawn_payload_with_runtime_self_continuity(
-                                &request.task,
-                                request.label.as_deref(),
-                                request.runtime_self_continuity.as_ref(),
-                            ),
+                        actor_session_id: Some(parent_session_id_for_spawn.clone()),
+                        event_payload_json: execution.spawn_payload_with_runtime_self_continuity(
+                            &task,
+                            label.as_deref(),
+                            runtime_self_continuity.as_ref(),
+                        ),
                     },
                 )?;
                 if started.is_none() {
                     return Err(format!(
                         "async_delegate_spawn_skipped: session `{}` was not in Ready state",
-                        request.child_session_id
+                        child_session_id_for_spawn
                     ));
                 }
 
                 let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
                     self.config.as_ref(),
-                    &runtime,
-                    &request.child_session_id,
-                    &request.parent_session_id,
-                    request.label,
-                    &request.task,
-                    request.execution,
+                    runtime_ref,
+                    &child_session_id_for_spawn,
+                    &parent_session_id_for_spawn,
+                    label,
+                    &task,
+                    execution,
                     execution_timeout_seconds,
-                    ConversationRuntimeBinding::from_optional_kernel_context(
-                        request.kernel_context.as_ref(),
-                    ),
+                    child_binding.as_borrowed(),
                 )
                 .await;
                 Ok(())

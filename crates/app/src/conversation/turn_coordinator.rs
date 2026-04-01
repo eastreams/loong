@@ -4262,7 +4262,6 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         },
     )?;
 
-    let kernel_context = binding.kernel_context().cloned();
     let request = AsyncDelegateSpawnRequest {
         child_session_id: child_session_id.clone(),
         parent_session_id: session_context.session_id.clone(),
@@ -4271,7 +4270,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         execution,
         runtime_self_continuity,
         timeout_seconds,
-        kernel_context,
+        binding: super::runtime_binding::OwnedConversationRuntimeBinding::from_borrowed(binding),
     };
     spawn_async_delegate_detached(runtime_handle, memory_config, spawner, request);
 

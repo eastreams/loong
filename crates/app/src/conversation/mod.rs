@@ -68,7 +68,7 @@ pub use runtime::{
     collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
-pub use runtime_binding::ConversationRuntimeBinding;
+pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 pub use safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, classify_safe_lane_plan_failure,
