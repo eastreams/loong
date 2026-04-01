@@ -16,6 +16,7 @@ mod secret_resolver;
 mod secret_value;
 mod task_state;
 mod tool_types;
+mod workflow_types;
 
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
 pub use clock::{Clock, FixedClock, SystemClock};
@@ -46,6 +47,10 @@ pub use secret_value::SecretValue;
 pub use task_state::TaskState;
 pub use tool_types::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
+};
+pub use workflow_types::{
+    GovernedSessionBindingDescriptor, GovernedSessionMode, TaskScopeDescriptor,
+    WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
 };
 
 #[cfg(test)]
