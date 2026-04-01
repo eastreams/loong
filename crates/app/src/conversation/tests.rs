@@ -10846,8 +10846,8 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
         crate::tools::planned_root_tool_view(),
     );
 
-    let result = engine
-        .execute_turn_in_context(
+    let (result, trace) = engine
+        .execute_turn_in_context_with_trace(
             &turn,
             &session_context,
             &dispatcher,
@@ -10886,6 +10886,19 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
             .expect("dispatcher executed lock")
             .is_empty(),
         "mutating app tool should not execute under advisory binding"
+    );
+    let trace = trace.expect("governed binding denial should record a trace");
+    assert_eq!(trace.decision_records.len(), 1);
+
+    let decision = &trace.decision_records[0].decision;
+    assert_eq!(decision.tool_name, "delegate_async");
+    assert_eq!(
+        decision.decision_kind,
+        crate::conversation::turn_engine::ToolDecisionKind::Deny
+    );
+    assert_eq!(
+        decision.capability_action_class.as_deref(),
+        Some("topology_expand")
     );
 }
 
@@ -18290,6 +18303,140 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_gran
         repo.load_approval_grant("root-session", "tool:delegate")
             .expect("load grant")
             .is_none()
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_before_binding_gate_for_stale_governed_retry()
+ {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-approval-resolve", "stale-governed-retry")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-delegate-stale".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-delegate-parent".to_owned(),
+        tool_call_id: "call-delegate-parent".to_owned(),
+        tool_name: "delegate".to_owned(),
+        approval_key: "tool:delegate".to_owned(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-delegate-parent",
+            "tool_call_id": "call-delegate-parent",
+            "tool_name": "delegate",
+            "args_json": {
+                "task": "child task",
+                "label": "research-subtask"
+            },
+            "source": "provider_tool_call",
+            "execution_kind": "app"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "topology_mutation",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "governed_tool_requires_approval",
+            "reason": "operator approval required before running `delegate`"
+        }),
+    })
+    .expect("seed approval request");
+    let stale_request = repo
+        .transition_approval_request_if_current(
+            "apr-delegate-stale",
+            crate::session::repository::TransitionApprovalRequestIfCurrentRequest {
+                expected_status: crate::session::repository::ApprovalRequestStatus::Pending,
+                next_status: crate::session::repository::ApprovalRequestStatus::Denied,
+                decision: Some(crate::session::repository::ApprovalDecision::Deny),
+                resolved_by_session_id: Some("root-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition stale approval request")
+        .expect("stale approval request should exist");
+    assert_eq!(
+        stale_request.status,
+        crate::session::repository::ApprovalRequestStatus::Denied
+    );
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "retry stale approval".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "approval_request_resolve",
+                    json!({
+                        "approval_request_id": "apr-delegate-stale",
+                        "decision": "approve_once"
+                    }),
+                    "root-session",
+                    "turn-approval-resolve-stale",
+                    "call-approval-resolve-stale",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "unused".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "retry approval resolution",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("stale advisory retry should still return a reply payload");
+
+    assert!(
+        reply.contains("approval_request_not_pending"),
+        "expected stale approval retry to report not_pending, got: {reply}"
+    );
+    assert!(
+        !reply.contains("governed_runtime_binding_required"),
+        "stale approval retry should not be rewritten as a binding denial: {reply}"
+    );
+
+    let request = repo
+        .load_approval_request("apr-delegate-stale")
+        .expect("load stale approval request")
+        .expect("stale approval request row");
+    assert_eq!(
+        request.status,
+        crate::session::repository::ApprovalRequestStatus::Denied
+    );
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::Deny)
     );
 }
 

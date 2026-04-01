@@ -427,10 +427,15 @@ fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionT
     ToolDecisionTelemetry::deny(tool_name, reason, rule_id)
 }
 
-fn governed_runtime_binding_denied_outcome(tool_name: &str) -> ToolPreflightOutcome {
+fn governed_runtime_binding_denied_outcome(
+    descriptor: &crate::tools::ToolDescriptor,
+) -> ToolPreflightOutcome {
+    let tool_name = descriptor.name;
     let reason_code = "governed_runtime_binding_required";
     let failure = TurnFailure::policy_denied(reason_code, reason_code);
-    let decision = denied_tool_decision(tool_name, &failure);
+    let action_class = descriptor.capability_action_class();
+    let decision = denied_tool_decision(tool_name, &failure)
+        .with_capability_action_class(action_class.as_str());
     ToolPreflightOutcome::Denied { failure, decision }
 }
 
@@ -447,7 +452,7 @@ pub trait AppToolDispatcher: Send + Sync {
         let requires_mutating_binding = requires_mutating_runtime_binding(descriptor);
         let allows_mutation = binding.allows_mutation();
         if requires_mutating_binding && !allows_mutation {
-            let denied = governed_runtime_binding_denied_outcome(descriptor.name);
+            let denied = governed_runtime_binding_denied_outcome(descriptor);
             return Ok(denied);
         }
 
@@ -1130,7 +1135,7 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 let requires_mutating_binding = requires_mutating_runtime_binding(descriptor);
                 let allows_mutation = binding.allows_mutation();
                 if requires_mutating_binding && !allows_mutation {
-                    let denied = governed_runtime_binding_denied_outcome(descriptor.name);
+                    let denied = governed_runtime_binding_denied_outcome(descriptor);
                     return Ok(denied);
                 }
 

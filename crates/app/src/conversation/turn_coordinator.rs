@@ -28,8 +28,6 @@ use crate::acp::{
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::operator::approval_runtime::OperatorApprovalRuntime;
-#[cfg(feature = "memory-sqlite")]
 use crate::operator::session_graph::OperatorSessionGraph;
 use crate::runtime_self_continuity;
 use crate::tools::ToolExecutionKind;
@@ -129,8 +127,9 @@ use crate::session::recovery::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalDecision, ApprovalRequestRecord, ApprovalRequestStatus, CreateSessionWithEventRequest,
-    FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, NewSessionToolConsentRecord,
-    SessionKind, SessionRepository, SessionState, TransitionSessionWithEventIfCurrentRequest,
+    FinalizeSessionTerminalRequest, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
+    NewSessionToolConsentRecord, SessionKind, SessionRepository, SessionState,
+    TransitionApprovalRequestIfCurrentRequest, TransitionSessionWithEventIfCurrentRequest,
 };
 
 #[derive(Default)]
@@ -3715,15 +3714,6 @@ where
         }
     }
 
-    fn request_parent_session_id(approval_request: &ApprovalRequestRecord) -> Option<&str> {
-        approval_request
-            .request_payload_json
-            .get("parent_session_id")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    }
-
     fn replay_approval_mode(
         &self,
         approval_request: &ApprovalRequestRecord,
@@ -3799,6 +3789,22 @@ where
         Err("app_tool_denied: governed_runtime_binding_required".to_owned())
     }
 
+    fn approval_request_not_pending_error(approval_request: &ApprovalRequestRecord) -> String {
+        let approval_request_id = approval_request.approval_request_id.as_str();
+        let status = approval_request.status.as_str();
+        format!("approval_request_not_pending: `{approval_request_id}` is already {status}")
+    }
+
+    fn ensure_resolution_request_is_pending(
+        approval_request: &ApprovalRequestRecord,
+    ) -> Result<(), String> {
+        if approval_request.status == ApprovalRequestStatus::Pending {
+            return Ok(());
+        }
+
+        Err(Self::approval_request_not_pending_error(approval_request))
+    }
+
     async fn replay_approved_request(
         &self,
         approval_request: &ApprovalRequestRecord,
@@ -3858,14 +3864,38 @@ where
         repo: &SessionRepository,
         approval_request_id: &str,
     ) -> Result<crate::tools::approval::ApprovalResolutionOutcome, String> {
-        let approval_runtime = OperatorApprovalRuntime::new(repo);
-        let executing = approval_runtime.begin_approved_request_execution(approval_request_id)?;
-        approval_runtime.ensure_request_session(&executing)?;
+        let executing = repo
+            .transition_approval_request_if_current(
+                approval_request_id,
+                TransitionApprovalRequestIfCurrentRequest {
+                    expected_status: ApprovalRequestStatus::Approved,
+                    next_status: ApprovalRequestStatus::Executing,
+                    decision: None,
+                    resolved_by_session_id: None,
+                    executed_at: None,
+                    last_error: None,
+                },
+            )?
+            .ok_or_else(|| {
+                format!(
+                    "approval_request_not_approved: `{approval_request_id}` is no longer approved"
+                )
+            })?;
 
         match self.replay_approved_request(&executing).await {
             Ok(resumed_tool_output) => {
-                let executed = approval_runtime
-                    .finish_executing_request(approval_request_id, None)?
+                let executed = repo
+                    .transition_approval_request_if_current(
+                        approval_request_id,
+                        TransitionApprovalRequestIfCurrentRequest {
+                            expected_status: ApprovalRequestStatus::Executing,
+                            next_status: ApprovalRequestStatus::Executed,
+                            decision: None,
+                            resolved_by_session_id: None,
+                            executed_at: Some(Self::current_epoch_s()),
+                            last_error: None,
+                        },
+                    )?
                     .ok_or_else(|| {
                         format!(
                             "approval_request_not_executing: `{approval_request_id}` is no longer executing"
@@ -3877,13 +3907,17 @@ where
                 })
             }
             Err(error) => {
-                let maybe_executed = approval_runtime
-                    .finish_executing_request(approval_request_id, Some(error.as_str()))?;
-                if maybe_executed.is_none() {
-                    return Err(format!(
-                        "approval_request_not_executing: `{approval_request_id}` is no longer executing; original replay error: {error}"
-                    ));
-                }
+                let _ = repo.transition_approval_request_if_current(
+                    approval_request_id,
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Executing,
+                        next_status: ApprovalRequestStatus::Executed,
+                        decision: None,
+                        resolved_by_session_id: None,
+                        executed_at: Some(Self::current_epoch_s()),
+                        last_error: Some(error.clone()),
+                    },
+                )?;
                 Err(error)
             }
         }
@@ -3903,7 +3937,6 @@ where
     ) -> Result<crate::tools::approval::ApprovalResolutionOutcome, String> {
         let memory_config = MemoryRuntimeConfig::from_memory_config(&self.config.memory);
         let repo = SessionRepository::new(&memory_config)?;
-        let approval_runtime = OperatorApprovalRuntime::new(&repo);
         let approval_request = repo
             .load_approval_request(&request.approval_request_id)?
             .ok_or_else(|| {
@@ -3925,7 +3958,6 @@ where
                     )?
             }
         };
-        approval_runtime.ensure_request_session(&approval_request)?;
         if !is_visible {
             return Err(format!(
                 "visibility_denied: session `{}` is not visible from `{}`",
@@ -3933,30 +3965,74 @@ where
             ));
         }
 
+        Self::ensure_resolution_request_is_pending(&approval_request)?;
         self.ensure_resolution_binding_allows_decision(&approval_request, request.decision)?;
 
         match request.decision {
             ApprovalDecision::Deny => {
-                let resolved = approval_runtime.resolve_pending_request(
+                let resolved = match repo.transition_approval_request_if_current(
                     &request.approval_request_id,
-                    ApprovalDecision::Deny,
-                    &request.current_session_id,
-                )?;
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Denied,
+                        decision: Some(ApprovalDecision::Deny),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(resolved) => resolved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(Self::approval_request_not_pending_error(&latest));
+                    }
+                };
                 Ok(crate::tools::approval::ApprovalResolutionOutcome {
                     approval_request: resolved,
                     resumed_tool_output: None,
                 })
             }
             ApprovalDecision::ApproveOnce => {
-                let approved = approval_runtime.resolve_pending_request(
+                let approved = match repo.transition_approval_request_if_current(
                     &request.approval_request_id,
-                    ApprovalDecision::ApproveOnce,
-                    &request.current_session_id,
-                )?;
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Approved,
+                        decision: Some(ApprovalDecision::ApproveOnce),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(approved) => approved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(Self::approval_request_not_pending_error(&latest));
+                    }
+                };
                 if let Some(session_consent_mode) = request.session_consent_mode {
-                    let parent_session_id = Self::request_parent_session_id(&approved);
-                    let scope_session_id = approval_runtime
-                        .grant_scope_session_id(&approved.session_id, parent_session_id)?;
+                    let scope_session_id = repo
+                        .lineage_root_session_id(&approved.session_id)?
+                        .ok_or_else(|| {
+                            format!(
+                                "approval_request_session_not_found: `{}`",
+                                approved.session_id
+                            )
+                        })?;
                     let updated_by_session_id = Some(request.current_session_id.clone());
                     repo.upsert_session_tool_consent(NewSessionToolConsentRecord {
                         scope_session_id,
@@ -3968,11 +4044,43 @@ where
                     .await
             }
             ApprovalDecision::ApproveAlways => {
-                let _approved = approval_runtime.resolve_pending_request(
+                let approved = match repo.transition_approval_request_if_current(
                     &request.approval_request_id,
-                    ApprovalDecision::ApproveAlways,
-                    &request.current_session_id,
-                )?;
+                    TransitionApprovalRequestIfCurrentRequest {
+                        expected_status: ApprovalRequestStatus::Pending,
+                        next_status: ApprovalRequestStatus::Approved,
+                        decision: Some(ApprovalDecision::ApproveAlways),
+                        resolved_by_session_id: Some(request.current_session_id.clone()),
+                        executed_at: None,
+                        last_error: None,
+                    },
+                )? {
+                    Some(approved) => approved,
+                    None => {
+                        let latest = repo
+                            .load_approval_request(&request.approval_request_id)?
+                            .ok_or_else(|| {
+                                format!(
+                                    "approval_request_not_found: `{}`",
+                                    request.approval_request_id
+                                )
+                            })?;
+                        return Err(Self::approval_request_not_pending_error(&latest));
+                    }
+                };
+                let grant_scope_session_id = repo
+                    .lineage_root_session_id(&approved.session_id)?
+                    .ok_or_else(|| {
+                        format!(
+                            "approval_request_session_not_found: `{}`",
+                            approved.session_id
+                        )
+                    })?;
+                repo.upsert_approval_grant(NewApprovalGrantRecord {
+                    scope_session_id: grant_scope_session_id,
+                    approval_key: approved.approval_key.clone(),
+                    created_by_session_id: Some(request.current_session_id.clone()),
+                })?;
                 self.execute_approved_request(&repo, &request.approval_request_id)
                     .await
             }
