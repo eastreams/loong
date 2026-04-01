@@ -461,7 +461,7 @@ fn render_import_apply_summary_lines_with_style(
     }
     let next_actions =
         crate::next_actions::collect_setup_next_actions(resolved_config, &config_path);
-    if let Some((primary, secondary)) = next_actions.split_first() {
+    if let Some((primary, secondary)) = select_primary_import_apply_action(&next_actions) {
         lines.extend(mvp::presentation::render_wrapped_text_line(
             "next step: ",
             &primary.command,
@@ -476,6 +476,37 @@ fn render_import_apply_summary_lines_with_style(
         }
     }
     lines
+}
+
+fn select_primary_import_apply_action(
+    actions: &[crate::next_actions::SetupNextAction],
+) -> Option<(
+    &crate::next_actions::SetupNextAction,
+    Vec<&crate::next_actions::SetupNextAction>,
+)> {
+    let primary_index = actions
+        .iter()
+        .position(is_managed_bridge_doctor_action)
+        .unwrap_or(0);
+    let primary = actions.get(primary_index)?;
+    let mut secondary = Vec::new();
+
+    for (index, action) in actions.iter().enumerate() {
+        if index == primary_index {
+            continue;
+        }
+
+        secondary.push(action);
+    }
+
+    Some((primary, secondary))
+}
+
+fn is_managed_bridge_doctor_action(action: &crate::next_actions::SetupNextAction) -> bool {
+    let is_doctor = action.kind == crate::next_actions::SetupNextActionKind::Doctor;
+    let is_managed_bridge_label = action.label == "verify managed bridges";
+
+    is_doctor && is_managed_bridge_label
 }
 
 #[derive(Serialize)]

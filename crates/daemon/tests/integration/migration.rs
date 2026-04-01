@@ -2247,6 +2247,115 @@ fn migration_compose_recommended_candidate_marks_plugin_bridge_install_root_conf
 }
 
 #[test]
+fn migration_compose_recommended_candidate_preserves_selected_channel_conflict_over_later_supplement()
+ {
+    let current_install_root = unique_temp_dir("managed-bridge-selected-conflict-current");
+    let conflicting_install_root = unique_temp_dir("managed-bridge-selected-conflict-detected");
+    let current_manifest = managed_bridge_manifest(
+        "qqbot",
+        Some("channel"),
+        compatible_managed_bridge_metadata(
+            "qq_official_bot_gateway_or_plugin_bridge",
+            "qqbot_reply_loop",
+        ),
+    );
+    let mut current: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        },
+        "external_skills": {
+            "install_root": current_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize current config");
+    let mut conflicting = mvp::config::LoongClawConfig::default();
+    let mut supplemental = mvp::config::LoongClawConfig::default();
+
+    std::fs::create_dir_all(&current_install_root).expect("create current install root");
+    std::fs::create_dir_all(&conflicting_install_root).expect("create conflicting install root");
+    write_managed_bridge_manifest(
+        current_install_root.as_path(),
+        "qqbot-current-bridge",
+        &current_manifest,
+    );
+
+    current.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    conflicting.provider.model = "openai/gpt-5.1-codex".to_owned();
+    conflicting.weixin.enabled = true;
+    conflicting.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    conflicting.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    conflicting.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+    conflicting.external_skills.install_root = Some(conflicting_install_root.display().to_string());
+
+    supplemental.provider.model = "openai/gpt-5.1-codex".to_owned();
+    supplemental.weixin.enabled = true;
+    supplemental.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    supplemental.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    supplemental.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+    let current_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        current,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("current candidate");
+    let conflicting_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        conflicting,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("conflicting candidate");
+    let supplemental_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        supplemental,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("supplemental candidate");
+
+    let composed = loongclaw_daemon::migration::planner::compose_recommended_import_candidate(&[
+        current_candidate,
+        conflicting_candidate,
+        supplemental_candidate,
+    ])
+    .expect("recommended candidate");
+    let weixin_candidate = composed
+        .channel_candidates
+        .iter()
+        .find(|channel| channel.id == "weixin")
+        .expect("weixin candidate");
+
+    assert_eq!(
+        weixin_candidate.status,
+        loongclaw_daemon::migration::types::PreviewStatus::NeedsReview,
+        "a conflicting selected channel should stay in review even if a later source could supplement the config"
+    );
+    assert!(
+        weixin_candidate
+            .summary
+            .contains("managed bridge install_root conflict"),
+        "selected channel conflicts must remain visible in the composed preview: {weixin_candidate:#?}"
+    );
+    assert!(
+        !composed.config.weixin.enabled,
+        "the composed config should not silently enable the conflicting plugin-backed channel"
+    );
+}
+
+#[test]
 fn migration_compose_recommended_candidate_upgrades_incomplete_provider_from_compatible_source() {
     let mut existing = mvp::config::LoongClawConfig::default();
     existing.provider.kind = mvp::config::ProviderKind::KimiCoding;

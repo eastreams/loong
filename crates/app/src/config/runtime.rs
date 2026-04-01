@@ -1110,12 +1110,14 @@ fn canonicalize_wecom_channel_for_encoding(config: &mut WecomChannelConfig) {
 }
 
 fn canonicalize_weixin_channel_for_encoding(config: &mut WeixinChannelConfig) {
+    canonicalize_env_string_reference(&mut config.bridge_url, &mut config.bridge_url_env);
     canonicalize_env_secret_reference(
         &mut config.bridge_access_token,
         &mut config.bridge_access_token_env,
     );
 
     for account in config.accounts.values_mut() {
+        canonicalize_env_string_reference(&mut account.bridge_url, &mut account.bridge_url_env);
         canonicalize_env_secret_reference(
             &mut account.bridge_access_token,
             &mut account.bridge_access_token_env,
@@ -1137,9 +1139,14 @@ fn canonicalize_qqbot_channel_for_encoding(config: &mut QqbotChannelConfig) {
 }
 
 fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
+    canonicalize_env_string_reference(&mut config.websocket_url, &mut config.websocket_url_env);
     canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
 
     for account in config.accounts.values_mut() {
+        canonicalize_env_string_reference(
+            &mut account.websocket_url,
+            &mut account.websocket_url_env,
+        );
         canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
     }
 }
@@ -1380,6 +1387,37 @@ fn canonicalize_provider_secret_env_reference(
         });
     }
     *env_name = None;
+}
+
+fn canonicalize_env_string_reference(value: &mut Option<String>, env_name: &mut Option<String>) {
+    let explicit_env_name = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| {
+            let secret_ref = loongclaw_contracts::SecretRef::Inline(raw.to_owned());
+            secret_ref_env_name(Some(&secret_ref))
+        });
+    let Some(explicit_env_name) = explicit_env_name else {
+        return;
+    };
+
+    let configured_env_name = env_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|configured| !configured.is_empty());
+
+    match configured_env_name {
+        None => {
+            *env_name = Some(explicit_env_name);
+            *value = None;
+        }
+        Some(configured_env_name) if configured_env_name == explicit_env_name => {
+            *env_name = Some(explicit_env_name);
+            *value = None;
+        }
+        Some(_) => {}
+    }
 }
 
 fn normalize_acp_agent_id(raw: &str) -> Option<String> {
@@ -3104,6 +3142,8 @@ model = "gpt-5"
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
 
+        config.weixin.bridge_url = Some("${WEIXIN_BRIDGE_URL}".to_owned());
+        config.weixin.bridge_url_env = Some(" WEIXIN_BRIDGE_URL ".to_owned());
         config.weixin.bridge_access_token = Some(SecretRef::Inline(
             "${WEIXIN_BRIDGE_ACCESS_TOKEN}".to_owned(),
         ));
@@ -3114,6 +3154,8 @@ model = "gpt-5"
         config.qqbot.client_secret = Some(SecretRef::Inline("${QQBOT_CLIENT_SECRET}".to_owned()));
         config.qqbot.client_secret_env = Some(" QQBOT_CLIENT_SECRET ".to_owned());
 
+        config.onebot.websocket_url = Some("${ONEBOT_WEBSOCKET_URL}".to_owned());
+        config.onebot.websocket_url_env = Some(" ONEBOT_WEBSOCKET_URL ".to_owned());
         config.onebot.access_token = Some(SecretRef::Inline("${ONEBOT_ACCESS_TOKEN}".to_owned()));
         config.onebot.access_token_env = Some(" ONEBOT_ACCESS_TOKEN ".to_owned());
 
@@ -3121,6 +3163,7 @@ model = "gpt-5"
 
         let raw = fs::read_to_string(&path).expect("read written config");
 
+        assert!(raw.contains(format!("bridge_url_env = \"{WEIXIN_BRIDGE_URL_ENV}\"").as_str()));
         assert!(raw.contains(
             format!("bridge_access_token_env = \"{WEIXIN_BRIDGE_ACCESS_TOKEN_ENV}\"").as_str()
         ));
@@ -3128,11 +3171,16 @@ model = "gpt-5"
         assert!(
             raw.contains(format!("client_secret_env = \"{QQBOT_CLIENT_SECRET_ENV}\"").as_str())
         );
+        assert!(
+            raw.contains(format!("websocket_url_env = \"{ONEBOT_WEBSOCKET_URL_ENV}\"").as_str())
+        );
         assert!(raw.contains(format!("access_token_env = \"{ONEBOT_ACCESS_TOKEN_ENV}\"").as_str()));
 
+        assert!(!raw.contains("bridge_url = \"${WEIXIN_BRIDGE_URL}\""));
         assert!(!raw.contains("bridge_access_token = \"${WEIXIN_BRIDGE_ACCESS_TOKEN}\""));
         assert!(!raw.contains("app_id = \"${QQBOT_APP_ID}\""));
         assert!(!raw.contains("client_secret = \"${QQBOT_CLIENT_SECRET}\""));
+        assert!(!raw.contains("websocket_url = \"${ONEBOT_WEBSOCKET_URL}\""));
         assert!(!raw.contains("access_token = \"${ONEBOT_ACCESS_TOKEN}\""));
 
         let _ = fs::remove_file(path);

@@ -704,6 +704,73 @@ fn import_cli_apply_summary_uses_channel_handoff_when_cli_is_disabled() {
 }
 
 #[test]
+fn import_cli_apply_summary_prefers_managed_bridge_doctor_handoff_when_preflight_blocks() {
+    let install_root = unique_temp_dir("import-apply-managed-bridge-handoff");
+    let mut metadata =
+        compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop");
+    let removed_transport_family = metadata.remove("transport_family");
+    let setup = managed_bridge_setup_with_guidance(
+        "channel",
+        vec!["WEIXIN_BRIDGE_URL"],
+        vec!["weixin.bridge_url"],
+        vec!["https://example.test/docs/weixin-bridge"],
+        Some("finish bridge setup before first use"),
+    );
+    let manifest = managed_bridge_manifest_with_setup("weixin", metadata, Some(setup));
+    let mut candidate = sample_import_candidate();
+    let mut resolved = mvp::config::LoongClawConfig::default();
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    write_managed_bridge_manifest(install_root.as_path(), "weixin-bridge", &manifest);
+    assert_eq!(
+        removed_transport_family.as_deref(),
+        Some("wechat_clawbot_ilink_bridge")
+    );
+
+    candidate.source = "Codex config at ~/.codex/config.toml".to_owned();
+    candidate.domains.retain(|domain| {
+        domain.kind != loongclaw_daemon::migration::types::SetupDomainKind::Provider
+    });
+    candidate.channel_candidates = vec![loongclaw_daemon::migration::types::ChannelCandidate {
+        id: "weixin",
+        label: "weixin",
+        status: loongclaw_daemon::migration::types::PreviewStatus::NeedsReview,
+        source: "Codex config at ~/.codex/config.toml".to_owned(),
+        summary: "managed bridge needs review".to_owned(),
+    }];
+
+    resolved.weixin.enabled = true;
+    resolved.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    resolved.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    resolved.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+    resolved.external_skills.install_root = Some(install_root.display().to_string());
+
+    let lines = loongclaw_daemon::import_cli::render_import_apply_summary_lines_for_width(
+        std::path::Path::new("/tmp/loongclaw-config.toml"),
+        &candidate,
+        &[loongclaw_daemon::migration::types::SetupDomainKind::Channels],
+        &resolved,
+        false,
+        160,
+    );
+
+    assert!(
+        lines.iter().any(|line| {
+            line == "next step: loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+        }),
+        "managed bridge doctor handoff should become the primary next step when plugin bridge preflight is unresolved: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line == "also available: first answer · loongclaw ask --config '/tmp/loongclaw-config.toml' --message 'Summarize this repository and suggest the best next step.'"
+        }),
+        "the default ask handoff should remain available after the managed bridge doctor step: {lines:#?}"
+    );
+}
+
+#[test]
 fn import_cli_render_preview_marks_provider_choice_required_for_unresolved_recommended_plan() {
     let _env_guard = provider_choice_preview_env_guard();
     let mut recommended = sample_import_candidate();

@@ -10,12 +10,12 @@
 
 ---
 
-### Task 1: Persist the approved design and analysis artifacts
+## Task 1: Persist the approved design and analysis artifacts
 
 **Files:**
 - Create: `docs/plans/2026-04-01-channel-bridge-managed-discovery-remediation-design.md`
 - Create: `docs/plans/2026-04-01-channel-bridge-managed-discovery-remediation-implementation-plan.md`
-- Create: `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-managed-discovery-remediation-analysis.md`
+- Create (local/private, not in repo): `<lc-knowledge-base>/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-managed-discovery-remediation-analysis.md`
 
 **Step 1: Save the public design**
 
@@ -30,7 +30,7 @@ Write this implementation plan under `docs/plans/`.
 Archive the fuller reasoning, alternatives, and seam analysis in
 `lc-knowledge-base`.
 
-### Task 2: Add failing app tests for remediation and ambiguity facts
+## Task 2: Add failing app tests for remediation and ambiguity facts
 
 **Files:**
 - Modify: `crates/app/src/channel/registry_plugin_bridge_tests.rs`
@@ -54,7 +54,7 @@ Run:
 Expected: failures because discovery summaries do not expose setup guidance or a
 typed compatibility-selection outcome yet.
 
-### Task 3: Implement app-owned discovery guidance and ambiguity status
+## Task 3: Implement app-owned discovery guidance and ambiguity status
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -83,7 +83,7 @@ When building a discovered plugin summary, copy:
 Count ready-compatible plugins per surface and record whether the compatible
 selection is absent, unique, or ambiguous.
 
-### Task 4: Add failing daemon tests for ambiguity and next steps
+## Task 4: Add failing daemon tests for ambiguity and next steps
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -116,7 +116,7 @@ Run:
 
 Expected: failures because daemon does not yet consume the new app-side facts.
 
-### Task 5: Implement daemon-side ambiguity and remediation output
+## Task 5: Implement daemon-side ambiguity and remediation output
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -141,7 +141,7 @@ Derive concrete next steps from:
 Update text and JSON output so operators can see compatibility-selection status
 and setup guidance.
 
-### Task 6: Run verification
+## Task 6: Run verification
 
 **Files:**
 - Modify: none

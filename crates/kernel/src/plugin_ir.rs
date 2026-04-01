@@ -290,25 +290,8 @@ pub enum PluginActivationStatus {
     BlockedInvalidManifestContract,
     BlockedUnsupportedBridge,
     BlockedUnsupportedAdapterFamily,
-    BlockedSlotClaimConflict,
     #[serde(other)]
     Unknown,
-}
-
-impl PluginActivationStatus {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ready => "ready",
-            Self::SetupIncomplete => "setup_incomplete",
-            Self::BlockedCompatibilityMode => "blocked_compatibility_mode",
-            Self::BlockedIncompatibleHost => "blocked_incompatible_host",
-            Self::BlockedUnsupportedBridge => "blocked_unsupported_bridge",
-            Self::BlockedUnsupportedAdapterFamily => "blocked_unsupported_adapter_family",
-            Self::BlockedSlotClaimConflict => "blocked_slot_claim_conflict",
-            Self::Unknown => "unknown",
-        }
-    }
 }
 
 /// Captures activation planning details for a single plugin candidate.
@@ -842,7 +825,8 @@ impl PluginTranslator {
                 }
                 PluginActivationStatus::BlockedInvalidManifestContract
                 | PluginActivationStatus::BlockedUnsupportedBridge
-                | PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
+                | PluginActivationStatus::BlockedUnsupportedAdapterFamily
+                | PluginActivationStatus::Unknown => {
                     plan.blocked_plugins = plan.blocked_plugins.saturating_add(1)
                 }
             }
@@ -2775,6 +2759,39 @@ mod tests {
         assert_eq!(plan.setup_incomplete_plugins, 0);
         assert!(plan.candidates[0].missing_required_env_vars.is_empty());
         assert!(plan.candidates[0].missing_required_config_keys.is_empty());
+    }
+
+    #[test]
+    fn activation_plan_deserializes_unknown_status_as_unknown_variant() {
+        let raw = r#"
+{
+  "total_plugins": 1,
+  "ready_plugins": 0,
+  "blocked_plugins": 1,
+  "candidates": [
+    {
+      "plugin_id": "future-plugin",
+      "source_path": "/tmp/future-plugin.py",
+      "source_kind": "embedded_source",
+      "package_root": "/tmp",
+      "package_manifest_path": null,
+      "bridge_kind": "http_json",
+      "adapter_family": "web-search",
+      "status": "blocked_by_future_runtime_rule",
+      "reason": "future payload",
+      "bootstrap_hint": "skip"
+    }
+  ]
+}
+"#;
+
+        let plan: PluginActivationPlan =
+            serde_json::from_str(raw).expect("future activation payload should deserialize");
+
+        assert!(matches!(
+            plan.candidates[0].status,
+            PluginActivationStatus::Unknown
+        ));
     }
 
     #[test]

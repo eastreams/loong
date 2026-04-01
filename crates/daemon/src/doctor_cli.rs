@@ -1106,14 +1106,19 @@ fn managed_plugin_bridge_discovery_check_level(
 fn managed_plugin_bridge_discovery_check_detail(
     discovery: &mvp::channel::ChannelPluginBridgeDiscovery,
 ) -> String {
-    let managed_install_root = discovery.managed_install_root.as_deref().unwrap_or("-");
+    let managed_install_root =
+        crate::render_line_safe_optional_text_value(discovery.managed_install_root.as_deref());
 
     match discovery.status {
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::NotConfigured => {
             "managed bridge discovery is unavailable because external_skills.install_root is not configured".to_owned()
         }
         mvp::channel::ChannelPluginBridgeDiscoveryStatus::ScanFailed => {
-            let scan_issue = discovery.scan_issue.as_deref().unwrap_or("unknown scan failure");
+            let scan_issue = discovery
+                .scan_issue
+                .as_deref()
+                .map(crate::render_line_safe_text_value)
+                .unwrap_or_else(|| "unknown scan failure".to_owned());
             let detail =
                 format!("managed bridge discovery failed under {managed_install_root}: {scan_issue}");
 
@@ -1147,11 +1152,7 @@ fn managed_plugin_bridge_discovery_check_detail(
 }
 
 fn render_managed_plugin_bridge_compatible_plugin_ids(compatible_plugin_ids: &[String]) -> String {
-    if compatible_plugin_ids.is_empty() {
-        return "-".to_owned();
-    }
-
-    compatible_plugin_ids.join(",")
+    crate::render_line_safe_text_values(compatible_plugin_ids.iter().map(String::as_str), ",")
 }
 
 fn render_managed_plugin_bridge_discovery_plugins(
@@ -1175,60 +1176,86 @@ fn render_managed_plugin_bridge_discovery_plugin(
     plugin: &mvp::channel::ChannelDiscoveredPluginBridge,
 ) -> String {
     let mut segments = Vec::new();
-    let package_manifest_path = plugin.package_manifest_path.as_deref().unwrap_or("-");
+    let plugin_id = crate::render_line_safe_text_value(&plugin.plugin_id);
+    let bridge_kind = crate::render_line_safe_text_value(&plugin.bridge_kind);
+    let adapter_family = crate::render_line_safe_text_value(&plugin.adapter_family);
+    let source_path = crate::render_line_safe_text_value(&plugin.source_path);
+    let package_root = crate::render_line_safe_text_value(&plugin.package_root);
+    let package_manifest_path =
+        crate::render_line_safe_optional_text_value(plugin.package_manifest_path.as_deref());
 
-    segments.push(plugin.plugin_id.clone());
+    segments.push(plugin_id);
     segments.push(format!("status={}", plugin.status.as_str()));
-    segments.push(format!("bridge_kind={}", plugin.bridge_kind));
-    segments.push(format!("adapter_family={}", plugin.adapter_family));
+    segments.push(format!("bridge_kind={bridge_kind}"));
+    segments.push(format!("adapter_family={adapter_family}"));
 
     if let Some(transport_family) = &plugin.transport_family {
-        segments.push(format!("transport_family={transport_family}"));
+        let rendered_transport_family = crate::render_line_safe_text_value(transport_family);
+        segments.push(format!("transport_family={rendered_transport_family}"));
     }
 
     if let Some(target_contract) = &plugin.target_contract {
-        segments.push(format!("target_contract={target_contract}"));
+        let rendered_target_contract = crate::render_line_safe_text_value(target_contract);
+        segments.push(format!("target_contract={rendered_target_contract}"));
     }
 
     if let Some(account_scope) = &plugin.account_scope {
-        segments.push(format!("account_scope={account_scope}"));
+        let rendered_account_scope = crate::render_line_safe_text_value(account_scope);
+        segments.push(format!("account_scope={rendered_account_scope}"));
     }
 
-    segments.push(format!("source_path={}", plugin.source_path));
-    segments.push(format!("package_root={}", plugin.package_root));
+    segments.push(format!("source_path={source_path}"));
+    segments.push(format!("package_root={package_root}"));
     segments.push(format!("package_manifest_path={package_manifest_path}"));
 
     if !plugin.missing_fields.is_empty() {
-        let missing_fields = plugin.missing_fields.join(",");
+        let missing_fields = crate::render_line_safe_text_values(
+            plugin.missing_fields.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("missing_fields={missing_fields}"));
     }
 
     if !plugin.issues.is_empty() {
-        let issues = plugin.issues.join("|");
+        let issues =
+            crate::render_line_safe_text_values(plugin.issues.iter().map(String::as_str), "|");
         segments.push(format!("issues={issues}"));
     }
 
     if !plugin.required_env_vars.is_empty() {
-        let required_env_vars = plugin.required_env_vars.join(",");
+        let required_env_vars = crate::render_line_safe_text_values(
+            plugin.required_env_vars.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("required_env_vars={required_env_vars}"));
     }
 
     if !plugin.recommended_env_vars.is_empty() {
-        let recommended_env_vars = plugin.recommended_env_vars.join(",");
+        let recommended_env_vars = crate::render_line_safe_text_values(
+            plugin.recommended_env_vars.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("recommended_env_vars={recommended_env_vars}"));
     }
 
     if !plugin.required_config_keys.is_empty() {
-        let required_config_keys = plugin.required_config_keys.join(",");
+        let required_config_keys = crate::render_line_safe_text_values(
+            plugin.required_config_keys.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("required_config_keys={required_config_keys}"));
     }
 
     if let Some(default_env_var) = &plugin.default_env_var {
-        segments.push(format!("default_env_var={default_env_var}"));
+        let rendered_default_env_var = crate::render_line_safe_text_value(default_env_var);
+        segments.push(format!("default_env_var={rendered_default_env_var}"));
     }
 
     if !plugin.setup_docs_urls.is_empty() {
-        let setup_docs_urls = plugin.setup_docs_urls.join(",");
+        let setup_docs_urls = crate::render_line_safe_text_values(
+            plugin.setup_docs_urls.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("setup_docs_urls={setup_docs_urls}"));
     }
 
@@ -2225,33 +2252,47 @@ fn managed_bridge_incomplete_setup_step(
 ) -> String {
     let mut segments = Vec::new();
     let plugin_label = managed_bridge_plugin_label(plugin, duplicate_plugin_id_counts);
+    let rendered_plugin_label = crate::render_line_safe_text_value(&plugin_label);
     let prefix = format!(
         "Complete managed bridge setup for {} plugin {}",
-        surface.catalog.id, plugin_label
+        surface.catalog.id, rendered_plugin_label
     );
     segments.push(prefix);
 
     if !plugin.missing_fields.is_empty() {
-        let missing_fields = plugin.missing_fields.join(",");
+        let missing_fields = crate::render_line_safe_text_values(
+            plugin.missing_fields.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("missing contract fields: {missing_fields}"));
     }
 
     if !plugin.required_env_vars.is_empty() {
-        let required_env_vars = plugin.required_env_vars.join(",");
+        let required_env_vars = crate::render_line_safe_text_values(
+            plugin.required_env_vars.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("required env: {required_env_vars}"));
     }
 
     if !plugin.required_config_keys.is_empty() {
-        let required_config_keys = plugin.required_config_keys.join(",");
+        let required_config_keys = crate::render_line_safe_text_values(
+            plugin.required_config_keys.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("required config keys: {required_config_keys}"));
     }
 
     if let Some(default_env_var) = &plugin.default_env_var {
-        segments.push(format!("default env var: {default_env_var}"));
+        let rendered_default_env_var = crate::render_line_safe_text_value(default_env_var);
+        segments.push(format!("default env var: {rendered_default_env_var}"));
     }
 
     if !plugin.setup_docs_urls.is_empty() {
-        let setup_docs_urls = plugin.setup_docs_urls.join(",");
+        let setup_docs_urls = crate::render_line_safe_text_values(
+            plugin.setup_docs_urls.iter().map(String::as_str),
+            ",",
+        );
         segments.push(format!("docs: {setup_docs_urls}"));
     }
 
@@ -2290,11 +2331,7 @@ fn render_managed_bridge_compatible_plugin_labels(
         compatible_plugin_labels.push(plugin_label);
     }
 
-    if compatible_plugin_labels.is_empty() {
-        return "-".to_owned();
-    }
-
-    compatible_plugin_labels.join(",")
+    crate::render_line_safe_text_values(compatible_plugin_labels.iter().map(String::as_str), ",")
 }
 
 fn managed_bridge_duplicate_plugin_id_counts(
@@ -3002,6 +3039,92 @@ mod tests {
                     "setup_remediation=\"Run the QQ bridge setup flow before enabling this bridge.\\nThen confirm exactly one managed bridge remains.\"",
                 )
         }));
+    }
+
+    #[test]
+    fn managed_plugin_bridge_discovery_detail_escapes_untrusted_values() {
+        let discovery = mvp::channel::ChannelPluginBridgeDiscovery {
+            managed_install_root: Some("/tmp/managed bridge".to_owned()),
+            status: mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound,
+            scan_issue: Some("scan failed\nplease inspect".to_owned()),
+            ambiguity_status: Some(
+                mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins,
+            ),
+            compatible_plugins: 1,
+            compatible_plugin_ids: vec!["bridge\none".to_owned()],
+            incomplete_plugins: 1,
+            incompatible_plugins: 0,
+            plugins: vec![mvp::channel::ChannelDiscoveredPluginBridge {
+                plugin_id: "qqbot bridge".to_owned(),
+                source_path: "/tmp/plugin root/bridge\nplugin.json".to_owned(),
+                package_root: "/tmp/plugin root".to_owned(),
+                package_manifest_path: Some("/tmp/plugin root/manifest\tbridge.json".to_owned()),
+                bridge_kind: "managed connector".to_owned(),
+                adapter_family: "channel bridge".to_owned(),
+                transport_family: Some("qq official".to_owned()),
+                target_contract: Some("qqbot\nreply".to_owned()),
+                account_scope: Some("shared scope".to_owned()),
+                status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
+                issues: vec!["missing\nfield".to_owned()],
+                missing_fields: vec!["metadata.transport family".to_owned()],
+                required_env_vars: vec!["QQBOT BRIDGE URL".to_owned()],
+                recommended_env_vars: vec!["QQBOT BRIDGE TOKEN".to_owned()],
+                required_config_keys: vec!["qqbot.bridge url".to_owned()],
+                default_env_var: Some("QQBOT DEFAULT ENV".to_owned()),
+                setup_docs_urls: vec!["https://example.test/docs bridge".to_owned()],
+                setup_remediation: Some("fix bridge\nthen retry".to_owned()),
+            }],
+        };
+
+        let detail = managed_plugin_bridge_discovery_check_detail(&discovery);
+
+        assert!(detail.contains("root=\"/tmp/managed bridge\""));
+        assert!(detail.contains("compatible_plugin_ids=\"bridge\\none\""));
+        assert!(detail.contains("\"qqbot bridge\""));
+        assert!(detail.contains("target_contract=\"qqbot\\nreply\""));
+        assert!(detail.contains("setup_docs_urls=\"https://example.test/docs bridge\""));
+        assert!(detail.contains("setup_remediation=\"fix bridge\\nthen retry\""));
+    }
+
+    #[test]
+    fn managed_bridge_incomplete_setup_step_escapes_untrusted_values() {
+        let config = mvp::config::LoongClawConfig::default();
+        let inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let plugin = mvp::channel::ChannelDiscoveredPluginBridge {
+            plugin_id: "weixin bridge".to_owned(),
+            source_path: "/tmp/plugin root/bridge\nplugin.json".to_owned(),
+            package_root: "/tmp/plugin root".to_owned(),
+            package_manifest_path: Some("/tmp/plugin root/manifest bridge.json".to_owned()),
+            bridge_kind: "managed connector".to_owned(),
+            adapter_family: "channel bridge".to_owned(),
+            transport_family: Some("wechat clawbot".to_owned()),
+            target_contract: Some("weixin reply".to_owned()),
+            account_scope: Some("shared scope".to_owned()),
+            status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
+            issues: vec!["missing\nfield".to_owned()],
+            missing_fields: vec!["metadata.transport family".to_owned()],
+            required_env_vars: vec!["WEIXIN BRIDGE URL".to_owned()],
+            recommended_env_vars: vec!["WEIXIN BRIDGE TOKEN".to_owned()],
+            required_config_keys: vec!["weixin.bridge url".to_owned()],
+            default_env_var: Some("WEIXIN DEFAULT ENV".to_owned()),
+            setup_docs_urls: vec!["https://example.test/docs bridge".to_owned()],
+            setup_remediation: Some("fix bridge\nthen retry".to_owned()),
+        };
+        let duplicate_plugin_id_counts =
+            managed_bridge_duplicate_plugin_id_counts(std::slice::from_ref(&plugin));
+        let step =
+            managed_bridge_incomplete_setup_step(surface, &plugin, &duplicate_plugin_id_counts);
+
+        assert!(step.contains("plugin \"weixin bridge\""));
+        assert!(step.contains("required env: \"WEIXIN BRIDGE URL\""));
+        assert!(step.contains("required config keys: \"weixin.bridge url\""));
+        assert!(step.contains("docs: \"https://example.test/docs bridge\""));
+        assert!(step.contains("remediation: \"fix bridge\\nthen retry\""));
     }
 
     #[test]

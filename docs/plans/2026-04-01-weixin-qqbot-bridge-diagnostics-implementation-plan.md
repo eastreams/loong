@@ -10,11 +10,11 @@
 
 ---
 
-### Task 1: Save the design and analysis artifacts
+## Task 1: Save the design and analysis artifacts
 
 **Files:**
 - Create: `docs/plans/2026-04-01-weixin-qqbot-bridge-diagnostics-design.md`
-- Create: `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-04-01-weixin-qqbot-bridge-diagnostics-analysis.md`
+- Create (local/private, not in repo): `<lc-knowledge-base>/projects/loongclaw/analysis/2026/2026-04-01-weixin-qqbot-bridge-diagnostics-analysis.md`
 
 **Step 1: Persist the public design**
 
@@ -26,7 +26,7 @@ registry-first fix.
 Archive the broader reasoning, rejected approaches, and external reference notes
 under `lc-knowledge-base`.
 
-### Task 2: Add failing registry and doctor tests
+## Task 2: Add failing registry and doctor tests
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -59,7 +59,7 @@ Run:
 Expected: failures because the new trigger and onboarding metadata do not exist
 yet.
 
-### Task 3: Add the bridge-specific registry metadata
+## Task 3: Add the bridge-specific registry metadata
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -83,7 +83,7 @@ descriptors for:
 Switch bridge-backed onboarding `status_command` to `loongclaw doctor` while
 leaving `repair_command` unset.
 
-### Task 4: Implement doctor-side bridge health interpretation
+## Task 4: Implement doctor-side bridge health interpretation
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -103,7 +103,7 @@ generic trigger paths.
 Teach `build_channel_operation_doctor_check` to use the new bridge helper only
 for the new trigger variant.
 
-### Task 5: Re-run focused tests and tighten names if needed
+## Task 5: Re-run focused tests and tighten names if needed
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -133,7 +133,7 @@ Expected: pass.
 If test output shows awkward operator-facing names or details, make the smallest
 text-only cleanup and keep the tests green.
 
-### Task 6: Run full verification
+## Task 6: Run full verification
 
 **Files:**
 - Modify: none

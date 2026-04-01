@@ -55,12 +55,15 @@ The fix had to respect the existing architecture boundary:
 - `app` owns channel registry semantics
 - `daemon` owns channel CLI rendering
 
-That means the correct solution is a chain:
+That means the correct solution is layered:
 
 1. derive the contract in `kernel`
-2. project it through `spec`
+2. project bridge facts through `spec`
 3. publish registry-owned expectations in `app`
-4. expose the result in `daemon`
+4. expose the resulting contract surfaces in `daemon`
+
+This is an execution flow, not a new dependency chain. Each layer contributes
+its own owned representation through existing boundaries.
 
 It must not make `kernel` depend on `app`, and it must not duplicate the
 contract into a second manifest schema.
@@ -209,4 +212,4 @@ gap end to end:
 - channel inventory publishes a canonical registry-owned contract
 
 It does that without introducing a second schema, without channel-specific
-logic in `daemon`, and without violating the `kernel -> app` boundary.
+logic in `daemon`, and without violating existing crate boundaries.

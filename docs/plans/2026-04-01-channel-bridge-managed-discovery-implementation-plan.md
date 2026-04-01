@@ -10,12 +10,12 @@
 
 ---
 
-### Task 1: Persist the approved design and analysis artifacts
+## Task 1: Persist the approved design and analysis artifacts
 
 **Files:**
 - Create: `docs/plans/2026-04-01-channel-bridge-managed-discovery-design.md`
 - Create: `docs/plans/2026-04-01-channel-bridge-managed-discovery-implementation-plan.md`
-- Create: `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-managed-discovery-analysis.md`
+- Create (local/private, not in repo): `<lc-knowledge-base>/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-managed-discovery-analysis.md`
 
 **Step 1: Save the public design**
 
@@ -30,7 +30,7 @@ Write this implementation plan under `docs/plans/`.
 Archive the fuller reasoning, alternatives, and seam analysis in
 `lc-knowledge-base`.
 
-### Task 2: Add failing app tests for managed discovery aggregation
+## Task 2: Add failing app tests for managed discovery aggregation
 
 **Files:**
 - Modify: `crates/app/src/channel/registry_plugin_bridge_tests.rs`
@@ -55,7 +55,7 @@ Run:
 Expected: failures because the inventory model does not expose managed discovery
 yet.
 
-### Task 3: Implement app-owned managed discovery summaries
+## Task 3: Implement app-owned managed discovery summaries
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -84,7 +84,7 @@ In the plugin-bridge helper module:
 Attach the managed discovery summary during `channel_inventory_with_now`
 assembly without changing `ChannelCatalogEntry`.
 
-### Task 4: Add failing daemon tests for doctor and channels output
+## Task 4: Add failing daemon tests for doctor and channels output
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -115,7 +115,7 @@ Run:
 
 Expected: failures because daemon does not consume the new summary yet.
 
-### Task 5: Implement daemon consumption of managed discovery
+## Task 5: Implement daemon consumption of managed discovery
 
 **Files:**
 - Modify: `crates/daemon/src/doctor_cli.rs`
@@ -136,7 +136,7 @@ the existing operation-level bridge checks.
 Update the channels text renderer to print managed discovery summary lines and
 matched plugin details.
 
-### Task 6: Run verification
+## Task 6: Run verification
 
 **Files:**
 - Modify: none

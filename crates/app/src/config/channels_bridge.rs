@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelDefaultAccountSelection,
-    ChannelResolvedAccountRoute, ConfigValidationIssue, EnvPointerValidationHint,
-    ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
-    ResolvedConfiguredAccount, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
-    configured_account_ids, default_channel_account_identity, normalize_channel_account_id,
+    ChannelResolvedAccountRoute, ConfigValidationCode, ConfigValidationIssue,
+    ConfigValidationSeverity, EnvPointerValidationHint, ONEBOT_ACCESS_TOKEN_ENV,
+    ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV, ResolvedConfiguredAccount,
+    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, configured_account_ids,
+    default_channel_account_identity, normalize_channel_account_id,
     resolve_account_for_session_account_id, resolve_channel_account_route,
     resolve_configured_account_identity, resolve_configured_account_selection,
     resolve_default_configured_account_selection, resolve_string_with_legacy_env,
@@ -228,6 +229,7 @@ impl WeixinChannelConfig {
             self.default_account.as_deref(),
             self.accounts.keys(),
         );
+        validate_effective_weixin_runtime_account_ids(&mut issues, self);
         validate_weixin_env_pointer(
             &mut issues,
             "weixin.bridge_url_env",
@@ -247,8 +249,7 @@ impl WeixinChannelConfig {
         );
 
         for (raw_account_id, account) in &self.accounts {
-            let account_id = normalize_channel_account_id(raw_account_id);
-
+            let account_id = raw_account_id.as_str();
             let bridge_url_field_path = format!("weixin.accounts.{account_id}.bridge_url");
             let bridge_url_env_field_path = format!("{bridge_url_field_path}_env");
             validate_weixin_env_pointer(
@@ -422,6 +423,7 @@ impl QqbotChannelConfig {
             self.default_account.as_deref(),
             self.accounts.keys(),
         );
+        validate_effective_qqbot_runtime_account_ids(&mut issues, self);
         validate_qqbot_env_pointer(
             &mut issues,
             "qqbot.app_id_env",
@@ -442,8 +444,7 @@ impl QqbotChannelConfig {
         );
 
         for (raw_account_id, account) in &self.accounts {
-            let account_id = normalize_channel_account_id(raw_account_id);
-
+            let account_id = raw_account_id.as_str();
             let app_id_field_path = format!("qqbot.accounts.{account_id}.app_id");
             let app_id_env_field_path = format!("{app_id_field_path}_env");
             validate_qqbot_env_pointer(
@@ -638,6 +639,7 @@ impl OnebotChannelConfig {
             self.default_account.as_deref(),
             self.accounts.keys(),
         );
+        validate_effective_onebot_runtime_account_ids(&mut issues, self);
         validate_onebot_env_pointer(
             &mut issues,
             "onebot.websocket_url_env",
@@ -657,8 +659,7 @@ impl OnebotChannelConfig {
         );
 
         for (raw_account_id, account) in &self.accounts {
-            let account_id = normalize_channel_account_id(raw_account_id);
-
+            let account_id = raw_account_id.as_str();
             let websocket_url_field_path = format!("onebot.accounts.{account_id}.websocket_url");
             let websocket_url_env_field_path = format!("{websocket_url_field_path}_env");
             validate_onebot_env_pointer(
@@ -831,6 +832,95 @@ impl OnebotChannelConfig {
             self.default_account.as_deref(),
             "default",
         )
+    }
+}
+
+fn validate_effective_weixin_runtime_account_ids(
+    issues: &mut Vec<ConfigValidationIssue>,
+    config: &WeixinChannelConfig,
+) {
+    let mut runtime_account_ids = BTreeMap::<String, Vec<String>>::new();
+    for configured_account_id in config.configured_account_ids() {
+        let resolved = config.resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let normalized_runtime_account_id =
+            normalize_channel_account_id(resolved.account.id.as_str());
+        runtime_account_ids
+            .entry(normalized_runtime_account_id)
+            .or_default()
+            .push(resolved.configured_account_label);
+    }
+    push_duplicate_effective_runtime_account_id_issues(issues, "weixin", runtime_account_ids);
+}
+
+fn validate_effective_qqbot_runtime_account_ids(
+    issues: &mut Vec<ConfigValidationIssue>,
+    config: &QqbotChannelConfig,
+) {
+    let mut runtime_account_ids = BTreeMap::<String, Vec<String>>::new();
+    for configured_account_id in config.configured_account_ids() {
+        let resolved = config.resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let normalized_runtime_account_id =
+            normalize_channel_account_id(resolved.account.id.as_str());
+        runtime_account_ids
+            .entry(normalized_runtime_account_id)
+            .or_default()
+            .push(resolved.configured_account_label);
+    }
+    push_duplicate_effective_runtime_account_id_issues(issues, "qqbot", runtime_account_ids);
+}
+
+fn validate_effective_onebot_runtime_account_ids(
+    issues: &mut Vec<ConfigValidationIssue>,
+    config: &OnebotChannelConfig,
+) {
+    let mut runtime_account_ids = BTreeMap::<String, Vec<String>>::new();
+    for configured_account_id in config.configured_account_ids() {
+        let resolved = config.resolve_account(Some(configured_account_id.as_str()));
+        let Ok(resolved) = resolved else {
+            continue;
+        };
+        let normalized_runtime_account_id =
+            normalize_channel_account_id(resolved.account.id.as_str());
+        runtime_account_ids
+            .entry(normalized_runtime_account_id)
+            .or_default()
+            .push(resolved.configured_account_label);
+    }
+    push_duplicate_effective_runtime_account_id_issues(issues, "onebot", runtime_account_ids);
+}
+
+fn push_duplicate_effective_runtime_account_id_issues(
+    issues: &mut Vec<ConfigValidationIssue>,
+    channel_key: &str,
+    runtime_account_ids: BTreeMap<String, Vec<String>>,
+) {
+    for (normalized_account_id, labels) in runtime_account_ids {
+        if labels.len() < 2 {
+            continue;
+        }
+
+        let mut extra_message_variables = BTreeMap::new();
+        extra_message_variables.insert(
+            "normalized_account_id".to_owned(),
+            normalized_account_id.clone(),
+        );
+        extra_message_variables.insert("raw_account_labels".to_owned(), labels.join(", "));
+
+        issues.push(ConfigValidationIssue {
+            severity: ConfigValidationSeverity::Error,
+            code: ConfigValidationCode::DuplicateChannelAccountId,
+            field_path: format!("{channel_key}.accounts"),
+            inline_field_path: format!("{channel_key}.accounts.{normalized_account_id}"),
+            example_env_name: String::new(),
+            suggested_env_name: None,
+            extra_message_variables,
+        });
     }
 }
 
@@ -1149,5 +1239,152 @@ mod tests {
         assert_eq!(resolved.account.id, "onebot_127-0-0-1-5700");
         assert_eq!(resolved.account.label, "onebot:127.0.0.1:5700");
         assert_eq!(websocket_url.as_deref(), Some("ws://127.0.0.1:5700"));
+    }
+
+    #[test]
+    fn weixin_validate_rejects_duplicate_effective_runtime_account_ids() {
+        let config: WeixinChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "accounts": {
+                "alpha": {},
+                "beta": {}
+            }
+        }))
+        .expect("deserialize weixin config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues.iter().any(|issue| {
+                issue.field_path == "weixin.accounts"
+                    && issue
+                        .extra_message_variables
+                        .get("normalized_account_id")
+                        .map(|value| value == "default")
+                        .unwrap_or(false)
+            }),
+            "validation should reject duplicate effective weixin account ids: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn qqbot_validate_rejects_duplicate_effective_runtime_account_ids() {
+        let config: QqbotChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "app_id": "10001",
+            "accounts": {
+                "alpha": {},
+                "beta": {}
+            }
+        }))
+        .expect("deserialize qqbot config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues.iter().any(|issue| {
+                issue.field_path == "qqbot.accounts"
+                    && issue
+                        .extra_message_variables
+                        .get("normalized_account_id")
+                        .map(|value| value == "qqbot_10001")
+                        .unwrap_or(false)
+            }),
+            "validation should reject duplicate effective qqbot account ids: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn onebot_validate_rejects_duplicate_effective_runtime_account_ids() {
+        let config: OnebotChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "websocket_url": "ws://127.0.0.1:5700",
+            "accounts": {
+                "alpha": {},
+                "beta": {}
+            }
+        }))
+        .expect("deserialize onebot config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues.iter().any(|issue| {
+                issue.field_path == "onebot.accounts"
+                    && issue
+                        .extra_message_variables
+                        .get("normalized_account_id")
+                        .map(|value| value == "onebot_127-0-0-1-5700")
+                        .unwrap_or(false)
+            }),
+            "validation should reject duplicate effective onebot account ids: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn weixin_validate_uses_raw_account_key_in_env_pointer_paths() {
+        let config: WeixinChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "accounts": {
+                "Ops Team": {
+                    "bridge_url_env": "BAD ENV"
+                }
+            }
+        }))
+        .expect("deserialize weixin config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "weixin.accounts.Ops Team.bridge_url_env"),
+            "validation should preserve raw weixin account key in issue path: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn qqbot_validate_uses_raw_account_key_in_env_pointer_paths() {
+        let config: QqbotChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "accounts": {
+                "Ops Team": {
+                    "app_id_env": "BAD ENV"
+                }
+            }
+        }))
+        .expect("deserialize qqbot config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "qqbot.accounts.Ops Team.app_id_env"),
+            "validation should preserve raw qqbot account key in issue path: {issues:#?}"
+        );
+    }
+
+    #[test]
+    fn onebot_validate_uses_raw_account_key_in_env_pointer_paths() {
+        let config: OnebotChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "accounts": {
+                "Ops Team": {
+                    "websocket_url_env": "BAD ENV"
+                }
+            }
+        }))
+        .expect("deserialize onebot config");
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "onebot.accounts.Ops Team.websocket_url_env"),
+            "validation should preserve raw onebot account key in issue path: {issues:#?}"
+        );
     }
 }

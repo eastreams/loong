@@ -4,7 +4,7 @@ use crate::config::{
     ChannelDefaultAccountSelectionSource, LoongClawConfig, ONEBOT_ACCESS_TOKEN_ENV,
     ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
     ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
-    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, normalize_channel_account_id,
 };
 
 use super::{
@@ -486,6 +486,8 @@ fn build_weixin_snapshots(
         .into_iter()
         .map(|configured_account_id| {
             let is_default_account = configured_account_id == default_configured_account_id;
+            let configured_enabled =
+                configured_weixin_account_enabled(config, configured_account_id.as_str());
             match config
                 .weixin
                 .resolve_account(Some(configured_account_id.as_str()))
@@ -500,6 +502,7 @@ fn build_weixin_snapshots(
                 Err(error) => build_invalid_weixin_snapshot(
                     descriptor,
                     compiled,
+                    configured_enabled,
                     configured_account_id.as_str(),
                     is_default_account,
                     default_account_source,
@@ -527,6 +530,8 @@ fn build_qqbot_snapshots(
         .into_iter()
         .map(|configured_account_id| {
             let is_default_account = configured_account_id == default_configured_account_id;
+            let configured_enabled =
+                configured_qqbot_account_enabled(config, configured_account_id.as_str());
             match config
                 .qqbot
                 .resolve_account(Some(configured_account_id.as_str()))
@@ -541,6 +546,7 @@ fn build_qqbot_snapshots(
                 Err(error) => build_invalid_qqbot_snapshot(
                     descriptor,
                     compiled,
+                    configured_enabled,
                     configured_account_id.as_str(),
                     is_default_account,
                     default_account_source,
@@ -568,6 +574,8 @@ fn build_onebot_snapshots(
         .into_iter()
         .map(|configured_account_id| {
             let is_default_account = configured_account_id == default_configured_account_id;
+            let configured_enabled =
+                configured_onebot_account_enabled(config, configured_account_id.as_str());
             match config
                 .onebot
                 .resolve_account(Some(configured_account_id.as_str()))
@@ -582,6 +590,7 @@ fn build_onebot_snapshots(
                 Err(error) => build_invalid_onebot_snapshot(
                     descriptor,
                     compiled,
+                    configured_enabled,
                     configured_account_id.as_str(),
                     is_default_account,
                     default_account_source,
@@ -933,9 +942,64 @@ fn build_onebot_snapshot_for_account(
     }
 }
 
+fn configured_weixin_account_enabled(
+    config: &LoongClawConfig,
+    configured_account_id: &str,
+) -> bool {
+    let account_enabled = config
+        .weixin
+        .accounts
+        .iter()
+        .find_map(|(raw_account_id, account)| {
+            let normalized_account_id = normalize_channel_account_id(raw_account_id);
+            if normalized_account_id != configured_account_id {
+                return None;
+            }
+            Some(account.enabled.unwrap_or(true))
+        })
+        .unwrap_or(true);
+    config.weixin.enabled && account_enabled
+}
+
+fn configured_qqbot_account_enabled(config: &LoongClawConfig, configured_account_id: &str) -> bool {
+    let account_enabled = config
+        .qqbot
+        .accounts
+        .iter()
+        .find_map(|(raw_account_id, account)| {
+            let normalized_account_id = normalize_channel_account_id(raw_account_id);
+            if normalized_account_id != configured_account_id {
+                return None;
+            }
+            Some(account.enabled.unwrap_or(true))
+        })
+        .unwrap_or(true);
+    config.qqbot.enabled && account_enabled
+}
+
+fn configured_onebot_account_enabled(
+    config: &LoongClawConfig,
+    configured_account_id: &str,
+) -> bool {
+    let account_enabled = config
+        .onebot
+        .accounts
+        .iter()
+        .find_map(|(raw_account_id, account)| {
+            let normalized_account_id = normalize_channel_account_id(raw_account_id);
+            if normalized_account_id != configured_account_id {
+                return None;
+            }
+            Some(account.enabled.unwrap_or(true))
+        })
+        .unwrap_or(true);
+    config.onebot.enabled && account_enabled
+}
+
 fn build_invalid_weixin_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
+    configured_enabled: bool,
     configured_account_id: &str,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
@@ -982,7 +1046,7 @@ fn build_invalid_weixin_snapshot(
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
         compiled,
-        enabled: false,
+        enabled: configured_enabled,
         api_base_url: None,
         notes,
         operations: vec![send_operation, serve_operation],
@@ -992,6 +1056,7 @@ fn build_invalid_weixin_snapshot(
 fn build_invalid_qqbot_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
+    configured_enabled: bool,
     configured_account_id: &str,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
@@ -1038,7 +1103,7 @@ fn build_invalid_qqbot_snapshot(
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
         compiled,
-        enabled: false,
+        enabled: configured_enabled,
         api_base_url: None,
         notes,
         operations: vec![send_operation, serve_operation],
@@ -1048,6 +1113,7 @@ fn build_invalid_qqbot_snapshot(
 fn build_invalid_onebot_snapshot(
     descriptor: &ChannelRegistryDescriptor,
     compiled: bool,
+    configured_enabled: bool,
     configured_account_id: &str,
     is_default_account: bool,
     default_account_source: ChannelDefaultAccountSelectionSource,
@@ -1094,7 +1160,7 @@ fn build_invalid_onebot_snapshot(
         aliases: descriptor.aliases.to_vec(),
         transport: descriptor.transport,
         compiled,
-        enabled: false,
+        enabled: configured_enabled,
         api_base_url: None,
         notes,
         operations: vec![send_operation, serve_operation],
@@ -1329,6 +1395,60 @@ mod tests {
                 .notes
                 .iter()
                 .any(|note| note == "account_id=onebot_127-0-0-1-5700")
+        );
+    }
+
+    #[test]
+    fn invalid_weixin_snapshot_preserves_configured_enabled_state() {
+        let snapshot = build_invalid_weixin_snapshot(
+            &WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
+            true,
+            true,
+            "default",
+            true,
+            ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            "selection failed".to_owned(),
+        );
+
+        assert!(
+            snapshot.enabled,
+            "invalid weixin snapshots should keep the configured enabled state"
+        );
+    }
+
+    #[test]
+    fn invalid_qqbot_snapshot_preserves_configured_enabled_state() {
+        let snapshot = build_invalid_qqbot_snapshot(
+            &QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
+            true,
+            true,
+            "default",
+            true,
+            ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            "selection failed".to_owned(),
+        );
+
+        assert!(
+            snapshot.enabled,
+            "invalid qqbot snapshots should keep the configured enabled state"
+        );
+    }
+
+    #[test]
+    fn invalid_onebot_snapshot_preserves_configured_enabled_state() {
+        let snapshot = build_invalid_onebot_snapshot(
+            &ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR,
+            true,
+            true,
+            "default",
+            true,
+            ChannelDefaultAccountSelectionSource::ExplicitDefault,
+            "selection failed".to_owned(),
+        );
+
+        assert!(
+            snapshot.enabled,
+            "invalid onebot snapshots should keep the configured enabled state"
         );
     }
 }

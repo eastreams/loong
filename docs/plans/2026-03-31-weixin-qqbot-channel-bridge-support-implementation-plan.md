@@ -10,11 +10,11 @@
 
 ---
 
-### Task 1: Save the approved design and analysis artifacts
+## Task 1: Save the approved design and analysis artifacts
 
 **Files:**
 - Create: `docs/plans/2026-03-31-weixin-qqbot-channel-bridge-support-design.md`
-- Create: `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-03-31-weixin-qqbot-channel-bridge-support-analysis.md`
+- Create (local/private, not in repo): `<lc-knowledge-base>/projects/loongclaw/analysis/2026/2026-03-31-weixin-qqbot-channel-bridge-support-analysis.md`
 
 **Step 1: Persist the public design**
 
@@ -25,7 +25,7 @@ Write the approved LoongClaw-facing design doc under `docs/plans/`.
 Archive the broader reasoning and ecosystem references in
 `lc-knowledge-base`.
 
-### Task 2: Add failing registry tests for the new support tier
+## Task 2: Add failing registry tests for the new support tier
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -50,7 +50,7 @@ and the new targeted registry tests.
 
 Expected: failure because the new enums and catalog entries do not exist yet.
 
-### Task 3: Implement the plugin-backed registry semantics
+## Task 3: Implement the plugin-backed registry semantics
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -85,7 +85,7 @@ including:
 Mark the new send/serve operations as `stub` while giving the surfaces the
 overall implementation status `plugin_backed`.
 
-### Task 4: Make the catalog tests pass
+## Task 4: Make the catalog tests pass
 
 **Files:**
 - Modify: `crates/app/src/channel/registry.rs`
@@ -105,7 +105,7 @@ Run:
 
 Expected: pass.
 
-### Task 5: Document the product-facing support contract
+## Task 5: Document the product-facing support contract
 
 **Files:**
 - Modify: `README.md`
@@ -131,7 +131,7 @@ Explain:
 
 and publish stable target examples.
 
-### Task 6: Document the plugin manifest guidance
+## Task 6: Document the plugin manifest guidance
 
 **Files:**
 - Modify: `docs/design-docs/plugin-package-manifest-contract.md`
@@ -150,7 +150,7 @@ Document how a bridge plugin should use the existing manifest seam:
 Show example manifest snippets for a `weixin` ClawBot bridge plugin and a
 `qqbot` bridge plugin.
 
-### Task 7: Run verification
+## Task 7: Run verification
 
 **Files:**
 - Modify: none

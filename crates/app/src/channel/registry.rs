@@ -304,6 +304,7 @@ pub struct ChannelCatalogEntry {
     pub aliases: Vec<&'static str>,
     pub transport: &'static str,
     pub onboarding: ChannelOnboardingDescriptor,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_bridge_contract: Option<ChannelPluginBridgeContract>,
     pub supported_target_kinds: Vec<ChannelCatalogTargetKind>,
     pub operations: Vec<ChannelCatalogOperation>,
@@ -512,6 +513,7 @@ pub struct ChannelSurface {
     pub catalog: ChannelCatalogEntry,
     pub configured_accounts: Vec<ChannelStatusSnapshot>,
     pub default_configured_account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin_bridge_discovery: Option<ChannelPluginBridgeDiscovery>,
 }
 
@@ -7903,6 +7905,10 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("manual_config")
         );
+        assert!(
+            encoded.get("plugin_bridge_contract").is_none(),
+            "config-backed catalog entries should omit plugin bridge contract when absent: {encoded}"
+        );
     }
 
     #[test]
@@ -9486,6 +9492,20 @@ mod tests {
             Some("default")
         );
         assert_eq!(discord.configured_accounts[0].id, "discord");
+        let discord_encoded =
+            serde_json::to_value(discord).expect("serialize discord channel surface");
+        assert!(
+            discord_encoded.get("plugin_bridge_discovery").is_none(),
+            "channel surface output should omit plugin bridge discovery when absent: {discord_encoded}"
+        );
+        assert!(
+            discord_encoded
+                .get("catalog")
+                .and_then(serde_json::Value::as_object)
+                .map(|catalog| !catalog.contains_key("plugin_bridge_contract"))
+                .unwrap_or(false),
+            "channel surface catalog output should omit plugin bridge contract when absent: {discord_encoded}"
+        );
 
         let weixin = inventory
             .channel_surfaces

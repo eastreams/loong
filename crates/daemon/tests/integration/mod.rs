@@ -1365,6 +1365,78 @@ fn render_channel_surfaces_text_reports_managed_plugin_bridge_ambiguity_and_setu
 }
 
 #[test]
+fn render_channel_surfaces_text_escapes_untrusted_managed_bridge_values() {
+    let config = mvp::config::LoongClawConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin_surface = inventory
+        .channel_surfaces
+        .iter_mut()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin_surface
+        .plugin_bridge_discovery
+        .as_mut()
+        .expect("weixin managed discovery");
+
+    discovery.managed_install_root = Some("/tmp/managed bridge".to_owned());
+    discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::ScanFailed;
+    discovery.scan_issue = Some("scan failed\nplease inspect".to_owned());
+    discovery.compatible_plugin_ids = vec!["bridge\none".to_owned()];
+    discovery.plugins = vec![mvp::channel::ChannelDiscoveredPluginBridge {
+        plugin_id: "weixin bridge".to_owned(),
+        source_path: "/tmp/plugin root/bridge\nplugin.json".to_owned(),
+        package_root: "/tmp/plugin root".to_owned(),
+        package_manifest_path: Some("/tmp/plugin root/manifest\tbridge.json".to_owned()),
+        bridge_kind: "managed connector".to_owned(),
+        adapter_family: "channel bridge".to_owned(),
+        transport_family: Some("wechat clawbot".to_owned()),
+        target_contract: Some("weixin\nreply".to_owned()),
+        account_scope: Some("shared scope".to_owned()),
+        status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
+        issues: vec!["missing\nfield".to_owned()],
+        missing_fields: vec!["metadata.transport family".to_owned()],
+        required_env_vars: vec!["WEIXIN BRIDGE URL".to_owned()],
+        recommended_env_vars: vec!["WEIXIN BRIDGE TOKEN".to_owned()],
+        required_config_keys: vec!["weixin.bridge url".to_owned()],
+        default_env_var: Some("WEIXIN DEFAULT ENV".to_owned()),
+        setup_docs_urls: vec!["https://example.test/docs bridge".to_owned()],
+        setup_remediation: Some("fix bridge\nthen retry".to_owned()),
+    }];
+
+    let mut lines = Vec::new();
+    loongclaw_daemon::push_channel_surface_managed_plugin_bridge_discovery(
+        &mut lines,
+        weixin_surface,
+    );
+    let rendered = lines.join("\n");
+
+    assert!(
+        rendered.contains("managed_install_root=\"/tmp/managed bridge\""),
+        "managed install root should be escaped when it contains spaces: {rendered}"
+    );
+    assert!(
+        rendered.contains("scan_issue=\"scan failed\\nplease inspect\""),
+        "scan issue should escape newlines: {rendered}"
+    );
+    assert!(
+        rendered.contains("id=\"weixin bridge\""),
+        "plugin id should be escaped when it contains spaces: {rendered}"
+    );
+    assert!(
+        rendered.contains("target_contract=\"weixin\\nreply\""),
+        "target contract should escape newlines: {rendered}"
+    );
+    assert!(
+        rendered.contains("setup_docs_urls=\"https://example.test/docs bridge\""),
+        "setup docs urls should be escaped when needed: {rendered}"
+    );
+    assert!(
+        rendered.contains("setup_remediation=\"fix bridge\\nthen retry\""),
+        "setup remediation should escape newlines: {rendered}"
+    );
+}
+
+#[test]
 fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
     use mvp::memory::MemorySystem as _;
 

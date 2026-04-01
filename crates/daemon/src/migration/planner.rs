@@ -820,36 +820,38 @@ fn compose_channels_domain(
         let mut supplemented_from = Vec::new();
         let mut supplemental_conflict = None;
 
-        for candidate in candidates {
-            if candidate.source == channel.source {
-                continue;
-            }
-            let candidate_supplies_channel = candidate
-                .channel_candidates
-                .iter()
-                .any(|candidate_channel| candidate_channel.id == channel.id);
+        if selected_conflict.is_none() {
+            for candidate in candidates {
+                if candidate.source == channel.source {
+                    continue;
+                }
+                let candidate_supplies_channel = candidate
+                    .channel_candidates
+                    .iter()
+                    .any(|candidate_channel| candidate_channel.id == channel.id);
 
-            if !candidate_supplies_channel {
-                continue;
-            }
-
-            let supplement_report = channels::apply_selected_channels_with_report(
-                merged_config,
-                &candidate.config,
-                &[channel.id],
-            );
-            let next_conflict = first_channel_apply_conflict(&supplement_report);
-
-            if let Some(conflict) = next_conflict {
-                if supplemental_conflict.is_none() {
-                    supplemental_conflict = Some(conflict);
+                if !candidate_supplies_channel {
+                    continue;
                 }
 
-                continue;
-            }
+                let supplement_report = channels::apply_selected_channels_with_report(
+                    merged_config,
+                    &candidate.config,
+                    &[channel.id],
+                );
+                let next_conflict = first_channel_apply_conflict(&supplement_report);
 
-            if supplement_report.changed {
-                supplemented_from.push(candidate.source.clone());
+                if let Some(conflict) = next_conflict {
+                    if supplemental_conflict.is_none() {
+                        supplemental_conflict = Some(conflict);
+                    }
+
+                    continue;
+                }
+
+                if supplement_report.changed {
+                    supplemented_from.push(candidate.source.clone());
+                }
             }
         }
 
@@ -863,14 +865,18 @@ fn compose_channels_domain(
         } else {
             "multiple sources".to_owned()
         };
-        let preview_candidate = channels::collect_channel_previews(
-            merged_config,
-            &resolve_channel_import_readiness_from_config(merged_config),
-            &effective_source,
-        )
-        .into_iter()
-        .find(|preview| preview.candidate.id == channel.id)
-        .map(|preview| preview.candidate);
+        let preview_candidate = if selected_conflict.is_some() {
+            None
+        } else {
+            channels::collect_channel_previews(
+                merged_config,
+                &resolve_channel_import_readiness_from_config(merged_config),
+                &effective_source,
+            )
+            .into_iter()
+            .find(|preview| preview.candidate.id == channel.id)
+            .map(|preview| preview.candidate)
+        };
         let mut final_channel = match preview_candidate {
             Some(preview_candidate) => preview_candidate,
             None => {

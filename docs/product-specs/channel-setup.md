@@ -264,6 +264,50 @@ that standardize on OneBot v11-compatible transports:
 - they do not join `multi-channel-serve` because the active reply loop still
   belongs to the external bridge
 
+When a plugin-backed bridge surface is configured and
+`external_skills.install_root` is set, `loongclaw channels --json` also
+surfaces a managed discovery block under `plugin_bridge_discovery`. That block
+captures the last discovery snapshot LoongClaw can verify locally:
+
+- `status`, `managed_install_root`, and `scan_issue` summarize discovery state
+- `compatible_plugin_ids`, `compatible_plugins`, `incomplete_plugins`, and
+  `incompatible_plugins` summarize bridge readiness at a glance
+- `plugins[]` carries per-plugin facts such as `status`, `transport_family`,
+  `target_contract`, `required_env_vars`, `required_config_keys`,
+  `setup_docs_urls`, and `setup_remediation`
+
+Compact example:
+
+```json
+{
+  "catalog": {
+    "id": "weixin",
+    "implementation_status": "plugin_backed"
+  },
+  "plugin_bridge_discovery": {
+    "status": "matches_found",
+    "managed_install_root": "~/.loongclaw/managed-skills",
+    "compatible_plugin_ids": ["weixin-bridge-a"],
+    "compatible_plugins": 1,
+    "incomplete_plugins": 0,
+    "incompatible_plugins": 0,
+    "plugins": [
+      {
+        "plugin_id": "weixin-bridge-a",
+        "status": "compatible_ready",
+        "transport_family": "wechat_clawbot_ilink_bridge",
+        "target_contract": "weixin_reply_loop"
+      }
+    ]
+  }
+}
+```
+
+`loongclaw doctor` uses the same managed discovery contract. A compatible
+external bridge counts as the expected runtime owner, while ambiguity,
+incomplete bridge setup, or discovery scan failures remain operator-facing
+warnings instead of being misreported as native adapter failures.
+
 ### Weixin
 
 `weixin` is a bridge-first surface that currently assumes a ClawBot or

@@ -25,7 +25,7 @@ Files:
 
 - `docs/plans/2026-04-01-channel-bridge-plugin-contract-design.md`
 - `docs/plans/2026-04-01-channel-bridge-plugin-contract-implementation-plan.md`
-- `/Users/chum/lc-knowledge-base/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-plugin-contract-analysis.md`
+- `<lc-knowledge-base>/projects/loongclaw/analysis/2026/2026-04-01-channel-bridge-plugin-contract-analysis.md`
 
 Store the public design in the repo and the deeper reasoning in the private KB.
 

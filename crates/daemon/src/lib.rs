@@ -3689,19 +3689,19 @@ pub fn push_channel_surface_managed_plugin_bridge_discovery(
         return;
     };
 
-    let managed_install_root = discovery.managed_install_root.as_deref().unwrap_or("-");
-    let scan_issue = discovery.scan_issue.as_deref().unwrap_or("-");
+    let managed_install_root =
+        render_line_safe_optional_text_value(discovery.managed_install_root.as_deref());
+    let scan_issue = render_line_safe_optional_text_value(discovery.scan_issue.as_deref());
     let status = discovery.status.as_str();
     let ambiguity_status = discovery
         .ambiguity_status
         .map(|value| value.as_str())
         .unwrap_or("-");
     let compatible_plugins = discovery.compatible_plugins;
-    let compatible_plugin_ids = if discovery.compatible_plugin_ids.is_empty() {
-        "-".to_owned()
-    } else {
-        discovery.compatible_plugin_ids.join(",")
-    };
+    let compatible_plugin_ids = render_line_safe_text_values(
+        discovery.compatible_plugin_ids.iter().map(String::as_str),
+        ",",
+    );
     let incomplete_plugins = discovery.incomplete_plugins;
     let incompatible_plugins = discovery.incompatible_plugins;
 
@@ -3725,57 +3725,42 @@ pub fn push_channel_surface_managed_plugin_bridge_discovery(
 pub fn render_channel_surface_discovered_plugin_line(
     plugin: &mvp::channel::ChannelDiscoveredPluginBridge,
 ) -> String {
-    let package_manifest_path = plugin.package_manifest_path.as_deref().unwrap_or("-");
-    let transport_family = plugin.transport_family.as_deref().unwrap_or("-");
-    let target_contract = plugin.target_contract.as_deref().unwrap_or("-");
-    let account_scope = plugin.account_scope.as_deref().unwrap_or("-");
-    let missing_fields = if plugin.missing_fields.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.missing_fields.join(",")
-    };
-    let issues = if plugin.issues.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.issues.join("|")
-    };
-    let required_env_vars = if plugin.required_env_vars.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.required_env_vars.join(",")
-    };
-    let recommended_env_vars = if plugin.recommended_env_vars.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.recommended_env_vars.join(",")
-    };
-    let required_config_keys = if plugin.required_config_keys.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.required_config_keys.join(",")
-    };
-    let default_env_var = plugin.default_env_var.as_deref().unwrap_or("-");
-    let setup_docs_urls = if plugin.setup_docs_urls.is_empty() {
-        "-".to_owned()
-    } else {
-        plugin.setup_docs_urls.join(",")
-    };
-    let setup_remediation = match plugin.setup_remediation.as_deref() {
-        Some(value) => render_line_safe_text_value(value),
-        None => "-".to_owned(),
-    };
+    let plugin_id = render_line_safe_text_value(&plugin.plugin_id);
+    let bridge_kind = render_line_safe_text_value(&plugin.bridge_kind);
+    let adapter_family = render_line_safe_text_value(&plugin.adapter_family);
+    let transport_family = render_line_safe_optional_text_value(plugin.transport_family.as_deref());
+    let target_contract = render_line_safe_optional_text_value(plugin.target_contract.as_deref());
+    let account_scope = render_line_safe_optional_text_value(plugin.account_scope.as_deref());
+    let source_path = render_line_safe_text_value(&plugin.source_path);
+    let package_root = render_line_safe_text_value(&plugin.package_root);
+    let package_manifest_path =
+        render_line_safe_optional_text_value(plugin.package_manifest_path.as_deref());
+    let missing_fields =
+        render_line_safe_text_values(plugin.missing_fields.iter().map(String::as_str), ",");
+    let issues = render_line_safe_text_values(plugin.issues.iter().map(String::as_str), "|");
+    let required_env_vars =
+        render_line_safe_text_values(plugin.required_env_vars.iter().map(String::as_str), ",");
+    let recommended_env_vars =
+        render_line_safe_text_values(plugin.recommended_env_vars.iter().map(String::as_str), ",");
+    let required_config_keys =
+        render_line_safe_text_values(plugin.required_config_keys.iter().map(String::as_str), ",");
+    let default_env_var = render_line_safe_optional_text_value(plugin.default_env_var.as_deref());
+    let setup_docs_urls =
+        render_line_safe_text_values(plugin.setup_docs_urls.iter().map(String::as_str), ",");
+    let setup_remediation =
+        render_line_safe_optional_text_value(plugin.setup_remediation.as_deref());
 
     format!(
         "    managed_plugin id={} status={} bridge_kind={} adapter_family={} transport_family={} target_contract={} account_scope={} source_path={} package_root={} package_manifest_path={} missing_fields={} issues={} required_env_vars={} recommended_env_vars={} required_config_keys={} default_env_var={} setup_docs_urls={} setup_remediation={}",
-        plugin.plugin_id,
+        plugin_id,
         plugin.status.as_str(),
-        plugin.bridge_kind,
-        plugin.adapter_family,
+        bridge_kind,
+        adapter_family,
         transport_family,
         target_contract,
         account_scope,
-        plugin.source_path,
-        plugin.package_root,
+        source_path,
+        package_root,
         package_manifest_path,
         missing_fields,
         issues,
@@ -3789,10 +3774,49 @@ pub fn render_channel_surface_discovered_plugin_line(
 }
 
 pub(crate) fn render_line_safe_text_value(raw: &str) -> String {
+    let raw_is_line_safe = raw.chars().all(line_safe_unquoted_char);
+
+    if raw_is_line_safe {
+        return raw.to_owned();
+    }
+
     match serde_json::to_string(raw) {
         Ok(value) => value,
         Err(_) => "\"<unrenderable-text>\"".to_owned(),
     }
+}
+
+pub(crate) fn render_line_safe_optional_text_value(raw: Option<&str>) -> String {
+    match raw {
+        Some(value) => render_line_safe_text_value(value),
+        None => "-".to_owned(),
+    }
+}
+
+pub(crate) fn render_line_safe_text_values<'a, I>(values: I, separator: &str) -> String
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut rendered_values = Vec::new();
+
+    for value in values {
+        let rendered_value = render_line_safe_text_value(value);
+        rendered_values.push(rendered_value);
+    }
+
+    if rendered_values.is_empty() {
+        return "-".to_owned();
+    }
+
+    rendered_values.join(separator)
+}
+
+fn line_safe_unquoted_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
+        || matches!(
+            ch,
+            '.' | '-' | '_' | '/' | ':' | '@' | '+' | '~' | '?' | '#' | '%' | '&'
+        )
 }
 
 pub fn run_list_context_engines_cli(config_path: Option<&str>, as_json: bool) -> CliResult<()> {
