@@ -896,6 +896,9 @@ fn remediation_class_for_diagnostic(
         PluginDiagnosticCode::LegacyOpenClawContract => {
             PluginPreflightRemediationClass::ModernizeLegacyOpenClawContract
         }
+        PluginDiagnosticCode::InvalidManifestContract => {
+            PluginPreflightRemediationClass::ResolveActivationBlockers
+        }
         PluginDiagnosticCode::CompatibilityShimRequired => {
             PluginPreflightRemediationClass::EnableCompatibilityShim
         }
@@ -2086,6 +2089,7 @@ fn build_profile_fit_ir(
         package_manifest_path: plugin.package_manifest_path.clone(),
         diagnostic_findings: plugin.diagnostic_findings.clone(),
         setup: None,
+        channel_bridge: None,
         slot_claims: plugin.slot_claims.clone(),
         compatibility: plugin.compatibility.clone(),
         runtime: PluginRuntimeProfile {

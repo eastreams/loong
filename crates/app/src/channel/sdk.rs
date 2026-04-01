@@ -957,23 +957,6 @@ mod tests {
 
     use super::*;
 
-    fn expected_service_channel_ids() -> Vec<&'static str> {
-        let mut channel_ids = Vec::new();
-        let catalog = super::super::registry::list_channel_catalog();
-
-        for catalog_entry in catalog {
-            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
-                continue;
-            };
-            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
-                continue;
-            }
-            channel_ids.push(descriptor.id);
-        }
-
-        channel_ids
-    }
-
     fn expected_background_channel_ids() -> Vec<&'static str> {
         let mut channel_ids = Vec::new();
         let catalog = super::super::registry::list_channel_catalog();
@@ -1025,11 +1008,15 @@ mod tests {
                 "webhook",
                 "google-chat",
                 "signal",
+                "twitch",
                 "teams",
                 "mattermost",
                 "nextcloud-talk",
                 "synology-chat",
+                "irc",
                 "imessage",
+                "nostr",
+                "tlon",
             ]
         );
     }

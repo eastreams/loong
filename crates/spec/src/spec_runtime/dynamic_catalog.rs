@@ -1214,6 +1214,7 @@ fn plugin_ir_from_runtime_contract(
         ),
         diagnostic_findings: Vec::new(),
         setup: None,
+        channel_bridge: None,
         slot_claims: Vec::new(),
         compatibility: contract.compatibility.clone(),
         runtime: PluginRuntimeProfile {

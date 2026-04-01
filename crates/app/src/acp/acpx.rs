@@ -1831,7 +1831,7 @@ mod tests {
         write_executable_script_atomically(
             &script_path,
             &format!(
-                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\ndrain_stdin() {{\n  while IFS= read -r _acpx_ignored_line; do\n    :\n  done\n}}\n{}\n",
+                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  _acpx_haystack=$1\n  _acpx_needle=$2\n  case \"$_acpx_haystack\" in\n    *\"$_acpx_needle\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  while IFS= read -r _acpx_ignored_line; do\n    :\n  done\n}}\n{}\n",
                 log_path.display(),
                 body
             ),

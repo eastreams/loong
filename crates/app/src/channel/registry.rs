@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::Path,
-};
+use std::{collections::BTreeSet, path::Path};
 
 use serde::Serialize;
 
@@ -41,9 +38,14 @@ use super::{
 
 #[path = "registry_bridge.rs"]
 mod bridge;
+#[path = "registry_nostr_impl.rs"]
+mod nostr_impl;
 
 #[path = "registry_plugin_bridge.rs"]
 mod plugin_bridge;
+
+#[path = "registry_surface.rs"]
+mod surface_support;
 
 #[cfg(test)]
 #[path = "registry_plugin_bridge_tests.rs"]
@@ -53,10 +55,20 @@ use bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
     WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
 };
+pub use nostr_impl::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
+use nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 pub use plugin_bridge::validate_plugin_channel_bridge_manifest;
+pub use plugin_bridge::{
+    ChannelDiscoveredPluginBridge, ChannelDiscoveredPluginBridgeStatus,
+    ChannelPluginBridgeContract, ChannelPluginBridgeDiscovery,
+    ChannelPluginBridgeDiscoveryAmbiguityStatus, ChannelPluginBridgeDiscoveryStatus,
+    ChannelPluginBridgeManifestStatus, ChannelPluginBridgeManifestValidation,
+    ChannelPluginBridgeStableTarget,
+};
 use plugin_bridge::{
     channel_surface_plugin_bridge_discovery_by_id, plugin_bridge_contract_from_descriptor,
 };
+use surface_support::build_channel_surfaces;
 
 pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
 pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
@@ -314,130 +326,6 @@ impl ChannelCatalogEntry {
     pub fn operation(&self, id: &str) -> Option<&ChannelCatalogOperation> {
         self.operations.iter().find(|operation| operation.id == id)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ChannelPluginBridgeContract {
-    pub manifest_channel_id: &'static str,
-    pub required_setup_surface: &'static str,
-    pub runtime_owner: &'static str,
-    pub supported_operations: Vec<&'static str>,
-    pub recommended_metadata_keys: Vec<&'static str>,
-    pub stable_targets: Vec<ChannelPluginBridgeStableTarget>,
-    pub account_scope_note: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ChannelPluginBridgeStableTarget {
-    pub template: &'static str,
-    pub target_kind: ChannelCatalogTargetKind,
-    pub description: &'static str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelPluginBridgeManifestStatus {
-    Compatible,
-    UnknownChannel,
-    MissingSetupSurface,
-    UnsupportedChannelSurface,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ChannelPluginBridgeManifestValidation {
-    pub channel_id: String,
-    pub status: ChannelPluginBridgeManifestStatus,
-    pub issues: Vec<String>,
-    pub recommended_metadata_keys: Vec<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelPluginBridgeDiscoveryStatus {
-    NotConfigured,
-    ScanFailed,
-    NoMatches,
-    MatchesFound,
-}
-
-impl ChannelPluginBridgeDiscoveryStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::NotConfigured => "not_configured",
-            Self::ScanFailed => "scan_failed",
-            Self::NoMatches => "no_matches",
-            Self::MatchesFound => "matches_found",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelPluginBridgeDiscoveryAmbiguityStatus {
-    MultipleCompatiblePlugins,
-}
-
-impl ChannelPluginBridgeDiscoveryAmbiguityStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::MultipleCompatiblePlugins => "multiple_compatible_plugins",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelDiscoveredPluginBridgeStatus {
-    CompatibleReady,
-    CompatibleIncompleteContract,
-    MissingSetupSurface,
-    UnsupportedChannelSurface,
-}
-
-impl ChannelDiscoveredPluginBridgeStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::CompatibleReady => "compatible_ready",
-            Self::CompatibleIncompleteContract => "compatible_incomplete_contract",
-            Self::MissingSetupSurface => "missing_setup_surface",
-            Self::UnsupportedChannelSurface => "unsupported_channel_surface",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ChannelDiscoveredPluginBridge {
-    pub plugin_id: String,
-    pub source_path: String,
-    pub package_root: String,
-    pub package_manifest_path: Option<String>,
-    pub bridge_kind: String,
-    pub adapter_family: String,
-    pub transport_family: Option<String>,
-    pub target_contract: Option<String>,
-    pub account_scope: Option<String>,
-    pub status: ChannelDiscoveredPluginBridgeStatus,
-    pub issues: Vec<String>,
-    pub missing_fields: Vec<String>,
-    pub required_env_vars: Vec<String>,
-    pub recommended_env_vars: Vec<String>,
-    pub required_config_keys: Vec<String>,
-    pub default_env_var: Option<String>,
-    pub setup_docs_urls: Vec<String>,
-    pub setup_remediation: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ChannelPluginBridgeDiscovery {
-    pub managed_install_root: Option<String>,
-    pub status: ChannelPluginBridgeDiscoveryStatus,
-    pub scan_issue: Option<String>,
-    pub ambiguity_status: Option<ChannelPluginBridgeDiscoveryAmbiguityStatus>,
-    pub compatible_plugins: usize,
-    pub compatible_plugin_ids: Vec<String>,
-    pub incomplete_plugins: usize,
-    pub incompatible_plugins: usize,
-    pub plugins: Vec<ChannelDiscoveredPluginBridge>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3643,34 +3531,6 @@ fn channel_inventory_with_now(
     }
 }
 
-fn build_channel_surfaces(
-    channel_catalog: &[ChannelCatalogEntry],
-    channels: &[ChannelStatusSnapshot],
-    plugin_bridge_discovery_by_id: &BTreeMap<&'static str, ChannelPluginBridgeDiscovery>,
-) -> Vec<ChannelSurface> {
-    channel_catalog
-        .iter()
-        .map(|catalog| {
-            let configured_accounts = channels
-                .iter()
-                .filter(|snapshot| snapshot.id == catalog.id)
-                .cloned()
-                .collect::<Vec<_>>();
-            let default_configured_account_id = configured_accounts
-                .iter()
-                .find(|snapshot| snapshot.is_default_account)
-                .map(|snapshot| snapshot.configured_account_id.clone());
-            let plugin_bridge_discovery = plugin_bridge_discovery_by_id.get(catalog.id).cloned();
-            ChannelSurface {
-                catalog: catalog.clone(),
-                configured_accounts,
-                default_configured_account_id,
-                plugin_bridge_discovery,
-            }
-        })
-        .collect()
-}
-
 fn channel_status_snapshots_with_now(
     config: &LoongClawConfig,
     runtime_dir: &Path,
@@ -3701,28 +3561,6 @@ fn validate_http_url(
             None
         }
     }
-}
-
-fn validate_websocket_url(field: &str, value: &str, issues: &mut Vec<String>) {
-    let parsed_url = reqwest::Url::parse(value);
-    let url = match parsed_url {
-        Ok(url) => url,
-        Err(error) => {
-            let issue = format!("{field} is invalid: {error}");
-            issues.push(issue);
-            return;
-        }
-    };
-
-    let scheme = url.scheme();
-    let is_ws = scheme == "ws";
-    let is_wss = scheme == "wss";
-    if is_ws || is_wss {
-        return;
-    }
-
-    let issue = format!("{field} must use ws or wss, got {scheme}");
-    issues.push(issue);
 }
 
 fn validate_websocket_url(field: &str, value: &str, issues: &mut Vec<String>) {
@@ -8952,15 +8790,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec![
-                "irc",
-                "nostr",
-                "twitch",
-                "tlon",
-                "zalo",
-                "zalo-personal",
-                "webchat"
-            ]
+            vec!["zalo", "zalo-personal", "webchat"]
         );
         assert!(!catalog_only.iter().any(|entry| entry.id == "discord"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "slack"));
@@ -8972,7 +8802,9 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "google-chat"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "signal"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "irc"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "nostr"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "twitch"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "tlon"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "teams"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "mattermost"));
         assert!(
@@ -8985,7 +8817,6 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "weixin"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "qqbot"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "onebot"));
-        assert_eq!(tlon.operations[0].command, "tlon-send");
         assert_eq!(webchat.operations[1].command, "webchat-serve");
     }
 
@@ -9034,15 +8865,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.id)
                 .collect::<Vec<_>>(),
-            vec![
-                "irc",
-                "nostr",
-                "twitch",
-                "tlon",
-                "zalo",
-                "zalo-personal",
-                "webchat"
-            ]
+            vec!["zalo", "zalo-personal", "webchat"]
         );
         assert_eq!(
             inventory

@@ -6,6 +6,130 @@ use loongclaw_kernel::{
     PluginTranslationReport, PluginTranslator,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeContract {
+    pub manifest_channel_id: &'static str,
+    pub required_setup_surface: &'static str,
+    pub runtime_owner: &'static str,
+    pub supported_operations: Vec<&'static str>,
+    pub recommended_metadata_keys: Vec<&'static str>,
+    pub stable_targets: Vec<ChannelPluginBridgeStableTarget>,
+    pub account_scope_note: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeStableTarget {
+    pub template: &'static str,
+    pub target_kind: ChannelCatalogTargetKind,
+    pub description: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeManifestStatus {
+    Compatible,
+    UnknownChannel,
+    MissingSetupSurface,
+    UnsupportedChannelSurface,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeManifestValidation {
+    pub channel_id: String,
+    pub status: ChannelPluginBridgeManifestStatus,
+    pub issues: Vec<String>,
+    pub recommended_metadata_keys: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeDiscoveryStatus {
+    NotConfigured,
+    ScanFailed,
+    NoMatches,
+    MatchesFound,
+}
+
+impl ChannelPluginBridgeDiscoveryStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::ScanFailed => "scan_failed",
+            Self::NoMatches => "no_matches",
+            Self::MatchesFound => "matches_found",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeDiscoveryAmbiguityStatus {
+    MultipleCompatiblePlugins,
+}
+
+impl ChannelPluginBridgeDiscoveryAmbiguityStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MultipleCompatiblePlugins => "multiple_compatible_plugins",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelDiscoveredPluginBridgeStatus {
+    CompatibleReady,
+    CompatibleIncompleteContract,
+    MissingSetupSurface,
+    UnsupportedChannelSurface,
+}
+
+impl ChannelDiscoveredPluginBridgeStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CompatibleReady => "compatible_ready",
+            Self::CompatibleIncompleteContract => "compatible_incomplete_contract",
+            Self::MissingSetupSurface => "missing_setup_surface",
+            Self::UnsupportedChannelSurface => "unsupported_channel_surface",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelDiscoveredPluginBridge {
+    pub plugin_id: String,
+    pub source_path: String,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
+    pub bridge_kind: String,
+    pub adapter_family: String,
+    pub transport_family: Option<String>,
+    pub target_contract: Option<String>,
+    pub account_scope: Option<String>,
+    pub status: ChannelDiscoveredPluginBridgeStatus,
+    pub issues: Vec<String>,
+    pub missing_fields: Vec<String>,
+    pub required_env_vars: Vec<String>,
+    pub recommended_env_vars: Vec<String>,
+    pub required_config_keys: Vec<String>,
+    pub default_env_var: Option<String>,
+    pub setup_docs_urls: Vec<String>,
+    pub setup_remediation: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ChannelPluginBridgeDiscovery {
+    pub managed_install_root: Option<String>,
+    pub status: ChannelPluginBridgeDiscoveryStatus,
+    pub scan_issue: Option<String>,
+    pub ambiguity_status: Option<ChannelPluginBridgeDiscoveryAmbiguityStatus>,
+    pub compatible_plugins: usize,
+    pub compatible_plugin_ids: Vec<String>,
+    pub incomplete_plugins: usize,
+    pub incompatible_plugins: usize,
+    pub plugins: Vec<ChannelDiscoveredPluginBridge>,
+}
+
 pub(super) fn plugin_bridge_contract_from_descriptor(
     descriptor: &ChannelRegistryDescriptor,
 ) -> Option<ChannelPluginBridgeContract> {

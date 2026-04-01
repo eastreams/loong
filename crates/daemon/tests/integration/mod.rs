@@ -40,6 +40,10 @@ fn cli_command_name() -> String {
     })
 }
 
+fn active_cli_command_name() -> &'static str {
+    mvp::config::active_cli_command_name()
+}
+
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
     let owned_path = subcommand_path
         .into_iter()
@@ -118,12 +122,15 @@ fn managed_bridge_manifest_with_plugin_id(
     setup: Option<loongclaw_daemon::kernel::PluginSetup>,
 ) -> loongclaw_daemon::kernel::PluginManifest {
     loongclaw_daemon::kernel::PluginManifest {
+        api_version: Some("v1alpha1".to_owned()),
+        version: Some("1.0.0".to_owned()),
         plugin_id: plugin_id.to_owned(),
         provider_id: format!("{channel_id}-provider"),
         connector_name: format!("{channel_id}-connector"),
         channel_id: Some(channel_id.to_owned()),
         endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
         capabilities: BTreeSet::new(),
+        trust_tier: loongclaw_daemon::kernel::PluginTrustTier::Unverified,
         metadata,
         summary: None,
         tags: Vec::new(),
@@ -131,6 +138,8 @@ fn managed_bridge_manifest_with_plugin_id(
         output_examples: Vec::new(),
         defer_loading: false,
         setup,
+        slot_claims: Vec::new(),
+        compatibility: None,
     }
 }
 
@@ -1403,12 +1412,8 @@ fn render_channel_surfaces_text_escapes_untrusted_managed_bridge_values() {
         setup_remediation: Some("fix bridge\nthen retry".to_owned()),
     }];
 
-    let mut lines = Vec::new();
-    loongclaw_daemon::push_channel_surface_managed_plugin_bridge_discovery(
-        &mut lines,
-        weixin_surface,
-    );
-    let rendered = lines.join("\n");
+    let rendered =
+        loongclaw_daemon::render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
 
     assert!(
         rendered.contains("managed_install_root=\"/tmp/managed bridge\""),

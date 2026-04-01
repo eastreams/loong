@@ -162,7 +162,8 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
     );
     assert!(
         fixture.onboard_log().contains("onboard"),
-        "explicit yes should invoke `loongclaw onboard`: {:?}",
+        "explicit yes should invoke `{} onboard`: {:?}",
+        super::active_cli_command_name(),
         fixture.onboard_log()
     );
 }
@@ -180,7 +181,8 @@ fn chat_without_config_runs_onboard_for_default_enter() {
     );
     assert!(
         fixture.onboard_log().contains("onboard"),
-        "default enter should invoke `loongclaw onboard`: {:?}",
+        "default enter should invoke `{} onboard`: {:?}",
+        super::active_cli_command_name(),
         fixture.onboard_log()
     );
 }
@@ -219,7 +221,8 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
     let expected_hint = format!(
-        "You can run 'loongclaw onboard --output {}' later to get started.",
+        "You can run '{} onboard --output {}' later to get started.",
+        super::active_cli_command_name(),
         explicit_config.display()
     );
     let compacted_stdout = stdout.split_whitespace().collect::<String>();
@@ -258,7 +261,13 @@ fn chat_without_config_treats_explicit_no_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        stdout.contains(
+            format!(
+                "You can run '{} onboard' later to get started.",
+                super::active_cli_command_name()
+            )
+            .as_str()
+        ),
         "explicit no should leave a follow-up hint: {stdout:?}"
     );
 }
@@ -281,7 +290,13 @@ fn chat_without_config_treats_eof_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        stdout.contains(
+            format!(
+                "You can run '{} onboard' later to get started.",
+                super::active_cli_command_name()
+            )
+            .as_str()
+        ),
         "eof should still leave the follow-up hint: {stdout:?}"
     );
 }

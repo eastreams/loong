@@ -12,10 +12,6 @@ mod tools;
 
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
-pub(crate) use channels::bridge::{
-    ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
-    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
-};
 #[allow(unused_imports)]
 pub use channels::bridge::{
     OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
@@ -24,29 +20,29 @@ pub use channels::bridge::{
 };
 #[allow(unused_imports)]
 pub use channels::{
-    ChannelAcpConfig, ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource,
-    ChannelDescriptor, ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig,
-    DingtalkAccountConfig, DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig,
-    EmailAccountConfig, EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig,
-    FeishuChannelServeMode, FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig,
-    ImessageAccountConfig, ImessageChannelConfig, LineAccountConfig, LineChannelConfig,
-    MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig, MattermostChannelConfig,
-    NextcloudTalkAccountConfig, NextcloudTalkChannelConfig, OnebotAccountConfig,
-    OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig, ResolvedDingtalkChannelConfig,
+    ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
+    ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
+    ChannelResolvedAccountRoute, ChannelRuntimeKind, CliChannelConfig, DingtalkAccountConfig,
+    DingtalkChannelConfig, DiscordAccountConfig, DiscordChannelConfig, EmailAccountConfig,
+    EmailChannelConfig, FeishuAccountConfig, FeishuChannelConfig, FeishuChannelServeMode,
+    FeishuDomain, GoogleChatAccountConfig, GoogleChatChannelConfig, ImessageAccountConfig,
+    ImessageChannelConfig, IrcAccountConfig, IrcChannelConfig, LineAccountConfig,
+    LineChannelConfig, MatrixAccountConfig, MatrixChannelConfig, MattermostAccountConfig,
+    MattermostChannelConfig, NextcloudTalkAccountConfig, NextcloudTalkChannelConfig,
+    NostrAccountConfig, NostrChannelConfig, ResolvedDingtalkChannelConfig,
     ResolvedDiscordChannelConfig, ResolvedEmailChannelConfig, ResolvedFeishuChannelConfig,
-    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedLineChannelConfig,
-    ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
-    ResolvedNextcloudTalkChannelConfig, ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig,
-    ResolvedSignalChannelConfig, ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig,
-    ResolvedTeamsChannelConfig, ResolvedTelegramChannelConfig, ResolvedWebhookChannelConfig,
-    ResolvedWecomChannelConfig, ResolvedWeixinChannelConfig, ResolvedWhatsappChannelConfig,
+    ResolvedGoogleChatChannelConfig, ResolvedImessageChannelConfig, ResolvedIrcChannelConfig,
+    ResolvedLineChannelConfig, ResolvedMatrixChannelConfig, ResolvedMattermostChannelConfig,
+    ResolvedNextcloudTalkChannelConfig, ResolvedNostrChannelConfig, ResolvedSignalChannelConfig,
+    ResolvedSlackChannelConfig, ResolvedSynologyChatChannelConfig, ResolvedTeamsChannelConfig,
+    ResolvedTelegramChannelConfig, ResolvedTlonChannelConfig, ResolvedTwitchChannelConfig,
+    ResolvedWebhookChannelConfig, ResolvedWecomChannelConfig, ResolvedWhatsappChannelConfig,
     SignalAccountConfig, SignalChannelConfig, SlackAccountConfig, SlackChannelConfig,
     SynologyChatAccountConfig, SynologyChatChannelConfig, TeamsAccountConfig, TeamsChannelConfig,
     TelegramAccountConfig, TelegramChannelConfig, TelegramStreamingMode, TlonAccountConfig,
     TlonChannelConfig, TwitchAccountConfig, TwitchChannelConfig, WebhookAccountConfig,
     WebhookChannelConfig, WebhookPayloadFormat, WecomAccountConfig, WecomChannelConfig,
-    WeixinAccountConfig, WeixinChannelConfig, WhatsappAccountConfig, WhatsappChannelConfig,
-    channel_descriptor, service_channel_descriptors,
+    WhatsappAccountConfig, WhatsappChannelConfig, channel_descriptor, service_channel_descriptors,
 };
 #[allow(unused_imports)]
 pub(crate) use channels::{
@@ -56,15 +52,17 @@ pub(crate) use channels::{
     FEISHU_VERIFICATION_TOKEN_ENV, GOOGLE_CHAT_WEBHOOK_URL_ENV, IMESSAGE_BRIDGE_TOKEN_ENV,
     IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV,
     MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
-    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, ONEBOT_ACCESS_TOKEN_ENV,
-    ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV, SIGNAL_ACCOUNT_ENV,
-    SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV, SYNOLOGY_CHAT_INCOMING_URL_ENV,
-    SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV, TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV,
-    TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
+    NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV,
+    NOSTR_RELAY_URLS_ENV, ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV,
+    QQBOT_CLIENT_SECRET_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
+    TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
+    TLON_CODE_ENV, TLON_SHIP_ENV, TLON_URL_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
     WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
     WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
-    normalize_channel_account_id, parse_email_smtp_endpoint,
+    normalize_channel_account_id, parse_email_smtp_endpoint, parse_nostr_private_key_hex,
+    parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -179,11 +177,15 @@ mod tests {
             "webhook",
             "google-chat",
             "signal",
+            "twitch",
             "teams",
             "mattermost",
             "nextcloud-talk",
             "synology-chat",
+            "irc",
             "imessage",
+            "nostr",
+            "tlon",
         ]
     }
 
@@ -349,7 +351,7 @@ mod tests {
         let default_config = LoongClawConfig::default();
         assert_eq!(default_config.enabled_channel_ids(), vec!["cli"]);
         assert!(default_config.enabled_service_channel_ids().is_empty());
-        let config = config_with_all_service_channels_enabled();
+        let mut config = LoongClawConfig::default();
         let expected_service_ids = expected_service_channel_ids();
         let expected_enabled_service_ids = expected_service_ids
             .iter()
@@ -374,39 +376,17 @@ mod tests {
         config.webhook.enabled = true;
         config.google_chat.enabled = true;
         config.signal.enabled = true;
+        config.twitch.enabled = true;
         config.teams.enabled = true;
         config.mattermost.enabled = true;
         config.nextcloud_talk.enabled = true;
         config.synology_chat.enabled = true;
+        config.irc.enabled = true;
         config.imessage.enabled = true;
+        config.nostr.enabled = true;
+        config.tlon.enabled = true;
 
-        assert_eq!(
-            config.enabled_channel_ids(),
-            vec![
-                "cli",
-                "telegram",
-                "feishu",
-                "matrix",
-                "wecom",
-                "weixin",
-                "qqbot",
-                "onebot",
-                "discord",
-                "slack",
-                "line",
-                "dingtalk",
-                "whatsapp",
-                "email",
-                "webhook",
-                "google-chat",
-                "signal",
-                "teams",
-                "mattermost",
-                "nextcloud-talk",
-                "synology-chat",
-                "imessage",
-            ]
-        );
+        assert_eq!(config.enabled_channel_ids(), expected_enabled_channel_ids);
         assert_eq!(
             config.enabled_service_channel_ids(),
             expected_enabled_service_ids

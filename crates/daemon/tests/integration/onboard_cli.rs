@@ -5622,7 +5622,11 @@ fn onboarding_success_summary_adds_doctor_action_for_plugin_backed_channels_need
     assert!(
         summary.next_actions.iter().any(|action| action.kind
             == crate::onboard_cli::OnboardingActionKind::Doctor
-            && action.command == "loongclaw doctor --config '/tmp/loongclaw-config.toml'"),
+            && action.command
+                == format!(
+                    "{} doctor --config '/tmp/loongclaw-config.toml'",
+                    super::active_cli_command_name()
+                )),
         "plugin-backed channels that still need managed bridge review should surface doctor as an explicit next action: {summary:#?}"
     );
     assert!(
@@ -7674,7 +7678,10 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert_eq!(summary.next_actions[0].label, "verify managed bridges");
     assert_eq!(
         summary.next_actions[0].command,
-        "loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+        format!(
+            "{} doctor --config '/tmp/loongclaw-config.toml'",
+            super::active_cli_command_name()
+        )
     );
     assert_eq!(
         summary.next_actions[1].kind,
@@ -7685,8 +7692,10 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert!(
         lines.iter().any(|line| line == "start here")
             && lines.iter().any(|line| {
-                line
-                    == "- verify managed bridges: loongclaw doctor --config '/tmp/loongclaw-config.toml'"
+                line == &format!(
+                    "- verify managed bridges: {} doctor --config '/tmp/loongclaw-config.toml'",
+                    super::active_cli_command_name()
+                )
             }),
         "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
     );
@@ -7726,7 +7735,13 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     assert!(
         lines.iter().any(|line| {
             line.contains("verify managed bridges")
-                && line.contains("loongclaw doctor --config '/tmp/loongclaw-config.toml'")
+                && line.contains(
+                    format!(
+                        "{} doctor --config '/tmp/loongclaw-config.toml'",
+                        super::active_cli_command_name()
+                    )
+                    .as_str(),
+                )
         }),
         "success summary should surface the managed bridge verification follow-up in the secondary actions: {lines:#?}"
     );

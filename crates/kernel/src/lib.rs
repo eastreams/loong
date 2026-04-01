@@ -66,10 +66,12 @@ pub use plugin::{
     PluginTrustTier, format_plugin_provenance_summary, plugin_provenance_summary_for_descriptor,
 };
 pub use plugin_ir::{
-    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationPlan, PluginActivationStatus,
-    PluginBridgeKind, PluginChannelBridgeContract, PluginChannelBridgeReadiness, PluginIR,
-    PluginRuntimeProfile, PluginSetupReadiness, PluginSetupReadinessContext,
+    BridgeSupportMatrix, PluginActivationCandidate, PluginActivationInventoryEntry,
+    PluginActivationPlan, PluginActivationStatus, PluginBridgeKind, PluginChannelBridgeContract,
+    PluginChannelBridgeReadiness, PluginCompatibilityShimSupport, PluginIR, PluginRuntimeProfile,
+    PluginRuntimeScaffoldDefaults, PluginSetupReadiness, PluginSetupReadinessContext,
     PluginTranslationReport, PluginTranslator, evaluate_plugin_setup_requirements,
+    plugin_runtime_scaffold_defaults,
 };
 pub use policy::{PolicyContext, PolicyDecision, PolicyEngine, PolicyRequest, StaticPolicyEngine};
 pub use policy_ext::{PolicyExtension, PolicyExtensionChain, PolicyExtensionContext};

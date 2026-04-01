@@ -1,4 +1,5 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI daemon binary
+use clap::Parser;
 use loongclaw_daemon::*;
 
 /// Discard any unread input from the terminal's tty input queue.
