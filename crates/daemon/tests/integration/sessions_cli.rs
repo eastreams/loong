@@ -50,22 +50,42 @@ fn sessions_list_cli_parses_global_flags_after_subcommand() {
     ])
     .expect("sessions list CLI should parse");
 
-    let rendered = format!("{:?}", cli.command);
+    let Some(loongclaw_daemon::Commands::Sessions {
+        config,
+        json,
+        session,
+        command,
+    }) = cli.command
+    else {
+        panic!("expected sessions command, got: {:?}", cli.command);
+    };
+
+    assert_eq!(config.as_deref(), Some("/tmp/loongclaw.toml"));
+    assert!(json, "expected --json flag to be preserved");
+    assert_eq!(session, "ops-root");
+
+    let loongclaw_daemon::sessions_cli::SessionsCommands::List {
+        limit,
+        state,
+        kind,
+        parent_session_id,
+        overdue_only,
+        include_archived,
+        include_delegate_lifecycle,
+    } = command
+    else {
+        panic!("expected sessions list command");
+    };
+
+    assert_eq!(limit, 25);
+    assert_eq!(state, None);
+    assert_eq!(kind.as_deref(), Some("delegate_child"));
+    assert_eq!(parent_session_id, None);
+    assert!(!overdue_only, "unexpected overdue_only flag");
+    assert!(!include_archived, "unexpected include_archived flag");
     assert!(
-        rendered.contains("Sessions"),
-        "expected parsed command to contain Sessions variant: {rendered}"
-    );
-    assert!(
-        rendered.contains("delegate_child"),
-        "expected parsed command to include delegate_child filter: {rendered}"
-    );
-    assert!(
-        rendered.contains("ops-root"),
-        "expected parsed command to include session scope: {rendered}"
-    );
-    assert!(
-        rendered.contains("/tmp/loongclaw.toml"),
-        "expected parsed command to include config path: {rendered}"
+        !include_delegate_lifecycle,
+        "unexpected include_delegate_lifecycle flag"
     );
 }
 
@@ -255,12 +275,36 @@ async fn execute_sessions_command_status_surfaces_workflow_recipes_and_rendered_
         "ops-root"
     );
     assert_eq!(execution.payload["detail"]["session"]["turn_count"], 2);
-    assert_eq!(
-        execution.payload["recipes"]
-            .as_array()
-            .expect("recipes array")
-            .len(),
-        4
+    let recipes = execution.payload["recipes"]
+        .as_array()
+        .expect("recipes array");
+    let recipe_values = recipes
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .collect::<Vec<_>>();
+    assert!(
+        recipe_values
+            .iter()
+            .any(|recipe| recipe.contains("sessions status")),
+        "expected status recipe in {recipe_values:?}"
+    );
+    assert!(
+        recipe_values
+            .iter()
+            .any(|recipe| recipe.contains("sessions history")),
+        "expected history recipe in {recipe_values:?}"
+    );
+    assert!(
+        recipe_values
+            .iter()
+            .any(|recipe| recipe.contains("sessions wait")),
+        "expected wait recipe in {recipe_values:?}"
+    );
+    assert!(
+        recipe_values
+            .iter()
+            .any(|recipe| recipe.contains("sessions events")),
+        "expected events recipe in {recipe_values:?}"
     );
 
     let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
@@ -591,5 +635,105 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
     assert!(
         rendered.contains("session_archived"),
         "archive render should surface archive action: {rendered}"
+    );
+}
+
+#[test]
+fn render_sessions_status_text_escapes_control_characters() {
+    let execution = loongclaw_daemon::sessions_cli::SessionsCommandExecution {
+        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+        current_session_id: "ops-root".to_owned(),
+        payload: json!({
+            "command": "status",
+            "detail": {
+                "session": {
+                    "session_id": "delegate:\u{1b}[31mchild",
+                    "kind": "delegate_child",
+                    "state": "running",
+                    "parent_session_id": "ops-root\nnext",
+                    "label": "line1\nline2",
+                    "turn_count": 2,
+                    "last_turn_at": 123,
+                    "last_error": "boom\u{1b}[0m"
+                },
+                "workflow": {
+                    "task": "research\ncontinuity",
+                    "lineage_root_session_id": "ops-root",
+                    "lineage_depth": 1,
+                    "runtime_self_continuity": {
+                        "present": true,
+                        "resolved_identity_present": true,
+                        "session_profile_projection_present": false
+                    }
+                },
+                "delegate_lifecycle": {
+                    "mode": "async",
+                    "phase": "running",
+                    "timeout_seconds": 90
+                },
+                "terminal_outcome_state": "present",
+                "terminal_outcome": {
+                    "status": "ok"
+                },
+                "recent_events": []
+            },
+            "recipes": [],
+            "next_steps": []
+        }),
+    };
+
+    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions status");
+
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "rendered status should not contain raw escape characters: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("label: line1\\nline2"),
+        "expected escaped newlines in label: {rendered}"
+    );
+    assert!(
+        rendered.contains("last_error: boom\\u{1b}[0m"),
+        "expected escaped escape sequence in last_error: {rendered}"
+    );
+    assert!(
+        rendered.contains("task: research\\ncontinuity"),
+        "expected escaped newlines in task: {rendered}"
+    );
+}
+
+#[test]
+fn render_sessions_history_text_escapes_control_characters() {
+    let execution = loongclaw_daemon::sessions_cli::SessionsCommandExecution {
+        resolved_config_path: "/tmp/loongclaw.toml".to_owned(),
+        current_session_id: "ops-root".to_owned(),
+        payload: json!({
+            "command": "history",
+            "session_id": "delegate:\u{1b}[31mchild",
+            "limit": 20,
+            "turns": [
+                {
+                    "role": "assistant",
+                    "content": "hello\nworld\u{1b}[0m"
+                }
+            ]
+        }),
+    };
+
+    let rendered = loongclaw_daemon::sessions_cli::render_sessions_cli_text(&execution)
+        .expect("render sessions history");
+
+    assert!(
+        !rendered.contains('\u{1b}'),
+        "rendered history should not contain raw escape characters: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("history for `delegate:\\u{1b}[31mchild`"),
+        "expected escaped session id in history header: {rendered}"
+    );
+    assert!(
+        rendered.contains("- assistant: hello\\nworld\\u{1b}[0m"),
+        "expected escaped turn content in history output: {rendered}"
     );
 }

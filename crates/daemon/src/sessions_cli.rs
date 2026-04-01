@@ -608,6 +608,19 @@ pub fn render_sessions_cli_text(execution: &SessionsCommandExecution) -> CliResu
     Ok(rendered)
 }
 
+fn sanitize_terminal_text(value: &str) -> String {
+    let mut sanitized = String::new();
+    for character in value.chars() {
+        if character.is_control() {
+            let escaped = character.escape_default().to_string();
+            sanitized.push_str(escaped.as_str());
+            continue;
+        }
+        sanitized.push(character);
+    }
+    sanitized
+}
+
 fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
     let sessions = payload
         .get("sessions")
@@ -625,10 +638,11 @@ fn render_sessions_list_text(payload: &Value) -> CliResult<String> {
         .get("current_session_id")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
+    let sanitized_scope = sanitize_terminal_text(scope);
 
     let mut lines = Vec::new();
     lines.push(format!(
-        "visible sessions from scope `{scope}`: {returned_count}/{matched_count}"
+        "visible sessions from scope `{sanitized_scope}`: {returned_count}/{matched_count}"
     ));
     if sessions.is_empty() {
         lines.push("No persisted sessions are currently visible.".to_owned());
@@ -661,14 +675,16 @@ fn render_sessions_status_text(payload: &Value) -> CliResult<String> {
         lines.push("recipes:".to_owned());
         for recipe in recipes {
             let text = recipe.as_str().unwrap_or("");
-            lines.push(format!("- {text}"));
+            let sanitized_text = sanitize_terminal_text(text);
+            lines.push(format!("- {sanitized_text}"));
         }
     }
     if !next_steps.is_empty() {
         lines.push("next steps:".to_owned());
         for step in next_steps {
             let text = step.as_str().unwrap_or("");
-            lines.push(format!("- {text}"));
+            let sanitized_text = sanitize_terminal_text(text);
+            lines.push(format!("- {sanitized_text}"));
         }
     }
 
@@ -690,8 +706,9 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
         .unwrap_or(0);
 
     let mut lines = Vec::new();
+    let sanitized_session_id = sanitize_terminal_text(session_id);
     lines.push(format!(
-        "events for `{session_id}` (next_after_id={next_after_id})"
+        "events for `{sanitized_session_id}` (next_after_id={next_after_id})"
     ));
     if events.is_empty() {
         lines.push("No newer events.".to_owned());
@@ -705,7 +722,8 @@ fn render_sessions_events_text(payload: &Value) -> CliResult<String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let ts = event.get("ts").and_then(Value::as_i64).unwrap_or_default();
-        lines.push(format!("- #{event_id} {event_kind} ts={ts}"));
+        let sanitized_event_kind = sanitize_terminal_text(event_kind);
+        lines.push(format!("- #{event_id} {sanitized_event_kind} ts={ts}"));
     }
 
     Ok(lines.join("\n"))
@@ -741,7 +759,8 @@ fn render_sessions_wait_text(payload: &Value) -> CliResult<String> {
                 .get("event_kind")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            lines.push(format!("- #{event_id} {event_kind}"));
+            let sanitized_event_kind = sanitize_terminal_text(event_kind);
+            lines.push(format!("- #{event_id} {sanitized_event_kind}"));
         }
     }
 
@@ -760,7 +779,10 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
         .ok_or_else(|| "sessions history payload missing turns array".to_owned())?;
 
     let mut lines = Vec::new();
-    lines.push(format!("history for `{session_id}` (limit={limit})"));
+    let sanitized_session_id = sanitize_terminal_text(session_id);
+    lines.push(format!(
+        "history for `{sanitized_session_id}` (limit={limit})"
+    ));
     if turns.is_empty() {
         lines.push("No transcript turns are currently stored.".to_owned());
         return Ok(lines.join("\n"));
@@ -772,7 +794,9 @@ fn render_sessions_history_text(payload: &Value) -> CliResult<String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let content = turn.get("content").and_then(Value::as_str).unwrap_or("");
-        lines.push(format!("- {role}: {content}"));
+        let sanitized_role = sanitize_terminal_text(role);
+        let sanitized_content = sanitize_terminal_text(content);
+        lines.push(format!("- {sanitized_role}: {sanitized_content}"));
     }
 
     Ok(lines.join("\n"))
@@ -799,9 +823,12 @@ fn render_sessions_mutation_text(payload: &Value) -> CliResult<String> {
     let inspection = payload.get("inspection").cloned().unwrap_or(Value::Null);
 
     let mut lines = Vec::new();
-    lines.push(format!("{command} dry_run={dry_run}"));
-    lines.push(format!("result: {result}"));
-    lines.push(format!("message: {message}"));
+    let sanitized_command = sanitize_terminal_text(command);
+    let sanitized_result = sanitize_terminal_text(result);
+    let sanitized_message = sanitize_terminal_text(message);
+    lines.push(format!("{sanitized_command} dry_run={dry_run}"));
+    lines.push(format!("result: {sanitized_result}"));
+    lines.push(format!("message: {sanitized_message}"));
     if !action.is_null() {
         let rendered_action = serde_json::to_string_pretty(&action)
             .map_err(|error| format!("render action failed: {error}"))?;
@@ -838,7 +865,10 @@ fn render_session_brief_line(session: &Value) -> CliResult<String> {
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_owned());
     let line = format!(
-        "{session_id} state={state} kind={kind} label={label} task={task} depth={lineage_depth}"
+        "{} state={state} kind={kind} label={} task={} depth={lineage_depth}",
+        sanitize_terminal_text(session_id.as_str()),
+        sanitize_terminal_text(label),
+        sanitize_terminal_text(task),
     );
     Ok(line)
 }
@@ -922,22 +952,28 @@ fn render_session_inspection_lines(detail: &Value) -> CliResult<Vec<String>> {
         .and_then(Value::as_array)
         .map(|value| value.len())
         .unwrap_or(0);
+    let sanitized_session_id = sanitize_terminal_text(session_id.as_str());
+    let sanitized_parent_session_id = sanitize_terminal_text(parent_session_id);
+    let sanitized_label = sanitize_terminal_text(label);
+    let sanitized_task = sanitize_terminal_text(task);
+    let sanitized_lineage_root_session_id = sanitize_terminal_text(lineage_root_session_id);
+    let sanitized_last_error = sanitize_terminal_text(last_error);
 
     let mut lines = Vec::new();
-    lines.push(format!("session_id: {session_id}"));
+    lines.push(format!("session_id: {sanitized_session_id}"));
     lines.push(format!("kind: {kind}"));
     lines.push(format!("state: {state}"));
-    lines.push(format!("parent_session_id: {parent_session_id}"));
-    lines.push(format!("label: {label}"));
-    lines.push(format!("task: {task}"));
+    lines.push(format!("parent_session_id: {sanitized_parent_session_id}"));
+    lines.push(format!("label: {sanitized_label}"));
+    lines.push(format!("task: {sanitized_task}"));
     lines.push(format!(
-        "lineage_root_session_id: {lineage_root_session_id}"
+        "lineage_root_session_id: {sanitized_lineage_root_session_id}"
     ));
     lines.push(format!("lineage_depth: {lineage_depth}"));
     lines.push(format!("runtime_self_continuity: {continuity}"));
     lines.push(format!("turn_count: {turn_count}"));
     lines.push(format!("last_turn_at: {last_turn_at}"));
-    lines.push(format!("last_error: {last_error}"));
+    lines.push(format!("last_error: {sanitized_last_error}"));
     lines.push(format!("delegate_mode: {delegate_mode}"));
     lines.push(format!("delegate_phase: {delegate_phase}"));
     lines.push(format!("timeout_seconds: {timeout_seconds}"));

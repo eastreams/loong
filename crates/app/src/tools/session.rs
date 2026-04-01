@@ -20,6 +20,8 @@ use crate::conversation::ConstrainedSubagentExecution;
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::runtime_self_continuity;
+#[cfg(feature = "memory-sqlite")]
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, RECOVERY_KIND_QUEUED_ASYNC_OVERDUE_MARKED_FAILED,
     RECOVERY_KIND_RUNNING_ASYNC_OVERDUE_MARKED_FAILED, SessionRecoveryRecord,
@@ -417,9 +419,15 @@ fn execute_sessions_list(
 
     let mut listed_sessions = Vec::new();
     for session in sessions {
+        let delegate_events = if session.kind == SessionKind::DelegateChild {
+            Some(load_delegate_lifecycle_events(&repo, &session)?)
+        } else {
+            None
+        };
         let delegate_lifecycle = if include_delegate_lifecycle {
-            let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
-            session_delegate_lifecycle_at(&session, delegate_events.as_slice(), now_ts)
+            delegate_events
+                .as_deref()
+                .and_then(|events| session_delegate_lifecycle_at(&session, events, now_ts))
         } else {
             None
         };
@@ -432,7 +440,7 @@ fn execute_sessions_list(
         {
             continue;
         }
-        listed_sessions.push((session, delegate_lifecycle));
+        listed_sessions.push((session, delegate_events, delegate_lifecycle));
     }
 
     let matched_count = listed_sessions.len();
@@ -448,8 +456,8 @@ fn execute_sessions_list(
     }
     let returned_count = listed_sessions.len();
     let mut session_payloads = Vec::with_capacity(returned_count);
-    for (session, delegate_lifecycle) in listed_sessions {
-        let workflow = load_session_workflow_record(&repo, &session, None)?;
+    for (session, delegate_events, delegate_lifecycle) in listed_sessions {
+        let workflow = load_session_workflow_record(&repo, &session, delegate_events.as_deref())?;
         let payload = session_summary_json_with_delegate_lifecycle(
             session,
             workflow,
@@ -1479,10 +1487,8 @@ fn load_session_workflow_record(
         .iter()
         .rev()
         .find_map(session_workflow_task_from_event);
-    let runtime_self_continuity = delegate_events
-        .iter()
-        .rev()
-        .find_map(session_runtime_self_continuity_from_event);
+    let runtime_self_continuity =
+        load_session_runtime_self_continuity_record(repo, session, delegate_events)?;
 
     Ok(SessionWorkflowRecord {
         task,
@@ -1502,21 +1508,48 @@ fn session_workflow_task_from_event(event: &SessionEventRecord) -> Option<String
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn session_runtime_self_continuity_from_event(
-    event: &SessionEventRecord,
-) -> Option<SessionRuntimeSelfContinuityRecord> {
-    let continuity = event.payload_json.get("runtime_self_continuity")?;
-    let resolved_identity = continuity.get("resolved_identity");
-    let session_profile_projection = continuity.get("session_profile_projection");
-    let resolved_identity_present = resolved_identity.is_some_and(Value::is_object);
-    let session_profile_projection_present =
-        session_profile_projection.and_then(Value::as_str).is_some();
+fn load_session_runtime_self_continuity_record(
+    repo: &SessionRepository,
+    session: &SessionSummaryRecord,
+    delegate_events: &[SessionEventRecord],
+) -> Result<Option<SessionRuntimeSelfContinuityRecord>, String> {
+    let recent_events = repo.list_recent_events(&session.session_id, 64)?;
+    let recent_continuity = recent_events
+        .iter()
+        .rev()
+        .filter(|event| {
+            event.event_kind == runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND
+        })
+        .find_map(|event| {
+            runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
+        });
+    if let Some(continuity) = recent_continuity {
+        let record = session_runtime_self_continuity_record_from_continuity(&continuity);
+        return Ok(Some(record));
+    }
 
-    Some(SessionRuntimeSelfContinuityRecord {
-        present: true,
-        resolved_identity_present,
+    let delegate_continuity = delegate_events.iter().rev().find_map(|event| {
+        runtime_self_continuity::runtime_self_continuity_from_event_payload(&event.payload_json)
+    });
+    let record = delegate_continuity
+        .as_ref()
+        .map(session_runtime_self_continuity_record_from_continuity);
+    Ok(record)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn session_runtime_self_continuity_record_from_continuity(
+    continuity: &runtime_self_continuity::RuntimeSelfContinuity,
+) -> SessionRuntimeSelfContinuityRecord {
+    let session_profile_projection_present = continuity
+        .session_profile_projection
+        .as_deref()
+        .is_some_and(|projection| !projection.trim().is_empty());
+    SessionRuntimeSelfContinuityRecord {
+        present: continuity.has_prompt_projection(),
+        resolved_identity_present: continuity.resolved_identity.is_some(),
         session_profile_projection_present,
-    })
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4114,6 +4147,69 @@ mod tests {
         );
         assert_eq!(outcome.payload["session"]["turn_count"], 2);
         assert!(outcome.payload["session"]["last_turn_at"].is_number());
+    }
+
+    #[test]
+    fn session_status_includes_runtime_self_continuity_from_refresh_events() {
+        let config = isolated_memory_config("session-status-refresh-continuity");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.append_event(NewSessionEvent {
+            session_id: "root-session".to_owned(),
+            event_kind: crate::runtime_self_continuity::RUNTIME_SELF_CONTINUITY_EVENT_KIND
+                .to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "source": "compaction",
+                "runtime_self_continuity": {
+                    "runtime_self": {
+                        "standing_instructions": ["Stay concise."],
+                        "tool_usage_policy": ["Prefer visible evidence."],
+                        "soul_guidance": ["Keep continuity explicit."],
+                        "identity_context": ["# Identity\n- Name: Root"],
+                        "user_context": ["Operator prefers concise technical summaries."]
+                    },
+                    "resolved_identity": {
+                        "source": "workspace_self",
+                        "content": "# Identity\n- Name: Root"
+                    },
+                    "session_profile_projection": "## Session Profile\nOperator prefers concise technical summaries."
+                }
+            }),
+        })
+        .expect("append runtime self continuity refresh");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "root-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["resolved_identity_present"],
+            true
+        );
+        assert_eq!(
+            outcome.payload["workflow"]["runtime_self_continuity"]["session_profile_projection_present"],
+            true
+        );
     }
 
     #[test]
