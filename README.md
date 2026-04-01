@@ -606,7 +606,33 @@ The longer-term direction remains to let one gateway-owned service host
 decouple CLI lifecycle from service lifecycle and own routes, status, logs,
 pairing, and richer channel runtimes.
 
-`loong channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
+`loong channels --json` exposes the broader channel catalog separately from
+shipped runtime-backed surfaces. That catalog now distinguishes config-backed
+outbound surfaces from plugin-backed bridge surfaces such as Weixin, QQBot,
+and OneBot. When a bridge-backed surface is configured, the same output now
+exposes config-derived account snapshots and bridge endpoint summaries without
+claiming native runtime ownership.
+
+Plugin-backed channel surfaces are intentionally honest:
+
+- they publish stable channel ids, setup hints, requirement keys, and target families
+- they reserve native command ids such as `weixin-send` or `qqbot-serve` without claiming those commands are implemented yet
+- they let bridge plugins converge on one LoongClaw-owned contract before native adapters exist
+
+Current bridge-first target families include:
+
+- `weixin:<account>:contact:<id>` and `weixin:<account>:room:<id>`
+- `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
+- `onebot:<account>:private:<user_id>` and `onebot:<account>:group:<group_id>`
+
+Config-backed outbound surfaces such as Discord, Slack, LINE, DingTalk,
+WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch, Tlon,
+Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
+iMessage / BlueBubbles, and Nostr expose send and readiness metadata without
+claiming runtime-backed reply-loop ownership.
+
+Pure catalog-only planned surfaces such as Zalo, Zalo Personal, and WebChat
+still do not claim runtime support until an adapter is actually shipped.
 
 Tool policy stays explicit:
 
@@ -735,7 +761,8 @@ downloads and installed skill execution.
 ### Delivery Surfaces
 
 - CLI is first-class today, but it is no longer the only surface
-- Telegram, Feishu / Lark, and Matrix already exist as real channel surfaces with runtime state and security validation
+- Telegram, Feishu / Lark, Matrix, and WeCom already exist as real channel surfaces with runtime state and security validation
+- Weixin, QQBot, and OneBot are now first-class plugin-backed catalog surfaces, so bridge integrations can align on stable ids and target contracts without pretending LoongClaw already owns their native runtime
 - browser, file, shell, and web tools are exposed through runtime policy rather than left in
   scattered helper scripts
 
@@ -776,7 +803,7 @@ Three design rules matter most:
 - **Core / Extension approach**: runtime, tool, memory, and connector surfaces are organized around trusted cores with richer extension layers, so specialization goes through adapters instead of kernel forks.
 - **Control planes stay distinct**: provider turns, context assembly, channel routing, and ACP control behavior are modeled as separate concerns, which keeps future collaboration and routing upgrades from forcing a rewrite of the conversation core.
 - **Governance is not an afterthought**: capability checks, policy gates, approvals, and audit trails are part of the main execution path rather than a perimeter feature added later.
-- **The product layer is already concrete**: a CLI-first entry path, Telegram / Feishu / Matrix channels, browser / file / shell / web tools, and configurable provider / memory / tool-policy baselines already form a real path through the current system.
+- **The product layer is already concrete**: a CLI-first entry path, Telegram / Feishu / Matrix / WeCom channels, plugin-backed Weixin / QQBot / OneBot catalog contracts, browser / file / shell / web tools, and configurable provider / memory / tool-policy baselines already form a real path through the current system.
 
 Some ecosystem pieces are still better described as architecture direction than as finished product surfaces, and we prefer to say that plainly in the README.
 

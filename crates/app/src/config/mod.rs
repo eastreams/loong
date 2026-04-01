@@ -12,6 +12,16 @@ mod tools;
 
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
+pub(crate) use channels::bridge::{
+    ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV, QQBOT_CLIENT_SECRET_ENV,
+    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+};
+#[allow(unused_imports)]
+pub use channels::bridge::{
+    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
+    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
+    WeixinAccountConfig, WeixinChannelConfig,
+};
 #[allow(unused_imports)]
 pub use channels::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
@@ -230,6 +240,24 @@ mod tests {
         assert_eq!(wecom.surface_label, "wecom channel");
         assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+
+        let weixin = channel_descriptor("wechat").expect("weixin descriptor");
+        assert_eq!(weixin.id, "weixin");
+        assert_eq!(weixin.surface_label, "weixin channel");
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(weixin.serve_subcommand, None);
+
+        let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
+        assert_eq!(qqbot.id, "qqbot");
+        assert_eq!(qqbot.surface_label, "qq bot channel");
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(qqbot.serve_subcommand, None);
+
+        let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
+        assert_eq!(onebot.id, "onebot");
+        assert_eq!(onebot.surface_label, "onebot channel");
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(onebot.serve_subcommand, None);
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");

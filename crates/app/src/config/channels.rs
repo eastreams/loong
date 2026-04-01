@@ -23,6 +23,8 @@ use super::shared::{
 };
 use crate::secrets::resolve_secret_with_legacy_env;
 
+#[path = "channels_bridge.rs"]
+pub(crate) mod bridge;
 #[path = "channels_irc_impl.rs"]
 mod irc_impl;
 #[path = "channels_nostr_impl.rs"]

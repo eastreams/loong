@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::CliResult;
 
 use super::{
+    OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
@@ -96,6 +97,12 @@ pub struct LoongClawConfig {
     pub matrix: MatrixChannelConfig,
     #[serde(default)]
     pub wecom: WecomChannelConfig,
+    #[serde(default)]
+    pub weixin: WeixinChannelConfig,
+    #[serde(default)]
+    pub qqbot: QqbotChannelConfig,
+    #[serde(default)]
+    pub onebot: OnebotChannelConfig,
     #[serde(default)]
     pub discord: DiscordChannelConfig,
     #[serde(default)]
@@ -1036,6 +1043,9 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_feishu_channel_for_encoding(&mut config.feishu);
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
     canonicalize_wecom_channel_for_encoding(&mut config.wecom);
+    canonicalize_weixin_channel_for_encoding(&mut config.weixin);
+    canonicalize_qqbot_channel_for_encoding(&mut config.qqbot);
+    canonicalize_onebot_channel_for_encoding(&mut config.onebot);
     canonicalize_discord_channel_for_encoding(&mut config.discord);
     canonicalize_line_channel_for_encoding(&mut config.line);
     canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
@@ -1096,6 +1106,41 @@ fn canonicalize_wecom_channel_for_encoding(config: &mut WecomChannelConfig) {
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_id, &mut account.bot_id_env);
         canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
+    }
+}
+
+fn canonicalize_weixin_channel_for_encoding(config: &mut WeixinChannelConfig) {
+    canonicalize_env_secret_reference(
+        &mut config.bridge_access_token,
+        &mut config.bridge_access_token_env,
+    );
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(
+            &mut account.bridge_access_token,
+            &mut account.bridge_access_token_env,
+        );
+    }
+}
+
+fn canonicalize_qqbot_channel_for_encoding(config: &mut QqbotChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.app_id, &mut config.app_id_env);
+    canonicalize_env_secret_reference(&mut config.client_secret, &mut config.client_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.app_id, &mut account.app_id_env);
+        canonicalize_env_secret_reference(
+            &mut account.client_secret,
+            &mut account.client_secret_env,
+        );
+    }
+}
+
+fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
     }
 }
 
@@ -2060,6 +2105,10 @@ fn template_web_search_usage_comment() -> String {
 mod tests {
     use super::*;
     use crate::config::ProviderKind;
+    use crate::config::{
+        ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV,
+        QQBOT_CLIENT_SECRET_ENV, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+    };
     use loongclaw_contracts::SecretRef;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2243,6 +2292,45 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains("access_token_env = \"MATRIX_ACCESS_TOKEN\""));
         assert!(raw.contains("sync_timeout_s = 30"));
         assert!(raw.contains("ignore_self_messages = true"));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_includes_plugin_backed_bridge_channel_defaults() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loongclaw-template-plugin-bridges-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+
+        assert!(raw.contains("[weixin]"));
+        assert!(raw.contains(format!("bridge_url_env = \"{WEIXIN_BRIDGE_URL_ENV}\"").as_str()));
+        assert!(raw.contains(
+            format!("bridge_access_token_env = \"{WEIXIN_BRIDGE_ACCESS_TOKEN_ENV}\"").as_str()
+        ));
+
+        assert!(raw.contains("[qqbot]"));
+        assert!(raw.contains(format!("app_id_env = \"{QQBOT_APP_ID_ENV}\"").as_str()));
+        assert!(
+            raw.contains(format!("client_secret_env = \"{QQBOT_CLIENT_SECRET_ENV}\"").as_str())
+        );
+
+        assert!(raw.contains("[onebot]"));
+        assert!(
+            raw.contains(format!("websocket_url_env = \"{ONEBOT_WEBSOCKET_URL_ENV}\"").as_str())
+        );
+        assert!(raw.contains(format!("access_token_env = \"{ONEBOT_ACCESS_TOKEN_ENV}\"").as_str()));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -3068,6 +3156,46 @@ model = "gpt-5"
         assert!(!raw.contains("access_token_env = \" BACKUP_TWITCH_ACCESS_TOKEN \""));
         assert!(!raw.contains("access_token = \"${TWITCH_ACCESS_TOKEN}\""));
         assert!(!raw.contains("access_token = \"${BACKUP_TWITCH_ACCESS_TOKEN}\""));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_canonicalizes_matching_plugin_backed_channel_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-plugin-bridge-env");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+
+        config.weixin.bridge_access_token = Some(SecretRef::Inline(
+            "${WEIXIN_BRIDGE_ACCESS_TOKEN}".to_owned(),
+        ));
+        config.weixin.bridge_access_token_env = Some(" WEIXIN_BRIDGE_ACCESS_TOKEN ".to_owned());
+
+        config.qqbot.app_id = Some(SecretRef::Inline("${QQBOT_APP_ID}".to_owned()));
+        config.qqbot.app_id_env = Some(" QQBOT_APP_ID ".to_owned());
+        config.qqbot.client_secret = Some(SecretRef::Inline("${QQBOT_CLIENT_SECRET}".to_owned()));
+        config.qqbot.client_secret_env = Some(" QQBOT_CLIENT_SECRET ".to_owned());
+
+        config.onebot.access_token = Some(SecretRef::Inline("${ONEBOT_ACCESS_TOKEN}".to_owned()));
+        config.onebot.access_token_env = Some(" ONEBOT_ACCESS_TOKEN ".to_owned());
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read written config");
+
+        assert!(raw.contains(
+            format!("bridge_access_token_env = \"{WEIXIN_BRIDGE_ACCESS_TOKEN_ENV}\"").as_str()
+        ));
+        assert!(raw.contains(format!("app_id_env = \"{QQBOT_APP_ID_ENV}\"").as_str()));
+        assert!(
+            raw.contains(format!("client_secret_env = \"{QQBOT_CLIENT_SECRET_ENV}\"").as_str())
+        );
+        assert!(raw.contains(format!("access_token_env = \"{ONEBOT_ACCESS_TOKEN_ENV}\"").as_str()));
+
+        assert!(!raw.contains("bridge_access_token = \"${WEIXIN_BRIDGE_ACCESS_TOKEN}\""));
+        assert!(!raw.contains("app_id = \"${QQBOT_APP_ID}\""));
+        assert!(!raw.contains("client_secret = \"${QQBOT_CLIENT_SECRET}\""));
+        assert!(!raw.contains("access_token = \"${ONEBOT_ACCESS_TOKEN}\""));
 
         let _ = fs::remove_file(path);
     }

@@ -36,9 +36,15 @@ use super::{
     webhook_auth::build_webhook_auth_header_from_parts,
 };
 
+#[path = "registry_bridge.rs"]
+mod bridge;
 #[path = "registry_nostr_impl.rs"]
 mod nostr_impl;
 
+use bridge::{
+    ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
+    WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
+};
 pub use nostr_impl::NOSTR_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 use nostr_impl::{NOSTR_ONBOARDING_DESCRIPTOR, NOSTR_OPERATIONS, build_nostr_snapshots};
 
@@ -186,6 +192,7 @@ impl ChannelCatalogOperationAvailability {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelCapability {
     RuntimeBacked,
+    PluginBacked,
     MultiAccount,
     Send,
     Serve,
@@ -196,6 +203,7 @@ impl ChannelCapability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::RuntimeBacked => "runtime_backed",
+            Self::PluginBacked => "plugin_backed",
             Self::MultiAccount => "multi_account",
             Self::Send => "send",
             Self::Serve => "serve",
@@ -208,6 +216,7 @@ impl ChannelCapability {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelOnboardingStrategy {
     ManualConfig,
+    PluginBridge,
     Planned,
 }
 
@@ -215,6 +224,7 @@ impl ChannelOnboardingStrategy {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ManualConfig => "manual_config",
+            Self::PluginBridge => "plugin_bridge",
             Self::Planned => "planned",
         }
     }
@@ -256,6 +266,7 @@ pub struct ChannelOperationDescriptor {
 pub enum ChannelCatalogImplementationStatus {
     RuntimeBacked,
     ConfigBacked,
+    PluginBacked,
     Stub,
 }
 
@@ -264,6 +275,7 @@ impl ChannelCatalogImplementationStatus {
         match self {
             Self::RuntimeBacked => "runtime_backed",
             Self::ConfigBacked => "config_backed",
+            Self::PluginBacked => "plugin_backed",
             Self::Stub => "stub",
         }
     }
@@ -839,6 +851,14 @@ const MATRIX_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
 };
 
 const PLANNED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::MultiAccount,
+    ChannelCapability::Send,
+    ChannelCapability::Serve,
+    ChannelCapability::RuntimeTracking,
+];
+
+const PLUGIN_BACKED_CHANNEL_CAPABILITIES: &[ChannelCapability] = &[
+    ChannelCapability::PluginBacked,
     ChannelCapability::MultiAccount,
     ChannelCapability::Send,
     ChannelCapability::Serve,
@@ -3022,6 +3042,9 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     FEISHU_CHANNEL_REGISTRY_DESCRIPTOR,
     MATRIX_CHANNEL_REGISTRY_DESCRIPTOR,
     WECOM_CHANNEL_REGISTRY_DESCRIPTOR,
+    WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
+    QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
+    ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR,
     DISCORD_CHANNEL_REGISTRY_DESCRIPTOR,
     SLACK_CHANNEL_REGISTRY_DESCRIPTOR,
     LINE_CHANNEL_REGISTRY_DESCRIPTOR,
@@ -3519,6 +3542,28 @@ fn validate_http_url(
             None
         }
     }
+}
+
+fn validate_websocket_url(field: &str, value: &str, issues: &mut Vec<String>) {
+    let parsed_url = reqwest::Url::parse(value);
+    let url = match parsed_url {
+        Ok(url) => url,
+        Err(error) => {
+            let issue = format!("{field} is invalid: {error}");
+            issues.push(issue);
+            return;
+        }
+    };
+
+    let scheme = url.scheme();
+    let is_ws = scheme == "ws";
+    let is_wss = scheme == "wss";
+    if is_ws || is_wss {
+        return;
+    }
+
+    let issue = format!("{field} must use ws or wss, got {scheme}");
+    issues.push(issue);
 }
 
 #[cfg(test)]
@@ -6144,6 +6189,13 @@ fn build_wecom_snapshot_for_account(
         send_issues.push("secret is missing".to_owned());
     }
 
+    let websocket_url = resolved.resolved_websocket_url();
+    validate_websocket_url(
+        "wecom.websocket_url",
+        websocket_url.as_str(),
+        &mut send_issues,
+    );
+
     let mut serve_issues = send_issues.clone();
     let has_allowlist = resolved
         .allowed_conversation_ids
@@ -6151,18 +6203,6 @@ fn build_wecom_snapshot_for_account(
         .any(|value| !value.trim().is_empty());
     if !has_allowlist {
         serve_issues.push("allowed_conversation_ids is empty".to_owned());
-    }
-
-    let websocket_url = resolved.resolved_websocket_url();
-    let websocket_parse = reqwest::Url::parse(websocket_url.as_str());
-    if websocket_parse.is_err() {
-        let error = websocket_parse
-            .err()
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown url parse error".to_owned());
-        let issue = format!("websocket_url is invalid: {error}");
-        send_issues.push(issue.clone());
-        serve_issues.push(issue);
     }
 
     let send_operation = if !compiled {
@@ -7468,6 +7508,30 @@ mod tests {
     }
 
     #[test]
+    fn normalize_channel_catalog_id_maps_runtime_and_stub_aliases() {
+        assert_eq!(normalize_channel_catalog_id("lark"), Some("feishu"));
+        assert_eq!(normalize_channel_catalog_id(" TELEGRAM "), Some("telegram"));
+        assert_eq!(normalize_channel_catalog_id("discord-bot"), Some("discord"));
+        assert_eq!(normalize_channel_catalog_id("slack"), Some("slack"));
+        assert_eq!(normalize_channel_catalog_id("gchat"), Some("google-chat"));
+        assert_eq!(normalize_channel_catalog_id("wechat"), Some("weixin"));
+        assert_eq!(normalize_channel_catalog_id("wx"), Some("weixin"));
+        assert_eq!(normalize_channel_catalog_id("qq"), Some("qqbot"));
+        assert_eq!(normalize_channel_catalog_id("onebot-v11"), Some("onebot"));
+        assert_eq!(
+            normalize_channel_catalog_id("synochat"),
+            Some("synology-chat")
+        );
+        assert_eq!(
+            normalize_channel_catalog_id("bluebubbles"),
+            Some("imessage")
+        );
+        assert_eq!(normalize_channel_catalog_id("urbit"), Some("tlon"));
+        assert_eq!(normalize_channel_catalog_id("web-ui"), Some("webchat"));
+        assert_eq!(normalize_channel_catalog_id("unknown"), None);
+    }
+
+    #[test]
     fn runtime_backed_channel_registry_descriptors_only_include_runtime_backed_surfaces() {
         let runtime_backed = runtime_backed_channel_registry_descriptors();
 
@@ -7667,6 +7731,9 @@ mod tests {
         let telegram = resolve_channel_catalog_entry("telegram").expect("telegram entry");
         let lark = resolve_channel_catalog_entry("lark").expect("lark entry");
         let discord = resolve_channel_catalog_entry("discord").expect("discord entry");
+        let weixin = resolve_channel_catalog_entry("wechat").expect("weixin entry");
+        let qqbot = resolve_channel_catalog_entry("qq").expect("qqbot entry");
+        let onebot = resolve_channel_catalog_entry("onebot-v11").expect("onebot entry");
 
         assert_eq!(
             telegram.onboarding.strategy,
@@ -7699,6 +7766,19 @@ mod tests {
                 .setup_hint
                 .contains("outbound direct send is shipped")
         );
+
+        assert_eq!(weixin.onboarding.strategy.as_str(), "plugin_bridge");
+        assert_eq!(
+            weixin.onboarding.status_command,
+            "loongclaw channels --json"
+        );
+        assert!(weixin.onboarding.setup_hint.contains("ClawBot"));
+
+        assert_eq!(qqbot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert!(qqbot.onboarding.setup_hint.contains("QQ Bot"));
+
+        assert_eq!(onebot.onboarding.strategy.as_str(), "plugin_bridge");
+        assert!(onebot.onboarding.setup_hint.contains("OneBot"));
     }
 
     #[test]
@@ -8664,7 +8744,96 @@ mod tests {
         assert!(!catalog_only.iter().any(|entry| entry.id == "imessage"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "nostr"));
         assert!(!catalog_only.iter().any(|entry| entry.id == "tlon"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "weixin"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "qqbot"));
+        assert!(!catalog_only.iter().any(|entry| entry.id == "onebot"));
         assert_eq!(webchat.operations[1].command, "webchat-serve");
+    }
+
+    #[test]
+    fn channel_inventory_combines_runtime_and_catalog_surfaces() {
+        let config = LoongClawConfig::default();
+        let inventory = channel_inventory(&config);
+
+        assert_eq!(
+            inventory
+                .channels
+                .iter()
+                .map(|snapshot| snapshot.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "weixin",
+                "qqbot",
+                "onebot",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "twitch",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "synology-chat",
+                "irc",
+                "imessage",
+                "nostr",
+                "tlon",
+            ]
+        );
+        assert_eq!(
+            inventory
+                .catalog_only_channels
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec!["zalo", "zalo-personal", "webchat"]
+        );
+        assert_eq!(
+            inventory
+                .channel_catalog
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "weixin",
+                "qqbot",
+                "onebot",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "twitch",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "synology-chat",
+                "irc",
+                "imessage",
+                "nostr",
+                "tlon",
+                "zalo",
+                "zalo-personal",
+                "webchat",
+            ]
+        );
     }
 
     #[test]
@@ -8964,6 +9133,289 @@ mod tests {
     }
 
     #[test]
+    fn wecom_status_rejects_non_websocket_endpoint_schemes() {
+        let config: LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "wecom": {
+                "enabled": true,
+                "bot_id": "wx-bot-id",
+                "secret": "wx-secret",
+                "allowed_conversation_ids": ["conv-1"],
+                "websocket_url": "https://wecom.example.test/aibot"
+            }
+        }))
+        .expect("deserialize wecom config");
+
+        let snapshots = channel_status_snapshots(&config);
+        let wecom = snapshots
+            .iter()
+            .find(|snapshot| snapshot.id == "wecom")
+            .expect("wecom snapshot");
+        let send = wecom.operation("send").expect("wecom send operation");
+        let serve = wecom.operation("serve").expect("wecom serve operation");
+
+        assert_eq!(send.health, ChannelOperationHealth::Misconfigured);
+        assert_eq!(serve.health, ChannelOperationHealth::Misconfigured);
+        assert!(
+            send.issues
+                .iter()
+                .any(|issue| issue.contains("websocket_url must use ws or wss")),
+            "send issues should reject non-websocket schemes: {:?}",
+            send.issues
+        );
+        assert!(
+            serve
+                .issues
+                .iter()
+                .any(|issue| issue.contains("websocket_url must use ws or wss")),
+            "serve issues should reject non-websocket schemes: {:?}",
+            serve.issues
+        );
+    }
+
+    #[test]
+    fn channel_inventory_exposes_grouped_channel_surfaces() {
+        let mut env = crate::test_support::ScopedEnv::new();
+        env.remove("TELEGRAM_BOT_TOKEN");
+
+        let config = LoongClawConfig::default();
+        let inventory = channel_inventory(&config);
+
+        assert_eq!(
+            inventory
+                .channel_surfaces
+                .iter()
+                .map(|surface| surface.catalog.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "weixin",
+                "qqbot",
+                "onebot",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "twitch",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "synology-chat",
+                "irc",
+                "imessage",
+                "nostr",
+                "tlon",
+                "zalo",
+                "zalo-personal",
+                "webchat",
+            ]
+        );
+
+        let telegram = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "telegram")
+            .expect("telegram surface");
+        assert_eq!(telegram.configured_accounts.len(), 1);
+        assert_eq!(
+            telegram.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(telegram.configured_accounts[0].id, "telegram");
+
+        let discord = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "discord")
+            .expect("discord surface");
+        assert_eq!(
+            discord.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(discord.configured_accounts.len(), 1);
+        assert_eq!(
+            discord.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(discord.configured_accounts[0].id, "discord");
+
+        let weixin = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        assert_eq!(
+            weixin.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::PluginBacked
+        );
+        assert_eq!(weixin.configured_accounts.len(), 1);
+        assert_eq!(
+            weixin.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(weixin.configured_accounts[0].id, "weixin");
+        assert_eq!(
+            weixin.configured_accounts[0].configured_account_id,
+            "default"
+        );
+
+        let qqbot = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "qqbot")
+            .expect("qqbot surface");
+        assert_eq!(
+            qqbot.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::PluginBacked
+        );
+        assert_eq!(qqbot.configured_accounts.len(), 1);
+        assert_eq!(
+            qqbot.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(qqbot.configured_accounts[0].id, "qqbot");
+        assert_eq!(
+            qqbot.configured_accounts[0].configured_account_id,
+            "default"
+        );
+
+        let onebot = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "onebot")
+            .expect("onebot surface");
+        assert_eq!(
+            onebot.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::PluginBacked
+        );
+        assert_eq!(onebot.configured_accounts.len(), 1);
+        assert_eq!(
+            onebot.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(onebot.configured_accounts[0].id, "onebot");
+        assert_eq!(
+            onebot.configured_accounts[0].configured_account_id,
+            "default"
+        );
+
+        let line = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "line")
+            .expect("line surface");
+        assert_eq!(
+            line.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(line.configured_accounts.len(), 1);
+        assert_eq!(
+            line.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(line.configured_accounts[0].id, "line");
+
+        let wecom = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "wecom")
+            .expect("wecom surface");
+        assert_eq!(
+            wecom.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::RuntimeBacked
+        );
+        assert_eq!(wecom.configured_accounts.len(), 1);
+        assert_eq!(
+            wecom.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(wecom.configured_accounts[0].id, "wecom");
+
+        let mattermost = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "mattermost")
+            .expect("mattermost surface");
+        assert_eq!(
+            mattermost.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(mattermost.configured_accounts.len(), 1);
+        assert_eq!(
+            mattermost.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(mattermost.configured_accounts[0].id, "mattermost");
+
+        let teams = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "teams")
+            .expect("teams surface");
+        assert_eq!(
+            teams.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(teams.configured_accounts.len(), 1);
+        assert_eq!(
+            teams.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(teams.configured_accounts[0].id, "teams");
+
+        let synology_chat = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "synology-chat")
+            .expect("synology chat surface");
+        assert_eq!(
+            synology_chat.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(synology_chat.configured_accounts.len(), 1);
+        assert_eq!(
+            synology_chat.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(synology_chat.configured_accounts[0].id, "synology-chat");
+
+        let imessage = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "imessage")
+            .expect("imessage surface");
+        assert_eq!(
+            imessage.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::ConfigBacked
+        );
+        assert_eq!(imessage.configured_accounts.len(), 1);
+        assert_eq!(
+            imessage.default_configured_account_id.as_deref(),
+            Some("default")
+        );
+        assert_eq!(imessage.configured_accounts[0].id, "imessage");
+
+        let webchat = inventory
+            .channel_surfaces
+            .iter()
+            .find(|surface| surface.catalog.id == "webchat")
+            .expect("webchat surface");
+        assert_eq!(
+            webchat.catalog.implementation_status,
+            ChannelCatalogImplementationStatus::Stub
+        );
+        assert_eq!(webchat.catalog.aliases, vec!["browser-chat", "web-ui"]);
+        assert!(webchat.configured_accounts.is_empty());
+    }
+
+    #[test]
     fn catalog_only_channel_entries_skip_platforms_that_already_have_status_snapshots() {
         let catalog = vec![
             ChannelCatalogEntry {
@@ -9076,15 +9528,19 @@ mod tests {
     #[test]
     fn shipped_channel_registry_descriptors_define_snapshot_builders() {
         for descriptor in sorted_channel_registry_descriptors() {
-            let is_stub =
-                descriptor.implementation_status == ChannelCatalogImplementationStatus::Stub;
-            if is_stub {
+            let requires_snapshot_builder = matches!(
+                descriptor.implementation_status,
+                ChannelCatalogImplementationStatus::RuntimeBacked
+                    | ChannelCatalogImplementationStatus::ConfigBacked
+                    | ChannelCatalogImplementationStatus::PluginBacked
+            );
+            if !requires_snapshot_builder {
                 continue;
             }
 
             assert!(
                 descriptor.snapshot_builder.is_some(),
-                "non-stub channel `{}` must define a snapshot builder",
+                "built-in shipped channel `{}` must define a snapshot builder",
                 descriptor.id
             );
         }

@@ -14,16 +14,21 @@ needs.
       DingTalk, WhatsApp, Email, generic Webhook, Google Chat, Signal, Twitch,
       Tlon,
       Microsoft Teams, Mattermost, Nextcloud Talk, Synology Chat, IRC,
-      iMessage / BlueBubbles, and Nostr.
+      iMessage / BlueBubbles, and Nostr, plus plugin-backed bridge surfaces
+      for Weixin, QQBot, and OneBot.
 - [ ] Product docs clearly distinguish runtime-backed shipped surfaces,
-      config-backed outbound shipped surfaces, and catalog-only planned
-      surfaces such as Zalo, Zalo Personal, and WebChat.
+      config-backed outbound shipped surfaces, plugin-backed bridge surfaces,
+      and catalog-only planned surfaces such as Zalo, Zalo Personal, and
+      WebChat.
 - [ ] Channel setup guidance describes required credentials, config toggles, and
       the command used to run each shipped channel today.
 - [ ] Product docs describe `gateway run/status/stop` as the current explicit
       gateway owner contract and `multi-channel-serve` as the attached
       compatibility wrapper for shipped runtime-backed surfaces rather than the
       long-term product noun.
+- [ ] Channel setup guidance publishes stable target contracts for
+      plugin-backed bridge surfaces such as `weixin`, `qqbot`, and `onebot`
+      without claiming that LoongClaw already owns their native runtime.
 - [ ] WeCom setup guidance documents the official AIBot long-connection flow and
       never presents webhook callback mode as a supported LoongClaw integration path.
 - [ ] Channel setup never implies a channel is ready until its required
@@ -38,12 +43,14 @@ needs.
 
 - Shipping additional runtime-backed channels beyond CLI, Telegram, Feishu /
   Lark, Matrix, and WeCom
+- Promoting plugin-backed bridge surfaces such as Weixin, QQBot, or OneBot to
+  native runtime-backed support in this slice
 - Promoting the remaining catalog-only planned surfaces such as Zalo,
   Zalo Personal, or WebChat to shipped support in this slice
 - Broad cross-channel inbox or routing UX
 - Full remote pairing flows for unshipped surfaces
 
-## Shipped Channel Matrix
+## Channel Surface Matrix
 
 | Surface | Status | Transport | Required config | Operator commands |
 | --- | --- | --- | --- | --- |
@@ -71,32 +78,44 @@ needs.
 | iMessage / BlueBubbles | Config-backed outbound | BlueBubbles bridge REST API | `imessage.enabled`, `imessage.bridge_url`, `imessage.bridge_token` | `loong imessage-send` |
 | Nostr | Config-backed outbound | relay publish over WebSocket | `nostr.enabled`, `nostr.relay_urls`, `nostr.private_key`; `allowed_pubkeys` stays reserved for the planned inbound path | `loong nostr-send` |
 
+### Plugin-Backed Bridge Surfaces
+
+| Surface | Status | Bridge family | Sanctioned setup keys | Stable targets | Native command state |
+| --- | --- | --- | --- | --- | --- |
+| Weixin | Plugin-backed bridge | ClawBot or iLink-compatible WeChat bridge | `weixin.enabled`, `weixin.bridge_url`, `weixin.bridge_access_token`; optional `weixin.allowed_contact_ids` | `weixin:<account>:contact:<id>`, `weixin:<account>:room:<id>` | `weixin-send`, `weixin-serve` are catalog stubs until a native adapter exists |
+| QQBot | Plugin-backed bridge | official QQ Bot gateway or compatible plugin bridge | `qqbot.enabled`, `qqbot.app_id`, `qqbot.client_secret`; optional `qqbot.allowed_peer_ids` | `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, `qqbot:<account>:channel:<id>` | `qqbot-send`, `qqbot-serve` are catalog stubs until a native adapter exists |
+| OneBot | Plugin-backed bridge | OneBot v11 bridge such as NapCat or LLOneBot | `onebot.enabled`, `onebot.websocket_url`, `onebot.access_token`; optional `onebot.allowed_group_ids` | `onebot:<account>:private:<user_id>`, `onebot:<account>:group:<group_id>` | `onebot-send`, `onebot-serve` are catalog stubs until a native adapter exists |
+
 ## Expansion Model
 
-LoongClaw keeps channel expansion in four explicit layers so planned surfaces
-do not overclaim runtime support:
+LoongClaw keeps channel expansion in four explicit implementation tiers inside
+one channel catalog so surfaces do not overclaim runtime support:
 
-- the channel catalog is the superset and can model planned surfaces before a
-  runtime adapter exists
-- config-backed outbound surfaces are a shipped subset that own credentials,
-  status, and direct sends without pretending they also own a long-running
-  serve runtime
-- runtime-backed service channels are a strict shipped subset of the catalog
-- `gateway run` is the current explicit runtime-owner contract and can run
-  headless or with an attached CLI session
-- `gateway status` and `gateway stop` provide the first cross-process owner
-  inspection and cooperative shutdown surfaces
-- `multi-channel-serve` is the attached compatibility wrapper and only
-  supervises enabled runtime-backed channels while using repeatable
-  `--channel-account <channel=account>` selectors instead of channel-specific
-  flags
-- the longer-term direction is an explicit gateway service that will own
-  runtime-backed channels, route mounts, auth, detached lifecycle, and operator
-  APIs without changing the registry-first channel inventory model
+- runtime-backed service channels own credentials, direct sends, status
+  snapshots, and a long-running reply-loop runtime
+- config-backed outbound surfaces own credentials, status, and direct sends
+  without pretending they also own a long-running serve runtime
+- plugin-backed bridge surfaces own sanctioned ids, onboarding hints,
+  requirement keys, and target contracts while delegating active transport and
+  login ownership to an external bridge
+- stub surfaces remain metadata-only future entries with no sanctioned bridge
+  contract yet
+
+The channel catalog is the superset that can model all four tiers before every
+adapter is shipped. `multi-channel-serve` only supervises enabled
+runtime-backed channels and uses repeatable `--channel-account <channel=account>`
+selectors instead of channel-specific flags.
+
+`gateway run` is the current explicit runtime-owner contract and can run
+headless or with an attached CLI session. `gateway status` and `gateway stop`
+provide the first cross-process owner inspection and cooperative shutdown
+surfaces. The longer-term direction is an explicit gateway service that will
+own runtime-backed channels, route mounts, auth, detached lifecycle, and
+operator APIs without changing the registry-first channel inventory model.
 
 This lets the product align channel naming and onboarding with broader channel
-ecosystems such as OpenClaw without pretending a stub catalog entry or a
-send-only surface is already a shipped runtime surface.
+ecosystems without pretending a plugin bridge or stub catalog entry is already
+a shipped native runtime surface.
 
 ## Setup Rules
 
@@ -176,6 +195,58 @@ surfaces:
 - operators who intentionally send through a private bridge, loopback service,
   or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
   at the top level of `loongclaw.toml`
+
+### Plugin-Backed Bridge Surfaces
+
+`weixin`, `qqbot`, and `onebot` are first-class channel catalog entries with
+`implementation_status = "plugin_backed"` and
+`onboarding.strategy = "plugin_bridge"`:
+
+- they publish stable requirement metadata and target families through
+  `loongclaw channels --json`
+- they also expose config-derived account snapshots and bridge endpoint
+  summaries through `loongclaw channels --json` when the bridge surface is
+  configured
+- their reserved native `*-send` and `*-serve` command ids remain non-runnable
+  catalog stubs until LoongClaw ships the adapter itself
+- they do not join `multi-channel-serve` because the active reply loop still
+  belongs to the external bridge
+
+### Weixin
+
+`weixin` is a bridge-first surface that currently assumes a ClawBot or
+iLink-compatible bridge:
+
+- configure `weixin.bridge_url` and `weixin.bridge_access_token`
+- optionally allowlist trusted contacts through `weixin.allowed_contact_ids`
+- let the bridge own QR login, upstream session lifecycle, and personal WeChat
+  transport details
+- keep target routing stable with `weixin:<account>:contact:<id>` for direct
+  contacts and `weixin:<account>:room:<id>` for group rooms
+
+### QQBot
+
+`qqbot` is a bridge-first surface for the official QQ Bot gateway or compatible
+plugin transports:
+
+- configure `qqbot.app_id` and `qqbot.client_secret`
+- optionally allowlist trusted peers through `qqbot.allowed_peer_ids`
+- treat account scope as part of the target contract because QQ openids are
+  bot-account specific
+- keep target routing stable with `qqbot:<account>:c2c:<openid>`,
+  `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
+
+### OneBot
+
+`onebot` is the protocol bridge surface for QQ and personal-account ecosystems
+that standardize on OneBot v11-compatible transports:
+
+- configure `onebot.websocket_url` and `onebot.access_token`
+- optionally allowlist trusted groups through `onebot.allowed_group_ids`
+- keep the active WebSocket and event-loop ownership in the bridge runtime,
+  not in LoongClaw
+- keep target routing stable with `onebot:<account>:private:<user_id>` and
+  `onebot:<account>:group:<group_id>`
 
 ### Webhook
 
@@ -393,14 +464,17 @@ the attached compatibility wrapper rather than the long-term product noun:
   specific accounts such as `telegram=bot_123456`, `lark=alerts`, `matrix=bridge-sync`,
   or `wecom=robot-prod`
 - it never promotes config-backed outbound surfaces such as WhatsApp, Signal,
-  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat, Tlon,
-  Mattermost, Nextcloud Talk, Synology Chat, IRC, or iMessage / BlueBubbles
-  into runtime supervision until those adapters grow real serve ownership
-- it never promotes catalog-only planned surfaces such as Twitch, Zalo, Zalo
-  Personal, or WebChat into runtime supervision until those adapters are
-  implemented
+  Email, generic Webhook, Microsoft Teams, DingTalk, Google Chat, Twitch,
+  Tlon, Mattermost, Nextcloud Talk, Synology Chat, IRC,
+  iMessage / BlueBubbles, or Nostr into runtime supervision until those
+  adapters grow real serve ownership
+- it never promotes plugin-backed bridge surfaces such as Weixin, QQBot, or
+  OneBot into runtime supervision because their active event loop still belongs
+  to the external bridge or gateway
+- it never promotes catalog-only planned surfaces such as Zalo, Zalo Personal,
+  or WebChat into runtime
+  supervision until those adapters are implemented
 - the gateway service should continue to absorb this runtime ownership model,
-  then
-  add detached service lifecycle, route mounting, status/log surfaces, pairing,
-  and richer gateway-native channel runtimes on top of the same registry-driven
-  inventory contract
+  then add detached service lifecycle, route mounting, status/log surfaces,
+  pairing, and richer gateway-native channel runtimes on top of the same
+  registry-driven inventory contract
