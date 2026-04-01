@@ -162,6 +162,100 @@ fn resolve_channel_catalog_entry_exposes_plugin_bridge_contracts() {
 }
 
 #[test]
+fn resolve_channel_catalog_entry_exposes_plugin_bridge_stable_targets() {
+    let weixin = resolve_channel_catalog_entry("wechat").expect("weixin entry");
+    let qqbot = resolve_channel_catalog_entry("qq").expect("qqbot entry");
+    let onebot = resolve_channel_catalog_entry("onebot-v11").expect("onebot entry");
+
+    let weixin_contract = weixin
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("weixin plugin bridge contract");
+    let qqbot_contract = qqbot
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("qqbot plugin bridge contract");
+    let onebot_contract = onebot
+        .plugin_bridge_contract
+        .as_ref()
+        .expect("onebot plugin bridge contract");
+
+    assert_eq!(
+        weixin_contract
+            .stable_targets
+            .iter()
+            .map(|target| { (target.template, target.target_kind, target.description,) })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "weixin:<account>:contact:<id>",
+                ChannelCatalogTargetKind::Conversation,
+                "direct contact conversation",
+            ),
+            (
+                "weixin:<account>:room:<id>",
+                ChannelCatalogTargetKind::Conversation,
+                "group room conversation",
+            ),
+        ]
+    );
+    assert_eq!(weixin_contract.account_scope_note, None);
+
+    assert_eq!(
+        qqbot_contract
+            .stable_targets
+            .iter()
+            .map(|target| { (target.template, target.target_kind, target.description,) })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "qqbot:<account>:c2c:<openid>",
+                ChannelCatalogTargetKind::Conversation,
+                "direct message openid",
+            ),
+            (
+                "qqbot:<account>:group:<openid>",
+                ChannelCatalogTargetKind::Conversation,
+                "group openid",
+            ),
+            (
+                "qqbot:<account>:channel:<id>",
+                ChannelCatalogTargetKind::Conversation,
+                "guild channel id",
+            ),
+        ]
+    );
+    assert_eq!(
+        qqbot_contract.account_scope_note,
+        Some("openids are scoped to the selected qq bot account")
+    );
+
+    assert_eq!(
+        onebot_contract
+            .stable_targets
+            .iter()
+            .map(|target| { (target.template, target.target_kind, target.description,) })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "onebot:<account>:private:<user_id>",
+                ChannelCatalogTargetKind::Conversation,
+                "private conversation user id",
+            ),
+            (
+                "onebot:<account>:group:<group_id>",
+                ChannelCatalogTargetKind::Conversation,
+                "group conversation id",
+            ),
+        ]
+    );
+    assert_eq!(
+        onebot_contract.account_scope_note,
+        Some("keep <account> stable so personal-account bridge routes stay unambiguous")
+    );
+}
+
+#[test]
 fn validate_plugin_channel_bridge_manifest_reports_contract_mismatches() {
     let compatible_manifest = sample_channel_bridge_manifest(Some("weixin"), Some("channel"));
     let compatible_validation = validate_plugin_channel_bridge_manifest(&compatible_manifest)

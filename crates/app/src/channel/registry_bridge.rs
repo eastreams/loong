@@ -12,9 +12,10 @@ use super::{
     ChannelCatalogOperation, ChannelCatalogOperationAvailability,
     ChannelCatalogOperationRequirement, ChannelCatalogTargetKind, ChannelDoctorCheckSpec,
     ChannelDoctorCheckTrigger, ChannelOnboardingDescriptor, ChannelOnboardingStrategy,
-    ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor, ChannelStatusSnapshot,
-    PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation, misconfigured_operation,
-    redact_endpoint_status_url, unsupported_operation, validate_http_url, validate_websocket_url,
+    ChannelPluginBridgeStableTarget, ChannelRegistryDescriptor, ChannelRegistryOperationDescriptor,
+    ChannelStatusSnapshot, PLUGIN_BACKED_CHANNEL_CAPABILITIES, disabled_operation,
+    misconfigured_operation, redact_endpoint_status_url, unsupported_operation, validate_http_url,
+    validate_websocket_url,
 };
 
 const WEIXIN_ENABLED_REQUIREMENT: ChannelCatalogOperationRequirement =
@@ -344,6 +345,58 @@ const ONEBOT_ONBOARDING_DESCRIPTOR: ChannelOnboardingDescriptor = ChannelOnboard
     repair_command: None,
 };
 
+const EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[];
+
+const WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
+    ChannelPluginBridgeStableTarget {
+        template: "weixin:<account>:contact:<id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "direct contact conversation",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "weixin:<account>:room:<id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "group room conversation",
+    },
+];
+
+const QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
+    ChannelPluginBridgeStableTarget {
+        template: "qqbot:<account>:c2c:<openid>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "direct message openid",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "qqbot:<account>:group:<openid>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "group openid",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "qqbot:<account>:channel:<id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "guild channel id",
+    },
+];
+
+const ONEBOT_PLUGIN_BRIDGE_STABLE_TARGETS: &[ChannelPluginBridgeStableTarget] = &[
+    ChannelPluginBridgeStableTarget {
+        template: "onebot:<account>:private:<user_id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "private conversation user id",
+    },
+    ChannelPluginBridgeStableTarget {
+        template: "onebot:<account>:group:<group_id>",
+        target_kind: ChannelCatalogTargetKind::Conversation,
+        description: "group conversation id",
+    },
+];
+
+const QQBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
+    "openids are scoped to the selected qq bot account";
+
+const ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE: &str =
+    "keep <account> stable so personal-account bridge routes stay unambiguous";
+
 pub(super) const WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
     ChannelRegistryDescriptor {
         id: "weixin",
@@ -394,6 +447,27 @@ pub(super) const ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR: ChannelRegistryDescriptor =
         onboarding: ONEBOT_ONBOARDING_DESCRIPTOR,
         operations: ONEBOT_OPERATIONS,
     };
+
+pub(super) fn plugin_bridge_stable_targets_for_channel_id(
+    channel_id: &str,
+) -> &'static [ChannelPluginBridgeStableTarget] {
+    match channel_id {
+        "weixin" => WEIXIN_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "qqbot" => QQBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
+        "onebot" => ONEBOT_PLUGIN_BRIDGE_STABLE_TARGETS,
+        _ => EMPTY_PLUGIN_BRIDGE_STABLE_TARGETS,
+    }
+}
+
+pub(super) fn plugin_bridge_account_scope_note_for_channel_id(
+    channel_id: &str,
+) -> Option<&'static str> {
+    match channel_id {
+        "qqbot" => Some(QQBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE),
+        "onebot" => Some(ONEBOT_PLUGIN_BRIDGE_ACCOUNT_SCOPE_NOTE),
+        _ => None,
+    }
+}
 
 fn build_weixin_snapshots(
     descriptor: &ChannelRegistryDescriptor,

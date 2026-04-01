@@ -1269,6 +1269,31 @@ fn render_channel_surfaces_text_reports_managed_plugin_bridge_discovery() {
 }
 
 #[test]
+fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains(
+            "stable_targets=weixin:<account>:contact:<id>[conversation]:direct contact conversation,weixin:<account>:room:<id>[conversation]:group room conversation"
+        ),
+        "rendered channel surfaces should expose weixin stable target templates: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "stable_targets=qqbot:<account>:c2c:<openid>[conversation]:direct message openid,qqbot:<account>:group:<openid>[conversation]:group openid,qqbot:<account>:channel:<id>[conversation]:guild channel id"
+        ),
+        "rendered channel surfaces should expose qqbot stable target templates: {rendered}"
+    );
+    assert!(
+        rendered
+            .contains("account_scope_note=\"openids are scoped to the selected qq bot account\""),
+        "rendered channel surfaces should expose qqbot account scope guidance: {rendered}"
+    );
+}
+
+#[test]
 fn render_channel_surfaces_text_reports_managed_plugin_bridge_ambiguity_and_setup_guidance() {
     let config = mvp::config::LoongClawConfig::default();
     let mut inventory = mvp::channel::channel_inventory(&config);
@@ -1613,6 +1638,83 @@ fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
                                 .collect::<Vec<_>>()
                         })
                         == Some(vec!["send", "serve"])
+            })
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("stable_targets"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|targets| {
+                            targets
+                                .iter()
+                                .map(|target| {
+                                    let template =
+                                        target.get("template").and_then(serde_json::Value::as_str);
+                                    let target_kind = target
+                                        .get("target_kind")
+                                        .and_then(serde_json::Value::as_str);
+                                    let description = target
+                                        .get("description")
+                                        .and_then(serde_json::Value::as_str);
+                                    (template, target_kind, description)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec![
+                            (
+                                Some("weixin:<account>:contact:<id>"),
+                                Some("conversation"),
+                                Some("direct contact conversation"),
+                            ),
+                            (
+                                Some("weixin:<account>:room:<id>"),
+                                Some("conversation"),
+                                Some("group room conversation"),
+                            ),
+                        ])
+            })
+    );
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("qqbot")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("account_scope_note"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("openids are scoped to the selected qq bot account")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("stable_targets"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|targets| targets.len())
+                        == Some(3)
             })
     );
 }
