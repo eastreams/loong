@@ -200,7 +200,13 @@ mod tests {
         }
 
         fn pop_scope(&mut self) {
-            let _ = self.alias_scopes.pop();
+            let can_pop = self.alias_scopes.len() > 1;
+
+            debug_assert!(can_pop, "daemon source guard should retain the root scope");
+
+            if can_pop {
+                let _ = self.alias_scopes.pop();
+            }
         }
 
         fn mark_forbidden_reference(&mut self) {
