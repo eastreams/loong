@@ -3420,6 +3420,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_doctor_next_steps_guides_browser_companion_version_alignment() {
+        let checks = vec![DoctorCheck {
+            name: "browser companion install".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "command `browser-companion` responded, but expected_version=1.5.0 observed_version=loongclaw-browser-companion 1.4.0".to_owned(),
+        }];
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            Path::new("/tmp/loongclaw.toml"),
+            &mvp::config::LoongClawConfig::default(),
+            false,
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Align `tools.browser_companion.expected_version` with the installed companion build before retrying."
+            }),
+            "doctor should guide expected_version alignment when the companion install check reports a mismatch: {next_steps:#?}"
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_doctor_checks_warn_when_command_is_missing() {

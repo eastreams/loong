@@ -9,8 +9,8 @@ pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
-const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
-const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 2;
+const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 3;
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -406,13 +406,47 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_tolerates_slow_version_mismatches() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("slow-version-mismatch");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\nsleep 4\necho 'loongclaw-browser-companion 11.5.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        assert!(
+            matches!(
+                diagnostics.install_status,
+                BrowserCompanionInstallStatus::VersionMismatch {
+                    ref expected_version,
+                    ref observed_version,
+                    ..
+                } if expected_version == "1.5.0"
+                    && observed_version == "loongclaw-browser-companion 11.5.0"
+            ),
+            "slow version probes should still surface mismatches before timing out: {diagnostics:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
     async fn collect_browser_companion_diagnostics_retries_transient_probe_timeouts() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let temp_dir = browser_companion_temp_dir("transient-timeout");
         let script_path = temp_dir.join("browser-companion");
         let state_path = temp_dir.join("probe-state");
         let script_body = format!(
-            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  sleep 4\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
             state_path.display()
         );
         write_browser_companion_script(&script_path, script_body.as_str());
@@ -437,6 +471,39 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_recovers_after_two_transient_timeouts() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("double-transient-timeout");
+        let script_path = temp_dir.join("browser-companion");
+        let state_path = temp_dir.join("probe-state");
+        let script_body = format!(
+            "#!/bin/sh\nstate_path='{}'\nattempt=0\nif [ -f \"$state_path\" ]; then\n  attempt=$(cat \"$state_path\")\nfi\nnext_attempt=$((attempt + 1))\nprintf '%s' \"$next_attempt\" > \"$state_path\"\nif [ \"$next_attempt\" -le 2 ]; then\n  sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            state_path.display()
+        );
+        write_browser_companion_script(&script_path, script_body.as_str());
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        assert_eq!(
+            diagnostics.install_status,
+            BrowserCompanionInstallStatus::Ready,
+            "two transient probe timeouts should still recover before surfacing an install warning: {diagnostics:#?}"
+        );
+        assert_eq!(
+            diagnostics.observed_version.as_deref(),
+            Some("loongclaw-browser-companion 1.5.0")
+        );
+    }
+
     #[test]
     fn observed_version_matches_expected_accepts_exact_tokens() {
         assert!(observed_version_matches_expected(
@@ -449,6 +516,14 @@ mod tests {
     fn observed_version_matches_expected_rejects_suffix_variants() {
         assert!(!observed_version_matches_expected(
             "loongclaw-browser-companion 1.5.0-beta",
+            "1.5.0"
+        ));
+    }
+
+    #[test]
+    fn observed_version_matches_expected_rejects_partial_numeric_matches() {
+        assert!(!observed_version_matches_expected(
+            "loongclaw-browser-companion 11.5.0",
             "1.5.0"
         ));
     }
