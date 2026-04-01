@@ -30,6 +30,54 @@ use crate::channel::{
 use crate::config::{FeishuIntegrationConfig, ResolvedFeishuChannelConfig};
 
 const FEISHU_CARD_MESSAGE_CONTENT_LIMIT_BYTES: usize = 30 * 1024;
+pub(super) const FEISHU_ACK_REACTIONS: &[&str] =
+    &["THUMBSUP", "OK", "APPLAUSE", "MUSCLE", "DONE", "SMILE"];
+
+fn pick_uniform_index(len: usize) -> usize {
+    debug_assert!(len > 0);
+    let upper = len as u64;
+    let reject_threshold = (u64::MAX / upper) * upper;
+
+    loop {
+        let value = rand::random::<u64>();
+        if value < reject_threshold {
+            #[allow(clippy::cast_possible_truncation)]
+            return (value % upper) as usize;
+        }
+    }
+}
+
+pub(super) fn random_feishu_ack_reaction() -> &'static str {
+    let index = pick_uniform_index(FEISHU_ACK_REACTIONS.len());
+    FEISHU_ACK_REACTIONS.get(index).unwrap_or(&"THUMBSUP")
+}
+
+pub(super) async fn add_message_reaction(
+    client: &FeishuClient,
+    tenant_access_token: &str,
+    message_id: &str,
+    emoji_type: &str,
+) -> CliResult<()> {
+    let message_id = message_id.trim();
+    if message_id.is_empty() {
+        return Err("feishu reaction requires non-empty message_id".to_owned());
+    }
+    let emoji_type = emoji_type.trim();
+    if emoji_type.is_empty() {
+        return Err("feishu reaction requires non-empty emoji_type".to_owned());
+    }
+
+    let path = format!("/open-apis/im/v1/messages/{message_id}/reactions");
+    let body = serde_json::json!({
+        "reaction_type": {
+            "emoji_type": emoji_type,
+        }
+    });
+    let _ = client
+        .post_json(path.as_str(), Some(tenant_access_token), &[], &body)
+        .await?;
+    Ok(())
+}
 
 pub(super) struct FeishuAdapter {
     client: FeishuClient,
@@ -933,6 +981,77 @@ mod tests {
             .feishu
             .resolve_account(None)
             .expect("resolve feishu test account")
+    }
+
+    #[test]
+    fn feishu_ack_reaction_picker_only_returns_valid_candidates() {
+        for _ in 0..128 {
+            let emoji = random_feishu_ack_reaction();
+            assert!(
+                FEISHU_ACK_REACTIONS.contains(&emoji),
+                "unexpected Feishu ack reaction: {emoji}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn feishu_ack_reaction_helper_posts_expected_request_shape() {
+        let requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
+        let state = MockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new().route(
+            "/open-apis/im/v1/messages/om_inbound_ack_1/reactions",
+            post({
+                let state = state.clone();
+                move |request| {
+                    let state = state.clone();
+                    async move {
+                        record_request(State(state), request).await;
+                        Json(json!({
+                            "code": 0,
+                            "data": {
+                                "reaction_id": "reaction_ack_1"
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let client = FeishuClient::new(
+            base_url,
+            "cli_a1b2c3".to_owned(),
+            "secret-123".to_owned(),
+            30,
+        )
+        .expect("build feishu client");
+
+        add_message_reaction(&client, "t-token-ack", "om_inbound_ack_1", "THUMBSUP")
+            .await
+            .expect("add ack reaction");
+
+        let recorded = requests.lock().await.clone();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(
+            recorded[0].path,
+            "/open-apis/im/v1/messages/om_inbound_ack_1/reactions"
+        );
+        assert_eq!(
+            recorded[0].authorization.as_deref(),
+            Some("Bearer t-token-ack")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recorded[0].body)
+                .expect("parse reaction body"),
+            json!({
+                "reaction_type": {
+                    "emoji_type": "THUMBSUP"
+                }
+            })
+        );
+
+        server.abort();
     }
 
     #[tokio::test]

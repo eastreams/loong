@@ -390,6 +390,8 @@ pub struct FeishuAccountConfig {
     #[serde(default)]
     pub allowed_chat_ids: Option<Vec<String>>,
     #[serde(default)]
+    pub ack_reactions: Option<bool>,
+    #[serde(default)]
     pub ignore_bot_messages: Option<bool>,
     #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
@@ -433,6 +435,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub encrypt_key: Option<SecretRef>,
     pub encrypt_key_env: Option<String>,
     pub allowed_chat_ids: Vec<String>,
+    pub ack_reactions: bool,
     pub ignore_bot_messages: bool,
     pub acp: ChannelAcpConfig,
 }
@@ -621,6 +624,8 @@ pub struct FeishuChannelConfig {
     pub encrypt_key_env: Option<String>,
     #[serde(default)]
     pub allowed_chat_ids: Vec<String>,
+    #[serde(default = "default_true")]
+    pub ack_reactions: bool,
     #[serde(default = "default_true")]
     pub ignore_bot_messages: bool,
     #[serde(default)]
@@ -2200,6 +2205,7 @@ impl Default for FeishuChannelConfig {
             encrypt_key: None,
             encrypt_key_env: Some(FEISHU_ENCRYPT_KEY_ENV.to_owned()),
             allowed_chat_ids: Vec::new(),
+            ack_reactions: true,
             ignore_bot_messages: true,
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
@@ -2767,6 +2773,9 @@ impl FeishuChannelConfig {
             allowed_chat_ids: account_override
                 .and_then(|account| account.allowed_chat_ids.clone())
                 .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            ack_reactions: account_override
+                .and_then(|account| account.ack_reactions)
+                .unwrap_or(self.ack_reactions),
             ignore_bot_messages: account_override
                 .and_then(|account| account.ignore_bot_messages)
                 .unwrap_or(self.ignore_bot_messages),
@@ -2798,6 +2807,7 @@ impl FeishuChannelConfig {
             encrypt_key: merged.encrypt_key,
             encrypt_key_env: merged.encrypt_key_env,
             allowed_chat_ids: merged.allowed_chat_ids,
+            ack_reactions: merged.ack_reactions,
             ignore_bot_messages: merged.ignore_bot_messages,
             acp: merged.acp,
         })
@@ -8293,6 +8303,7 @@ mod tests {
         assert_eq!(resolved.receive_id_type, "chat_id");
         assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
         assert_eq!(resolved.resolved_base_url(), "https://open.larksuite.com");
+        assert!(resolved.ack_reactions);
 
         let disabled = config
             .resolve_account(Some("Feishu Backup"))
@@ -8308,6 +8319,40 @@ mod tests {
             disabled.acp.resolved_working_directory(),
             Some(std::path::PathBuf::from("/workspace/base"))
         );
+    }
+
+    #[test]
+    fn feishu_ack_reactions_default_to_true_and_allow_account_override() {
+        let base_config: FeishuChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "app_id": "cli_base",
+            "app_secret": "base-secret"
+        }))
+        .expect("deserialize base feishu config");
+
+        let default_resolved = base_config
+            .resolve_account(None)
+            .expect("resolve default feishu account");
+        assert!(default_resolved.ack_reactions);
+
+        let override_config: FeishuChannelConfig = serde_json::from_value(json!({
+            "enabled": true,
+            "app_id": "cli_base",
+            "app_secret": "base-secret",
+            "accounts": {
+                "Quiet Bot": {
+                    "ack_reactions": false,
+                    "app_id": "cli_quiet",
+                    "app_secret": "quiet-secret"
+                }
+            }
+        }))
+        .expect("deserialize override feishu config");
+
+        let quiet_resolved = override_config
+            .resolve_account(Some("Quiet Bot"))
+            .expect("resolve quiet feishu account");
+        assert!(!quiet_resolved.ack_reactions);
     }
 
     #[test]

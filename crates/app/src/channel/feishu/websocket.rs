@@ -514,6 +514,20 @@ mod tests {
         });
     }
 
+    async fn wait_for_request_count(
+        requests: &Arc<Mutex<Vec<MockRequest>>>,
+        expected_len: usize,
+    ) -> Vec<MockRequest> {
+        for _ in 0..50 {
+            let snapshot = requests.lock().await.clone();
+            if snapshot.len() >= expected_len {
+                return snapshot;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        requests.lock().await.clone()
+    }
+
     async fn spawn_mock_provider_server(
         requests: Arc<Mutex<Vec<MockRequest>>>,
     ) -> (String, tokio::task::JoinHandle<()>) {
@@ -575,6 +589,24 @@ mod tests {
                                 "data": {
                                     "message_id": reply_message_id,
                                     "root_id": message_id
+                                }
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/im/v1/messages/{message_id}/reactions",
+                post({
+                    let state = state.clone();
+                    move |request| {
+                        let state = state.clone();
+                        async move {
+                            record_request(State(state), request).await;
+                            Json(json!({
+                                "code": 0,
+                                "data": {
+                                    "reaction_id": "reaction_websocket_1"
                                 }
                             }))
                         }
@@ -1042,30 +1074,34 @@ mod tests {
             "provider request should include the websocket inbound message"
         );
 
-        let feishu_requests = feishu_requests.lock().await.clone();
-        assert_eq!(feishu_requests.len(), 2);
+        let feishu_requests = wait_for_request_count(&feishu_requests, 3).await;
+        assert_eq!(feishu_requests.len(), 4);
+        let reaction_request = feishu_requests
+            .iter()
+            .find(|request| request.path == "/open-apis/im/v1/messages/om_inbound_ws_1/reactions")
+            .expect("websocket flow should add ack reaction");
         assert_eq!(
-            feishu_requests[1].path,
-            "/open-apis/im/v1/messages/om_inbound_ws_1/reply"
-        );
-        assert_eq!(
-            feishu_requests[1].authorization.as_deref(),
+            reaction_request.authorization.as_deref(),
             Some("Bearer t-token-websocket")
         );
         assert!(
-            feishu_requests[1]
-                .body
-                .contains("\"msg_type\":\"interactive\""),
+            reaction_request.body.contains("\"emoji_type\""),
+            "reaction request should include a Feishu emoji type"
+        );
+        let reply_request = feishu_requests
+            .iter()
+            .find(|request| request.path == "/open-apis/im/v1/messages/om_inbound_ws_1/reply")
+            .expect("websocket flow should still send a reply");
+        assert!(
+            reply_request.body.contains("\"msg_type\":\"interactive\""),
             "websocket flow should send markdown-capable interactive cards"
         );
         assert!(
-            feishu_requests[1]
-                .body
-                .contains("\\\"tag\\\":\\\"markdown\\\""),
+            reply_request.body.contains("\\\"tag\\\":\\\"markdown\\\""),
             "websocket flow should wrap the provider reply in a markdown card"
         );
         assert!(
-            feishu_requests[1]
+            reply_request
                 .body
                 .contains("\\\"content\\\":\\\"## structured inbound ack\\\\n\\\\n- rendered\\\""),
             "websocket flow should preserve provider markdown content"
