@@ -1666,6 +1666,7 @@ mod tests {
     use super::*;
     use crate::test_support::{ScopedEnv, unique_temp_dir};
     use std::path::{Path, PathBuf};
+    use std::sync::{MutexGuard, OnceLock};
 
     fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig {
         runtime_config::ToolRuntimeConfig {
@@ -1694,13 +1695,25 @@ mod tests {
 
     struct ScopedCurrentDir {
         original: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    fn current_dir_test_lock() -> &'static std::sync::Mutex<()> {
+        static CURRENT_DIR_TEST_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        CURRENT_DIR_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 
     impl ScopedCurrentDir {
         fn new(path: &Path) -> Self {
+            let lock = current_dir_test_lock()
+                .lock()
+                .expect("lock current dir test");
             let original = std::env::current_dir().expect("read current dir");
             std::env::set_current_dir(path).expect("set current dir");
-            Self { original }
+            Self {
+                original,
+                _lock: lock,
+            }
         }
     }
 

@@ -233,7 +233,7 @@ Keep the workspace root free of local `.loongclaw/rules` fixtures so the test fa
 
 Run:
 
-- `cargo test -p loongclaw-app bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app tools::tests::bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path --lib -- --exact --nocapture`
 
 Expected:
 
@@ -243,7 +243,7 @@ Expected:
 
 Once Task 1 is implemented, make any small fixture-path adjustments needed so the new regression uses the same helper assumptions as production, then re-run:
 
-- `cargo test -p loongclaw-app bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path --lib -- --exact --nocapture`
+- `cargo test -p loongclaw-app tools::tests::bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_config_path --lib -- --exact --nocapture`
 - `cargo test -p loongclaw-app bash_exec_ --lib -- --nocapture`
 - `cargo test -p loongclaw-app runtime_tool_view_ --lib -- --nocapture`
 
