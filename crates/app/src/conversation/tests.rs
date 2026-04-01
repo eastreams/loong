@@ -6298,6 +6298,65 @@ async fn default_runtime_build_context_includes_tool_discovery_delta_from_persis
     );
 }
 
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_messages_filters_tool_discovery_delta_to_requested_tool_view() {
+    let mut config = test_config();
+    let sqlite_path = unique_memory_sqlite_path("tool-discovery-delta-filtered-view");
+    config.memory.sqlite_path = sqlite_path;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let session_id = "session-tool-discovery-delta-filtered-view";
+    let discovery_event = crate::memory::build_conversation_event_content(
+        "tool_discovery_refreshed",
+        json!({
+            "schema_version": 1,
+            "query": "read note.md",
+            "exact_tool_id": "file.read",
+            "entries": [
+                {
+                    "tool_id": "file.read",
+                    "summary": "Read a UTF-8 text file from the configured workspace root and return contents.",
+                    "argument_hint": "path:string,offset?:integer,limit?:integer",
+                    "required_fields": ["path"],
+                    "required_field_groups": [["path"]]
+                }
+            ]
+        }),
+    );
+
+    crate::memory::append_turn_direct(session_id, "assistant", &discovery_event, &memory_config)
+        .expect("persist discovery event");
+
+    let runtime = DefaultConversationRuntime::default();
+    let requested_tool_view =
+        crate::tools::ToolView::from_tool_names(["tool.search", "tool.invoke"]);
+    let messages = runtime
+        .build_messages(
+            &config,
+            session_id,
+            true,
+            &requested_tool_view,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build messages");
+
+    let system_text = messages[0]["content"].as_str().expect("system text");
+
+    assert!(
+        system_text.contains("[tool_discovery_delta]"),
+        "expected discovery delta guidance to remain present: {system_text}"
+    );
+    assert!(
+        system_text.contains("no currently visible tools"),
+        "expected discovery delta to explain that the current tool view hides prior results: {system_text}"
+    );
+    assert!(
+        !system_text.contains("file.read"),
+        "discovery delta should not leak hidden tool ids into a narrower requested tool view: {system_text}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn handle_turn_with_runtime_blocks_only_when_next_round_would_exceed_max_total_tool_calls() {
     use crate::test_support::TurnTestHarness;

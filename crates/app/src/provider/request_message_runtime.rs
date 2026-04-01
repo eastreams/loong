@@ -484,7 +484,7 @@ pub(crate) async fn project_hydrated_memory_context_for_view_with_binding(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, hydrated);
+        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, tool_view, hydrated);
         append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
     }
 
@@ -514,7 +514,7 @@ pub(crate) fn project_hydrated_memory_context_for_view(
 
     #[cfg(feature = "memory-sqlite")]
     {
-        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, hydrated);
+        append_hydrated_tool_discovery_prompt_fragment(&mut prompt_fragments, tool_view, hydrated);
         append_hydrated_memory_messages(&mut messages, &mut artifacts, hydrated);
     }
 
@@ -548,6 +548,7 @@ fn append_hydrated_memory_messages(
 #[cfg(feature = "memory-sqlite")]
 fn append_hydrated_tool_discovery_prompt_fragment(
     prompt_fragments: &mut Vec<PromptFragment>,
+    tool_view: &ToolView,
     hydrated: &memory::HydratedMemoryContext,
 ) {
     let assistant_contents = hydrated
@@ -560,7 +561,10 @@ fn append_hydrated_tool_discovery_prompt_fragment(
         .collect::<Vec<_>>();
     let discovery_state =
         latest_tool_discovery_state_from_assistant_contents(assistant_contents.as_slice());
-    let Some(discovery_state) = discovery_state else {
+    let filtered_state = discovery_state
+        .as_ref()
+        .and_then(|discovery_state| discovery_state.filtered_for_tool_view(tool_view));
+    let Some(discovery_state) = filtered_state else {
         return;
     };
 
@@ -572,7 +576,8 @@ fn append_hydrated_tool_discovery_prompt_fragment(
         content,
         ContextArtifactKind::ToolHint,
     )
-    .with_dedupe_key("tool-discovery-delta");
+    .with_dedupe_key("tool-discovery-delta")
+    .with_tool_discovery_state(discovery_state);
 
     prompt_fragments.push(fragment);
 }
