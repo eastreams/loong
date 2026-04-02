@@ -241,20 +241,9 @@ fn bash_exec_fails_closed_when_rule_loading_failed() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn bash_exec_reports_failed_status_for_non_zero_exit() {
-    use std::fs;
-
-    let root = unique_tool_temp_dir("loongclaw-bash-exec-failed-status");
-    fs::create_dir_all(&root).expect("create fixture root");
-    let log_path = root.join("bash-args.log");
-    let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
-
-    let mut config = test_tool_runtime_config(root.clone());
+    let mut config = test_tool_runtime_config(std::env::temp_dir());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
-    config.bash_exec = runtime_config::BashExecRuntimePolicy {
-        available: true,
-        command: Some(runtime_path),
-        ..runtime_config::BashExecRuntimePolicy::default()
-    };
+    config.bash_exec = ready_bash_exec_runtime_policy();
 
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
@@ -268,8 +257,6 @@ fn bash_exec_reports_failed_status_for_non_zero_exit() {
     assert_eq!(outcome.status, "failed");
     assert_eq!(outcome.payload["stdout"].as_str(), Some("hello"));
     assert_eq!(outcome.payload["exit_code"].as_i64(), Some(7));
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[cfg(feature = "tool-shell")]
@@ -579,16 +566,10 @@ fn bash_exec_honors_cwd() {
     let root = unique_tool_temp_dir("loongclaw-bash-exec-cwd");
     let nested = root.join("nested");
     fs::create_dir_all(&nested).expect("create nested dir");
-    let log_path = root.join("bash-args.log");
-    let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
     let mut config = test_tool_runtime_config(root.clone());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
-    config.bash_exec = runtime_config::BashExecRuntimePolicy {
-        available: true,
-        command: Some(runtime_path),
-        ..runtime_config::BashExecRuntimePolicy::default()
-    };
+    config.bash_exec = ready_bash_exec_runtime_policy();
 
     let outcome = execute_tool_core_with_config(
         ToolCoreRequest {
@@ -617,20 +598,9 @@ fn bash_exec_honors_cwd() {
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
 fn bash_exec_times_out_when_timeout_ms_is_small() {
-    use std::fs;
-
-    let root = unique_tool_temp_dir("loongclaw-bash-exec-timeout");
-    fs::create_dir_all(&root).expect("create fixture root");
-    let log_path = root.join("bash-args.log");
-    let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
-
-    let mut config = test_tool_runtime_config(root.clone());
+    let mut config = test_tool_runtime_config(std::env::temp_dir());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
-    config.bash_exec = runtime_config::BashExecRuntimePolicy {
-        available: true,
-        command: Some(runtime_path),
-        ..runtime_config::BashExecRuntimePolicy::default()
-    };
+    config.bash_exec = ready_bash_exec_runtime_policy();
 
     let error = execute_tool_core_with_config(
         ToolCoreRequest {
@@ -648,8 +618,6 @@ fn bash_exec_times_out_when_timeout_ms_is_small() {
         error.contains("timed out after"),
         "expected timeout failure, got: {error}"
     );
-
-    fs::remove_dir_all(&root).ok();
 }
 
 #[cfg(all(feature = "tool-shell", unix))]
@@ -659,16 +627,10 @@ fn tool_invoke_dispatches_bash_exec_with_trusted_internal_context() {
 
     let root = unique_tool_temp_dir("loongclaw-tool-invoke-bash-exec");
     fs::create_dir_all(&root).expect("create fixture root");
-    let log_path = root.join("bash-args.log");
-    let runtime_path = write_fake_bash_runtime(&root, "fake-bash", &log_path);
 
     let mut config = test_tool_runtime_config(root.clone());
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
-    config.bash_exec = runtime_config::BashExecRuntimePolicy {
-        available: true,
-        command: Some(runtime_path),
-        ..runtime_config::BashExecRuntimePolicy::default()
-    };
+    config.bash_exec = ready_bash_exec_runtime_policy();
 
     let search = execute_tool_core_with_config(
         ToolCoreRequest {

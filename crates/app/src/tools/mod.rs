@@ -1781,6 +1781,8 @@ mod tests {
         unique_temp_dir(prefix)
     }
 
+    const TEST_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 120;
+
     fn browser_companion_runtime_config(
         root: &Path,
         command: String,
@@ -1789,6 +1791,7 @@ mod tests {
         config.browser_companion.enabled = true;
         config.browser_companion.ready = true;
         config.browser_companion.command = Some(command);
+        config.browser_companion.timeout_seconds = TEST_BROWSER_COMPANION_TIMEOUT_SECONDS;
         config
     }
 
@@ -1804,7 +1807,7 @@ mod tests {
     ) -> PathBuf {
         let path = root.join(name);
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=\"$(cat)\"\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=''\nIFS= read -r BODY || true\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
             log_path.display(),
             stdout_body.replace('\'', "'\"'\"'")
         );
