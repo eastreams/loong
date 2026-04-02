@@ -34,6 +34,22 @@ pub enum PromptRenderPolicy {
     },
 }
 
+impl PromptRenderPolicy {
+    pub const fn for_lane(lane: PromptLane) -> Self {
+        match lane {
+            PromptLane::ToolDiscoveryDelta => PromptRenderPolicy::GovernedAdvisory {
+                allowed_root_headings: &[],
+            },
+            PromptLane::TaskDirective
+            | PromptLane::BaseSystem
+            | PromptLane::RuntimeSelf
+            | PromptLane::RuntimeIdentity
+            | PromptLane::Continuity
+            | PromptLane::CapabilitySnapshot => PromptRenderPolicy::TrustedLiteral,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptFragment {
     pub fragment_id: String,
@@ -58,7 +74,7 @@ impl PromptFragment {
     ) -> Self {
         let fragment_id = fragment_id.into();
         let content = content.into();
-        let render_policy = PromptRenderPolicy::TrustedLiteral;
+        let render_policy = PromptRenderPolicy::for_lane(lane);
 
         Self {
             fragment_id,
