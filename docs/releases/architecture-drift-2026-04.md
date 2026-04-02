@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-02T04:26:30Z
+- Generated at: 2026-04-02T09:19:10Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -19,7 +19,7 @@
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3391 | 3600 | 209 | 8 | 12 | 4 | 94.2% | WATCH | 3383 | 0.2% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2716 | 2800 | 84 | 56 | 65 | 9 | 97.0% | TIGHT | 2698 | 0.7% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10464 | 10500 | 36 | 88 | 90 | 2 | 99.7% | TIGHT | 9922 | 5.5% | PASS | 88 |
-| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9798 | 9800 | 2 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | 0.0% | PASS | 90 |
+| channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9713 | 9800 | 87 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | -0.8% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6976 | 7300 | 324 | 147 | 160 | 13 | 95.6% | TIGHT | 6936 | 0.6% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1784 | 6400 | 4616 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.3% | PASS | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10971 | 11200 | 229 | 100 | 120 | 20 | 98.0% | TIGHT | 10831 | 1.3% | PASS | 98 |
@@ -64,7 +64,7 @@
 <!-- arch-hotspot key=acp_manager lines=3391 functions=8 -->
 <!-- arch-hotspot key=acpx_runtime lines=2716 functions=56 -->
 <!-- arch-hotspot key=channel_registry lines=10464 functions=88 -->
-<!-- arch-hotspot key=channel_config lines=9798 functions=90 -->
+<!-- arch-hotspot key=channel_config lines=9713 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6976 functions=147 -->
 <!-- arch-hotspot key=channel_mod lines=1784 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10971 functions=100 -->
