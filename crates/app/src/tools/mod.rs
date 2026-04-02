@@ -3140,18 +3140,18 @@ mod tests {
 
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::new(),
+            shell_default_mode: shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root.clone()),
             messages_enabled: true,
             ..Default::default()
         };
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "shell command"}),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
+
+        let request = ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({"exact_tool_id": "shell.exec"}),
+        };
+        let outcome =
+            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
 
         let results = outcome.payload["results"].as_array().expect("results");
         let shell_entry = results
