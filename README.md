@@ -25,11 +25,7 @@
   <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
-<p>
-  <strong>LoongClaw is a secure, extensible, and sustainably evolvable agent runtime foundation built in Rust.</strong><br/>
-  It starts from assistant capabilities, but it is meant to grow into a team-facing foundation layer for vertical AI agents, where people and AI can keep collaborating, evolving, and building more capable workflows together.
-  Rather than ending at a thin model wrapper or a terminal-only demo, LoongClaw is being shaped as a governed runtime base for longer-horizon workflow construction, compound task execution, and closed-loop improvement as real work becomes more demanding.
-</p>
+***Secure, extensible, and sustainably evolvable*** — LoongClaw is an agent foundation for vertical AI agents, built in Rust. On a secure and controlled foundation, it supports longer-horizon workflow construction, compound task execution, and closed-loop improvement — enabling people and AI to collaborate in real-world scenarios.
 
 <p align="center">
   <a href="README.md">English</a> |
@@ -45,28 +41,23 @@
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
-<a id="what-loongclaw-is"></a>
-## What LoongClaw Is
+<a id="why-loongclaw"></a>
+## Why LoongClaw
 
-LoongClaw already presents itself as more than a runnable assistant path.
-You can start with `loong onboard`, `loong ask`, or `loong chat`, but the more important point is that the project already exposes the runtime surfaces teams eventually need to inspect, operate, and extend.
-Today that public shape is already concrete: a usable operator path, an operator-visible runtime surface, and a governed foundation for longer-lived team workflows.
+**Because it already has the core capabilities you need to inspect, operate, and extend:**
 
-Today that means three concrete things:
+- **🚀 Ready-to-use core commands**: `loong onboard`, `loong ask`, `loong chat`, and `loong doctor` — ready to run out of the box.
+- **👀 Accessible runtime capabilities**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are directly usable commands, not internals locked in a black box.
+- **🛡️ Secure and controllable foundation**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
 
-- **🚀 Runnable operator path**: `loong onboard`, `loong ask`, `loong chat`, and `loong doctor` are the shortest supported route to a useful result.
-- **👀 Operator-visible runtime surface**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are public-facing commands rather than hidden internal machinery.
-- **🛡️ Governed foundation**: provider selection, tools, memory, delivery surfaces, approvals, policy, and audit stay behind explicit runtime boundaries.
+**Also because whether you are a beginner or a power user, it fits you:**
 
-<a id="when-loongclaw-fits"></a>
-## When LoongClaw Fits
+- **⚡ Easy to start**: a few commands to get running, compatible with existing Claude Code, Codex, and OpenCode configurations.
+- **🧭 Transparent boundaries**: assistant, gateway, and channels operate independently — no blurred lines.
+- **🔌 Core and extensions are separate**: providers, tools, channels, memory, and policy live outside the kernel — compile and compose as needed.
+- **🌱 Not a toy**: designed for long-term use, grows with your needs over time.
 
-- **⚡ You want something you can actually run first**: the project starts with a usable operator path instead of asking teams to assemble a system from framework primitives.
-- **🧭 You care about truthful public contracts**: local assistant flow, gateway ownership, reply-loop surfaces, and outbound-only delivery are kept separate instead of being marketed as one thing.
-- **🔌 You need visible extension seams**: providers, tools, channels, memory, and policy are explicit boundaries rather than accidental coupling points.
-- **🌱 You expect the runtime to grow with the team**: the design targets longer-lived team workflows, not just a single local prompt loop.
-
-If you want the longer public rationale behind this positioning, read
+Also, if you want the longer public rationale behind this positioning, read
 [Why LoongClaw](site/reference/why-loongclaw.mdx).
 
 ## Sponsors
@@ -90,9 +81,9 @@ If you want the longer public rationale behind this positioning, read
 <a id="quick-start"></a>
 ## Quick Start
 
-LoongClaw uses `loong` as the primary command. `loongclaw` remains as a compatibility entrypoint.
+> LoongClaw uses `loong` as the primary command. `loongclaw` remains as a compatibility entrypoint.
 
-### Install
+### Script Install (Recommended)
 
 Linux or macOS:
 
@@ -149,7 +140,7 @@ api_key = { env = "OPENAI_API_KEY" }
 | reach first value quickly | `onboard`, `ask`, `chat`, and `doctor` |
 | follow one complete provider-plus-channel rollout path | [Common Setups](site/use-loongclaw/common-setups.mdx) and the dedicated playbooks under it |
 | choose a provider or model without guessing | `onboard`, `list-models`, [Providers And Models](site/use-loongclaw/providers-and-models.mdx), and [Provider Recipes](site/use-loongclaw/provider-recipes.mdx) |
-| add delivery surfaces without overclaiming support | [Channels](site/use-loongclaw/channels.mdx), [Gateway And Supervision](site/use-loongclaw/gateway-and-supervision.mdx), [Channel Recipes](site/use-loongclaw/channel-recipes.mdx), and the full [Channel Setup](docs/product-specs/channel-setup.md) contract |
+| add channels without overclaiming support | [Channels](site/use-loongclaw/channels.mdx), [Gateway And Supervision](site/use-loongclaw/gateway-and-supervision.mdx), [Channel Recipes](site/use-loongclaw/channel-recipes.mdx), and the full [Channel Setup](docs/product-specs/channel-setup.md) contract |
 | understand the current runtime surface and governed extension seams | [Use LoongClaw](site/use-loongclaw/overview.mdx), [Tools And Memory](site/use-loongclaw/tools-and-memory.mdx), [ARCHITECTURE.md](ARCHITECTURE.md), and [Contributing](CONTRIBUTING.md) |
 
 <a id="documentation"></a>

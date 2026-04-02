@@ -25,11 +25,7 @@
   <a href="https://loongclaw.ai/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-QR-07C160?logo=wechat&logoColor=white&style=flat-square" alt="WeChat QR" /></a>
 </p>
 
-<p>
-  <strong>LoongClaw 是一套基于 Rust 构建的安全、可扩展、可持续演进的智能体运行时基座。</strong><br/>
-  它以助手能力为起点，但目标并不仅停留于通用助手，而是逐步成长为面向团队的垂域智能体基础层，让人与 AI 能在真实场景中持续协作、共同进化，并一起构建更有能力的工作流。
-  它的目标不是停在一层轻量模型封装或一个只在终端里演示的 demo，而是成为一个受治理的运行时底座，去承载更长程的工作流构建、复合任务执行与闭环改进。
-</p>
+***安全、可扩展、可持续演进***——LoongClaw 是一套基于 Rust 构建的垂域智能体基座，在安全可控的基础上承载长程工作流构建、复合任务执行与闭环改进，让人与 AI 在真实场景中持续协作。
 
 <p align="center">
   <a href="README.md">English</a> |
@@ -45,28 +41,23 @@
   <a href="CONTRIBUTING.md">参与贡献</a>
 </p>
 
-<a id="what-loongclaw-is"></a>
-## LoongClaw 现在到底是什么
+<a id="why-loongclaw"></a>
+## 为什么选 LoongClaw
 
-LoongClaw 今天已经不只是一个可运行的助手入口。
-你当然可以从 `loong onboard`、`loong ask` 或 `loong chat` 开始，但更重要的是，项目已经把团队后续真正需要观察、操作和扩展的运行时表面公开出来了。
-它今天所呈现的公开形态已经很明确：可用的 operator path、操作者可见的 runtime surface，以及面向更长期团队工作流的受治理 foundation。
+**因为它已经具备你在观察、操作、扩展过程中所需的核心能力：**
 
-今天更准确地说，它已经具备三层公开现实：
+- **🚀 开箱即用的核心命令**：`loong onboard`、`loong ask`、`loong chat`、`loong doctor`，上手即用。
+- **👀 触手可及的运行时能力**：`audit`、`tasks`、`skills`、`plugins`、`channels`、`runtime-snapshot` 以及 gateway control 都是直接可用的命令，不是封在内部的黑盒。
+- **🛡️ 安全可控的基座能力**：provider 选择、工具、记忆、接入频道、审批、策略、审计都在明确的运行时边界之内。
 
-- **🚀 可运行的操作者主路径**：`loong onboard`、`loong ask`、`loong chat`、`loong doctor` 是最短的公开成功路径。
-- **👀 操作者可见的运行时表面**：`audit`、`tasks`、`skills`、`plugins`、`channels`、`runtime-snapshot` 以及 gateway control 都已经是公开命令，而不是藏在内部的东西。
-- **🛡️ 受治理的基座能力**：provider 选择、工具、记忆、接入面、审批、策略、审计都在显式 runtime boundary 之内。
+**也因为无论你是小白还是极客，它都适合你：**
 
-<a id="when-loongclaw-fits"></a>
-## LoongClaw 适合什么场景
+- **⚡ 易于上手**：几条命令就能跑通，兼容 Claude Code、Codex、OpenCode 等已有配置。
+- **🧭 边界透明**：助手、网关、接入频道各自独立，不会混成一个模糊概念。
+- **🔌 内核与扩展分离**：provider、工具、接入频道、记忆、策略独立于内核，按需编译组合。
+- **🌱 不是玩具**：面向长期使用设计，能跟着你的需求一起成长。
 
-- **⚡ 你想先从一个能跑起来的东西开始**：它从可用的 operator path 出发，而不是要求团队从裸框架原语开始自己拼。
-- **🧭 你在意公开 contract 讲真话**：本地助手流、gateway ownership、reply-loop surface 和 outbound-only delivery 会明确区分，而不是混成一个大词。
-- **🔌 你需要清晰的扩展缝**：provider、tool、channel、memory、policy 都有相对明确的边界，而不是鼓励大家反复直接改内核。
-- **🌱 你希望运行时能跟团队一起长**：它想支撑更长期的团队工作流，而不是停在单机 prompt loop。
-
-如果你想读更完整的公开定位和产品立场，可以看
+另外，如果你想读更完整的公开定位和产品立场，可以看
 [LoongClaw 的缘起与定位](site/reference/why-loongclaw.mdx)。
 
 ## 赞助商
@@ -90,9 +81,9 @@ LoongClaw 今天已经不只是一个可运行的助手入口。
 <a id="quick-start"></a>
 ## 快速开始
 
-LoongClaw 当前主命令是 `loong`，`loongclaw` 仍保留为兼容入口。
+> LoongClaw 当前主命令是 `loong`，`loongclaw` 仍保留为兼容入口。
 
-### 安装
+### 脚本安装（推荐）
 
 Linux 或 macOS：
 
@@ -149,7 +140,7 @@ api_key = { env = "OPENAI_API_KEY" }
 | 先尽快得到第一条有效结果 | `onboard`、`ask`、`chat`、`doctor` |
 | 想直接跟着一条完整的 provider + channel 路径走 | [常见路线](site/use-loongclaw/common-setups.mdx) 与其下对应的 playbook 页面 |
 | 不靠猜测完成 provider / model 选择 | `onboard`、`list-models`、[Provider 与 Model 选择](site/use-loongclaw/providers-and-models.mdx) 以及 [Provider 路线示例](site/use-loongclaw/provider-recipes.mdx) |
-| 增加交付接入面，但不把支持范围说大 | [接入面选择](site/use-loongclaw/channels.mdx)、[Gateway 与监督](site/use-loongclaw/gateway-and-supervision.mdx)、[Channel 路线示例](site/use-loongclaw/channel-recipes.mdx) 与完整的 [Channel Setup](docs/product-specs/channel-setup.md) 说明 |
+| 增加交付接入频道，但不把支持范围说大 | [接入频道选择](site/use-loongclaw/channels.mdx)、[Gateway 与监督](site/use-loongclaw/gateway-and-supervision.mdx)、[Channel 路线示例](site/use-loongclaw/channel-recipes.mdx) 与完整的 [Channel Setup](docs/product-specs/channel-setup.md) 说明 |
 | 理解当前 runtime surface 以及受治理的扩展边界 | [使用 LoongClaw](site/use-loongclaw/overview.mdx)、[工具与记忆](site/use-loongclaw/tools-and-memory.mdx)、[ARCHITECTURE.md](ARCHITECTURE.md)、[参与贡献](CONTRIBUTING.md) |
 
 <a id="documentation"></a>
