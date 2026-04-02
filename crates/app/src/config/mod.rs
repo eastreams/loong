@@ -73,7 +73,8 @@ pub(crate) use irc::{
 };
 #[allow(unused_imports)]
 pub use memory::{
-    MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+    InitiativeLevel, MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile,
+    MemorySystemKind, PersonalizationConfig, PersonalizationPromptState, ResponseDensity,
 };
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;

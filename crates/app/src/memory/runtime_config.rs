@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use crate::config::{
     MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+    PersonalizationConfig,
 };
 
 /// Typed runtime configuration for the memory (SQLite) subsystem.
@@ -23,6 +24,7 @@ pub struct MemoryRuntimeConfig {
     pub sliding_window: usize,
     pub summary_max_chars: usize,
     pub profile_note: Option<String>,
+    pub personalization: Option<PersonalizationConfig>,
 }
 
 impl Default for MemoryRuntimeConfig {
@@ -40,6 +42,7 @@ impl Default for MemoryRuntimeConfig {
             sliding_window: defaults.sliding_window,
             summary_max_chars: defaults.summary_char_budget(),
             profile_note: defaults.trimmed_profile_note(),
+            personalization: defaults.trimmed_personalization(),
         }
     }
 }
@@ -58,6 +61,7 @@ impl MemoryRuntimeConfig {
             sliding_window: config.sliding_window,
             summary_max_chars: config.summary_char_budget(),
             profile_note: config.trimmed_profile_note(),
+            personalization: config.trimmed_personalization(),
         }
     }
 
@@ -271,6 +275,7 @@ mod tests {
             sliding_window: 12,
             summary_max_chars: 1200,
             profile_note: None,
+            personalization: None,
         };
         assert_eq!(
             config.sqlite_path,

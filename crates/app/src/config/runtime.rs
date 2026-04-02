@@ -2680,6 +2680,67 @@ api_key_env = "{secret}"
 
     #[test]
     #[cfg(feature = "config-toml")]
+    fn write_persists_typed_personalization_metadata() {
+        let path = unique_config_path("loongclaw-personalization-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        let personalization = crate::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Thorough),
+            initiative_level: Some(crate::config::InitiativeLevel::HighInitiative),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: Some("zh-CN".to_owned()),
+            prompt_state: crate::config::PersonalizationPromptState::Configured,
+            schema_version: 1,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+
+        config.memory.profile = crate::config::MemoryProfile::ProfilePlusWindow;
+        config.memory.personalization = Some(personalization);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let load_result = load(Some(&path_string));
+        let (_, loaded) = load_result.expect("config load should pass");
+        let loaded_personalization = loaded
+            .memory
+            .personalization
+            .expect("typed personalization should persist");
+        let preferred_name = loaded_personalization.preferred_name.as_deref();
+        let response_density = loaded_personalization.response_density;
+        let initiative_level = loaded_personalization.initiative_level;
+        let standing_boundaries = loaded_personalization.standing_boundaries.as_deref();
+        let timezone = loaded_personalization.timezone.as_deref();
+        let locale = loaded_personalization.locale.as_deref();
+        let prompt_state = loaded_personalization.prompt_state;
+        let schema_version = loaded_personalization.schema_version;
+        let updated_at_epoch_seconds = loaded_personalization.updated_at_epoch_seconds;
+
+        assert_eq!(preferred_name, Some("Chum"));
+        assert_eq!(
+            response_density,
+            Some(crate::config::ResponseDensity::Thorough)
+        );
+        assert_eq!(
+            initiative_level,
+            Some(crate::config::InitiativeLevel::HighInitiative)
+        );
+        assert_eq!(standing_boundaries, Some("Ask before destructive actions."));
+        assert_eq!(timezone, Some("Asia/Shanghai"));
+        assert_eq!(locale, Some("zh-CN"));
+        assert_eq!(
+            prompt_state,
+            crate::config::PersonalizationPromptState::Configured
+        );
+        assert_eq!(schema_version, 1);
+        assert_eq!(updated_at_epoch_seconds, Some(1_775_095_200));
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
     fn load_legacy_provider_table_populates_active_provider_profile_storage() {
         let path = unique_config_path("loongclaw-config-legacy-provider");
         let raw = r#"

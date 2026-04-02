@@ -348,7 +348,7 @@ impl OnboardPromptLineReader for StdioOnboardLineReader {
 }
 
 #[derive(Debug, Default)]
-struct StdioOnboardUi {
+pub(crate) struct StdioOnboardUi {
     line_reader: Option<StdioOnboardLineReader>,
 }
 

@@ -258,8 +258,10 @@ pub fn load_prompt_context_with_diagnostics(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(Vec<MemoryContextEntry>, SqliteContextLoadDiagnostics), String> {
     let mut profile_entry = None;
-    let profile_section =
-        runtime_identity::render_session_profile_section(config.profile_note.as_deref());
+    let profile_section = runtime_identity::render_session_profile_section(
+        config.profile_note.as_deref(),
+        config.personalization.as_ref(),
+    );
     if matches!(config.mode, crate::config::MemoryMode::ProfilePlusWindow)
         && let Some(profile_section) = profile_section
     {

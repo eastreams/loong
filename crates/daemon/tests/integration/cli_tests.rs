@@ -45,6 +45,10 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should mention chat with an explicit config placeholder: {help}"
     );
     assert!(
+        help.contains("loong personalize --config <path>"),
+        "welcome help should mention personalize with an explicit config placeholder: {help}"
+    );
+    assert!(
         help.contains("loong doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );

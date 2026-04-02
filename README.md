@@ -279,6 +279,12 @@ loong completions elvish >> ~/.config/elvish/rc.elv
    loong chat
    ```
 
+Optional follow-up: if you want LoongClaw to remember advisory working preferences such as preferred name, response density, or standing boundaries for future sessions, run:
+
+```bash
+loong personalize
+```
+
 5. Repair local health issues when needed:
 
    ```bash

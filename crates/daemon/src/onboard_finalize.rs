@@ -65,6 +65,7 @@ pub struct OnboardingDomainOutcome {
 pub enum OnboardingActionKind {
     Ask,
     Chat,
+    Personalize,
     Channel,
     BrowserPreview,
     Doctor,
@@ -100,6 +101,9 @@ pub(crate) fn build_onboarding_success_summary_with_memory(
             let kind = match action.kind {
                 crate::next_actions::SetupNextActionKind::Ask => OnboardingActionKind::Ask,
                 crate::next_actions::SetupNextActionKind::Chat => OnboardingActionKind::Chat,
+                crate::next_actions::SetupNextActionKind::Personalize => {
+                    OnboardingActionKind::Personalize
+                }
                 crate::next_actions::SetupNextActionKind::Channel => OnboardingActionKind::Channel,
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
                     OnboardingActionKind::BrowserPreview

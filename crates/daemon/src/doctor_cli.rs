@@ -2113,6 +2113,9 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             let prefix = match action.kind {
                 crate::next_actions::SetupNextActionKind::Ask => "Get a first answer",
                 crate::next_actions::SetupNextActionKind::Chat => "Continue in chat",
+                crate::next_actions::SetupNextActionKind::Personalize => {
+                    "Set your working preferences"
+                }
                 crate::next_actions::SetupNextActionKind::Channel => "Open a channel",
                 crate::next_actions::SetupNextActionKind::BrowserPreview => {
                     match action.browser_preview_phase {
@@ -2390,6 +2393,9 @@ fn select_doctor_first_turn_actions(
         is_repair_priority_browser_preview_action(action)
     });
     push_first_matching_action(&mut prioritized, &actions, |action| {
+        action.kind == crate::next_actions::SetupNextActionKind::Personalize
+    });
+    push_first_matching_action(&mut prioritized, &actions, |action| {
         is_channel_catalog_action(action)
     });
     push_first_matching_action(&mut prioritized, &actions, |action| {
@@ -2573,14 +2579,14 @@ mod tests {
                 channel_action_id: None,
                 browser_preview_phase: None,
                 label: "verify managed bridges".to_owned(),
-                command: "loongclaw doctor --config '/tmp/loongclaw-config.toml'".to_owned(),
+                command: "loong doctor --config '/tmp/loongclaw-config.toml'".to_owned(),
             },
             crate::next_actions::SetupNextAction {
                 kind: crate::next_actions::SetupNextActionKind::Channel,
                 channel_action_id: Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID),
                 browser_preview_phase: None,
                 label: "channels".to_owned(),
-                command: "loongclaw channels --config '/tmp/loongclaw-config.toml'".to_owned(),
+                command: "loong channels --config '/tmp/loongclaw-config.toml'".to_owned(),
             },
         ];
 
@@ -5007,20 +5013,28 @@ mod tests {
         );
         assert!(
             next_steps.iter().any(|step| {
+                step == "Set your working preferences: loong personalize --config '/tmp/loongclaw.toml'"
+            }),
+            "green doctor runs should surface personalization as the third healthy-path suggestion: {next_steps:#?}"
+        );
+        assert!(
+            !next_steps.iter().any(|step| {
                 step == "Open a channel: loong channels --config '/tmp/loongclaw.toml'"
             }),
-            "green doctor runs should surface the channel catalog when no service channel is enabled yet: {next_steps:#?}"
+            "green doctor runs should cap the healthy-path list before lower-priority channel setup suggestions: {next_steps:#?}"
         );
         assert!(
             !next_steps.iter().any(|step| {
                 step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
-            "green doctor runs should prioritize the channel catalog ahead of optional browser preview when no service channel is enabled yet: {next_steps:#?}"
+            "green doctor runs should keep generic browser-preview nudges behind personalization: {next_steps:#?}"
         );
         assert!(
-            !next_steps.iter().any(|step| {
-                step == "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
-            }),
+            !next_steps.iter().any(
+                |step| {
+                    step == "Install browser preview runtime: npm install -g agent-browser && agent-browser install"
+                }
+            ),
             "green doctor runs should not push runtime install steps before preview has been enabled: {next_steps:#?}"
         );
         assert!(
@@ -5106,9 +5120,15 @@ mod tests {
 
         assert!(
             next_steps.iter().any(|step| {
+                step == "Set your working preferences: loong personalize --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should prioritize personalization ahead of generic browser preview when the healthy-path list is capped: {next_steps:#?}"
+        );
+        assert!(
+            !next_steps.iter().any(|step| {
                 step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
-            "doctor should keep a browser preview action visible even when channel actions are available: {next_steps:#?}"
+            "doctor should keep generic browser preview behind personalization when only three healthy-path actions are shown: {next_steps:#?}"
         );
     }
 }

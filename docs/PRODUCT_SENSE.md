@@ -52,7 +52,7 @@ See [Product Specs Index](product-specs/index.md) for detailed user-facing requi
 - [Onboarding](product-specs/onboarding.md) — first-run setup and handoff to first success
 - [One-Shot Ask](product-specs/one-shot-ask.md) — non-interactive assistant fast path
 - [Doctor](product-specs/doctor.md) — diagnostics and safe repair expectations
-- [Personalization](product-specs/personalization.md) — expectation-setting spec for optional operator preference capture
+- [Personalization](product-specs/personalization.md) — optional operator preference capture and review
 - [Browser Automation](product-specs/browser-automation.md) — bounded browser-style assistant actions
 - [Channel Setup](product-specs/channel-setup.md) — configuring shipped assistant surfaces
 - [Tool Surface](product-specs/tool-surface.md) — truthful runtime-visible tool advertising
@@ -70,6 +70,7 @@ The primary daemon surfaces are:
 | `onboard` | Guided first-run setup, detection, and configuration |
 | `ask` | One-shot assistant answer and exit |
 | `chat` | Interactive CLI conversation |
+| `personalize` | Optional operator preference capture and advisory review |
 | `doctor` | Health diagnostics with optional safe repair |
 | `migrate` | Power-user migration path |
 | `telegram-serve` / `feishu-serve` / `matrix-serve` / `wecom-serve` / `multi-channel-serve` | Service channels once the base setup is healthy |

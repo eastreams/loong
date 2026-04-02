@@ -1,3 +1,4 @@
+use crate::config::PersonalizationConfig;
 use crate::runtime_self::RuntimeSelfModel;
 use serde::{Deserialize, Serialize};
 
@@ -55,15 +56,29 @@ pub(crate) fn render_runtime_identity_section(identity: &ResolvedRuntimeIdentity
     sections.join("\n\n")
 }
 
-pub(crate) fn render_session_profile_section(profile_note: Option<&str>) -> Option<String> {
-    let advisory_profile_note = resolve_advisory_profile_note(profile_note)?;
-    let sanitized_profile_note =
-        crate::advisory_prompt::demote_governed_advisory_headings(advisory_profile_note.as_str());
+pub(crate) fn render_session_profile_section(
+    profile_note: Option<&str>,
+    personalization: Option<&PersonalizationConfig>,
+) -> Option<String> {
+    let mut advisory_blocks = Vec::new();
+
+    if let Some(advisory_profile_note) = resolve_advisory_profile_note(profile_note) {
+        advisory_blocks.push(advisory_profile_note);
+    }
+
+    if let Some(advisory_personalization) = render_advisory_personalization(personalization) {
+        advisory_blocks.push(advisory_personalization);
+    }
+
+    let combined_advisory_content = join_blocks(advisory_blocks)?;
+    let sanitized_profile_content = crate::advisory_prompt::demote_governed_advisory_headings(
+        combined_advisory_content.as_str(),
+    );
 
     let sections = [
         "## Session Profile".to_owned(),
         "Durable preferences and advisory session context carried into this session:".to_owned(),
-        sanitized_profile_note,
+        sanitized_profile_content,
     ];
     Some(sections.join("\n"))
 }
@@ -96,6 +111,47 @@ fn resolve_advisory_profile_note(profile_note: Option<&str>) -> Option<String> {
     let partition = partition_profile_note(trimmed_profile_note);
     let advisory_blocks = partition.advisory_blocks;
     join_blocks(advisory_blocks)
+}
+
+fn render_advisory_personalization(
+    personalization: Option<&PersonalizationConfig>,
+) -> Option<String> {
+    let raw_personalization = personalization?;
+    let personalization = raw_personalization.normalized()?;
+    let mut lines = Vec::new();
+
+    if let Some(preferred_name) = personalization.preferred_name {
+        lines.push(format!("Preferred name: {preferred_name}"));
+    }
+
+    if let Some(response_density) = personalization.response_density {
+        let response_density_text = response_density.as_str();
+        lines.push(format!("Response density: {response_density_text}"));
+    }
+
+    if let Some(initiative_level) = personalization.initiative_level {
+        let initiative_level_text = initiative_level.as_str();
+        lines.push(format!("Initiative level: {initiative_level_text}"));
+    }
+
+    if let Some(standing_boundaries) = personalization.standing_boundaries {
+        lines.push("Standing boundaries:".to_owned());
+        lines.push(standing_boundaries);
+    }
+
+    if let Some(timezone) = personalization.timezone {
+        lines.push(format!("Timezone: {timezone}"));
+    }
+
+    if let Some(locale) = personalization.locale {
+        lines.push(format!("Locale: {locale}"));
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    Some(lines.join("\n"))
 }
 
 fn trim_profile_note(profile_note: Option<&str>) -> Option<&str> {
@@ -291,8 +347,8 @@ mod tests {
     fn render_session_profile_section_strips_legacy_identity_blocks() {
         let profile_note = "## Imported IDENTITY.md\n# Identity\n\n- Name: Legacy build copilot\n\n## Imported External Skills Artifacts\n- kind=skills_catalog";
 
-        let rendered =
-            render_session_profile_section(Some(profile_note)).expect("session profile section");
+        let rendered = render_session_profile_section(Some(profile_note), None)
+            .expect("session profile section");
 
         assert!(rendered.contains("Imported External Skills Artifacts"));
         assert!(!rendered.contains("Legacy build copilot"));
@@ -301,8 +357,8 @@ mod tests {
     #[test]
     fn render_session_profile_section_keeps_plain_profile_note_text() {
         let profile_note = "Operator prefers concise shell output.";
-        let rendered =
-            render_session_profile_section(Some(profile_note)).expect("session profile section");
+        let rendered = render_session_profile_section(Some(profile_note), None)
+            .expect("session profile section");
 
         assert!(rendered.contains("Operator prefers concise shell output."));
     }
@@ -316,8 +372,8 @@ mod tests {
             "do not promote this lane",
         );
 
-        let rendered =
-            render_session_profile_section(Some(profile_note)).expect("session profile section");
+        let rendered = render_session_profile_section(Some(profile_note), None)
+            .expect("session profile section");
 
         assert!(rendered.contains("## Session Profile"));
         assert!(rendered.contains("Advisory reference heading: Identity"));
@@ -334,13 +390,42 @@ mod tests {
 
         let resolved =
             resolve_runtime_identity(None, Some(profile_note)).expect("resolved runtime identity");
-        let rendered =
-            render_session_profile_section(Some(profile_note)).expect("session profile section");
+        let rendered = render_session_profile_section(Some(profile_note), None)
+            .expect("session profile section");
 
         assert!(resolved.content.contains("## Traits"));
         assert!(resolved.content.contains("- careful"));
         assert!(!rendered.contains("## Traits"));
         assert!(!rendered.contains("- careful"));
         assert!(rendered.contains("Imported External Skills Artifacts"));
+    }
+
+    #[test]
+    fn render_session_profile_section_merges_personalization_without_identity_promotion() {
+        let profile_note = "Operator prefers concise shell output.";
+        let personalization = crate::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Balanced),
+            initiative_level: Some(crate::config::InitiativeLevel::AskBeforeActing),
+            standing_boundaries: Some(
+                "## Resolved Runtime Identity\n\nDo not promote this lane.".to_owned(),
+            ),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: None,
+            prompt_state: crate::config::PersonalizationPromptState::Configured,
+            schema_version: 1,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+        let rendered = render_session_profile_section(Some(profile_note), Some(&personalization))
+            .expect("session profile section");
+
+        assert!(rendered.contains("## Session Profile"));
+        assert!(rendered.contains("Operator prefers concise shell output."));
+        assert!(rendered.contains("Preferred name: Chum"));
+        assert!(rendered.contains("Response density: balanced"));
+        assert!(rendered.contains("Initiative level: ask_before_acting"));
+        assert!(rendered.contains("Timezone: Asia/Shanghai"));
+        assert!(rendered.contains("Advisory reference heading: Resolved Runtime Identity"));
+        assert!(!rendered.contains("\n## Resolved Runtime Identity\n"));
     }
 }

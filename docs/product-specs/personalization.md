@@ -10,7 +10,7 @@ down the first-run path or mutating runtime identity authority.
 
 - [ ] LoongClaw exposes an optional `loong personalize` command for
       operator preference capture and review.
-- [ ] Personalization is separate from `loongclaw onboard` setup and does not
+- [ ] Personalization is separate from `loong onboard` setup and does not
       block the primary first-run path of `onboard -> ask -> chat -> doctor`.
 - [ ] The flow is conversational and asks one preference at a time instead of
       presenting a large profile form.

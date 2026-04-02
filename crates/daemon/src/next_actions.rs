@@ -9,6 +9,7 @@ pub use mvp::chat::DEFAULT_FIRST_PROMPT as DEFAULT_FIRST_ASK_MESSAGE;
 pub enum SetupNextActionKind {
     Ask,
     Chat,
+    Personalize,
     Channel,
     BrowserPreview,
     Doctor,
@@ -67,6 +68,18 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             label: "chat".to_owned(),
             command: crate::cli_handoff::format_subcommand_with_config("chat", config_path),
         });
+        if should_suggest_personalization(config) {
+            actions.push(SetupNextAction {
+                kind: SetupNextActionKind::Personalize,
+                channel_action_id: None,
+                browser_preview_phase: None,
+                label: "working preferences".to_owned(),
+                command: crate::cli_handoff::format_subcommand_with_config(
+                    "personalize",
+                    config_path,
+                ),
+            });
+        }
     }
     if should_add_managed_bridge_doctor_action(config, &channel_actions) {
         let doctor_action = build_managed_bridge_doctor_action(config_path);
@@ -232,6 +245,17 @@ fn channel_next_action_to_setup_action(
     }
 }
 
+fn should_suggest_personalization(config: &mvp::config::LoongClawConfig) -> bool {
+    let personalization = config.memory.trimmed_personalization();
+    let Some(personalization) = personalization else {
+        return true;
+    };
+    if personalization.suppresses_suggestions() {
+        return false;
+    }
+    !personalization.has_operator_preferences()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +326,84 @@ mod tests {
     }
 
     #[test]
+    fn collect_setup_next_actions_includes_personalize_after_chat_when_pending() {
+        let config = mvp::config::LoongClawConfig::default();
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert_eq!(actions[0].kind, SetupNextActionKind::Ask);
+        assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
+        assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
+        assert_eq!(actions[2].label, "working preferences");
+        assert_eq!(
+            actions[2].command,
+            "loong personalize --config '/tmp/loongclaw.toml'"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_omits_personalize_when_suppressed() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.memory.personalization = Some(mvp::config::PersonalizationConfig {
+            preferred_name: None,
+            response_density: None,
+            initiative_level: None,
+            standing_boundaries: None,
+            timezone: None,
+            locale: None,
+            prompt_state: mvp::config::PersonalizationPromptState::Suppressed,
+            schema_version: 1,
+            updated_at_epoch_seconds: Some(7),
+        });
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            actions
+                .iter()
+                .all(|action| action.kind != SetupNextActionKind::Personalize),
+            "suppressed personalization should not be suggested again: {actions:#?}"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_omits_personalize_when_configured() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.memory.personalization = Some(mvp::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(mvp::config::ResponseDensity::Balanced),
+            initiative_level: Some(mvp::config::InitiativeLevel::Balanced),
+            standing_boundaries: None,
+            timezone: None,
+            locale: None,
+            prompt_state: mvp::config::PersonalizationPromptState::Configured,
+            schema_version: 1,
+            updated_at_epoch_seconds: Some(7),
+        });
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+
+        assert!(
+            actions
+                .iter()
+                .all(|action| action.kind != SetupNextActionKind::Personalize),
+            "configured personalization should not be suggested again: {actions:#?}"
+        );
+    }
+
+    #[test]
     fn collect_setup_next_actions_promotes_browser_companion_preview_when_ready() {
         let root = unique_temp_dir("loongclaw-next-actions-browser-companion");
         let install_root = root.join("managed-skills");
@@ -328,15 +430,16 @@ mod tests {
 
         assert_eq!(actions[0].kind, SetupNextActionKind::Ask);
         assert_eq!(actions[1].kind, SetupNextActionKind::Chat);
-        assert_channel_catalog_action(&actions[2]);
-        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
+        assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
+        assert_channel_catalog_action(&actions[3]);
+        assert_eq!(actions[4].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[3].browser_preview_phase,
+            actions[4].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Ready)
         );
-        assert_eq!(actions[3].label, "browser companion preview");
+        assert_eq!(actions[4].label, "browser companion preview");
         assert!(
-            actions[3]
+            actions[4]
                 .command
                 .contains("Use the browser companion preview to open https://example.com"),
             "ready preview action should hand users into a task-shaped first browser recipe: {actions:#?}"
@@ -370,15 +473,16 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_channel_catalog_action(&actions[2]);
-        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
+        assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
+        assert_channel_catalog_action(&actions[3]);
+        assert_eq!(actions[4].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[3].browser_preview_phase,
+            actions[4].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Unblock)
         );
-        assert_eq!(actions[3].label, "allow agent-browser");
+        assert_eq!(actions[4].label, "allow agent-browser");
         assert!(
-            actions[3]
+            actions[4]
                 .command
                 .contains("remove `agent-browser` from [tools].shell_deny"),
             "shell hard-deny should produce an unblock step instead of looping back to enable-browser-preview: {actions:#?}"
@@ -402,14 +506,15 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_channel_catalog_action(&actions[2]);
-        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
+        assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
+        assert_channel_catalog_action(&actions[3]);
+        assert_eq!(actions[4].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[3].browser_preview_phase,
+            actions[4].browser_preview_phase,
             Some(BrowserPreviewActionPhase::Enable)
         );
         assert!(
-            actions[3].command.contains("enable-browser-preview"),
+            actions[4].command.contains("enable-browser-preview"),
             "browser preview enable action should point operators at the preview bootstrap command: {actions:#?}"
         );
 
@@ -442,18 +547,19 @@ mod tests {
             Some(bin_dir.as_os_str()),
         );
 
-        assert_channel_catalog_action(&actions[2]);
-        assert_eq!(actions[3].kind, SetupNextActionKind::BrowserPreview);
+        assert_eq!(actions[2].kind, SetupNextActionKind::Personalize);
+        assert_channel_catalog_action(&actions[3]);
+        assert_eq!(actions[4].kind, SetupNextActionKind::BrowserPreview);
         assert_eq!(
-            actions[3].browser_preview_phase,
+            actions[4].browser_preview_phase,
             Some(BrowserPreviewActionPhase::InstallRuntime)
         );
         assert_eq!(
-            actions[3].label,
+            actions[4].label,
             format!("install {}", mvp::tools::BROWSER_COMPANION_COMMAND)
         );
         assert_eq!(
-            actions[3].command,
+            actions[4].command,
             format!(
                 "npm install -g {} && {} install",
                 mvp::tools::BROWSER_COMPANION_COMMAND,

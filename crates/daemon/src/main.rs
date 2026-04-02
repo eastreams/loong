@@ -224,6 +224,7 @@ async fn main() {
             })
             .await
         }
+        Commands::Personalize { config } => personalize_cli::run_personalize_cli(config.as_deref()),
         Commands::Import {
             output,
             force,

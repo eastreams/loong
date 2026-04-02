@@ -104,6 +104,8 @@ mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
 pub mod plugins_cli;
+pub mod operator_prompt;
+pub mod personalize_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
 pub mod provider_presentation;
@@ -152,7 +154,7 @@ pub fn active_cli_command_name() -> &'static str {
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
     )
 }
 
@@ -308,7 +310,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -499,6 +501,15 @@ pub enum Commands {
         /// Skip probing the resolved provider model list during onboarding
         #[arg(long, default_value_t = false)]
         skip_model_probe: bool,
+    },
+    #[command(
+        about = "Capture optional operator preferences for future sessions",
+        long_about = "Capture optional operator preferences for future sessions.\n\nThis command stores advisory working preferences such as preferred name, response density, initiative level, and standing boundaries. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
+    )]
+    Personalize {
+        /// Config file path to update (defaults to auto-discovery)
+        #[arg(long)]
+        config: Option<String>,
     },
     #[command(
         about = "Preview or apply migration sources explicitly",
@@ -1450,29 +1461,40 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     }
 }
 
-fn render_welcome_banner(config_path: &Path) -> String {
-    let config_path = config_path.to_string_lossy();
-    let ask_command = crate::cli_handoff::format_ask_with_config(
-        &config_path,
-        next_actions::DEFAULT_FIRST_ASK_MESSAGE,
-    );
-    let chat_command = crate::cli_handoff::format_subcommand_with_config("chat", &config_path);
-    let doctor_command = crate::cli_handoff::format_subcommand_with_config("doctor", &config_path);
+fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConfig) -> String {
+    let config_path_display = config_path.display().to_string();
+    let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
+    let mut quick_command_lines = Vec::new();
+
+    for action in next_actions {
+        let label = match action.kind {
+            next_actions::SetupNextActionKind::Ask => "First answer",
+            next_actions::SetupNextActionKind::Chat => "Chat",
+            next_actions::SetupNextActionKind::Personalize => "Working preferences",
+            next_actions::SetupNextActionKind::Channel => "Channels",
+            next_actions::SetupNextActionKind::BrowserPreview => "Browser preview",
+            next_actions::SetupNextActionKind::Doctor => "Doctor",
+        };
+        quick_command_lines.push(format!("- {label}: {}", action.command));
+    }
+
+    quick_command_lines.push(format!("- Help: {} --help", CLI_COMMAND_NAME));
+    let quick_commands = quick_command_lines.join("\n");
 
     format!(
-        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n- First answer: {}\n- Chat: {}\n- Doctor: {}\n- Help: {} --help",
+        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n{}",
         env!("CARGO_PKG_VERSION"),
-        config_path,
-        ask_command,
-        chat_command,
-        doctor_command,
-        active_cli_command_name(),
+        config_path_display,
+        quick_commands,
     )
 }
 
 pub fn run_welcome_cli() -> CliResult<()> {
     let config_path = resolve_welcome_config_path()?;
-    println!("{}", render_welcome_banner(config_path.as_path()));
+    let config_path_string = config_path.display().to_string();
+    let load_result = mvp::config::load(Some(config_path_string.as_str()))?;
+    let (_resolved_path, config) = load_result;
+    println!("{}", render_welcome_banner(config_path.as_path(), &config));
     Ok(())
 }
 
@@ -1647,7 +1669,8 @@ mod first_run_entry_tests {
 
     #[test]
     fn render_welcome_banner_includes_version_and_next_commands() {
-        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"));
+        let config = mvp::config::LoongClawConfig::default();
+        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
 
         assert!(
             rendered.contains(env!("CARGO_PKG_VERSION")),
@@ -1662,8 +1685,9 @@ mod first_run_entry_tests {
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
-            rendered.contains("loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"),
-            "welcome banner should include a quoted doctor command: {rendered}"
+            rendered
+                .contains("loong personalize --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            "welcome banner should include a quoted personalize command: {rendered}"
         );
         assert!(
             rendered.contains("loong --help"),

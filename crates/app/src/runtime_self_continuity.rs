@@ -3,7 +3,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::LoongClawConfig;
+use crate::config::{LoongClawConfig, PersonalizationConfig};
 use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
 #[cfg(feature = "memory-sqlite")]
@@ -63,6 +63,7 @@ impl RuntimeSelfContinuity {
 pub(crate) fn resolve_runtime_self_continuity(
     workspace_root: Option<&Path>,
     profile_note: Option<&str>,
+    personalization: Option<&PersonalizationConfig>,
 ) -> Option<RuntimeSelfContinuity> {
     let runtime_self = match workspace_root {
         Some(workspace_root) => runtime_self::load_runtime_self_model(workspace_root),
@@ -70,7 +71,8 @@ pub(crate) fn resolve_runtime_self_continuity(
     };
     let resolved_identity =
         runtime_identity::resolve_runtime_identity(Some(&runtime_self), profile_note);
-    let session_profile_projection = runtime_identity::render_session_profile_section(profile_note);
+    let session_profile_projection =
+        runtime_identity::render_session_profile_section(profile_note, personalization);
     let continuity = RuntimeSelfContinuity {
         runtime_self,
         resolved_identity,
@@ -86,7 +88,12 @@ pub(crate) fn resolve_runtime_self_continuity_for_config(
     let tool_runtime_config = ToolRuntimeConfig::from_loongclaw_config(config, None);
     let workspace_root = tool_runtime_config.file_root.as_deref();
     let profile_note = config.memory.trimmed_profile_note();
-    resolve_runtime_self_continuity(workspace_root, profile_note.as_deref())
+    let personalization = config.memory.trimmed_personalization();
+    resolve_runtime_self_continuity(
+        workspace_root,
+        profile_note.as_deref(),
+        personalization.as_ref(),
+    )
 }
 
 pub(crate) fn runtime_self_continuity_from_event_payload(

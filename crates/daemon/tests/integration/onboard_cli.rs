@@ -5528,7 +5528,7 @@ fn onboarding_success_summary_derives_structured_actions() {
     );
     assert_eq!(
         summary.next_actions[2].kind,
-        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Personalize
     );
     assert_eq!(
         summary.next_actions[3].kind,
@@ -5536,13 +5536,18 @@ fn onboarding_success_summary_derives_structured_actions() {
     );
     assert_eq!(
         summary.next_actions[4].kind,
+        loongclaw_daemon::onboard_cli::OnboardingActionKind::Channel
+    );
+    assert_eq!(
+        summary.next_actions[5].kind,
         crate::onboard_cli::OnboardingActionKind::BrowserPreview
     );
     assert_eq!(summary.next_actions[0].label, "first answer");
     assert_eq!(summary.next_actions[1].label, "chat");
-    assert_eq!(summary.next_actions[2].label, "Telegram");
-    assert_eq!(summary.next_actions[3].label, "Feishu/Lark");
-    assert_eq!(summary.next_actions[4].label, "enable browser preview");
+    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(summary.next_actions[3].label, "Telegram");
+    assert_eq!(summary.next_actions[4].label, "Feishu/Lark");
+    assert_eq!(summary.next_actions[5].label, "enable browser preview");
 }
 
 #[test]
@@ -5569,11 +5574,16 @@ fn onboarding_success_summary_suggests_registry_backed_channels_when_none_are_en
     );
     assert_eq!(
         summary.next_actions[2].kind,
+        crate::onboard_cli::OnboardingActionKind::Personalize
+    );
+    assert_eq!(summary.next_actions[2].label, "working preferences");
+    assert_eq!(
+        summary.next_actions[3].kind,
         crate::onboard_cli::OnboardingActionKind::Channel
     );
-    assert_eq!(summary.next_actions[2].label, "channels");
+    assert_eq!(summary.next_actions[3].label, "channels");
     assert_eq!(
-        summary.next_actions[2].command,
+        summary.next_actions[3].command,
         "loong channels --config '/tmp/loongclaw-config.toml'"
     );
     assert!(
