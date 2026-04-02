@@ -236,7 +236,8 @@ fn tui_subcommand_rejects_non_tty_with_terminal_error() {
 
     // Run `loong tui` instead of `loong chat` — uses a dedicated method
     // that invokes the `tui` subcommand directly.
-    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"));
+    let binary_path = cli_binary_path();
+    let mut command = std::process::Command::new(binary_path);
     command
         .arg("tui")
         .arg("--config")

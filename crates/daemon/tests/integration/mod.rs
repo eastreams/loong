@@ -49,6 +49,42 @@ fn cli_binary_path() -> PathBuf {
     PathBuf::from(binary_path)
 }
 
+fn detected_environment_keys() -> std::collections::BTreeSet<String> {
+    let mut keys = std::collections::BTreeSet::new();
+    let default_config = mvp::config::LoongClawConfig::default();
+
+    for provider_kind in mvp::config::ProviderKind::all_sorted() {
+        if let Some(key) = provider_kind.default_api_key_env() {
+            keys.insert(key.to_owned());
+        }
+        for alias in provider_kind.api_key_env_aliases() {
+            keys.insert((*alias).to_owned());
+        }
+        if let Some(key) = provider_kind.default_oauth_access_token_env() {
+            keys.insert(key.to_owned());
+        }
+        for alias in provider_kind.oauth_access_token_env_aliases() {
+            keys.insert((*alias).to_owned());
+        }
+    }
+    if let Some(key) = default_config.telegram.bot_token_env.as_deref() {
+        keys.insert(key.to_owned());
+    }
+    if let Some(key) = default_config.feishu.app_id_env.as_deref() {
+        keys.insert(key.to_owned());
+    }
+    if let Some(key) = default_config.feishu.app_secret_env.as_deref() {
+        keys.insert(key.to_owned());
+    }
+    for descriptor in mvp::config::web_search_provider_descriptors() {
+        for env_name in descriptor.api_key_env_names {
+            keys.insert((*env_name).to_owned());
+        }
+    }
+
+    keys
+}
+
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
     let owned_path = subcommand_path
         .into_iter()

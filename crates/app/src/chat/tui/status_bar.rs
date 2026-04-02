@@ -8,6 +8,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use super::focus::FocusLayer;
 use super::theme::Palette;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,7 @@ pub(super) fn render_status_bar(
     frame: &mut Frame<'_>,
     area: Rect,
     pane: &impl StatusBarView,
+    focus: FocusLayer,
     palette: &Palette,
 ) {
     let model_display = truncate_str(pane.model(), 24, "no model");
@@ -97,6 +99,11 @@ pub(super) fn render_status_bar(
         Style::default().fg(palette.separator),
     ));
     spans.push(scroll_state_span(pane.scroll_offset(), palette));
+    spans.push(Span::styled(
+        " | ".to_string(),
+        Style::default().fg(palette.separator),
+    ));
+    spans.push(focus_state_span(focus, palette));
     if let Some(s) = status_span {
         spans.push(s);
     }
@@ -117,6 +124,19 @@ fn scroll_state_span(scroll_offset: u16, palette: &Palette) -> Span<'static> {
         palette.success
     } else {
         palette.warning
+    };
+    let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+
+    Span::styled(label.to_string(), style)
+}
+
+fn focus_state_span(focus: FocusLayer, palette: &Palette) -> Span<'static> {
+    let (label, color) = match focus {
+        FocusLayer::Composer => ("COMPOSE", palette.info),
+        FocusLayer::Transcript => ("REVIEW", palette.warning),
+        FocusLayer::Help => ("HELP", palette.brand),
+        FocusLayer::ToolInspector => ("TOOL", palette.tool_running),
+        FocusLayer::ClarifyDialog => ("QUESTION", palette.warning),
     };
     let style = Style::default().fg(color).add_modifier(Modifier::BOLD);
 
@@ -228,7 +248,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_status_bar(f, f.area(), &bar, &palette);
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
             })
             .expect("draw");
 
@@ -298,7 +318,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_status_bar(f, f.area(), &bar, &palette);
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
             })
             .expect("draw");
 
@@ -324,7 +344,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_status_bar(f, f.area(), &bar, &palette);
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
             })
             .expect("draw");
 
@@ -353,7 +373,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                render_status_bar(f, f.area(), &bar, &palette);
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
             })
             .expect("draw");
 
@@ -362,6 +382,64 @@ mod tests {
         assert!(
             text.contains("SCROLLED"),
             "scrolled history status bar should show a SCROLLED indicator: {text:?}"
+        );
+    }
+
+    #[test]
+    fn composer_focus_status_bar_shows_compose_indicator() {
+        let backend = TestBackend::new(90, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let bar = TestBar {
+            model: "gpt-4".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            context_length: 0,
+            session_id: "sess-input".into(),
+            scroll_offset: 0,
+            status_message: None,
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("COMPOSE"),
+            "composer focus should keep the COMPOSE indicator visible: {text:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_focus_status_bar_shows_review_indicator() {
+        let backend = TestBackend::new(90, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let bar = TestBar {
+            model: "gpt-4".into(),
+            input_tokens: 0,
+            output_tokens: 0,
+            context_length: 0,
+            session_id: "sess-output".into(),
+            scroll_offset: 2,
+            status_message: None,
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_status_bar(f, f.area(), &bar, FocusLayer::Transcript, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("REVIEW"),
+            "transcript focus should expose the REVIEW indicator: {text:?}"
         );
     }
 }

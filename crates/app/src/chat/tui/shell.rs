@@ -322,6 +322,8 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
 enum HistoryNavigationAction {
     ScrollLineUp,
     ScrollLineDown,
+    ScrollHalfPageUp,
+    ScrollHalfPageDown,
     ScrollPageUp,
     ScrollPageDown,
     JumpTop,
@@ -357,6 +359,44 @@ fn history_navigation_action(
     }
 }
 
+fn transcript_navigation_action(key: KeyEvent) -> Option<HistoryNavigationAction> {
+    match key.code {
+        KeyCode::Up => Some(HistoryNavigationAction::ScrollLineUp),
+        KeyCode::Down => Some(HistoryNavigationAction::ScrollLineDown),
+        KeyCode::Char('k') if key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::ScrollLineUp)
+        }
+        KeyCode::Char('j') if key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::ScrollLineDown)
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(HistoryNavigationAction::ScrollHalfPageUp)
+        }
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(HistoryNavigationAction::ScrollHalfPageDown)
+        }
+        KeyCode::PageUp => Some(HistoryNavigationAction::ScrollPageUp),
+        KeyCode::PageDown => Some(HistoryNavigationAction::ScrollPageDown),
+        KeyCode::Home => Some(HistoryNavigationAction::JumpTop),
+        KeyCode::End => Some(HistoryNavigationAction::JumpLatest),
+        KeyCode::Char('g') if key.modifiers.is_empty() => Some(HistoryNavigationAction::JumpTop),
+        KeyCode::Char('G') => Some(HistoryNavigationAction::JumpLatest),
+        _ => None,
+    }
+}
+
+fn transcript_focus_returns_to_composer(key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Backspace => true,
+        KeyCode::Left => true,
+        KeyCode::Right => true,
+        KeyCode::Home => true,
+        KeyCode::End => true,
+        KeyCode::Char(_) if !key.modifiers.intersects(KeyModifiers::CONTROL) => true,
+        _ => false,
+    }
+}
+
 fn history_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
     let terminal_size = crossterm::terminal::size();
     let (width, height) = terminal_size.unwrap_or((80, 24));
@@ -368,6 +408,13 @@ fn history_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
     let page_step = history_height.saturating_sub(1);
 
     page_step.max(1)
+}
+
+fn history_half_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
+    let page_step = history_page_step(textarea);
+    let half_page_step = page_step / 2;
+
+    half_page_step.max(1)
 }
 
 fn apply_history_navigation(
@@ -382,6 +429,16 @@ fn apply_history_navigation(
         }
         HistoryNavigationAction::ScrollLineDown => {
             let next_offset = shell.pane.scroll_offset.saturating_sub(1);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::ScrollHalfPageUp => {
+            let half_page_step = history_half_page_step(textarea);
+            let next_offset = shell.pane.scroll_offset.saturating_add(half_page_step);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::ScrollHalfPageDown => {
+            let half_page_step = history_half_page_step(textarea);
+            let next_offset = shell.pane.scroll_offset.saturating_sub(half_page_step);
             shell.pane.scroll_offset = next_offset;
         }
         HistoryNavigationAction::ScrollPageUp => {
@@ -403,6 +460,27 @@ fn apply_history_navigation(
             shell.pane.set_status("Jumped to latest output".to_owned());
         }
     }
+}
+
+fn open_transcript_review(shell: &mut state::Shell) {
+    shell.focus.focus_transcript();
+
+    shell.pane.set_status("Transcript review mode".to_owned());
+}
+
+fn close_transcript_review(shell: &mut state::Shell) {
+    shell.focus.focus_composer();
+
+    shell.pane.set_status("Back to composer".to_owned());
+}
+
+fn toggle_transcript_review(shell: &mut state::Shell) {
+    if shell.focus.top() == FocusLayer::Transcript {
+        close_transcript_review(shell);
+        return;
+    }
+
+    open_transcript_review(shell);
 }
 
 fn tool_inspector_scroll_step() -> u16 {
@@ -442,6 +520,8 @@ fn apply_terminal_event(
     let Event::Key(key) = event else {
         return;
     };
+
+    let mut continue_in_composer = false;
 
     match shell.focus.top() {
         FocusLayer::ClarifyDialog => {
@@ -517,6 +597,44 @@ fn apply_terminal_event(
             }
             return;
         }
+        FocusLayer::Transcript => {
+            let navigation_action = transcript_navigation_action(key);
+            if let Some(action) = navigation_action {
+                apply_history_navigation(shell, textarea, action);
+                return;
+            }
+
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => {
+                    close_transcript_review(shell);
+                    return;
+                }
+                KeyCode::Tab if key.modifiers.is_empty() => {
+                    close_transcript_review(shell);
+                    return;
+                }
+                KeyCode::Char('q') if key.modifiers.is_empty() => {
+                    close_transcript_review(shell);
+                    return;
+                }
+                KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    close_transcript_review(shell);
+                    return;
+                }
+                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    open_tool_inspector(shell);
+                    return;
+                }
+                _ => {
+                    if transcript_focus_returns_to_composer(key) {
+                        close_transcript_review(shell);
+                        continue_in_composer = true;
+                    } else {
+                        return;
+                    }
+                }
+            }
+        }
         FocusLayer::Composer => {
             // Fall through to global shortcuts + textarea below
         }
@@ -527,6 +645,11 @@ fn apply_terminal_event(
     let navigation_action = history_navigation_action(key, composer_is_empty);
     if let Some(action) = navigation_action {
         apply_history_navigation(shell, textarea, action);
+        return;
+    }
+
+    if key.code == KeyCode::Tab && key.modifiers.is_empty() {
+        toggle_transcript_review(shell);
         return;
     }
 
@@ -546,7 +669,15 @@ fn apply_terminal_event(
             open_tool_inspector(shell);
             return;
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            open_transcript_review(shell);
+            return;
+        }
         _ => {}
+    }
+
+    if !continue_in_composer && shell.focus.top() != FocusLayer::Composer {
+        return;
     }
 
     // --- Escape to clear staged message --------------------------------
@@ -651,6 +782,9 @@ fn handle_slash_command(shell: &mut state::Shell, cmd: SlashCommand) {
                 shell.pane.model.clone()
             };
             shell.pane.set_status(format!("Model: {model}"));
+        }
+        SlashCommand::Review => {
+            toggle_transcript_review(shell);
         }
         SlashCommand::ThinkOn => {
             shell.show_thinking = true;
@@ -840,16 +974,25 @@ pub(super) async fn run(
     runtime: &super::runtime::TuiRuntime,
     palette_hint: super::terminal::PaletteHint,
 ) -> CliResult<()> {
-    run_inner(Some(runtime.clone()), None, None, None, palette_hint).await
+    run_inner(Some(runtime.clone()), None, None, None, None, palette_hint).await
 }
 
 pub(super) async fn run_lazy(
     config_path: Option<&str>,
     session_hint: Option<&str>,
     boot_flow: Option<Box<dyn TuiBootFlow>>,
+    initial_system_message: Option<String>,
     palette_hint: super::terminal::PaletteHint,
 ) -> CliResult<()> {
-    run_inner(None, config_path, session_hint, boot_flow, palette_hint).await
+    run_inner(
+        None,
+        config_path,
+        session_hint,
+        boot_flow,
+        initial_system_message,
+        palette_hint,
+    )
+    .await
 }
 
 fn prepare_chat_turn_future(
@@ -895,6 +1038,7 @@ async fn run_inner(
     config_path: Option<&str>,
     session_hint: Option<&str>,
     mut boot_flow: Option<Box<dyn TuiBootFlow>>,
+    initial_system_message: Option<String>,
     palette_hint: super::terminal::PaletteHint,
 ) -> CliResult<()> {
     let mut guard = TerminalGuard::enter()?;
@@ -918,10 +1062,10 @@ async fn run_inner(
     let mut owned_runtime = initial_runtime.map(std::sync::Arc::new);
     if boot_flow.is_none() {
         if let Some(runtime) = resolve_active_runtime(owned_runtime.as_ref()) {
-            activate_chat_surface(&mut shell, runtime.as_ref(), None);
+            activate_chat_surface(&mut shell, runtime.as_ref(), initial_system_message.clone());
         } else {
             let runtime = super::runtime::initialize(config_path, session_hint)?;
-            activate_chat_surface(&mut shell, &runtime, None);
+            activate_chat_surface(&mut shell, &runtime, initial_system_message.clone());
             owned_runtime = Some(std::sync::Arc::new(runtime));
         }
     }
@@ -1240,6 +1384,60 @@ mod tests {
     }
 
     #[test]
+    fn tab_switches_primary_focus_to_transcript() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let tab_event = Event::Key(plain_key(KeyCode::Tab));
+
+        apply_terminal_event(&mut shell, &mut textarea, tab_event, &tx, &mut submit_text);
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+    }
+
+    #[test]
+    fn transcript_focus_scrolls_even_when_composer_has_text() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let tab_event = Event::Key(plain_key(KeyCode::Tab));
+        let up_event = Event::Key(plain_key(KeyCode::Up));
+
+        textarea.insert_str("draft reply");
+
+        apply_terminal_event(&mut shell, &mut textarea, tab_event, &tx, &mut submit_text);
+        apply_terminal_event(&mut shell, &mut textarea, up_event, &tx, &mut submit_text);
+
+        let draft_text = textarea.lines().join("\n");
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+        assert_eq!(shell.pane.scroll_offset, 1);
+        assert_eq!(draft_text, "draft reply");
+    }
+
+    #[test]
+    fn typing_while_transcript_focused_returns_to_composer_and_keeps_draft() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let tab_event = Event::Key(plain_key(KeyCode::Tab));
+        let char_event = Event::Key(plain_key(KeyCode::Char('!')));
+
+        textarea.insert_str("draft");
+
+        apply_terminal_event(&mut shell, &mut textarea, tab_event, &tx, &mut submit_text);
+        apply_terminal_event(&mut shell, &mut textarea, char_event, &tx, &mut submit_text);
+
+        let draft_text = textarea.lines().join("\n");
+
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
+        assert_eq!(draft_text, "draft!");
+    }
+
+    #[test]
     fn ctrl_o_without_tool_calls_sets_status_message() {
         let mut shell = state::Shell::new("test");
         let mut textarea = tui_textarea::TextArea::default();
@@ -1279,6 +1477,37 @@ mod tests {
 
         assert_eq!(shell.focus.top(), FocusLayer::ToolInspector);
         assert_eq!(selected_tool_id, Some("tool-1"));
+    }
+
+    #[test]
+    fn ctrl_r_enables_history_navigation_with_non_empty_composer() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let review_event = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let up_event = Event::Key(plain_key(KeyCode::Up));
+
+        textarea.insert_str("draft message");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            review_event,
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(&mut shell, &mut textarea, up_event, &tx, &mut submit_text);
+
+        assert_eq!(
+            shell.pane.scroll_offset, 1,
+            "review mode should allow transcript scrolling even when the composer has text"
+        );
+        assert_eq!(
+            textarea.lines().join("\n"),
+            "draft message",
+            "review mode should not mutate composer contents while navigating transcript"
+        );
     }
 
     #[test]

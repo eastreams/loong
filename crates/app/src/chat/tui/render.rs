@@ -82,10 +82,23 @@ pub(super) fn draw(
     render_separator(frame, areas.separator2, palette);
 
     // 5. Input area
-    input::render_input(frame, areas.input, textarea, state.pane(), palette);
+    input::render_input(
+        frame,
+        areas.input,
+        textarea,
+        state.pane(),
+        state.focus().top(),
+        palette,
+    );
 
     // 6. Status bar
-    status_bar::render_status_bar(frame, areas.status_bar, state.pane(), palette);
+    status_bar::render_status_bar(
+        frame,
+        areas.status_bar,
+        state.pane(),
+        state.focus().top(),
+        palette,
+    );
 
     // 7. Overlays
     if let Some(dialog) = state.clarify_dialog()
@@ -246,6 +259,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
                 ("/help", "Toggle this help"),
                 ("/clear", "Clear conversation"),
                 ("/model", "Show current model"),
+                ("/review", "Toggle transcript review"),
                 ("/think-on", "Show thinking blocks"),
                 ("/think-off", "Hide thinking blocks"),
                 ("/exit", "Exit the TUI"),
@@ -259,6 +273,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
                 ("Up/Down", "Scroll history when empty"),
                 ("PageUp/Dn", "Page scroll history"),
                 ("Home/End", "Jump top/latest when empty"),
+                ("Ctrl+R", "Toggle transcript review"),
                 ("Ctrl+O", "Open latest tool details"),
                 ("Ctrl+C", "Interrupt / cancel"),
                 ("Esc", "Close dialogs"),
@@ -726,6 +741,10 @@ mod tests {
         assert!(
             text.contains("Ctrl+O"),
             "help overlay should advertise tool inspection shortcut"
+        );
+        assert!(
+            text.contains("Ctrl+R"),
+            "help overlay should advertise transcript review shortcut"
         );
     }
 

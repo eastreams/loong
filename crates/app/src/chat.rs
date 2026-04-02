@@ -28,6 +28,7 @@ mod tui;
 #[cfg(feature = "channel-cli")]
 pub use self::tui::{
     TuiBootFlow, TuiBootScreen, TuiBootTransition, run_tui, run_tui_with_boot_flow,
+    run_tui_with_system_message,
 };
 mod ui_mode;
 

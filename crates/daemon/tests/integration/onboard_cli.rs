@@ -54,39 +54,7 @@ struct DetectedEnvironmentGuard {
 impl DetectedEnvironmentGuard {
     fn without_detected_environment() -> Self {
         let lock = super::lock_daemon_test_environment();
-        let mut keys = std::collections::BTreeSet::new();
-        let default_config = mvp::config::LoongClawConfig::default();
-
-        for provider_kind in mvp::config::ProviderKind::all_sorted() {
-            if let Some(key) = provider_kind.default_api_key_env() {
-                keys.insert(key.to_owned());
-            }
-            for alias in provider_kind.api_key_env_aliases() {
-                keys.insert((*alias).to_owned());
-            }
-            if let Some(key) = provider_kind.default_oauth_access_token_env() {
-                keys.insert(key.to_owned());
-            }
-            for alias in provider_kind.oauth_access_token_env_aliases() {
-                keys.insert((*alias).to_owned());
-            }
-        }
-        if let Some(key) = default_config.telegram.bot_token_env.as_deref() {
-            keys.insert(key.to_owned());
-        }
-        if let Some(key) = default_config.feishu.app_id_env.as_deref() {
-            keys.insert(key.to_owned());
-        }
-        if let Some(key) = default_config.feishu.app_secret_env.as_deref() {
-            keys.insert(key.to_owned());
-        }
-        for descriptor in mvp::config::web_search_provider_descriptors() {
-            for env_name in descriptor.api_key_env_names {
-                keys.insert((*env_name).to_owned());
-            }
-        }
-
-        let saved = keys
+        let saved = detected_environment_keys()
             .into_iter()
             .map(|key| {
                 let value = std::env::var_os(&key);

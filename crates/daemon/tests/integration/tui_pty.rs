@@ -61,11 +61,30 @@ struct TuiPtyFixture {
     _root: PathBuf,
 }
 
-const ONBOARDING_START_MARKERS: &[&str] = &[
+const GUIDED_ONBOARDING_START_MARKERS: &[&str] = &[
     "Security Check",
     "Setup Wizard",
     "review the trust boundary",
 ];
+const ONBOARD_OPENING_MARKERS: &[&str] = &[
+    "Press Enter to begin.",
+    "A focused full-screen deck for first setup",
+    "Nothing is written until Verify & Write.",
+];
+const ONBOARD_ENTRY_PATH_MARKERS: &[&str] = &["Choose A Path", "Start fresh"];
+const MODEL_STEP_MARKERS: &[&str] = &["choose model", "model"];
+const CREDENTIAL_STEP_MARKERS: &[&str] = &["credential source", "credential env"];
+const WEB_SEARCH_STEP_MARKERS: &[&str] = &["Web Search", "Default Web Search"];
+const MEMORY_STEP_MARKERS: &[&str] = &["memory profile", "Memory Profile"];
+const PERSONALITY_STEP_MARKERS: &[&str] = &["CLI Personality", "personality"];
+const RUNTIME_SURFACES_STEP_MARKERS: &[&str] = &["Runtime Surfaces", "CLI shell"];
+const SQLITE_PATH_STEP_MARKERS: &[&str] = &["choose sqlite memory path", "SQLite path:"];
+const FILE_ROOT_STEP_MARKERS: &[&str] = &["choose workspace root", "File root:"];
+const SERVICE_CHANNEL_STEP_MARKERS: &[&str] = &["Service Channels"];
+const ACP_STEP_MARKERS: &[&str] = &["choose protocol support", "ACP Protocol", "ACP Backend"];
+const VERIFY_WRITE_STEP_MARKERS: &[&str] = &["verify and write", "Verification", "Draft review"];
+const LAUNCH_HANDOFF_STEP_MARKERS: &[&str] =
+    &["Ready handoff", "Enter opens chat in this terminal"];
 
 impl TuiPtyFixture {
     fn spawn_chat_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
@@ -92,6 +111,20 @@ impl TuiPtyFixture {
                 cmd.arg(config_path);
             }
         })
+    }
+
+    fn spawn_onboard_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
+        Self::spawn_command(label, write_config, extra_env, |cmd, config_path| {
+            cmd.arg("onboard");
+            if let Some(config_path) = config_path {
+                cmd.arg("--output");
+                cmd.arg(config_path);
+            }
+        })
+    }
+
+    fn spawn_onboard_without_config(label: &str) -> Self {
+        Self::spawn_onboard_with_env(label, false, &[])
     }
 
     /// Spawn `loong chat --ui tui` inside a real PTY.
@@ -142,7 +175,7 @@ impl TuiPtyFixture {
             })
             .expect("open PTY pair");
 
-        let binary_path = env!("CARGO_BIN_EXE_loongclaw");
+        let binary_path = cli_binary_path();
         let mut cmd = CommandBuilder::new(binary_path);
         let maybe_config_path = write_config.then_some(&config_path);
         build_args(&mut cmd, maybe_config_path);
@@ -151,6 +184,9 @@ impl TuiPtyFixture {
         cmd.env("COLORFGBG", "15;0");
         cmd.env_remove("LOONGCLAW_CONFIG_PATH");
         cmd.env_remove("USERPROFILE");
+        for env_name in detected_environment_keys() {
+            cmd.env_remove(env_name);
+        }
         for (key, value) in extra_env {
             cmd.env(key, value);
         }
@@ -382,14 +418,75 @@ fn wait_for_fullscreen_onboarding_start(
         ));
     }
 
-    for marker in ONBOARDING_START_MARKERS {
+    for marker in GUIDED_ONBOARDING_START_MARKERS {
         if visible_screen.contains(marker) {
             return Ok(visible_screen);
         }
     }
 
     let remaining = deadline.saturating_duration_since(Instant::now());
-    fixture.wait_for_any(ONBOARDING_START_MARKERS, remaining)
+    fixture.wait_for_any(GUIDED_ONBOARDING_START_MARKERS, remaining)
+}
+
+fn wait_for_onboard_opening_screen(
+    fixture: &mut TuiPtyFixture,
+    timeout: Duration,
+) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let visible_screen = fixture.read_screen(timeout)?;
+    if visible_screen.trim().is_empty() {
+        let child_state = match fixture.child.try_wait() {
+            Ok(Some(status)) => format!("child exited with code {}", status.exit_code()),
+            Ok(None) => "child still running".to_owned(),
+            Err(error) => format!("failed to query child status: {error}"),
+        };
+
+        return Err(format!(
+            "timed out waiting for the first visible fullscreen frame before the onboard opening deck ({child_state})"
+        ));
+    }
+
+    for marker in ONBOARD_OPENING_MARKERS {
+        if visible_screen.contains(marker) {
+            return Ok(visible_screen);
+        }
+    }
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    fixture.wait_for_any(ONBOARD_OPENING_MARKERS, remaining)
+}
+
+fn enter_onboard_cli_guided_flow(
+    fixture: &mut TuiPtyFixture,
+    timeout: Duration,
+) -> Result<String, String> {
+    fixture.send_keys(b"\r")?;
+
+    let mut next_screen = fixture.wait_for_any(
+        &[
+            "Providers",
+            MODEL_STEP_MARKERS[0],
+            MODEL_STEP_MARKERS[1],
+            ONBOARD_ENTRY_PATH_MARKERS[0],
+            ONBOARD_ENTRY_PATH_MARKERS[1],
+        ],
+        timeout,
+    )?;
+
+    if next_screen.contains(ONBOARD_ENTRY_PATH_MARKERS[0])
+        || next_screen.contains(ONBOARD_ENTRY_PATH_MARKERS[1])
+    {
+        fixture.send_keys(b"G")?;
+        fixture.send_keys(b"\r")?;
+        next_screen = fixture.wait_for_any(&["Providers", "choose model"], timeout)?;
+    }
+
+    if next_screen.contains("Providers") {
+        fixture.send_keys(b"\r")?;
+        return fixture.wait_for_any(MODEL_STEP_MARKERS, timeout);
+    }
+
+    Ok(next_screen)
 }
 
 impl Drop for TuiPtyFixture {
@@ -480,6 +577,109 @@ fn tui_subcommand_missing_config_starts_fullscreen_onboarding() {
             || screen.contains("Setup Wizard")
             || screen.contains("review the trust boundary"),
         "missing-config tui subcommand should show onboarding content instead of exiting: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+#[test]
+fn onboard_cli_missing_config_can_finish_fullscreen_onboarding_and_enter_chat() {
+    let mut fixture = TuiPtyFixture::spawn_onboard_with_env(
+        "onboard-cli-fullscreen-happy-path",
+        false,
+        &[("OPENAI_CODEX_OAUTH_TOKEN", "test-oauth-token")],
+    );
+
+    wait_for_onboard_opening_screen(&mut fixture, Duration::from_secs(10))
+        .expect("onboard should start on the fullscreen opening deck");
+
+    enter_onboard_cli_guided_flow(&mut fixture, Duration::from_secs(10))
+        .expect("onboard should advance from the opening deck into guided setup");
+
+    fixture.send_keys(b"\r").expect("keep default model");
+
+    fixture
+        .wait_for_any(CREDENTIAL_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the credential step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default credential env");
+
+    fixture
+        .wait_for_any(WEB_SEARCH_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the web-search step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default web-search selection");
+
+    fixture
+        .wait_for_any(MEMORY_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the memory profile step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default memory profile");
+
+    fixture
+        .wait_for_any(PERSONALITY_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the personality step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default CLI personality");
+
+    fixture
+        .wait_for_any(RUNTIME_SURFACES_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the runtime-surfaces step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default runtime-surfaces selection");
+
+    fixture
+        .wait_for_any(SQLITE_PATH_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the sqlite path step");
+    fixture.send_keys(b"\r").expect("keep default sqlite path");
+
+    fixture
+        .wait_for_any(FILE_ROOT_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the workspace root step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default workspace root");
+
+    fixture
+        .wait_for_any(SERVICE_CHANNEL_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the service-channel step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default service-channel selection");
+
+    fixture
+        .wait_for_any(ACP_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the ACP step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default ACP selection");
+
+    fixture
+        .wait_for_any(VERIFY_WRITE_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the verify-and-write step");
+    fixture
+        .send_keys(b"\r")
+        .expect("write config from verify screen");
+
+    fixture
+        .wait_for_any(LAUNCH_HANDOFF_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should render the launch handoff after writing config");
+    fixture
+        .send_keys(b"\r")
+        .expect("enter chat from launch handoff");
+
+    let screen = fixture
+        .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))
+        .expect("successful fullscreen onboarding should transition into the shared chat shell");
+
+    assert!(
+        screen.contains("Setup complete. Entering chat."),
+        "chat shell should preserve the setup completion handoff message: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");
@@ -1059,6 +1259,29 @@ fn tui_scroll_does_not_crash() {
     assert!(
         has_loongclaw || has_welcome,
         "TUI should still be alive after scroll keys: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+/// Ctrl+R enters transcript review mode so navigation is discoverable.
+#[test]
+fn tui_ctrl_r_enters_transcript_review_mode() {
+    let mut fixture = TuiPtyFixture::spawn("review-mode");
+
+    fixture
+        .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))
+        .expect("TUI should be ready");
+
+    fixture.send_keys(b"\x12").expect("send Ctrl+R");
+
+    let screen = fixture
+        .wait_for("Review mode", Duration::from_secs(5))
+        .expect("Ctrl+R should surface the transcript review affordance");
+
+    assert!(
+        contains_collapsed(&screen, "Review mode"),
+        "Ctrl+R should surface a visible review mode affordance: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");

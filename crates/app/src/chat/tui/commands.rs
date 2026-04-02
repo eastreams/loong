@@ -3,6 +3,7 @@ pub(super) enum SlashCommand {
     Help,
     Clear,
     Model,
+    Review,
     ThinkOn,
     ThinkOff,
     Exit,
@@ -13,6 +14,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/help", "Show available commands"),
     ("/clear", "Clear conversation history"),
     ("/model", "Show current model info"),
+    ("/review", "Toggle transcript review mode (or Ctrl+R)"),
     ("/think-on", "Enable thinking blocks (or Ctrl+T)"),
     ("/think-off", "Disable thinking blocks (or Ctrl+T)"),
     ("/exit", "Exit the TUI"),
@@ -28,6 +30,7 @@ pub(super) fn parse(input: &str) -> Option<SlashCommand> {
         "/help" => SlashCommand::Help,
         "/clear" => SlashCommand::Clear,
         "/model" => SlashCommand::Model,
+        "/review" => SlashCommand::Review,
         "/think-on" => SlashCommand::ThinkOn,
         "/think-off" => SlashCommand::ThinkOff,
         "/exit" | "/quit" | "/q" => SlashCommand::Exit,
@@ -52,6 +55,7 @@ mod tests {
         assert_eq!(parse("/help"), Some(SlashCommand::Help));
         assert_eq!(parse("/clear"), Some(SlashCommand::Clear));
         assert_eq!(parse("/model"), Some(SlashCommand::Model));
+        assert_eq!(parse("/review"), Some(SlashCommand::Review));
         assert_eq!(parse("/think-on"), Some(SlashCommand::ThinkOn));
         assert_eq!(parse("/think-off"), Some(SlashCommand::ThinkOff));
         assert_eq!(parse("/exit"), Some(SlashCommand::Exit));
@@ -85,6 +89,16 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert!(results.iter().any(|(name, _)| *name == "/think-on"));
         assert!(results.iter().any(|(name, _)| *name == "/think-off"));
+    }
+
+    #[test]
+    fn completions_include_review_command() {
+        let results = completions("/re");
+
+        assert!(
+            results.iter().any(|(name, _)| *name == "/review"),
+            "review command should be discoverable via completion"
+        );
     }
 
     #[test]

@@ -1215,8 +1215,16 @@ async fn run_onboard_cli_inner(
                     let blocked_chat_config_path =
                         launch_chat_config_path(&blocked_summary, blocked_launch_result);
                     if let Some(config_path) = blocked_chat_config_path.as_deref() {
-                        crate::run_chat_cli(Some(config_path), None, false, false, &[], None)
-                            .await?;
+                        crate::run_chat_cli(
+                            Some(config_path),
+                            None,
+                            crate::CliChatUiModeArg::Tui,
+                            false,
+                            false,
+                            &[],
+                            None,
+                        )
+                        .await?;
                     }
                     return Err(failure);
                 }
@@ -1266,7 +1274,12 @@ async fn run_onboard_cli_inner(
     }
     let chat_config_path = launch_chat_config_path(&success_summary, launch_result);
     if let Some(config_path) = chat_config_path.as_deref() {
-        crate::run_chat_cli(Some(config_path), None, false, false, &[], None).await?;
+        crate::tui_cli::run_tui_cli_with_system_message(
+            Some(config_path),
+            None,
+            Some("Setup complete. Entering chat.".to_owned()),
+        )
+        .await?;
     }
 
     Ok(())

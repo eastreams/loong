@@ -81,7 +81,32 @@ pub async fn run_tui(config_path: Option<&str>, session_hint: Option<&str>) -> C
         }
     }
 
-    shell::run_lazy(config_path, session_hint, None, policy.palette_hint).await
+    shell::run_lazy(config_path, session_hint, None, None, policy.palette_hint).await
+}
+
+pub async fn run_tui_with_system_message(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    system_message: Option<String>,
+) -> CliResult<()> {
+    let snapshot = terminal::TerminalSupportSnapshot::capture_current();
+    let policy = terminal::resolve_terminal_policy(snapshot);
+
+    match policy.launch {
+        terminal::TerminalLaunch::Tui => {}
+        terminal::TerminalLaunch::FallbackToText { reason } => {
+            return Err(reason);
+        }
+    }
+
+    shell::run_lazy(
+        config_path,
+        session_hint,
+        None,
+        system_message,
+        policy.palette_hint,
+    )
+    .await
 }
 
 pub async fn run_tui_with_boot_flow(
@@ -103,6 +128,7 @@ pub async fn run_tui_with_boot_flow(
         config_path,
         session_hint,
         Some(boot_flow),
+        None,
         policy.palette_hint,
     )
     .await
