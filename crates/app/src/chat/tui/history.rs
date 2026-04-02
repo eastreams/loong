@@ -220,6 +220,18 @@ fn render_message(
                 }
             }
         }
+        Role::Surface => {
+            for part in &msg.parts {
+                if let MessagePart::Text(text) = part {
+                    for line_str in text.lines() {
+                        lines.push(Line::styled(
+                            line_str.to_owned(),
+                            Style::default().fg(palette.text),
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     lines

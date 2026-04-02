@@ -2,6 +2,7 @@ use std::env;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+mod fullscreen;
 #[path = "onboard_protocols.rs"]
 mod onboard_protocols;
 #[path = "onboard_workspace.rs"]
@@ -9,6 +10,7 @@ mod onboard_workspace;
 pub mod presentation;
 #[allow(dead_code)] // Contains functions accessed by integration tests via pub re-exports
 mod screens;
+pub(crate) use fullscreen::build_first_run_fullscreen_boot_flow;
 pub use screens::*;
 
 use loongclaw_app as mvp;

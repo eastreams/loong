@@ -27,6 +27,7 @@ pub(super) struct Pane {
     pub(super) last_spinner_tick: Instant,
     pub(super) status_message: Option<(String, Instant)>,
     pub(super) clarify_dialog: Option<ClarifyDialog>,
+    pub(super) input_hint_override: Option<String>,
     /// Depth-1 staged message queue: holds the next user message to submit
     /// once the current agent turn completes.
     pub(super) staged_message: Option<String>,
@@ -51,6 +52,7 @@ impl Pane {
             last_spinner_tick: Instant::now(),
             status_message: None,
             clarify_dialog: None,
+            input_hint_override: None,
             staged_message: None,
         }
     }
@@ -143,6 +145,16 @@ impl Pane {
 
     pub(super) fn add_system_message(&mut self, text: &str) {
         self.messages.push(Message::system(text));
+    }
+
+    pub(super) fn show_surface_lines(&mut self, lines: &[String]) {
+        let content = lines.join("\n");
+        self.messages.clear();
+        self.messages.push(Message::surface(content));
+    }
+
+    pub(super) fn clear_input_hint_override(&mut self) {
+        self.input_hint_override = None;
     }
 
     pub(super) fn total_tokens(&self) -> u32 {

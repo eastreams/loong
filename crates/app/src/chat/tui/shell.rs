@@ -2,7 +2,7 @@ use std::io;
 use std::pin::Pin;
 use std::time::Instant;
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -19,6 +19,7 @@ use crate::conversation::{
     ConversationRuntimeBinding, ConversationTurnObserverHandle, ProviderErrorMode,
 };
 
+use super::boot::{TuiBootFlow, TuiBootScreen, TuiBootTransition};
 use super::commands::{self, SlashCommand};
 use super::dialog::ClarifyDialog;
 use super::events::UiEvent;
@@ -97,6 +98,9 @@ impl InputView for state::Pane {
     }
     fn has_staged_message(&self) -> bool {
         self.staged_message.is_some()
+    }
+    fn input_hint(&self) -> Option<&str> {
+        self.input_hint_override.as_deref()
     }
 }
 
@@ -475,12 +479,233 @@ fn handle_slash_command(shell: &mut state::Shell, cmd: SlashCommand) {
     }
 }
 
+fn terminal_render_width() -> usize {
+    match crossterm::terminal::size() {
+        Ok((width, _)) => usize::from(width.max(40)),
+        Err(_) => 80,
+    }
+}
+
+fn replace_textarea_contents(textarea: &mut tui_textarea::TextArea<'_>, value: &str) {
+    textarea.select_all();
+    textarea.delete_str(usize::MAX);
+
+    if !value.is_empty() {
+        textarea.insert_str(value);
+    }
+}
+
+fn take_textarea_submission(textarea: &mut tui_textarea::TextArea<'_>) -> String {
+    let text = textarea.lines().join("\n");
+    textarea.select_all();
+    textarea.delete_str(usize::MAX);
+    text
+}
+
+fn apply_boot_screen(
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    screen: &TuiBootScreen,
+) {
+    shell.pane.show_surface_lines(&screen.lines);
+    shell.pane.input_hint_override = Some(screen.prompt_hint.clone());
+    shell.pane.agent_running = false;
+    shell.pane.scroll_offset = u16::MAX;
+    replace_textarea_contents(textarea, &screen.initial_value);
+}
+
+fn activate_chat_surface(
+    shell: &mut state::Shell,
+    runtime: &super::runtime::TuiRuntime,
+    system_message: Option<String>,
+) {
+    shell.pane.messages.clear();
+    shell.pane.model = runtime.model_label.clone();
+    shell.pane.context_length = state::context_length_for_model(&runtime.model_label);
+    shell.pane.clear_input_hint_override();
+
+    if let Some(system_message) = system_message {
+        shell.pane.add_system_message(&system_message);
+    }
+
+    shell
+        .pane
+        .add_system_message("Welcome to LoongClaw TUI. Type a message and press Enter.");
+}
+
+fn handle_boot_key_event(
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    key: KeyEvent,
+    tx: &mpsc::UnboundedSender<UiEvent>,
+    boot_escape_submit: Option<&str>,
+    submit_text: &mut Option<String>,
+) {
+    let is_ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+    if is_ctrl_c {
+        shell.running = false;
+        return;
+    }
+
+    let is_escape = key.code == KeyCode::Esc;
+    if is_escape {
+        *submit_text = boot_escape_submit.map(str::to_owned);
+        return;
+    }
+
+    let is_submit = key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT);
+    if is_submit {
+        let text = take_textarea_submission(textarea);
+        *submit_text = Some(text);
+        return;
+    }
+
+    let forwarded_event = Event::Key(key);
+    apply_terminal_event(shell, textarea, forwarded_event, tx, submit_text);
+}
+
+fn apply_boot_transition(
+    transition: TuiBootTransition,
+    boot_flow: &mut Option<Box<dyn TuiBootFlow>>,
+    boot_escape_submit: &mut Option<String>,
+    owned_runtime: &mut Option<std::sync::Arc<super::runtime::TuiRuntime>>,
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+) -> CliResult<()> {
+    match transition {
+        TuiBootTransition::Screen(screen) => {
+            *boot_escape_submit = screen.escape_submit.clone();
+            apply_boot_screen(shell, textarea, &screen);
+        }
+        TuiBootTransition::StartChat { system_message } => {
+            if owned_runtime.is_none() {
+                let runtime = super::runtime::initialize(config_path, session_hint)?;
+                let shared_runtime = std::sync::Arc::new(runtime);
+                *owned_runtime = Some(shared_runtime);
+            }
+
+            let active_runtime = resolve_active_runtime(owned_runtime.as_ref());
+            let Some(runtime) = active_runtime else {
+                return Err("failed to initialize TUI runtime after boot flow".to_owned());
+            };
+
+            *boot_flow = None;
+            *boot_escape_submit = None;
+            activate_chat_surface(shell, runtime.as_ref(), system_message);
+            replace_textarea_contents(textarea, "");
+        }
+        TuiBootTransition::Exit => {
+            shell.running = false;
+        }
+    }
+
+    Ok(())
+}
+
+async fn submit_boot_flow_input(
+    boot_flow: &mut Option<Box<dyn TuiBootFlow>>,
+    boot_escape_submit: &mut Option<String>,
+    owned_runtime: &mut Option<std::sync::Arc<super::runtime::TuiRuntime>>,
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    text: &str,
+) -> CliResult<()> {
+    let width = terminal_render_width();
+    let input = text.to_owned();
+
+    let Some(flow) = boot_flow.as_mut() else {
+        return Err("internal TUI state error: boot flow missing during submit".to_owned());
+    };
+
+    let transition = flow.submit(input, width).await?;
+
+    apply_boot_transition(
+        transition,
+        boot_flow,
+        boot_escape_submit,
+        owned_runtime,
+        shell,
+        textarea,
+        config_path,
+        session_hint,
+    )?;
+
+    Ok(())
+}
+
+fn resolve_active_runtime(
+    owned_runtime: Option<&std::sync::Arc<super::runtime::TuiRuntime>>,
+) -> Option<std::sync::Arc<super::runtime::TuiRuntime>> {
+    owned_runtime.cloned()
+}
+
 // ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
 pub(super) async fn run(
     runtime: &super::runtime::TuiRuntime,
+    palette_hint: super::terminal::PaletteHint,
+) -> CliResult<()> {
+    run_inner(Some(runtime.clone()), None, None, None, palette_hint).await
+}
+
+pub(super) async fn run_lazy(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    boot_flow: Option<Box<dyn TuiBootFlow>>,
+    palette_hint: super::terminal::PaletteHint,
+) -> CliResult<()> {
+    run_inner(None, config_path, session_hint, boot_flow, palette_hint).await
+}
+
+fn prepare_chat_turn_future(
+    runtime: std::sync::Arc<super::runtime::TuiRuntime>,
+    text: String,
+    tx: mpsc::UnboundedSender<UiEvent>,
+) -> Pin<Box<dyn std::future::Future<Output = ()>>> {
+    let obs = build_tui_observer(tx.clone());
+    let tx2 = tx;
+    let streamed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let streamed_flag = streamed.clone();
+    let tracking_obs = TrackingObserver {
+        inner: obs,
+        streamed: streamed_flag,
+    };
+    let tracking_handle: crate::conversation::ConversationTurnObserverHandle =
+        std::sync::Arc::new(tracking_obs);
+
+    Box::pin(async move {
+        let result = run_turn(runtime.as_ref(), text.as_str(), Some(tracking_handle)).await;
+        match result {
+            Ok(reply) => {
+                if !streamed.load(std::sync::atomic::Ordering::Relaxed) && !reply.is_empty() {
+                    let _ = tx2.send(UiEvent::Token {
+                        content: reply,
+                        is_thinking: false,
+                    });
+                    let _ = tx2.send(UiEvent::ResponseDone {
+                        input_tokens: 0,
+                        output_tokens: 0,
+                    });
+                }
+            }
+            Err(error) => {
+                let _ = tx2.send(UiEvent::TurnError(error));
+            }
+        }
+    })
+}
+
+async fn run_inner(
+    initial_runtime: Option<super::runtime::TuiRuntime>,
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    mut boot_flow: Option<Box<dyn TuiBootFlow>>,
     palette_hint: super::terminal::PaletteHint,
 ) -> CliResult<()> {
     let mut guard = TerminalGuard::enter()?;
@@ -490,12 +715,27 @@ pub(super) async fn run(
     let mut textarea = tui_textarea::TextArea::default();
     textarea.set_cursor_line_style(Style::default());
 
-    let mut shell = state::Shell::new(&runtime.session_id);
-    shell.pane.model = runtime.model_label.clone();
-    shell.pane.context_length = state::context_length_for_model(&runtime.model_label);
-    shell
-        .pane
-        .add_system_message("Welcome to LoongClaw TUI. Type a message and press Enter.");
+    let session_id = initial_runtime
+        .as_ref()
+        .map(|runtime| runtime.session_id.as_str())
+        .or_else(|| {
+            session_hint
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .unwrap_or("default");
+    let mut shell = state::Shell::new(session_id);
+
+    let mut owned_runtime = initial_runtime.map(std::sync::Arc::new);
+    if boot_flow.is_none() {
+        if let Some(runtime) = resolve_active_runtime(owned_runtime.as_ref()) {
+            activate_chat_surface(&mut shell, runtime.as_ref(), None);
+        } else {
+            let runtime = super::runtime::initialize(config_path, session_hint)?;
+            activate_chat_surface(&mut shell, &runtime, None);
+            owned_runtime = Some(std::sync::Arc::new(runtime));
+        }
+    }
 
     let palette = match palette_hint {
         super::terminal::PaletteHint::Dark => Palette::dark(),
@@ -511,6 +751,14 @@ pub(super) async fn run(
     let mut turn_future: Pin<Box<dyn std::future::Future<Output = ()> + '_>> =
         Box::pin(std::future::pending());
     let mut turn_active = false;
+    let mut boot_escape_submit: Option<String> = None;
+
+    if let Some(flow) = boot_flow.as_mut() {
+        let width = terminal_render_width();
+        let screen = flow.begin(width)?;
+        boot_escape_submit = screen.escape_submit.clone();
+        apply_boot_screen(&mut shell, &mut textarea, &screen);
+    }
 
     loop {
         // ── Phase 1: Drain all pending events (non-blocking) ──────────
@@ -528,13 +776,27 @@ pub(super) async fn run(
             while let Some(maybe_event) = crossterm_events.next().now_or_never().flatten() {
                 if let Ok(event) = maybe_event {
                     let mut submit_text_drain: Option<String> = None;
-                    apply_terminal_event(
-                        &mut shell,
-                        &mut textarea,
-                        event,
-                        &tx,
-                        &mut submit_text_drain,
-                    );
+                    if boot_flow.is_some() {
+                        if let Event::Key(key) = event {
+                            let boot_escape_submit = boot_escape_submit.as_deref();
+                            handle_boot_key_event(
+                                &mut shell,
+                                &mut textarea,
+                                key,
+                                &tx,
+                                boot_escape_submit,
+                                &mut submit_text_drain,
+                            );
+                        }
+                    } else {
+                        apply_terminal_event(
+                            &mut shell,
+                            &mut textarea,
+                            event,
+                            &tx,
+                            &mut submit_text_drain,
+                        );
+                    }
                     shell.dirty = true;
 
                     if submit_text_drain.is_some() {
@@ -565,41 +827,24 @@ pub(super) async fn run(
 
         // Submit turn if drain phase produced one
         if let Some(ref text) = submit_text.take() {
-            let obs = build_tui_observer(tx.clone());
-            let tx2 = tx.clone();
-            let streamed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let streamed_flag = streamed.clone();
-            let tracking_obs = TrackingObserver {
-                inner: obs,
-                streamed: streamed_flag,
-            };
-            let tracking_handle: crate::conversation::ConversationTurnObserverHandle =
-                std::sync::Arc::new(tracking_obs);
-
-            let text_owned = text.to_string();
-            turn_future = Box::pin(async move {
-                let result = run_turn(runtime, &text_owned, Some(tracking_handle)).await;
-                match result {
-                    Ok(reply) => {
-                        if !streamed.load(std::sync::atomic::Ordering::Relaxed) && !reply.is_empty()
-                        {
-                            let _ = tx2.send(UiEvent::Token {
-                                content: reply,
-                                is_thinking: false,
-                            });
-                            let _ = tx2.send(UiEvent::ResponseDone {
-                                input_tokens: 0,
-                                output_tokens: 0,
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx2.send(UiEvent::TurnError(e));
-                    }
-                }
-            });
-            turn_active = true;
-            shell.pane.agent_running = true;
+            if boot_flow.is_some() {
+                submit_boot_flow_input(
+                    &mut boot_flow,
+                    &mut boot_escape_submit,
+                    &mut owned_runtime,
+                    &mut shell,
+                    &mut textarea,
+                    config_path,
+                    session_hint,
+                    text,
+                )
+                .await?;
+                shell.dirty = true;
+            } else if let Some(runtime) = resolve_active_runtime(owned_runtime.as_ref()) {
+                turn_future = prepare_chat_turn_future(runtime, text.to_string(), tx.clone());
+                turn_active = true;
+                shell.pane.agent_running = true;
+            }
         }
 
         // ── Phase 2: Render (only when dirty) ─────────────────────────
@@ -626,13 +871,27 @@ pub(super) async fn run(
 
             maybe_event = crossterm_events.next() => {
                 if let Some(Ok(event)) = maybe_event {
-                    apply_terminal_event(
-                        &mut shell,
-                        &mut textarea,
-                        event,
-                        &tx,
-                        &mut submit_text,
-                    );
+                    if boot_flow.is_some() {
+                        if let Event::Key(key) = event {
+                            let boot_escape_submit = boot_escape_submit.as_deref();
+                            handle_boot_key_event(
+                                &mut shell,
+                                &mut textarea,
+                                key,
+                                &tx,
+                                boot_escape_submit,
+                                &mut submit_text,
+                            );
+                        }
+                    } else {
+                        apply_terminal_event(
+                            &mut shell,
+                            &mut textarea,
+                            event,
+                            &tx,
+                            &mut submit_text,
+                        );
+                    }
                     shell.dirty = true;
                 }
             }
@@ -656,41 +915,24 @@ pub(super) async fn run(
 
         // Submit turn after select! releases borrows
         if let Some(ref text) = submit_text.take() {
-            let obs = build_tui_observer(tx.clone());
-            let tx2 = tx.clone();
-            let streamed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let streamed_flag = streamed.clone();
-            let tracking_obs = TrackingObserver {
-                inner: obs,
-                streamed: streamed_flag,
-            };
-            let tracking_handle: crate::conversation::ConversationTurnObserverHandle =
-                std::sync::Arc::new(tracking_obs);
-
-            let text_owned = text.to_string();
-            turn_future = Box::pin(async move {
-                let result = run_turn(runtime, &text_owned, Some(tracking_handle)).await;
-                match result {
-                    Ok(reply) => {
-                        if !streamed.load(std::sync::atomic::Ordering::Relaxed) && !reply.is_empty()
-                        {
-                            let _ = tx2.send(UiEvent::Token {
-                                content: reply,
-                                is_thinking: false,
-                            });
-                            let _ = tx2.send(UiEvent::ResponseDone {
-                                input_tokens: 0,
-                                output_tokens: 0,
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx2.send(UiEvent::TurnError(e));
-                    }
-                }
-            });
-            turn_active = true;
-            shell.pane.agent_running = true;
+            if boot_flow.is_some() {
+                submit_boot_flow_input(
+                    &mut boot_flow,
+                    &mut boot_escape_submit,
+                    &mut owned_runtime,
+                    &mut shell,
+                    &mut textarea,
+                    config_path,
+                    session_hint,
+                    text,
+                )
+                .await?;
+                shell.dirty = true;
+            } else if let Some(runtime) = resolve_active_runtime(owned_runtime.as_ref()) {
+                turn_future = prepare_chat_turn_future(runtime, text.to_string(), tx.clone());
+                turn_active = true;
+                shell.pane.agent_running = true;
+            }
         }
     }
 

@@ -62,22 +62,69 @@ struct TuiPtyFixture {
 }
 
 impl TuiPtyFixture {
+    fn spawn_chat_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
+        Self::spawn_command(label, write_config, extra_env, |cmd, config_path| {
+            cmd.arg("chat");
+            cmd.arg("--ui");
+            cmd.arg("tui");
+            if let Some(config_path) = config_path {
+                cmd.arg("--config");
+                cmd.arg(config_path);
+            }
+        })
+    }
+
+    fn spawn_chat(label: &str, write_config: bool) -> Self {
+        Self::spawn_chat_with_env(label, write_config, &[])
+    }
+
+    fn spawn_tui_subcommand(label: &str, write_config: bool) -> Self {
+        Self::spawn_command(label, write_config, &[], |cmd, config_path| {
+            cmd.arg("tui");
+            if let Some(config_path) = config_path {
+                cmd.arg("--config");
+                cmd.arg(config_path);
+            }
+        })
+    }
+
     /// Spawn `loong chat --ui tui` inside a real PTY.
     ///
     /// `label` is used to create a unique temp directory for the fixture.
     /// A minimal default config is written so the binary can start without
     /// triggering the onboarding flow.
     fn spawn(label: &str) -> Self {
+        Self::spawn_chat(label, true)
+    }
+
+    fn spawn_without_config(label: &str) -> Self {
+        Self::spawn_chat(label, false)
+    }
+
+    fn spawn_tui_without_config(label: &str) -> Self {
+        Self::spawn_tui_subcommand(label, false)
+    }
+
+    fn spawn_command<F>(
+        label: &str,
+        write_config: bool,
+        extra_env: &[(&str, &str)],
+        build_args: F,
+    ) -> Self
+    where
+        F: FnOnce(&mut CommandBuilder, Option<&PathBuf>),
+    {
         let root = unique_pty_temp_path(label);
         let home_dir = root.join("home");
         std::fs::create_dir_all(&home_dir).expect("create fixture home directory");
 
-        // Write a minimal config so chat does not enter onboarding.
         let config_path = root.join("loongclaw.toml");
-        let config = loongclaw_app::config::LoongClawConfig::default();
-        let config_path_str = config_path.to_string_lossy().into_owned();
-        loongclaw_app::config::write(Some(&config_path_str), &config, true)
-            .expect("write default config for PTY fixture");
+        if write_config {
+            let config = loongclaw_app::config::LoongClawConfig::default();
+            let config_path_str = config_path.to_string_lossy().into_owned();
+            loongclaw_app::config::write(Some(&config_path_str), &config, true)
+                .expect("write default config for PTY fixture");
+        }
 
         let pty_system = NativePtySystem::default();
         let pair = pty_system
@@ -91,16 +138,16 @@ impl TuiPtyFixture {
 
         let binary_path = env!("CARGO_BIN_EXE_loongclaw");
         let mut cmd = CommandBuilder::new(binary_path);
-        cmd.arg("chat");
-        cmd.arg("--ui");
-        cmd.arg("tui");
-        cmd.arg("--config");
-        cmd.arg(&config_path);
+        let maybe_config_path = write_config.then_some(&config_path);
+        build_args(&mut cmd, maybe_config_path);
         cmd.env("HOME", &home_dir);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORFGBG", "15;0");
         cmd.env_remove("LOONGCLAW_CONFIG_PATH");
         cmd.env_remove("USERPROFILE");
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
 
         let child = pair
             .slave
@@ -365,6 +412,159 @@ fn tui_shows_welcome_message() {
     assert!(
         screen.contains("Type a message and press Enter"),
         "Welcome message should include input instructions: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+#[test]
+fn chat_tui_missing_config_starts_fullscreen_onboarding() {
+    let mut fixture = TuiPtyFixture::spawn_without_config("missing-config-onboarding");
+
+    let screen = fixture
+        .wait_for_any(
+            &[
+                "Security Check",
+                "Setup Wizard",
+                "review the trust boundary",
+            ],
+            Duration::from_secs(10),
+        )
+        .expect("chat --ui tui should enter fullscreen onboarding when config is missing");
+
+    assert!(
+        screen.contains("Security Check")
+            || screen.contains("Setup Wizard")
+            || screen.contains("review the trust boundary"),
+        "missing-config tui should show onboarding content instead of the text fallback prompt: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+#[test]
+fn tui_subcommand_missing_config_starts_fullscreen_onboarding() {
+    let mut fixture = TuiPtyFixture::spawn_tui_without_config("tui-subcommand-onboarding");
+
+    let screen = fixture
+        .wait_for_any(
+            &[
+                "Security Check",
+                "Setup Wizard",
+                "review the trust boundary",
+            ],
+            Duration::from_secs(10),
+        )
+        .expect("loong tui should enter fullscreen onboarding when config is missing");
+
+    assert!(
+        screen.contains("Security Check")
+            || screen.contains("Setup Wizard")
+            || screen.contains("review the trust boundary"),
+        "missing-config tui subcommand should show onboarding content instead of exiting: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+#[test]
+fn chat_tui_missing_config_can_finish_fullscreen_onboarding_and_enter_chat() {
+    let mut fixture = TuiPtyFixture::spawn_chat_with_env(
+        "missing-config-onboarding-happy-path",
+        false,
+        &[("OPENAI_CODEX_OAUTH_TOKEN", "test-oauth-token")],
+    );
+
+    fixture
+        .wait_for_any(
+            &[
+                "Security Check",
+                "Setup Wizard",
+                "review the trust boundary",
+            ],
+            Duration::from_secs(10),
+        )
+        .expect("missing-config tui should start on the fullscreen onboarding risk screen");
+
+    fixture.type_text("y").expect("accept risk");
+    fixture.send_keys(b"\r").expect("submit risk acceptance");
+
+    fixture
+        .wait_for("choose model", Duration::from_secs(10))
+        .expect("onboarding should continue to the model step");
+    fixture.send_keys(b"\r").expect("keep default model");
+
+    fixture
+        .wait_for("credential source", Duration::from_secs(10))
+        .expect("onboarding should continue to the credential step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default credential env");
+
+    fixture
+        .wait_for("memory profile", Duration::from_secs(10))
+        .expect("onboarding should continue to the memory profile step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default memory profile");
+
+    fixture
+        .wait_for("choose sqlite memory path", Duration::from_secs(10))
+        .expect("onboarding should continue to the sqlite path step");
+    fixture.send_keys(b"\r").expect("keep default sqlite path");
+
+    fixture
+        .wait_for("choose workspace root", Duration::from_secs(10))
+        .expect("onboarding should continue to the workspace root step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default workspace root");
+
+    fixture
+        .wait_for("choose protocol support", Duration::from_secs(10))
+        .expect("onboarding should continue to the ACP enablement step");
+    fixture.type_text("disabled").expect("disable ACP");
+    fixture.send_keys(b"\r").expect("submit ACP selection");
+
+    fixture
+        .wait_for_any(
+            &["verify before write", "preflight checks"],
+            Duration::from_secs(10),
+        )
+        .expect("onboarding should continue to the preflight step");
+    fixture.send_keys(b"\r").expect("continue from preflight");
+
+    fixture
+        .wait_for("review setup", Duration::from_secs(10))
+        .expect("onboarding should continue to the review step");
+    fixture.send_keys(b"\r").expect("continue from review");
+
+    fixture
+        .wait_for_any(
+            &["ready to write config", "Write config"],
+            Duration::from_secs(10),
+        )
+        .expect("onboarding should continue to the write-confirm step");
+    fixture.type_text("y").expect("confirm config write");
+    fixture.send_keys(b"\r").expect("submit config write");
+
+    fixture
+        .wait_for_any(
+            &["setup complete", "onboarding complete", "start here"],
+            Duration::from_secs(10),
+        )
+        .expect("onboarding should render the success summary after writing config");
+    fixture
+        .send_keys(b"\r")
+        .expect("enter chat from success screen");
+
+    let screen = fixture
+        .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))
+        .expect("successful fullscreen onboarding should transition into the chat shell");
+
+    assert!(
+        screen.contains("Setup complete. Entering chat."),
+        "chat shell should preserve the setup completion handoff message: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");

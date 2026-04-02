@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub(super) mod app_shell;
+pub mod boot;
 pub(super) mod commands;
 pub(super) mod dialog;
 pub(super) mod events;
@@ -20,6 +21,7 @@ pub(super) mod terminal;
 pub(super) mod theme;
 
 use crate::CliResult;
+pub use boot::{TuiBootFlow, TuiBootScreen, TuiBootTransition};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CliTuiLaunchResult {
@@ -79,6 +81,29 @@ pub async fn run_tui(config_path: Option<&str>, session_hint: Option<&str>) -> C
         }
     }
 
-    let rt = runtime::initialize(config_path, session_hint)?;
-    shell::run(&rt, policy.palette_hint).await
+    shell::run_lazy(config_path, session_hint, None, policy.palette_hint).await
+}
+
+pub async fn run_tui_with_boot_flow(
+    config_path: Option<&str>,
+    session_hint: Option<&str>,
+    boot_flow: Box<dyn TuiBootFlow>,
+) -> CliResult<()> {
+    let snapshot = terminal::TerminalSupportSnapshot::capture_current();
+    let policy = terminal::resolve_terminal_policy(snapshot);
+
+    match policy.launch {
+        terminal::TerminalLaunch::Tui => {}
+        terminal::TerminalLaunch::FallbackToText { reason } => {
+            return Err(reason);
+        }
+    }
+
+    shell::run_lazy(
+        config_path,
+        session_hint,
+        Some(boot_flow),
+        policy.palette_hint,
+    )
+    .await
 }

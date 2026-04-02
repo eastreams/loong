@@ -15,6 +15,9 @@ use super::theme::Palette;
 pub(super) trait InputView {
     fn agent_running(&self) -> bool;
     fn has_staged_message(&self) -> bool;
+    fn input_hint(&self) -> Option<&str> {
+        None
+    }
 }
 
 pub(super) fn render_input(
@@ -27,13 +30,14 @@ pub(super) fn render_input(
     let border_color = palette.brand;
     let border_style = Style::default().fg(border_color);
 
-    let prompt_hint = if pane.agent_running() && pane.has_staged_message() {
+    let default_prompt_hint = if pane.agent_running() && pane.has_staged_message() {
         " Queued: 1 message | Esc to clear "
     } else if pane.agent_running() {
         " Enter to queue | Esc to cancel queue "
     } else {
         " Enter send | Shift+Enter newline | /help "
     };
+    let prompt_hint = pane.input_hint().unwrap_or(default_prompt_hint);
 
     let block = Block::default()
         .borders(Borders::ALL)

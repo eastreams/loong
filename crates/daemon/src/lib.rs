@@ -4135,6 +4135,22 @@ pub async fn run_chat_cli(
     acp_bootstrap_mcp_server: &[String],
     acp_cwd: Option<&str>,
 ) -> CliResult<()> {
+    if ui == CliChatUiModeArg::Tui {
+        let resolved_config_path = config_path
+            .map(mvp::config::expand_path)
+            .unwrap_or_else(mvp::config::default_config_path);
+        let config_exists = resolved_config_path.try_exists().map_err(|error| {
+            format!(
+                "failed to access config path {}: {error}",
+                resolved_config_path.display()
+            )
+        })?;
+
+        if !config_exists {
+            return crate::tui_cli::run_tui_cli(config_path, session).await;
+        }
+    }
+
     let options =
         build_cli_chat_options(ui, acp, acp_event_stream, acp_bootstrap_mcp_server, acp_cwd);
     mvp::chat::run_cli_chat(config_path, session, &options).await

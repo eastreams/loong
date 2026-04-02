@@ -129,7 +129,7 @@ use crate::session::repository::{
     TransitionApprovalRequestIfCurrentRequest, TransitionSessionWithEventIfCurrentRequest,
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ConversationTurnCoordinator;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

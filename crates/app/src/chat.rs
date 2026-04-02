@@ -26,7 +26,9 @@ mod text_surface;
 #[cfg(feature = "channel-cli")]
 mod tui;
 #[cfg(feature = "channel-cli")]
-pub use self::tui::run_tui;
+pub use self::tui::{
+    TuiBootFlow, TuiBootScreen, TuiBootTransition, run_tui, run_tui_with_boot_flow,
+};
 mod ui_mode;
 
 use self::cli_input::ConcurrentCliInputReader;

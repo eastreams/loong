@@ -5,6 +5,7 @@ pub(super) enum Role {
     User,
     Assistant,
     System,
+    Surface,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,13 @@ impl Message {
     pub(super) fn system(text: impl Into<String>) -> Self {
         Self {
             role: Role::System,
+            parts: vec![MessagePart::Text(text.into())],
+        }
+    }
+
+    pub(super) fn surface(text: impl Into<String>) -> Self {
+        Self {
+            role: Role::Surface,
             parts: vec![MessagePart::Text(text.into())],
         }
     }
@@ -96,6 +104,13 @@ mod tests {
     fn system_message_creation() {
         let msg = Message::system("system prompt");
         assert_eq!(msg.role, Role::System);
+        assert_eq!(msg.parts.len(), 1);
+    }
+
+    #[test]
+    fn surface_message_creation() {
+        let msg = Message::surface("surface");
+        assert_eq!(msg.role, Role::Surface);
         assert_eq!(msg.parts.len(), 1);
     }
 

@@ -8,6 +8,7 @@ use crate::conversation::{ConversationSessionAddress, ConversationTurnCoordinato
 
 /// Self-contained TUI runtime, mirroring the fields of `CliTurnRuntime`
 /// needed for turn execution without depending on `chat.rs` internals.
+#[derive(Clone)]
 pub(crate) struct TuiRuntime {
     pub(super) resolved_path: PathBuf,
     pub(super) config: LoongClawConfig,
