@@ -623,6 +623,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    const EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES: usize = 10;
+
     #[test]
     fn tool_discovery_state_omits_leases_when_built_from_tool_search_payload() {
         let payload = json!({
@@ -845,9 +847,14 @@ mod tests {
 
         let rendered = state.render_delta_prompt();
         let line_count = rendered.lines().count();
-        let omitted_entry_count = 50 - MAX_RENDERED_TOOL_DISCOVERY_ENTRIES;
+        let omitted_entry_count = 50 - EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES;
         let omitted_entries_line = format!(
             "... {omitted_entry_count} additional tools omitted. Re-run tool.search with a narrower query or exact_tool_id."
+        );
+
+        assert_eq!(
+            MAX_RENDERED_TOOL_DISCOVERY_ENTRIES, EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
+            "the discovery render budget should remain aligned with the gateway overflow fix contract"
         );
 
         assert!(
@@ -864,9 +871,9 @@ mod tests {
 
         let tool_count = rendered.matches("- \"tool_").count();
         assert!(
-            tool_count <= MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
+            tool_count <= EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
             "should render at most {} tools, got {}",
-            MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
+            EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
             tool_count
         );
 
@@ -878,7 +885,7 @@ mod tests {
 
     #[test]
     fn render_delta_prompt_renders_exactly_max_entries_boundary() {
-        let entries: Vec<ToolDiscoveryEntry> = (0..MAX_RENDERED_TOOL_DISCOVERY_ENTRIES)
+        let entries: Vec<ToolDiscoveryEntry> = (0..EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES)
             .map(|i| ToolDiscoveryEntry {
                 tool_id: format!("tool_{i}"),
                 summary: format!("Summary for tool {i}"),
@@ -899,6 +906,11 @@ mod tests {
 
         let rendered = state.render_delta_prompt();
 
+        assert_eq!(
+            MAX_RENDERED_TOOL_DISCOVERY_ENTRIES, EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
+            "the discovery render budget should remain aligned with the gateway overflow fix contract"
+        );
+
         assert!(
             rendered.contains("[tool_discovery_delta]"),
             "should render discovery delta header, got: {}",
@@ -907,9 +919,9 @@ mod tests {
 
         let tool_count = rendered.matches("- \"tool_").count();
         assert_eq!(
-            tool_count, MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
+            tool_count, EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES,
             "should render exactly {} tools when entries equals MAX_ENTRIES, got {}: {}",
-            MAX_RENDERED_TOOL_DISCOVERY_ENTRIES, tool_count, rendered
+            EXPECTED_MAX_RENDERED_TOOL_DISCOVERY_ENTRIES, tool_count, rendered
         );
 
         assert!(

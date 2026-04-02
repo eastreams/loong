@@ -18,6 +18,12 @@ pub(crate) const GATEWAY_CLI_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 type BoxedSupervisorFuture = Pin<Box<dyn Future<Output = CliResult<()>> + Send + 'static>>;
 type BoxedShutdownFuture = Pin<Box<dyn Future<Output = CliResult<String>> + Send + 'static>>;
+type GatewayCliHostThreadSpawner = Arc<
+    dyn Fn(String, usize, mvp::chat::ConcurrentCliHostOptions) -> BoxedSupervisorFuture
+        + Send
+        + Sync
+        + 'static,
+>;
 type BackgroundChannelRunner =
     Arc<dyn Fn(BackgroundChannelRunnerRequest) -> BoxedSupervisorFuture + Send + Sync + 'static>;
 type BackgroundChannelRunnerRegistry = BTreeMap<&'static str, BackgroundChannelRunner>;
@@ -661,7 +667,9 @@ impl SupervisorRuntimeHooks {
         runners
     }
 
-    pub fn production() -> Self {
+    fn production_with_gateway_cli_host_thread_spawner(
+        gateway_cli_host_thread_spawner: GatewayCliHostThreadSpawner,
+    ) -> Self {
         Self {
             load_config: Arc::new(|config_path| {
                 let (resolved_path, config) = mvp::config::load(config_path)?;
@@ -676,21 +684,7 @@ impl SupervisorRuntimeHooks {
                     Some(loaded_config.resolved_path.as_path()),
                 );
             }),
-            run_cli_host: Arc::new(|options| {
-                Box::pin(async move {
-                    let handle = std::thread::Builder::new()
-                        .name("gateway-cli-host".to_owned())
-                        .stack_size(GATEWAY_CLI_STACK_SIZE)
-                        .spawn(move || mvp::chat::run_concurrent_cli_host(&options))
-                        .map_err(|error| {
-                            format!("failed to spawn gateway CLI host thread: {error}")
-                        })?;
-
-                    handle
-                        .join()
-                        .map_err(|_panic| "gateway CLI host thread panicked".to_owned())?
-                })
-            }),
+            run_cli_host: build_gateway_cli_host_runner(gateway_cli_host_thread_spawner),
             background_channel_runners: Self::production_background_channel_runners(),
             wait_for_shutdown: Arc::new(|| {
                 Box::pin(async { crate::wait_for_shutdown_reason().await })
@@ -698,6 +692,43 @@ impl SupervisorRuntimeHooks {
             observe_state: Arc::new(|_| Ok(())),
         }
     }
+
+    pub fn production() -> Self {
+        let gateway_cli_host_thread_spawner = Arc::new(spawn_gateway_cli_host_thread);
+
+        Self::production_with_gateway_cli_host_thread_spawner(gateway_cli_host_thread_spawner)
+    }
+}
+
+fn build_gateway_cli_host_runner(
+    gateway_cli_host_thread_spawner: GatewayCliHostThreadSpawner,
+) -> Arc<dyn Fn(mvp::chat::ConcurrentCliHostOptions) -> BoxedSupervisorFuture + Send + Sync + 'static>
+{
+    Arc::new(move |options| {
+        let thread_name = "gateway-cli-host".to_owned();
+        let stack_size_bytes = GATEWAY_CLI_STACK_SIZE;
+        let gateway_cli_host_thread_spawner = gateway_cli_host_thread_spawner.clone();
+
+        gateway_cli_host_thread_spawner(thread_name, stack_size_bytes, options)
+    })
+}
+
+fn spawn_gateway_cli_host_thread(
+    thread_name: String,
+    stack_size_bytes: usize,
+    options: mvp::chat::ConcurrentCliHostOptions,
+) -> BoxedSupervisorFuture {
+    Box::pin(async move {
+        let handle = std::thread::Builder::new()
+            .name(thread_name)
+            .stack_size(stack_size_bytes)
+            .spawn(move || mvp::chat::run_concurrent_cli_host(&options))
+            .map_err(|error| format!("failed to spawn gateway CLI host thread: {error}"))?;
+
+        handle
+            .join()
+            .map_err(|_panic| "gateway CLI host thread panicked".to_owned())?
+    })
 }
 
 #[derive(Debug)]
@@ -927,10 +958,15 @@ pub async fn run_multi_channel_serve(
 #[cfg(test)]
 mod tests {
     use super::{
-        BackgroundChannelSurface, RuntimeOwnerMode, RuntimeOwnerPhase, SupervisorShutdownReason,
+        BackgroundChannelSurface, GATEWAY_CLI_STACK_SIZE, GatewayCliHostThreadSpawner,
+        RuntimeOwnerMode, RuntimeOwnerPhase, SupervisorRuntimeHooks, SupervisorShutdownReason,
         SupervisorSpec, SupervisorState, SurfacePhase,
     };
     use crate::mvp;
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     fn telegram_surface(account_id: Option<&str>) -> BackgroundChannelSurface {
         BackgroundChannelSurface::new(
@@ -1492,14 +1528,85 @@ mod tests {
         assert_eq!(feishu_state.started_at_ms, None);
     }
 
-    #[test]
-    fn gateway_cli_stack_size_matches_runtime_contract() {
-        let stack_size_bytes = super::GATEWAY_CLI_STACK_SIZE;
-        let expected_stack_size_bytes = 8 * 1024 * 1024;
+    #[tokio::test]
+    async fn production_run_cli_host_uses_gateway_thread_contract() {
+        let observed_thread_name = Arc::new(Mutex::new(None::<String>));
+        let observed_stack_size_bytes = Arc::new(Mutex::new(None::<usize>));
+        let observed_session_id = Arc::new(Mutex::new(None::<String>));
+
+        let gateway_cli_host_thread_spawner: GatewayCliHostThreadSpawner = {
+            let observed_thread_name = observed_thread_name.clone();
+            let observed_stack_size_bytes = observed_stack_size_bytes.clone();
+            let observed_session_id = observed_session_id.clone();
+
+            Arc::new(move |thread_name, stack_size_bytes, options| {
+                let observed_thread_name = observed_thread_name.clone();
+                let observed_stack_size_bytes = observed_stack_size_bytes.clone();
+                let observed_session_id = observed_session_id.clone();
+
+                Box::pin(async move {
+                    let mut observed_thread_name = observed_thread_name
+                        .lock()
+                        .expect("thread name observation should lock");
+                    *observed_thread_name = Some(thread_name);
+
+                    let mut observed_stack_size_bytes = observed_stack_size_bytes
+                        .lock()
+                        .expect("stack size observation should lock");
+                    *observed_stack_size_bytes = Some(stack_size_bytes);
+
+                    let mut observed_session_id = observed_session_id
+                        .lock()
+                        .expect("session id observation should lock");
+                    *observed_session_id = Some(options.session_id);
+
+                    Ok(())
+                })
+            })
+        };
+
+        let hooks = SupervisorRuntimeHooks::production_with_gateway_cli_host_thread_spawner(
+            gateway_cli_host_thread_spawner,
+        );
+        let options = mvp::chat::ConcurrentCliHostOptions {
+            resolved_path: PathBuf::from("/tmp/loongclaw-test-config.toml"),
+            config: mvp::config::LoongClawConfig::default(),
+            session_id: "cli-supervisor".to_owned(),
+            shutdown: mvp::chat::ConcurrentCliShutdown::new(),
+            initialize_runtime_environment: false,
+        };
+
+        (hooks.run_cli_host)(options)
+            .await
+            .expect("production hook should delegate to the configured thread spawner");
+
+        let observed_thread_name = observed_thread_name
+            .lock()
+            .expect("thread name observation should lock")
+            .clone();
+        let observed_stack_size_bytes = observed_stack_size_bytes
+            .lock()
+            .expect("stack size observation should lock")
+            .to_owned();
+        let observed_session_id = observed_session_id
+            .lock()
+            .expect("session id observation should lock")
+            .clone();
 
         assert_eq!(
-            stack_size_bytes, expected_stack_size_bytes,
-            "production stack size constant must be 8MB to prevent gateway stack overflow"
+            observed_thread_name.as_deref(),
+            Some("gateway-cli-host"),
+            "production hook should keep the dedicated gateway cli host thread name"
+        );
+        assert_eq!(
+            observed_stack_size_bytes,
+            Some(GATEWAY_CLI_STACK_SIZE),
+            "production hook should keep the dedicated gateway cli host stack size"
+        );
+        assert_eq!(
+            observed_session_id.as_deref(),
+            Some("cli-supervisor"),
+            "production hook should forward cli host options to the thread spawner"
         );
     }
 }
