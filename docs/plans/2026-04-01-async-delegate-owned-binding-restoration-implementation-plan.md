@@ -1,7 +1,5 @@
 # Async Delegate Owned Binding Restoration Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
-
 **Goal:** Restore an explicit owned runtime-binding contract for detached async delegate requests.
 
 **Architecture:** Keep `ConversationRuntimeBinding<'_>` as the borrowed execution API for immediate runtime helpers, but add an owned mirror for detached transport. The detach point in `turn_coordinator.rs` should own the binding, and spawners should borrow it back only when they actually execute cleanup or child turns.
@@ -10,7 +8,7 @@
 
 ---
 
-### Task 1: Add the owned binding type
+## Task 1: Add the owned binding type
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime_binding.rs`
@@ -65,7 +63,7 @@ git add crates/app/src/conversation/runtime_binding.rs crates/app/src/conversati
 git commit -m "refactor: add owned conversation runtime binding"
 ```
 
-### Task 2: Move async delegate requests onto the owned binding contract
+## Task 2: Move async delegate requests onto the owned binding contract
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime.rs`
@@ -126,7 +124,7 @@ git add crates/app/src/conversation/runtime.rs crates/app/src/conversation/turn_
 git commit -m "refactor: store owned binding in async delegate requests"
 ```
 
-### Task 3: Borrow the owned binding only at child execution seams
+## Task 3: Borrow the owned binding only at child execution seams
 
 **Files:**
 - Modify: `crates/app/src/conversation/runtime.rs`
@@ -169,7 +167,7 @@ git add crates/app/src/conversation/runtime.rs crates/app/src/conversation/tests
 git commit -m "test: align async delegate spawners with owned binding"
 ```
 
-### Task 4: Verify the bounded slice end-to-end
+## Task 4: Verify the bounded slice end-to-end
 
 **Files:**
 - Modify: `docs/plans/2026-04-01-async-delegate-owned-binding-restoration-design.md`
