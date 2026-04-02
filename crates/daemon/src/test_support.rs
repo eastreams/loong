@@ -240,16 +240,9 @@ mod tests {
 
         fn resolve_path_aliases(&self, path_segments: &[String]) -> Vec<String> {
             let mut resolved_segments = path_segments.to_vec();
-            let mut seen_paths = BTreeSet::new();
+            let mut seen_alias_segments = BTreeSet::new();
 
             loop {
-                let inserted_new_path = seen_paths.insert(resolved_segments.clone());
-                let already_saw_path = !inserted_new_path;
-
-                if already_saw_path {
-                    break;
-                }
-
                 let mut alias_index = 0;
 
                 while let Some(segment) = resolved_segments.get(alias_index) {
@@ -270,10 +263,18 @@ mod tests {
                     Some(imported_path) => imported_path,
                     None => break,
                 };
-                let leading_segments = &resolved_segments[..alias_index];
+                let inserted_new_alias_segment = seen_alias_segments.insert(alias_segment.clone());
+                let already_saw_alias_segment = !inserted_new_alias_segment;
+
+                if already_saw_alias_segment {
+                    break;
+                }
+
                 let trailing_segments = &resolved_segments[(alias_index + 1)..];
-                let mut expanded_segments = leading_segments.to_vec();
-                expanded_segments.extend(imported_path);
+                // Replace the alias with its imported path directly.
+                // Carrying the original relative qualifier chain forward can
+                // create unbounded growth for imports like `use super::ScopedEnv;`.
+                let mut expanded_segments = imported_path;
 
                 for trailing_segment in trailing_segments {
                     expanded_segments.push(trailing_segment.clone());
@@ -988,6 +989,45 @@ mod tests {
         assert!(
             daemon_source_uses_forbidden_env_guard(sample_source),
             "daemon source guard should flag nested-module glob imports that resolve through a later root alias"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_same_name_root_alias_without_unbounded_growth() {
+        let sample_source = r#"
+            use crate::mvp as mvp;
+
+            fn build_guard() {
+                let mut env = mvp::test_support::ScopedEnv::new();
+                drop(env);
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should resolve same-name root aliases without growing the expanded path without bound"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_allows_super_scoped_env_import_without_unbounded_growth() {
+        let sample_source = r#"
+            mod outer {
+                pub struct ScopedEnv;
+
+                mod inner {
+                    use super::ScopedEnv;
+
+                    fn build_guard() {
+                        let _env = ScopedEnv;
+                    }
+                }
+            }
+        "#;
+
+        assert!(
+            !daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should allow daemon-local super imports without growing alias resolution without bound"
         );
     }
 
