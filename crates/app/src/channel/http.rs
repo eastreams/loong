@@ -189,6 +189,9 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
+                        stream.set_nonblocking(false).map_err(|error| {
+                            format!("set test server stream blocking mode: {error}")
+                        })?;
                         read_test_http_request(&mut stream, request_read_timeout)?;
                         stream
                             .write_all(response.as_bytes())
