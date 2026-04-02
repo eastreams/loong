@@ -2001,6 +2001,32 @@ fn provider_tool_intent(
     }
 }
 
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+fn shell_exec_test_command() -> (&'static str, Vec<&'static str>, &'static str) {
+    #[cfg(unix)]
+    {
+        (
+            "echo",
+            vec!["approved-shell-output"],
+            "approved-shell-output",
+        )
+    }
+
+    #[cfg(windows)]
+    {
+        (
+            "cmd",
+            vec!["/C", "echo", "approved-shell-output"],
+            "approved-shell-output",
+        )
+    }
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+fn shell_exec_approval_key(command: &str) -> String {
+    format!("tool:shell.exec:{command}")
+}
+
 fn effective_tool_request(request: &ToolCoreRequest) -> (String, &Value) {
     let tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
     if tool_name != "tool.invoke" {
@@ -18502,6 +18528,553 @@ async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_b
     assert_eq!(
         request.decision,
         Some(crate::session::repository::ApprovalDecision::Deny)
+    );
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-shell-approval", "request")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let kernel_ctx =
+        crate::context::bootstrap_kernel_context_with_config("shell-approval-request", 60, &config)
+            .expect("bootstrap kernel context");
+    let (command, args, _expected_stdout) = shell_exec_test_command();
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "Running a shell command.".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "shell.exec",
+                    json!({
+                        "command": command,
+                        "args": args
+                    }),
+                    "root-session",
+                    "turn-shell-parent",
+                    "call-shell-parent",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "approval pending".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "run the command",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("shell approval reply");
+
+    let requests = repo
+        .list_approval_requests_for_session("root-session", None)
+        .expect("list approval requests");
+    let approval_key = shell_exec_approval_key(command);
+
+    assert!(
+        reply.contains("[tool_approval_required]"),
+        "expected approval marker, got: {reply}"
+    );
+    assert!(
+        reply.contains("tool: shell.exec"),
+        "expected shell.exec tool detail, got: {reply}"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].tool_name, "shell.exec");
+    assert_eq!(requests[0].approval_key, approval_key);
+    assert!(
+        reply.contains(requests[0].approval_request_id.as_str()),
+        "reply should surface approval request id, got: {reply}"
+    );
+
+    let stored = repo
+        .load_approval_request(&requests[0].approval_request_id)
+        .expect("load approval request")
+        .expect("approval request row");
+    let payload_tool_name = stored.request_payload_json["tool_name"]
+        .as_str()
+        .expect("request payload tool name");
+    let payload_command = stored.request_payload_json["args_json"]["command"]
+        .as_str()
+        .expect("request payload command");
+
+    assert_eq!(payload_tool_name, "shell.exec");
+    assert_eq!(payload_command, command);
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_for_approve_once() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-shell-approval", "approve-once")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let kernel_ctx =
+        crate::context::bootstrap_kernel_context_with_config("shell-approval-once", 60, &config)
+            .expect("bootstrap kernel context");
+    let (command, args, expected_stdout) = shell_exec_test_command();
+    let args_json = json!({
+        "command": command,
+        "args": args
+    });
+    let approval_key = shell_exec_approval_key(command);
+
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-shell-1".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-shell-parent".to_owned(),
+        tool_call_id: "call-shell-parent".to_owned(),
+        tool_name: "shell.exec".to_owned(),
+        approval_key,
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-shell-parent",
+            "tool_call_id": "call-shell-parent",
+            "tool_name": "shell.exec",
+            "args_json": args_json,
+            "source": "provider_tool_call",
+            "execution_kind": "core"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "routine",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "shell_exec_requires_approval",
+            "reason": format!(
+                "operator approval required before running shell command `{command}` via `shell.exec`"
+            )
+        }),
+    })
+    .expect("seed shell approval request");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "resolving shell approval".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "approval_request_resolve",
+                    json!({
+                        "approval_request_id": "apr-shell-1",
+                        "decision": "approve_once"
+                    }),
+                    "root-session",
+                    "turn-approval-resolve",
+                    "call-approval-resolve",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "shell approval resolved".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("shell approval resolve reply");
+
+    let request = repo
+        .load_approval_request("apr-shell-1")
+        .expect("load approval request")
+        .expect("approval request row");
+
+    assert!(
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
+    );
+    assert!(
+        reply.contains(expected_stdout),
+        "expected resumed shell output, got: {reply}"
+    );
+    assert_eq!(
+        request.status,
+        crate::session::repository::ApprovalRequestStatus::Executed
+    );
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::ApproveOnce)
+    );
+    assert!(request.last_error.is_none(), "request={request:?}");
+    assert!(
+        repo.load_approval_grant("root-session", &request.approval_key)
+            .expect("load shell grant")
+            .is_none()
+    );
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses_shell_grant() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-shell-approval", "approve-always")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let kernel_ctx =
+        crate::context::bootstrap_kernel_context_with_config("shell-approval-always", 60, &config)
+            .expect("bootstrap kernel context");
+    let (command, args, expected_stdout) = shell_exec_test_command();
+    let command_payload = json!({
+        "command": command,
+        "args": args
+    });
+    let args_json = command_payload.clone();
+    let approval_key = shell_exec_approval_key(command);
+
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-shell-always".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-shell-parent".to_owned(),
+        tool_call_id: "call-shell-parent".to_owned(),
+        tool_name: "shell.exec".to_owned(),
+        approval_key: approval_key.clone(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-shell-parent",
+            "tool_call_id": "call-shell-parent",
+            "tool_name": "shell.exec",
+            "args_json": args_json,
+            "source": "provider_tool_call",
+            "execution_kind": "core"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "routine",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "shell_exec_requires_approval",
+            "reason": format!(
+                "operator approval required before running shell command `{command}` via `shell.exec`"
+            )
+        }),
+    })
+    .expect("seed shell approval request");
+
+    let approval_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "resolving shell approval".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "approval_request_resolve",
+                    json!({
+                        "approval_request_id": "apr-shell-always",
+                        "decision": "approve_always"
+                    }),
+                    "root-session",
+                    "turn-shell-approval",
+                    "call-shell-approval",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "shell approval persisted".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let approval_reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &approval_runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("shell approval persist reply");
+
+    let resolved = repo
+        .load_approval_request("apr-shell-always")
+        .expect("load approval request")
+        .expect("approval request row");
+
+    assert!(
+        approval_reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {approval_reply}"
+    );
+    assert_eq!(
+        resolved.decision,
+        Some(crate::session::repository::ApprovalDecision::ApproveAlways)
+    );
+    assert!(
+        repo.load_approval_grant("root-session", &approval_key)
+            .expect("load shell grant")
+            .is_some()
+    );
+
+    let granted_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "running granted shell command".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "shell.exec",
+                    command_payload,
+                    "root-session",
+                    "turn-after-grant",
+                    "call-after-grant",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "granted shell completed".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+
+    let granted_reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &granted_runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
+        )
+        .await
+        .expect("granted shell reply");
+
+    let requests = repo
+        .list_approval_requests_for_session("root-session", None)
+        .expect("list shell approval requests");
+
+    assert!(
+        !granted_reply.contains("[tool_approval_required]"),
+        "grant-backed shell call should not request approval again, got: {granted_reply}"
+    );
+    assert!(
+        granted_reply.contains(expected_stdout),
+        "expected granted shell output, got: {granted_reply}"
+    );
+    assert_eq!(
+        requests.len(),
+        1,
+        "grant-backed shell call should not create a second approval request"
+    );
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+#[tokio::test]
+async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_shell_exec() {
+    let db_path = std::env::temp_dir().join(format!(
+        "{}.sqlite3",
+        unique_acp_test_id("conversation-shell-approval", "deny")
+    ));
+    let _ = std::fs::remove_file(&db_path);
+
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+
+    let (command, args, _expected_stdout) = shell_exec_test_command();
+    let args_json = json!({
+        "command": command,
+        "args": args
+    });
+    let approval_key = shell_exec_approval_key(command);
+
+    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
+        approval_request_id: "apr-shell-deny".to_owned(),
+        session_id: "root-session".to_owned(),
+        turn_id: "turn-shell-parent".to_owned(),
+        tool_call_id: "call-shell-parent".to_owned(),
+        tool_name: "shell.exec".to_owned(),
+        approval_key: approval_key.clone(),
+        request_payload_json: json!({
+            "session_id": "root-session",
+            "parent_session_id": Value::Null,
+            "turn_id": "turn-shell-parent",
+            "tool_call_id": "call-shell-parent",
+            "tool_name": "shell.exec",
+            "args_json": args_json,
+            "source": "provider_tool_call",
+            "execution_kind": "core"
+        }),
+        governance_snapshot_json: json!({
+            "governance_scope": "routine",
+            "risk_class": "high",
+            "approval_mode": "policy_driven",
+            "rule_id": "shell_exec_requires_approval",
+            "reason": format!(
+                "operator approval required before running shell command `{command}` via `shell.exec`"
+            )
+        }),
+    })
+    .expect("seed shell approval request");
+
+    let runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "denying shell approval".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "approval_request_resolve",
+                    json!({
+                        "approval_request_id": "apr-shell-deny",
+                        "decision": "deny"
+                    }),
+                    "root-session",
+                    "turn-shell-deny",
+                    "call-shell-deny",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "shell denied".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let coordinator = ConversationTurnCoordinator::new();
+
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("shell approval deny reply");
+
+    assert!(
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
+    );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
+
+    let request = repo
+        .load_approval_request("apr-shell-deny")
+        .expect("load approval request")
+        .expect("approval request row");
+    assert_eq!(
+        request.status,
+        crate::session::repository::ApprovalRequestStatus::Denied
+    );
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::Deny)
+    );
+    assert_eq!(
+        request.resolved_by_session_id.as_deref(),
+        Some("root-session")
+    );
+    assert!(request.executed_at.is_none(), "request={request:?}");
+    assert!(request.last_error.is_none(), "request={request:?}");
+    assert!(
+        repo.load_approval_grant("root-session", approval_key.as_str())
+            .expect("load shell grant")
+            .is_none()
     );
 }
 

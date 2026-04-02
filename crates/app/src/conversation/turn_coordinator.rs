@@ -98,8 +98,8 @@ use super::turn_checkpoint::{
 };
 use super::turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
-    ToolBatchExecutionTrace, ToolIntent, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,
-    TurnValidation, effective_result_tool_name,
+    ToolBatchExecutionTrace, ToolExecutionPreflight, ToolIntent, TurnEngine, TurnFailure,
+    TurnFailureKind, TurnResult, TurnValidation, effective_result_tool_name,
 };
 use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
@@ -3667,6 +3667,13 @@ struct CoordinatorApprovalResolutionRuntime<'a, R: ?Sized> {
 }
 
 #[cfg(feature = "memory-sqlite")]
+struct ApprovalReplayRequest {
+    request: loongclaw_contracts::ToolCoreRequest,
+    execution_kind: crate::tools::ToolExecutionKind,
+    trusted_internal_context: bool,
+}
+
+#[cfg(feature = "memory-sqlite")]
 impl<R> CoordinatorApprovalResolutionRuntime<'_, R>
 where
     R: ConversationRuntime + ?Sized,
@@ -3678,12 +3685,57 @@ where
             .unwrap_or(0)
     }
 
+    fn replay_shell_request(
+        &self,
+        approval_request: &ApprovalRequestRecord,
+        tool_name: &str,
+        args_json: &Value,
+    ) -> Result<ApprovalReplayRequest, String> {
+        let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
+        let mut payload = if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
+            args_json.clone()
+        } else {
+            let approved_tool_name = approval_request
+                .request_payload_json
+                .get("approved_tool_name")
+                .and_then(Value::as_str)
+                .map(crate::tools::canonical_tool_name)
+                .unwrap_or(canonical_tool_name);
+            if approved_tool_name != crate::tools::SHELL_EXEC_TOOL_NAME {
+                return Err(format!(
+                    "approval_request_invalid_execution_kind: expected `shell.exec`, got `{approved_tool_name}`"
+                ));
+            }
+            args_json.get("arguments").cloned().ok_or_else(|| {
+                "approval_request_invalid_payload: missing shell.exec arguments".to_owned()
+            })?
+        };
+        let payload_object = payload.as_object_mut().ok_or_else(|| {
+            "approval_request_invalid_payload: shell.exec args_json must be an object".to_owned()
+        })?;
+        let internal_context = crate::tools::shell_policy_ext::shell_exec_internal_approval_context(
+            approval_request.approval_key.as_str(),
+        );
+        crate::tools::merge_trusted_internal_tool_context_into_arguments(
+            payload_object,
+            &internal_context,
+        )?;
+
+        Ok(ApprovalReplayRequest {
+            request: loongclaw_contracts::ToolCoreRequest {
+                tool_name: crate::tools::SHELL_EXEC_TOOL_NAME.to_owned(),
+                payload,
+            },
+            execution_kind: crate::tools::ToolExecutionKind::Core,
+            trusted_internal_context: true,
+        })
+    }
+
     fn replay_request(
         &self,
         approval_request: &ApprovalRequestRecord,
-    ) -> Result<loongclaw_contracts::ToolCoreRequest, String> {
-        let _ = self.replay_execution_kind(approval_request)?;
-
+    ) -> Result<ApprovalReplayRequest, String> {
+        let execution_kind = self.replay_execution_kind(approval_request)?;
         let tool_name = approval_request
             .request_payload_json
             .get("tool_name")
@@ -3697,10 +3749,31 @@ where
             .cloned()
             .ok_or_else(|| "approval_request_invalid_payload: missing args_json".to_owned())?;
 
-        Ok(loongclaw_contracts::ToolCoreRequest {
-            tool_name: tool_name.to_owned(),
-            payload,
-        })
+        match execution_kind {
+            ToolExecutionKind::App => Ok(ApprovalReplayRequest {
+                request: loongclaw_contracts::ToolCoreRequest {
+                    tool_name: tool_name.to_owned(),
+                    payload,
+                },
+                execution_kind: crate::tools::ToolExecutionKind::App,
+                trusted_internal_context: false,
+            }),
+            ToolExecutionKind::Core => {
+                let canonical_tool_name = crate::tools::canonical_tool_name(tool_name);
+                if canonical_tool_name == crate::tools::SHELL_EXEC_TOOL_NAME {
+                    return self.replay_shell_request(approval_request, tool_name, &payload);
+                }
+
+                Ok(ApprovalReplayRequest {
+                    request: loongclaw_contracts::ToolCoreRequest {
+                        tool_name: tool_name.to_owned(),
+                        payload,
+                    },
+                    execution_kind: crate::tools::ToolExecutionKind::Core,
+                    trusted_internal_context: false,
+                })
+            }
+        }
     }
 
     fn replay_execution_kind(
@@ -3774,32 +3847,35 @@ where
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
-        let execution_kind = self.replay_execution_kind(approval_request)?;
         let replay_request = self.replay_request(approval_request)?;
-
-        match execution_kind {
-            ToolExecutionKind::Core => {
+        match replay_request.execution_kind {
+            crate::tools::ToolExecutionKind::Core => {
                 let kernel_ctx = self
                     .binding
                     .kernel_context()
-                    .ok_or_else(|| "approval_request_replay_missing_kernel_context".to_owned())?;
-                crate::tools::execute_tool(replay_request, kernel_ctx).await
+                    .ok_or_else(|| "no_kernel_context".to_owned())?;
+                crate::tools::execute_kernel_tool_request(
+                    kernel_ctx,
+                    replay_request.request,
+                    replay_request.trusted_internal_context,
+                )
+                .await
+                .map_err(|error| error.to_string())
             }
-            ToolExecutionKind::App => {
+            crate::tools::ToolExecutionKind::App => {
                 let session_context = self
                     .runtime
                     .session_context(self.config, &approval_request.session_id, self.binding)
                     .map_err(|error| {
                         format!("load approval request session context failed: {error}")
                     })?;
-
-                match crate::tools::canonical_tool_name(replay_request.tool_name.as_str()) {
+                match crate::tools::canonical_tool_name(replay_request.request.tool_name.as_str()) {
                     "delegate" => {
                         execute_delegate_tool(
                             self.config,
                             self.runtime,
                             &session_context,
-                            replay_request.payload,
+                            replay_request.request.payload,
                             self.binding,
                         )
                         .await
@@ -3809,14 +3885,18 @@ where
                             self.config,
                             self.runtime,
                             &session_context,
-                            replay_request.payload,
+                            replay_request.request.payload,
                             self.binding,
                         )
                         .await
                     }
                     _ => {
                         self.fallback
-                            .execute_app_tool(&session_context, replay_request, self.binding)
+                            .execute_app_tool(
+                                &session_context,
+                                replay_request.request,
+                                self.binding,
+                            )
                             .await
                     }
                 }
@@ -4099,6 +4179,25 @@ where
     ) -> Result<Option<super::turn_engine::ApprovalRequirement>, String> {
         self.fallback
             .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
+            .await
+    }
+
+    async fn preflight_tool_execution_with_binding(
+        &self,
+        session_context: &SessionContext,
+        intent: &ToolIntent,
+        request: loongclaw_contracts::ToolCoreRequest,
+        descriptor: &crate::tools::ToolDescriptor,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> Result<ToolExecutionPreflight, String> {
+        self.fallback
+            .preflight_tool_execution_with_binding(
+                session_context,
+                intent,
+                request,
+                descriptor,
+                binding,
+            )
             .await
     }
 

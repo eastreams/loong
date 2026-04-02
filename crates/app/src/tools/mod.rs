@@ -749,7 +749,7 @@ fn trusted_runtime_narrowing_from_payload(
         .map_err(|error| format!("invalid_internal_runtime_narrowing: {error}"))
 }
 
-fn merge_trusted_internal_tool_context_into_arguments(
+pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     arguments: &mut serde_json::Map<String, Value>,
     internal_context: &Value,
 ) -> Result<(), String> {
@@ -1111,7 +1111,10 @@ fn runtime_discoverable_tool_entries(
         .iter()
         .filter(|descriptor| descriptor.is_discoverable())
         .filter(|descriptor| visible_tool_view.contains(descriptor.name))
-        .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
+        .filter(|descriptor| {
+            descriptor.name == SHELL_EXEC_TOOL_NAME
+                || tool_search_entry_is_runtime_usable(descriptor.name, config)
+        })
         .map(searchable_entry_from_descriptor)
         .collect::<Vec<_>>()
 }
@@ -3128,7 +3131,7 @@ mod tests {
 
     #[cfg(feature = "tool-shell")]
     #[test]
-    fn tool_search_hides_shell_exec_when_runtime_allowlist_is_empty() {
+    fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
         let root = std::env::temp_dir().join(format!(
             "loongclaw-tool-search-shell-filter-{}",
             std::process::id()
@@ -3151,7 +3154,15 @@ mod tests {
         .expect("tool search should succeed");
 
         let results = outcome.payload["results"].as_array().expect("results");
-        assert!(results.iter().all(|entry| entry["tool_id"] != "shell.exec"));
+        let shell_entry = results
+            .iter()
+            .find(|entry| entry["tool_id"] == "shell.exec")
+            .expect("shell.exec should remain discoverable");
+        let lease = shell_entry["lease"]
+            .as_str()
+            .expect("shell.exec should include a lease");
+
+        assert!(!lease.is_empty(), "lease should not be empty");
 
         std::fs::remove_dir_all(&root).ok();
     }

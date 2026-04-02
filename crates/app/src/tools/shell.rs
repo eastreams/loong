@@ -63,7 +63,16 @@ pub(super) fn execute_shell_tool_with_config(
             config.shell_default_mode,
             crate::tools::shell_policy_ext::ShellPolicyDefault::Allow
         );
-        if !explicitly_allowed && !default_allows {
+        let approval_key =
+            crate::tools::shell_policy_ext::shell_exec_approval_key_for_normalized_command(
+                basename,
+            );
+        let approved_by_internal_context =
+            crate::tools::shell_policy_ext::shell_exec_matches_trusted_internal_approval(
+                payload,
+                approval_key.as_str(),
+            );
+        if !explicitly_allowed && !default_allows && !approved_by_internal_context {
             return Err(format!(
                 "policy_denied: shell command `{basename}` is not in the allow list (default-deny policy)"
             ));

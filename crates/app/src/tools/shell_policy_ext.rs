@@ -3,6 +3,10 @@ use std::collections::BTreeSet;
 use loongclaw_contracts::PolicyError;
 use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
 
+pub(crate) const SHELL_EXEC_APPROVAL_RULE_ID: &str = "shell_exec_requires_approval";
+const SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: &str = "shell_approval";
+const SHELL_INTERNAL_APPROVAL_KEY_FIELD: &str = "approval_key";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellPolicyDefault {
     Deny,
@@ -77,6 +81,41 @@ pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, Strin
     Ok(normalized)
 }
 
+#[cfg(test)]
+pub(crate) fn shell_exec_approval_key(command: &str) -> Result<String, String> {
+    let normalized_command = validate_shell_command_name(command)?;
+    Ok(shell_exec_approval_key_for_normalized_command(
+        normalized_command.as_str(),
+    ))
+}
+
+pub(crate) fn shell_exec_approval_key_for_normalized_command(normalized_command: &str) -> String {
+    format!("tool:shell.exec:{normalized_command}")
+}
+
+pub(crate) fn shell_exec_internal_approval_context(approval_key: &str) -> serde_json::Value {
+    serde_json::json!({
+        SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: {
+            SHELL_INTERNAL_APPROVAL_KEY_FIELD: approval_key,
+        }
+    })
+}
+
+pub(crate) fn shell_exec_matches_trusted_internal_approval(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    approval_key: &str,
+) -> bool {
+    let trusted_context = payload.get(super::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY);
+    let trusted_context = trusted_context.and_then(serde_json::Value::as_object);
+    let trusted_context =
+        trusted_context.and_then(|value| value.get(SHELL_INTERNAL_APPROVAL_CONTEXT_KEY));
+    let trusted_context = trusted_context.and_then(serde_json::Value::as_object);
+    let trusted_approval_key =
+        trusted_context.and_then(|value| value.get(SHELL_INTERNAL_APPROVAL_KEY_FIELD));
+    let trusted_approval_key = trusted_approval_key.and_then(serde_json::Value::as_str);
+    trusted_approval_key == Some(approval_key)
+}
+
 impl PolicyExtension for ToolPolicyExtension {
     fn name(&self) -> &str {
         "tool-policy"
@@ -92,25 +131,23 @@ impl PolicyExtension for ToolPolicyExtension {
             return Ok(());
         }
 
-        let command = payload
-            .and_then(|payload| payload.get("command"))
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-
+        let Some(payload) = payload.and_then(serde_json::Value::as_object) else {
+            return Ok(());
+        };
+        let command = payload.get("command").and_then(serde_json::Value::as_str);
         let Some(command) = command else {
             return Ok(());
         };
-
-        let basename = match validate_shell_command_name(command) {
-            Ok(command) => command,
-            Err(reason) => {
-                return Err(PolicyError::ToolCallDenied {
-                    tool_name: tool_name.to_owned(),
-                    reason,
-                });
+        let trimmed_command = command.trim();
+        if trimmed_command.is_empty() {
+            return Ok(());
+        }
+        let basename = validate_shell_command_name(trimmed_command).map_err(|reason| {
+            PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason,
             }
-        };
+        })?;
 
         if self.hard_deny.contains(basename.as_str()) {
             return Err(PolicyError::ToolCallDenied {
@@ -120,6 +157,13 @@ impl PolicyExtension for ToolPolicyExtension {
         }
 
         if self.allow.contains(basename.as_str()) {
+            return Ok(());
+        }
+
+        let approval_key = shell_exec_approval_key_for_normalized_command(basename.as_str());
+        let approved_by_internal_context =
+            shell_exec_matches_trusted_internal_approval(payload, approval_key.as_str());
+        if approved_by_internal_context {
             return Ok(());
         }
 
@@ -293,6 +337,52 @@ mod tests {
         });
         let allowed_ctx = make_context(&pack, &token, &caps, Some(&allowed));
         assert!(ext.authorize_extension(&allowed_ctx).is_ok());
+    }
+
+    #[test]
+    fn allows_trusted_shell_approval_context_when_default_policy_denies() {
+        let ext =
+            ToolPolicyExtension::new(BTreeSet::new(), BTreeSet::new(), ShellPolicyDefault::Deny);
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let approval_key = shell_exec_approval_key("cargo").expect("approval key");
+        let params = json!({
+            "tool_name": "shell.exec",
+            "payload": {
+                "command": "cargo",
+                "_loongclaw": shell_exec_internal_approval_context(approval_key.as_str()),
+            }
+        });
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+
+        assert!(ext.authorize_extension(&ctx).is_ok());
+    }
+
+    #[test]
+    fn hard_deny_overrides_trusted_shell_approval_context() {
+        let ext = ToolPolicyExtension::new(
+            BTreeSet::from(["cargo".to_owned()]),
+            BTreeSet::new(),
+            ShellPolicyDefault::Deny,
+        );
+        let pack = test_pack();
+        let token = test_token();
+        let caps = BTreeSet::from([Capability::InvokeTool]);
+        let approval_key = shell_exec_approval_key("cargo").expect("approval key");
+        let params = json!({
+            "tool_name": "shell.exec",
+            "payload": {
+                "command": "cargo",
+                "_loongclaw": shell_exec_internal_approval_context(approval_key.as_str()),
+            }
+        });
+        let ctx = make_context(&pack, &token, &caps, Some(&params));
+
+        assert!(matches!(
+            ext.authorize_extension(&ctx).unwrap_err(),
+            PolicyError::ToolCallDenied { .. }
+        ));
     }
 
     #[test]
