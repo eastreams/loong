@@ -5,11 +5,15 @@ use sha2::{Digest, Sha256};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::session_graph::OperatorSessionGraph;
+#[cfg(all(feature = "memory-sqlite", test))]
+use crate::session::repository::{
+    ApprovalDecision, ApprovalRequestStatus, NewApprovalGrantRecord,
+    TransitionApprovalRequestIfCurrentRequest,
+};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalDecision, ApprovalGrantRecord, ApprovalRequestRecord, ApprovalRequestStatus,
-    NewApprovalGrantRecord, NewApprovalRequestRecord, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState, TransitionApprovalRequestIfCurrentRequest,
+    ApprovalGrantRecord, ApprovalRequestRecord, NewApprovalRequestRecord, NewSessionRecord,
+    SessionKind, SessionRepository, SessionState,
 };
 
 #[cfg(feature = "memory-sqlite")]
@@ -116,15 +120,6 @@ impl<'a> OperatorApprovalRuntime<'a> {
         self.repo.ensure_approval_request(approval_request_record)
     }
 
-    pub(crate) fn ensure_request_session(
-        &self,
-        approval_request: &ApprovalRequestRecord,
-    ) -> Result<(), String> {
-        let parent_session_id = Self::request_parent_session_id(approval_request);
-
-        self.ensure_session_boundary(&approval_request.session_id, parent_session_id)
-    }
-
     pub(crate) fn load_runtime_grant_for_context(
         &self,
         session_id: &str,
@@ -162,6 +157,7 @@ impl<'a> OperatorApprovalRuntime<'a> {
         Ok((grant_scope_session_id, runtime_grant))
     }
 
+    #[cfg(test)]
     pub(crate) fn upsert_runtime_grant_for_request(
         &self,
         approval_request: &ApprovalRequestRecord,
@@ -179,6 +175,7 @@ impl<'a> OperatorApprovalRuntime<'a> {
         self.repo.upsert_approval_grant(grant_record)
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve_pending_request(
         &self,
         approval_request_id: &str,
@@ -211,46 +208,6 @@ impl<'a> OperatorApprovalRuntime<'a> {
 
         Ok(resolved)
     }
-    pub(crate) fn begin_approved_request_execution(
-        &self,
-        approval_request_id: &str,
-    ) -> Result<ApprovalRequestRecord, String> {
-        let transition_request = TransitionApprovalRequestIfCurrentRequest {
-            expected_status: ApprovalRequestStatus::Approved,
-            next_status: ApprovalRequestStatus::Executing,
-            decision: None,
-            resolved_by_session_id: None,
-            executed_at: None,
-            last_error: None,
-        };
-        let maybe_executing = self
-            .repo
-            .transition_approval_request_if_current(approval_request_id, transition_request)?;
-        let executing = maybe_executing.ok_or_else(|| {
-            format!("approval_request_not_approved: `{approval_request_id}` is no longer approved")
-        })?;
-
-        Ok(executing)
-    }
-
-    pub(crate) fn finish_executing_request(
-        &self,
-        approval_request_id: &str,
-        last_error: Option<&str>,
-    ) -> Result<Option<ApprovalRequestRecord>, String> {
-        let executed_at = Self::current_epoch_s();
-        let transition_request = TransitionApprovalRequestIfCurrentRequest {
-            expected_status: ApprovalRequestStatus::Executing,
-            next_status: ApprovalRequestStatus::Executed,
-            decision: None,
-            resolved_by_session_id: None,
-            executed_at: Some(executed_at),
-            last_error: last_error.map(str::to_owned),
-        };
-
-        self.repo
-            .transition_approval_request_if_current(approval_request_id, transition_request)
-    }
 
     fn session_kind_for_parent(parent_session_id: Option<&str>) -> SessionKind {
         if parent_session_id.is_some() {
@@ -279,6 +236,7 @@ impl<'a> OperatorApprovalRuntime<'a> {
         Ok(())
     }
 
+    #[cfg(test)]
     fn next_status_for_decision(decision: ApprovalDecision) -> ApprovalRequestStatus {
         match decision {
             ApprovalDecision::Deny => ApprovalRequestStatus::Denied,
@@ -287,6 +245,7 @@ impl<'a> OperatorApprovalRuntime<'a> {
         }
     }
 
+    #[cfg(test)]
     fn pending_resolution_error(&self, approval_request_id: &str) -> Result<String, String> {
         let latest_request = self.repo.load_approval_request(approval_request_id)?;
         let latest_request = latest_request
@@ -307,16 +266,6 @@ impl<'a> OperatorApprovalRuntime<'a> {
         let parent_session_value = parent_session_value.map(str::trim);
 
         parent_session_value.filter(|parent_session_id| !parent_session_id.is_empty())
-    }
-
-    fn current_epoch_s() -> i64 {
-        let now = std::time::SystemTime::now();
-        let unix_epoch = std::time::UNIX_EPOCH;
-        let duration = now.duration_since(unix_epoch);
-        let duration = duration.unwrap_or_default();
-        let seconds = duration.as_secs();
-
-        seconds as i64
     }
 }
 

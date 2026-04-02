@@ -3671,6 +3671,13 @@ impl<R> CoordinatorApprovalResolutionRuntime<'_, R>
 where
     R: ConversationRuntime + ?Sized,
 {
+    fn current_epoch_s() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0)
+    }
+
     fn replay_request(
         &self,
         approval_request: &ApprovalRequestRecord,
@@ -3714,55 +3721,12 @@ where
         }
     }
 
-    fn replay_approval_mode(
-        &self,
-        approval_request: &ApprovalRequestRecord,
-    ) -> Result<Option<crate::tools::ToolApprovalMode>, String> {
-        let approval_mode_value = approval_request
-            .governance_snapshot_json
-            .get("approval_mode")
-            .and_then(Value::as_str);
-        let Some(approval_mode_value) = approval_mode_value else {
-            return Ok(None);
-        };
-
-        let policy_driven = crate::tools::ToolApprovalMode::PolicyDriven;
-        let never = crate::tools::ToolApprovalMode::Never;
-
-        if approval_mode_value == policy_driven.as_str() {
-            return Ok(Some(policy_driven));
-        }
-
-        if approval_mode_value == never.as_str() {
-            return Ok(Some(never));
-        }
-
-        Err(format!(
-            "approval_request_invalid_governance_snapshot: unknown approval_mode `{approval_mode_value}`"
-        ))
-    }
-
     fn replay_requires_mutating_binding(
         &self,
         approval_request: &ApprovalRequestRecord,
     ) -> Result<bool, String> {
         let execution_kind = self.replay_execution_kind(approval_request)?;
-        match execution_kind {
-            ToolExecutionKind::Core => Ok(true),
-            ToolExecutionKind::App => {
-                let replay_approval_mode = match self.replay_approval_mode(approval_request)? {
-                    Some(replay_approval_mode) => replay_approval_mode,
-                    None => {
-                        let governance = crate::tools::governance_profile_for_tool_name(
-                            approval_request.tool_name.as_str(),
-                        );
-                        governance.approval_mode
-                    }
-                };
-
-                Ok(replay_approval_mode == crate::tools::ToolApprovalMode::PolicyDriven)
-            }
-        }
+        Ok(execution_kind == ToolExecutionKind::Core)
     }
 
     fn ensure_resolution_binding_allows_decision(
@@ -3908,7 +3872,7 @@ where
                 })
             }
             Err(error) => {
-                let _ = repo.transition_approval_request_if_current(
+                let maybe_executed = repo.transition_approval_request_if_current(
                     approval_request_id,
                     TransitionApprovalRequestIfCurrentRequest {
                         expected_status: ApprovalRequestStatus::Executing,
@@ -3919,6 +3883,13 @@ where
                         last_error: Some(error.clone()),
                     },
                 )?;
+
+                if maybe_executed.is_none() {
+                    return Err(format!(
+                        "approval_request_not_executing: `{approval_request_id}` is no longer executing; original replay error: {error}"
+                    ));
+                }
+
                 Err(error)
             }
         }
