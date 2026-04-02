@@ -927,5 +927,5 @@ Because the chosen style-review mode is `single-pass`:
 
 Run:
 
-- `git add crates/app/Cargo.toml crates/app/src/config/tools.rs crates/app/src/tools/runtime_config.rs crates/app/src/tools/bash_rules.rs crates/app/src/tools/bash_ast.rs crates/app/src/tools/bash_governance.rs crates/app/src/tools/bash.rs crates/app/src/tools/mod.rs`
+- `git add docs/plans/2026-03-29-bash-governance-ast-prefix-rule-implementation-plan.md crates/app/Cargo.toml crates/app/src/config/tools.rs crates/app/src/tools/runtime_config.rs crates/app/src/tools/bash_rules.rs crates/app/src/tools/bash_ast.rs crates/app/src/tools/bash_governance.rs crates/app/src/tools/bash.rs crates/app/src/tools/mod.rs`
 - `git commit -m "feat(app): add bash ast governance"`

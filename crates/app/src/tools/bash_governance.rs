@@ -2,7 +2,7 @@ use super::bash_ast::{
     BashCommandAnalysis, MinimalCommandUnit, UnitClassification, UnitOperator,
     UnsupportedStructureKind, analyze_bash_command,
 };
-use super::bash_rules::{CompiledPrefixRule, CompiledRuleOrigin, PrefixRuleDecision};
+use super::bash_rules::{CompiledPrefixRule, PrefixRuleDecision};
 use super::shell_policy_ext::ShellPolicyDefault;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -324,6 +324,7 @@ fn default_mode_label(default_mode: ShellPolicyDefault) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::super::bash_rules::CompiledRuleOrigin;
     use super::*;
 
     struct PrefixRuleFixture;

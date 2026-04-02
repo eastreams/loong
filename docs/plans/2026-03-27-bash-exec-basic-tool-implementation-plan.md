@@ -411,13 +411,13 @@ pub enum ToolVisibilityGate {
 Update the gate functions:
 
 ```rust
-ToolVisibilityGate::BashRuntime => config.bash_exec.is_runtime_ready(),
+ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
 ```
 
 for `tool_visibility_gate_enabled_for_runtime_view(...)`, and the same:
 
 ```rust
-ToolVisibilityGate::BashRuntime => config.bash_exec.is_runtime_ready(),
+ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
 ```
 
 for `tool_visibility_gate_enabled_for_runtime_policy(...)`.
@@ -470,7 +470,7 @@ In `crates/app/src/tools/mod.rs`:
 - update `tool_search_entry_is_runtime_usable(...)` with:
 
 ```rust
-"bash.exec" => config.bash_exec.is_runtime_ready(),
+"bash.exec" => config.bash_exec.is_discoverable(),
 ```
 
 - include `bash.exec` in `tool_uses_dedicated_timeout(...)`
