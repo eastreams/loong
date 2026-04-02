@@ -46,13 +46,13 @@
 
 **Because it already has the core capabilities you need to inspect, operate, and extend:**
 
-- **🚀 Ready-to-use core commands**: `loong onboard`, `loong ask`, `loong chat`, and `loong doctor` — ready to run out of the box.
-- **👀 Accessible runtime capabilities**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are directly usable commands, not internals locked in a black box.
+- **🚀 Rich configuration out of the box**: 42+ built-in providers, 25+ channels — up and running in a few commands.
+- **👀 Transparent and controllable**: `audit`, `tasks`, `skills`, `plugins`, `channels`, `runtime-snapshot`, and gateway control are all exposed as directly usable commands.
 - **🛡️ Secure and controllable foundation**: provider selection, tools, memory, channels, approvals, policy, and audit operate within explicit runtime boundaries.
 
 **Also because whether you are a beginner or a power user, it fits you:**
 
-- **⚡ Easy to start**: a few commands to get running, compatible with existing Claude Code, Codex, and OpenCode configurations.
+- **⚡ Easy to start**: a few commands to get running, compatible with existing configurations from OpenClaw, Claude Code, Codex, OpenCode, and other similar AI tools.
 - **🧭 Transparent boundaries**: assistant, gateway, and channels operate independently — no blurred lines.
 - **🔌 Core and extensions are separate**: providers, tools, channels, memory, and policy live outside the kernel — compile and compose as needed.
 - **🌱 Not a toy**: designed for long-term use, grows with your needs over time.

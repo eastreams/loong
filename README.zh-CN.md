@@ -46,13 +46,13 @@
 
 **因为它已经具备你在观察、操作、扩展过程中所需的核心能力：**
 
-- **🚀 开箱即用的核心命令**：`loong onboard`、`loong ask`、`loong chat`、`loong doctor`，上手即用。
-- **👀 触手可及的运行时能力**：`audit`、`tasks`、`skills`、`plugins`、`channels`、`runtime-snapshot` 以及 gateway control 都是直接可用的命令，不是封在内部的黑盒。
+- **🚀 开箱即用的丰富配置**：内置 42+ provider、25+ 接入频道，几条命令即可跑通。
+- **👀 透明可控的操控能力**：`audit`、`tasks`、`skills`、`plugins`、`channels`、`runtime-snapshot` 以及 gateway control 都暴露为直接可用的命令。
 - **🛡️ 安全可控的基座能力**：provider 选择、工具、记忆、接入频道、审批、策略、审计都在明确的运行时边界之内。
 
 **也因为无论你是小白还是极客，它都适合你：**
 
-- **⚡ 易于上手**：几条命令就能跑通，兼容 Claude Code、Codex、OpenCode 等已有配置。
+- **⚡ 易于上手**：几条命令就能跑通，兼容 OpenClaw、Claude Code、Codex、OpenCode 等同类 AI 工具的已有配置。
 - **🧭 边界透明**：助手、网关、接入频道各自独立，不会混成一个模糊概念。
 - **🔌 内核与扩展分离**：provider、工具、接入频道、记忆、策略独立于内核，按需编译组合。
 - **🌱 不是玩具**：面向长期使用设计，能跟着你的需求一起成长。
