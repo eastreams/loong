@@ -175,6 +175,8 @@ mod tests {
     #[derive(Debug, Default)]
     struct ForbiddenAliasScope {
         imported_bindings: BTreeMap<String, Vec<String>>,
+        imported_paths: Vec<Vec<String>>,
+        glob_import_paths: Vec<Vec<String>>,
         scoped_env_visible_from_glob_import: bool,
     }
 
@@ -248,18 +250,33 @@ mod tests {
                     break;
                 }
 
-                let first_segment = match resolved_segments.first() {
-                    Some(first_segment) => first_segment,
+                let mut alias_index = 0;
+
+                while let Some(segment) = resolved_segments.get(alias_index) {
+                    let is_relative_qualifier = is_relative_path_qualifier(segment);
+
+                    if !is_relative_qualifier {
+                        break;
+                    }
+
+                    alias_index += 1;
+                }
+
+                let alias_segment = match resolved_segments.get(alias_index) {
+                    Some(alias_segment) => alias_segment,
                     None => break,
                 };
-                let imported_path = match self.lookup_alias(first_segment) {
+                let imported_path = match self.lookup_alias(alias_segment) {
                     Some(imported_path) => imported_path,
                     None => break,
                 };
-                let mut expanded_segments = imported_path;
+                let leading_segments = &resolved_segments[..alias_index];
+                let trailing_segments = &resolved_segments[(alias_index + 1)..];
+                let mut expanded_segments = leading_segments.to_vec();
+                expanded_segments.extend(imported_path);
 
-                for tail_segment in resolved_segments.iter().skip(1) {
-                    expanded_segments.push(tail_segment.clone());
+                for trailing_segment in trailing_segments {
+                    expanded_segments.push(trailing_segment.clone());
                 }
 
                 let expansion_changed = expanded_segments != resolved_segments;
@@ -274,22 +291,14 @@ mod tests {
             resolved_segments
         }
 
-        fn record_glob_import(&mut self, kind: ForbiddenImportKind) {
-            match kind {
-                ForbiddenImportKind::Module => {
-                    let current_scope = self.current_scope_mut();
-                    current_scope.scoped_env_visible_from_glob_import = true;
-                }
-                ForbiddenImportKind::ScopedEnv => {
-                    self.mark_forbidden_reference();
-                }
-            }
+        fn record_glob_import_path(&mut self, imported_path: Vec<String>) {
+            let current_scope = self.current_scope_mut();
+            current_scope.glob_import_paths.push(imported_path);
         }
 
         fn path_uses_glob_visible_scoped_env(path_segments: &[String]) -> bool {
             for qualifier_segment in path_segments {
-                let is_relative_qualifier =
-                    matches!(qualifier_segment.as_str(), "self" | "super" | "crate");
+                let is_relative_qualifier = is_relative_path_qualifier(qualifier_segment);
 
                 if is_relative_qualifier {
                     continue;
@@ -355,12 +364,7 @@ mod tests {
                 }
                 syn::UseTree::Glob(_) => {
                     let imported_path = prefix.clone();
-                    let resolved_imported_path = self.resolve_path_aliases(&imported_path);
-                    let import_kind = forbidden_import_kind_for_use_path(&resolved_imported_path);
-
-                    if let Some(import_kind) = import_kind {
-                        self.record_glob_import(import_kind);
-                    }
+                    self.record_glob_import_path(imported_path);
                 }
                 syn::UseTree::Group(use_group) => {
                     for child_tree in &use_group.items {
@@ -375,26 +379,103 @@ mod tests {
                 Some(alias_name) => alias_name,
                 None => imported_binding_name(&imported_path),
             };
-            let resolved_imported_path = self.resolve_path_aliases(&imported_path);
-            let import_kind = forbidden_import_kind_for_use_path(&resolved_imported_path);
-
-            self.record_alias(alias_name, resolved_imported_path);
-
-            let Some(import_kind) = import_kind else {
-                return;
-            };
-            let should_mark_forbidden_reference = match import_kind {
-                ForbiddenImportKind::Module => false,
-                ForbiddenImportKind::ScopedEnv => true,
-            };
-
-            if should_mark_forbidden_reference {
-                self.mark_forbidden_reference();
+            {
+                let current_scope = self.current_scope_mut();
+                current_scope.imported_paths.push(imported_path.clone());
             }
+            self.record_alias(alias_name, imported_path);
+        }
+
+        fn collect_item_uses(&mut self, items: &[syn::Item]) {
+            for item in items {
+                let syn::Item::Use(item_use) = item else {
+                    continue;
+                };
+                self.collect_single_item_use(item_use);
+            }
+        }
+
+        fn collect_single_item_use(&mut self, item_use: &syn::ItemUse) {
+            let mut prefix = Vec::new();
+            self.inspect_use_tree(&item_use.tree, &mut prefix);
+        }
+
+        fn current_scope_use_effect_counts(&self) -> (usize, usize) {
+            let current_scope = self
+                .alias_scopes
+                .last()
+                .expect("daemon source guard scope should exist");
+            let imported_path_count = current_scope.imported_paths.len();
+            let glob_import_path_count = current_scope.glob_import_paths.len();
+
+            (imported_path_count, glob_import_path_count)
+        }
+
+        fn refresh_current_scope_use_effects_since(
+            &mut self,
+            imported_path_start: usize,
+            glob_import_path_start: usize,
+        ) {
+            let (imported_paths, glob_import_paths, scoped_env_visible_from_glob_import) = {
+                let current_scope = self
+                    .alias_scopes
+                    .last()
+                    .expect("daemon source guard scope should exist");
+                let imported_paths = current_scope.imported_paths[imported_path_start..].to_vec();
+                let glob_import_paths =
+                    current_scope.glob_import_paths[glob_import_path_start..].to_vec();
+                let scoped_env_visible_from_glob_import =
+                    current_scope.scoped_env_visible_from_glob_import;
+
+                (
+                    imported_paths,
+                    glob_import_paths,
+                    scoped_env_visible_from_glob_import,
+                )
+            };
+            let mut scoped_env_visible_from_glob_import = scoped_env_visible_from_glob_import;
+
+            for imported_path in &imported_paths {
+                let resolved_imported_path = self.resolve_path_aliases(imported_path);
+                let import_kind = forbidden_import_kind_for_use_path(&resolved_imported_path);
+                let imports_scoped_env =
+                    matches!(import_kind, Some(ForbiddenImportKind::ScopedEnv));
+
+                if imports_scoped_env {
+                    self.mark_forbidden_reference();
+                }
+            }
+
+            for glob_import_path in &glob_import_paths {
+                let resolved_imported_path = self.resolve_path_aliases(glob_import_path);
+                let import_kind = forbidden_import_kind_for_use_path(&resolved_imported_path);
+
+                match import_kind {
+                    Some(ForbiddenImportKind::Module) => {
+                        scoped_env_visible_from_glob_import = true;
+                    }
+                    Some(ForbiddenImportKind::ScopedEnv) => {
+                        self.mark_forbidden_reference();
+                    }
+                    None => {}
+                }
+            }
+
+            let current_scope = self.current_scope_mut();
+            current_scope.scoped_env_visible_from_glob_import = scoped_env_visible_from_glob_import;
         }
     }
 
     impl<'ast> Visit<'ast> for DaemonSourceGuardInspector {
+        fn visit_file(&mut self, file: &'ast syn::File) {
+            self.collect_item_uses(&file.items);
+            self.refresh_current_scope_use_effects_since(0, 0);
+
+            for item in &file.items {
+                self.visit_item(item);
+            }
+        }
+
         fn visit_item_mod(&mut self, item_mod: &'ast syn::ItemMod) {
             let module_content = match &item_mod.content {
                 Some(module_content) => module_content,
@@ -403,6 +484,8 @@ mod tests {
             let (_, items) = module_content;
 
             self.push_scope();
+            self.collect_item_uses(items);
+            self.refresh_current_scope_use_effects_since(0, 0);
 
             for item in items {
                 self.visit_item(item);
@@ -413,14 +496,53 @@ mod tests {
 
         fn visit_block(&mut self, block: &'ast syn::Block) {
             self.push_scope();
-            visit::visit_block(self, block);
+            let mut pending_use_items = Vec::new();
+
+            for statement in &block.stmts {
+                if let syn::Stmt::Item(syn::Item::Use(item_use)) = statement {
+                    pending_use_items.push(item_use);
+                    continue;
+                }
+
+                let has_pending_use_items = !pending_use_items.is_empty();
+
+                if has_pending_use_items {
+                    let (imported_path_start, glob_import_path_start) =
+                        self.current_scope_use_effect_counts();
+
+                    for pending_use_item in pending_use_items.drain(..) {
+                        self.collect_single_item_use(pending_use_item);
+                    }
+
+                    self.refresh_current_scope_use_effects_since(
+                        imported_path_start,
+                        glob_import_path_start,
+                    );
+                }
+
+                self.visit_stmt(statement);
+            }
+
+            let has_pending_use_items = !pending_use_items.is_empty();
+
+            if has_pending_use_items {
+                let (imported_path_start, glob_import_path_start) =
+                    self.current_scope_use_effect_counts();
+
+                for pending_use_item in pending_use_items.drain(..) {
+                    self.collect_single_item_use(pending_use_item);
+                }
+
+                self.refresh_current_scope_use_effects_since(
+                    imported_path_start,
+                    glob_import_path_start,
+                );
+            }
+
             self.pop_scope();
         }
 
-        fn visit_item_use(&mut self, item_use: &'ast syn::ItemUse) {
-            let mut prefix = Vec::new();
-            self.inspect_use_tree(&item_use.tree, &mut prefix);
-        }
+        fn visit_item_use(&mut self, _item_use: &'ast syn::ItemUse) {}
 
         fn visit_path(&mut self, path: &'ast syn::Path) {
             let uses_forbidden_env_guard = self.path_uses_forbidden_scoped_env(path);
@@ -449,6 +571,10 @@ mod tests {
             .last()
             .cloned()
             .expect("forbidden import path should have a binding name")
+    }
+
+    fn is_relative_path_qualifier(segment: &str) -> bool {
+        matches!(segment, "self" | "super" | "crate")
     }
 
     fn forbidden_import_kind_for_use_path(imported_path: &[String]) -> Option<ForbiddenImportKind> {
@@ -811,6 +937,76 @@ mod tests {
         assert!(
             daemon_source_uses_forbidden_env_guard(sample_source),
             "daemon source guard should flag long alias chains that still resolve to the forbidden root module"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_glob_import_from_later_root_alias_before_function_use() {
+        let sample_source = r#"
+            fn build_guard() {
+                let mut env = ScopedEnv::new();
+                drop(env);
+            }
+
+            use app_side::test_support::*;
+            use crate::mvp as app_side;
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag glob imports that resolve through a later root alias in the same scope"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_import_only_scoped_env_from_later_root_alias() {
+        let sample_source = r#"
+            use app_side::test_support::ScopedEnv;
+            use crate::mvp as app_side;
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag import-only forbidden scoped env paths that resolve through a later root alias"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_glob_import_from_later_root_alias_inside_nested_module() {
+        let sample_source = r#"
+            mod outer {
+                fn build_guard() {
+                    let mut env = ScopedEnv::new();
+                    drop(env);
+                }
+
+                use self::app_side::test_support::*;
+                use crate::mvp as app_side;
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag nested-module glob imports that resolve through a later root alias"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_self_qualified_path_from_later_root_alias_inside_nested_module() {
+        let sample_source = r#"
+            mod outer {
+                fn build_guard() {
+                    let mut env = self::app_side::test_support::ScopedEnv::new();
+                    drop(env);
+                }
+
+                use crate::mvp as app_side;
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag self-qualified nested-module paths that resolve through a later root alias"
         );
     }
 
