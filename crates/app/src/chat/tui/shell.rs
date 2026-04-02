@@ -64,6 +64,9 @@ impl SpinnerView for state::Pane {
     fn loop_state(&self) -> &str {
         &self.loop_state
     }
+    fn loop_action(&self) -> &str {
+        &self.loop_action
+    }
     fn loop_iteration(&self) -> u32 {
         self.loop_iteration
     }
@@ -122,6 +125,20 @@ impl ShellView for state::Shell {
     }
     fn clarify_dialog(&self) -> Option<&ClarifyDialog> {
         self.pane.clarify_dialog.as_ref()
+    }
+    fn tool_inspector(&self) -> Option<render::ToolInspectorView<'_>> {
+        let active_tool_inspector = self.pane.active_tool_inspector()?;
+        let tool_call = active_tool_inspector.tool_call;
+
+        Some(render::ToolInspectorView {
+            tool_id: tool_call.tool_id,
+            tool_name: tool_call.tool_name,
+            args_preview: tool_call.args_preview,
+            status: tool_call.status,
+            scroll_offset: active_tool_inspector.scroll_offset,
+            position: active_tool_inspector.position,
+            total: active_tool_inspector.total,
+        })
     }
 }
 
@@ -278,9 +295,10 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
         UiEvent::PhaseChange {
             phase,
             iteration,
-            action: _,
+            action,
         } => {
             shell.pane.loop_state = phase;
+            shell.pane.loop_action = action;
             shell.pane.loop_iteration = iteration;
         }
         UiEvent::ResponseDone {
@@ -387,6 +405,33 @@ fn apply_history_navigation(
     }
 }
 
+fn tool_inspector_scroll_step() -> u16 {
+    let terminal_size = crossterm::terminal::size();
+    let (_, height) = terminal_size.unwrap_or((80, 24));
+    let available_height = height.saturating_sub(8);
+    let scroll_step = available_height / 2;
+
+    scroll_step.max(1)
+}
+
+fn open_tool_inspector(shell: &mut state::Shell) {
+    let opened = shell.pane.open_latest_tool_inspector();
+    if opened {
+        if !shell.focus.has(FocusLayer::ToolInspector) {
+            shell.focus.push(FocusLayer::ToolInspector);
+        }
+    } else {
+        shell.pane.set_status("No tool details available".into());
+    }
+}
+
+fn close_tool_inspector(shell: &mut state::Shell) {
+    shell.pane.close_tool_inspector();
+    if shell.focus.top() == FocusLayer::ToolInspector {
+        shell.focus.pop();
+    }
+}
+
 fn apply_terminal_event(
     shell: &mut state::Shell,
     textarea: &mut tui_textarea::TextArea<'_>,
@@ -427,6 +472,45 @@ fn apply_terminal_event(
             }
             return;
         }
+        FocusLayer::ToolInspector => {
+            let scroll_step = tool_inspector_scroll_step();
+
+            #[allow(clippy::wildcard_enum_match_arm)]
+            match key.code {
+                KeyCode::Esc => {
+                    close_tool_inspector(shell);
+                }
+                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = shell.pane.open_latest_tool_inspector();
+                }
+                KeyCode::Up => {
+                    let moved = shell.pane.select_previous_tool_inspector_entry();
+                    if !moved {
+                        shell.pane.scroll_tool_inspector_up(1);
+                    }
+                }
+                KeyCode::Down => {
+                    let moved = shell.pane.select_next_tool_inspector_entry();
+                    if !moved {
+                        shell.pane.scroll_tool_inspector_down(1);
+                    }
+                }
+                KeyCode::PageUp => {
+                    shell.pane.scroll_tool_inspector_up(scroll_step);
+                }
+                KeyCode::PageDown => {
+                    shell.pane.scroll_tool_inspector_down(scroll_step);
+                }
+                KeyCode::Home => {
+                    let _ = shell.pane.select_first_tool_inspector_entry();
+                }
+                KeyCode::End => {
+                    let _ = shell.pane.select_last_tool_inspector_entry();
+                }
+                _ => {}
+            }
+            return;
+        }
         FocusLayer::Help => {
             if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
                 shell.focus.pop();
@@ -456,6 +540,10 @@ fn apply_terminal_event(
             shell.show_thinking = !shell.show_thinking;
             let label = if shell.show_thinking { "on" } else { "off" };
             shell.pane.set_status(format!("Thinking display: {label}"));
+            return;
+        }
+        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            open_tool_inspector(shell);
             return;
         }
         _ => {}
@@ -861,6 +949,14 @@ async fn run_inner(
         apply_boot_screen(&mut shell, &mut textarea, &screen);
     }
 
+    if shell.dirty {
+        // Render a deterministic first frame before the async event loop starts
+        // so PTY clients observe a stable fullscreen surface immediately.
+        shell.pane.tick_spinner();
+        guard.draw(&shell, &textarea, &palette)?;
+        shell.dirty = false;
+    }
+
     loop {
         // ── Phase 1: Drain all pending events (non-blocking) ──────────
 
@@ -1141,5 +1237,72 @@ mod tests {
             submit_text.is_none(),
             "Shift+Enter should not submit composer contents"
         );
+    }
+
+    #[test]
+    fn ctrl_o_without_tool_calls_sets_status_message() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let open_event = Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        apply_terminal_event(&mut shell, &mut textarea, open_event, &tx, &mut submit_text);
+
+        let status_message = shell
+            .pane
+            .status_message
+            .as_ref()
+            .map(|(msg, _)| msg.as_str());
+
+        assert_eq!(status_message, Some("No tool details available"));
+    }
+
+    #[test]
+    fn ctrl_o_with_tool_calls_opens_tool_inspector() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let open_event = Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+
+        shell.pane.start_tool_call("tool-1", "shell", "ls -la");
+        shell.pane.complete_tool_call("tool-1", true, "file-a", 12);
+
+        apply_terminal_event(&mut shell, &mut textarea, open_event, &tx, &mut submit_text);
+
+        let selected_tool_id = shell
+            .pane
+            .tool_inspector
+            .as_ref()
+            .map(|state| state.selected_tool_id.as_str());
+
+        assert_eq!(shell.focus.top(), FocusLayer::ToolInspector);
+        assert_eq!(selected_tool_id, Some("tool-1"));
+    }
+
+    #[test]
+    fn esc_closes_tool_inspector_focus() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let open_event = Event::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+        let close_event = Event::Key(plain_key(KeyCode::Esc));
+
+        shell.pane.start_tool_call("tool-1", "shell", "ls -la");
+        shell.pane.complete_tool_call("tool-1", true, "file-a", 12);
+
+        apply_terminal_event(&mut shell, &mut textarea, open_event, &tx, &mut submit_text);
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            close_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
+        assert!(shell.pane.tool_inspector.is_none());
     }
 }

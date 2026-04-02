@@ -1,9 +1,14 @@
+use std::borrow::Cow;
+
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap, block::Position as TitlePosition},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+        block::Position as TitlePosition,
+    },
 };
 
 use super::dialog::ClarifyDialog;
@@ -11,9 +16,21 @@ use super::focus::{FocusLayer, FocusStack};
 use super::history::{self, PaneView};
 use super::input::{self, InputView};
 use super::layout;
+use super::message::ToolStatus;
 use super::spinner::{self, SpinnerView};
 use super::status_bar::{self, StatusBarView};
 use super::theme::Palette;
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ToolInspectorView<'a> {
+    pub(super) tool_id: &'a str,
+    pub(super) tool_name: &'a str,
+    pub(super) args_preview: &'a str,
+    pub(super) status: &'a ToolStatus,
+    pub(super) scroll_offset: u16,
+    pub(super) position: usize,
+    pub(super) total: usize,
+}
 
 // ---------------------------------------------------------------------------
 // Composite view trait for Shell
@@ -29,6 +46,7 @@ pub(super) trait ShellView {
     fn show_thinking(&self) -> bool;
     fn focus(&self) -> &FocusStack;
     fn clarify_dialog(&self) -> Option<&ClarifyDialog>;
+    fn tool_inspector(&self) -> Option<ToolInspectorView<'_>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +92,12 @@ pub(super) fn draw(
         && state.focus().has(FocusLayer::ClarifyDialog)
     {
         render_clarify_dialog(dialog, frame, area, palette);
+    }
+
+    if let Some(tool_inspector) = state.tool_inspector()
+        && state.focus().has(FocusLayer::ToolInspector)
+    {
+        render_tool_inspector(tool_inspector, frame, area, palette);
     }
 
     if state.focus().has(FocusLayer::Help) {
@@ -235,6 +259,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
                 ("Up/Down", "Scroll history when empty"),
                 ("PageUp/Dn", "Page scroll history"),
                 ("Home/End", "Jump top/latest when empty"),
+                ("Ctrl+O", "Open latest tool details"),
                 ("Ctrl+C", "Interrupt / cancel"),
                 ("Esc", "Close dialogs"),
             ],
@@ -297,6 +322,182 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 }
 
 // ---------------------------------------------------------------------------
+// Tool inspector overlay
+// ---------------------------------------------------------------------------
+
+fn render_tool_inspector(
+    tool_inspector: ToolInspectorView<'_>,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    palette: &Palette,
+) {
+    if area.width < 24 || area.height < 10 {
+        return;
+    }
+
+    let max_width = area.width.saturating_sub(4);
+    let preferred_width = area.width.saturating_mul(4) / 5;
+    let popup_width = preferred_width.max(60).min(max_width);
+
+    let max_height = area.height.saturating_sub(2);
+    let preferred_height = area.height.saturating_mul(4) / 5;
+    let popup_height = preferred_height.max(12).min(max_height);
+
+    let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette.info))
+        .title(Span::styled(
+            " Tool Details ",
+            Style::default()
+                .fg(palette.info)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_position(TitlePosition::Top)
+        .title(Span::styled(
+            " Up/Down tool | PgUp/PgDn output | Esc close ",
+            Style::default()
+                .fg(palette.dim)
+                .add_modifier(Modifier::ITALIC),
+        ))
+        .title_position(TitlePosition::Bottom)
+        .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x1a)));
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let status_summary = render_tool_inspector_status(&tool_inspector, palette);
+    let output_text = tool_inspector_output(tool_inspector.status);
+
+    let mut content_lines: Vec<Line<'_>> = Vec::new();
+    let tool_position = tool_inspector.position + 1;
+    let position_label = format!("{tool_position}/{}", tool_inspector.total);
+
+    content_lines.push(Line::from(vec![
+        Span::styled(" Tool ".to_string(), Style::default().fg(palette.dim)),
+        Span::styled(
+            position_label,
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    content_lines.push(Line::from(vec![
+        Span::styled(" Name: ".to_string(), Style::default().fg(palette.dim)),
+        Span::styled(
+            tool_inspector.tool_name.to_string(),
+            Style::default()
+                .fg(palette.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    content_lines.push(Line::from(vec![
+        Span::styled(" Id: ".to_string(), Style::default().fg(palette.dim)),
+        Span::styled(
+            tool_inspector.tool_id.to_string(),
+            Style::default().fg(palette.text),
+        ),
+    ]));
+    content_lines.push(Line::from(vec![
+        Span::styled(" Args: ".to_string(), Style::default().fg(palette.dim)),
+        Span::styled(
+            tool_inspector.args_preview.to_string(),
+            Style::default().fg(palette.text),
+        ),
+    ]));
+    content_lines.push(Line::from(vec![
+        Span::styled(" Status: ".to_string(), Style::default().fg(palette.dim)),
+        status_summary,
+    ]));
+    content_lines.push(Line::default());
+    content_lines.push(Line::styled(
+        " Output",
+        Style::default()
+            .fg(palette.brand)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    for output_line in output_text.lines() {
+        let prefixed_line = format!(" {output_line}");
+        let line = Line::styled(prefixed_line, Style::default().fg(palette.text));
+        content_lines.push(line);
+    }
+
+    if output_text.is_empty() {
+        let empty_line = Line::styled(" ", Style::default().fg(palette.text));
+        content_lines.push(empty_line);
+    }
+
+    let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false });
+    let total_lines = paragraph.line_count(inner.width) as u16;
+    let visible_height = inner.height;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    let scroll_offset = tool_inspector.scroll_offset.min(max_scroll);
+    let paragraph = paragraph.scroll((scroll_offset, 0));
+
+    frame.render_widget(paragraph, inner);
+
+    if total_lines > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(total_lines as usize);
+        scrollbar_state = scrollbar_state.position(scroll_offset as usize);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(palette.dim));
+
+        frame.render_stateful_widget(
+            scrollbar,
+            inner.inner(Margin {
+                horizontal: 0,
+                vertical: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn render_tool_inspector_status(
+    tool_inspector: &ToolInspectorView<'_>,
+    palette: &Palette,
+) -> Span<'static> {
+    match tool_inspector.status {
+        ToolStatus::Running { started } => {
+            let elapsed_seconds = started.elapsed().as_secs_f32();
+            let summary = format!("running | {elapsed_seconds:.1}s elapsed");
+
+            Span::styled(summary, Style::default().fg(palette.tool_running))
+        }
+        ToolStatus::Done {
+            success,
+            duration_ms,
+            ..
+        } => {
+            let status_label = if *success { "success" } else { "failed" };
+            let duration_label = format!("{duration_ms}ms");
+            let summary = format!("{status_label} | {duration_label}");
+            let color = if *success {
+                palette.tool_done
+            } else {
+                palette.tool_fail
+            };
+
+            Span::styled(summary, Style::default().fg(color))
+        }
+    }
+}
+
+fn tool_inspector_output<'a>(status: &'a ToolStatus) -> Cow<'a, str> {
+    match status {
+        ToolStatus::Running { .. } => Cow::Borrowed("Waiting for tool output..."),
+        ToolStatus::Done { output, .. } => Cow::Borrowed(output.as_str()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -304,9 +505,19 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 mod tests {
     use super::*;
     use crate::chat::tui::dialog::ClarifyDialog;
-    use crate::chat::tui::message::Message;
+    use crate::chat::tui::message::{Message, ToolStatus};
     use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
+
+    struct TestToolInspector {
+        tool_id: String,
+        tool_name: String,
+        args_preview: String,
+        status: ToolStatus,
+        scroll_offset: u16,
+        position: usize,
+        total: usize,
+    }
 
     // Unified test pane implementing all view traits.
     struct TestPane {
@@ -317,6 +528,7 @@ mod tests {
         spinner_frame: usize,
         dots_frame: usize,
         loop_state: String,
+        loop_action: String,
         loop_iteration: u32,
         status_message: Option<(String, Instant)>,
         model: String,
@@ -336,6 +548,7 @@ mod tests {
                 spinner_frame: 0,
                 dots_frame: 0,
                 loop_state: String::new(),
+                loop_action: String::new(),
                 loop_iteration: 0,
                 status_message: None,
                 model: "test-model".into(),
@@ -371,6 +584,9 @@ mod tests {
         }
         fn loop_state(&self) -> &str {
             &self.loop_state
+        }
+        fn loop_action(&self) -> &str {
+            &self.loop_action
         }
         fn loop_iteration(&self) -> u32 {
             self.loop_iteration
@@ -412,6 +628,7 @@ mod tests {
         show_thinking: bool,
         focus: FocusStack,
         clarify_dialog: Option<ClarifyDialog>,
+        tool_inspector: Option<TestToolInspector>,
     }
 
     impl TestShell {
@@ -421,6 +638,7 @@ mod tests {
                 show_thinking: false,
                 focus: FocusStack::new(),
                 clarify_dialog: None,
+                tool_inspector: None,
             }
         }
     }
@@ -439,6 +657,19 @@ mod tests {
         }
         fn clarify_dialog(&self) -> Option<&ClarifyDialog> {
             self.clarify_dialog.as_ref()
+        }
+        fn tool_inspector(&self) -> Option<ToolInspectorView<'_>> {
+            let inspector = self.tool_inspector.as_ref()?;
+
+            Some(ToolInspectorView {
+                tool_id: inspector.tool_id.as_str(),
+                tool_name: inspector.tool_name.as_str(),
+                args_preview: inspector.args_preview.as_str(),
+                status: &inspector.status,
+                scroll_offset: inspector.scroll_offset,
+                position: inspector.position,
+                total: inspector.total,
+            })
         }
     }
 
@@ -492,6 +723,10 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Help"), "help overlay should be visible");
+        assert!(
+            text.contains("Ctrl+O"),
+            "help overlay should advertise tool inspection shortcut"
+        );
     }
 
     #[test]
@@ -521,6 +756,50 @@ mod tests {
         assert!(
             text.contains("Agent Question"),
             "clarify dialog should be visible"
+        );
+    }
+
+    #[test]
+    fn draw_with_tool_inspector_overlay() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::ToolInspector);
+        let tool_inspector = TestToolInspector {
+            tool_id: "tool-2".into(),
+            tool_name: "shell".into(),
+            args_preview: "ls -la".into(),
+            status: ToolStatus::Done {
+                success: true,
+                output: "line 1\nline 2".into(),
+                duration_ms: 24,
+            },
+            scroll_offset: 0,
+            position: 1,
+            total: 2,
+        };
+        let shell = TestShell {
+            focus,
+            tool_inspector: Some(tool_inspector),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Tool Details"),
+            "tool inspector overlay should be visible"
+        );
+        assert!(
+            text.contains("line 2"),
+            "tool inspector should render tool output"
         );
     }
 

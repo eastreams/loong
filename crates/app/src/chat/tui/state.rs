@@ -9,6 +9,28 @@ const DOTS_INTERVAL_MS: u128 = 300;
 const SPINNER_FRAMES: usize = 10;
 const DOTS_FRAMES: usize = 4;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ToolInspectorState {
+    pub(super) selected_tool_id: String,
+    pub(super) scroll_offset: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ToolCallRecord<'a> {
+    pub(super) tool_id: &'a str,
+    pub(super) tool_name: &'a str,
+    pub(super) args_preview: &'a str,
+    pub(super) status: &'a ToolStatus,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ActiveToolInspector<'a> {
+    pub(super) tool_call: ToolCallRecord<'a>,
+    pub(super) scroll_offset: u16,
+    pub(super) position: usize,
+    pub(super) total: usize,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Pane {
     pub(super) messages: Vec<Message>,
@@ -20,6 +42,7 @@ pub(super) struct Pane {
     pub(super) context_length: u32,
     pub(super) agent_running: bool,
     pub(super) loop_state: String,
+    pub(super) loop_action: String,
     pub(super) loop_iteration: u32,
     pub(super) streaming_active: bool,
     pub(super) spinner_frame: usize,
@@ -31,6 +54,7 @@ pub(super) struct Pane {
     /// Depth-1 staged message queue: holds the next user message to submit
     /// once the current agent turn completes.
     pub(super) staged_message: Option<String>,
+    pub(super) tool_inspector: Option<ToolInspectorState>,
 }
 
 impl Pane {
@@ -45,6 +69,7 @@ impl Pane {
             context_length: 0,
             agent_running: false,
             loop_state: String::new(),
+            loop_action: String::new(),
             loop_iteration: 0,
             streaming_active: false,
             spinner_frame: 0,
@@ -54,6 +79,7 @@ impl Pane {
             clarify_dialog: None,
             input_hint_override: None,
             staged_message: None,
+            tool_inspector: None,
         }
     }
 
@@ -103,7 +129,7 @@ impl Pane {
     }
 
     /// Finds the matching tool call by `tool_id` and transitions it to
-    /// `ToolStatus::Done`. Output is truncated to 80 chars for the preview.
+    /// `ToolStatus::Done`.
     pub(super) fn complete_tool_call(
         &mut self,
         tool_id: &str,
@@ -111,7 +137,6 @@ impl Pane {
         output: &str,
         duration_ms: u32,
     ) {
-        let truncated = truncate_preview(output, 80);
         for msg in self.messages.iter_mut().rev() {
             for part in &mut msg.parts {
                 if let MessagePart::ToolCall {
@@ -123,7 +148,7 @@ impl Pane {
                 {
                     *status = ToolStatus::Done {
                         success,
-                        output: truncated,
+                        output: output.to_string(),
                         duration_ms,
                     };
                     return;
@@ -189,6 +214,83 @@ impl Pane {
         self.status_message = Some((msg, Instant::now()));
     }
 
+    pub(super) fn open_latest_tool_inspector(&mut self) -> bool {
+        let tool_calls = self.collect_tool_calls();
+        let latest_tool = match tool_calls.last() {
+            Some(tool_call) => tool_call,
+            None => return false,
+        };
+        let selected_tool_id = latest_tool.tool_id.to_string();
+
+        self.tool_inspector = Some(ToolInspectorState {
+            selected_tool_id,
+            scroll_offset: 0,
+        });
+
+        true
+    }
+
+    pub(super) fn close_tool_inspector(&mut self) {
+        self.tool_inspector = None;
+    }
+
+    pub(super) fn active_tool_inspector(&self) -> Option<ActiveToolInspector<'_>> {
+        let tool_calls = self.collect_tool_calls();
+        let selected_index = self.selected_tool_call_index(&tool_calls)?;
+        let selected_tool = tool_calls.get(selected_index).copied()?;
+        let inspector = self.tool_inspector.as_ref()?;
+        let total = tool_calls.len();
+
+        Some(ActiveToolInspector {
+            tool_call: selected_tool,
+            scroll_offset: inspector.scroll_offset,
+            position: selected_index,
+            total,
+        })
+    }
+
+    pub(super) fn select_previous_tool_inspector_entry(&mut self) -> bool {
+        self.move_tool_inspector_selection(ToolInspectorDirection::Previous)
+    }
+
+    pub(super) fn select_next_tool_inspector_entry(&mut self) -> bool {
+        self.move_tool_inspector_selection(ToolInspectorDirection::Next)
+    }
+
+    pub(super) fn select_first_tool_inspector_entry(&mut self) -> bool {
+        self.select_tool_inspector_entry_by_index(0)
+    }
+
+    pub(super) fn select_last_tool_inspector_entry(&mut self) -> bool {
+        let tool_calls = self.collect_tool_calls();
+        let last_index = match tool_calls.len().checked_sub(1) {
+            Some(index) => index,
+            None => return false,
+        };
+
+        self.select_tool_inspector_entry_by_index(last_index)
+    }
+
+    pub(super) fn scroll_tool_inspector_up(&mut self, amount: u16) {
+        let inspector = match self.tool_inspector.as_mut() {
+            Some(inspector) => inspector,
+            None => return,
+        };
+        let next_offset = inspector.scroll_offset.saturating_sub(amount);
+
+        inspector.scroll_offset = next_offset;
+    }
+
+    pub(super) fn scroll_tool_inspector_down(&mut self, amount: u16) {
+        let inspector = match self.tool_inspector.as_mut() {
+            Some(inspector) => inspector,
+            None => return,
+        };
+        let next_offset = inspector.scroll_offset.saturating_add(amount);
+
+        inspector.scroll_offset = next_offset;
+    }
+
     // -- private helpers --
 
     fn ensure_assistant_message(&mut self) {
@@ -200,6 +302,86 @@ impl Pane {
             self.messages.push(Message::assistant());
         }
     }
+
+    fn collect_tool_calls(&self) -> Vec<ToolCallRecord<'_>> {
+        let mut tool_calls = Vec::new();
+
+        for message in &self.messages {
+            for part in &message.parts {
+                let tool_call = match part {
+                    MessagePart::ToolCall {
+                        tool_id,
+                        tool_name,
+                        args_preview,
+                        status,
+                    } => ToolCallRecord {
+                        tool_id,
+                        tool_name,
+                        args_preview,
+                        status,
+                    },
+                    MessagePart::Text(_) | MessagePart::ThinkBlock(_) => continue,
+                };
+
+                tool_calls.push(tool_call);
+            }
+        }
+
+        tool_calls
+    }
+
+    fn selected_tool_call_index(&self, tool_calls: &[ToolCallRecord<'_>]) -> Option<usize> {
+        let inspector = self.tool_inspector.as_ref()?;
+        let selected_tool_id = inspector.selected_tool_id.as_str();
+        let selected_index = tool_calls
+            .iter()
+            .position(|tool_call| tool_call.tool_id == selected_tool_id)?;
+
+        Some(selected_index)
+    }
+
+    fn move_tool_inspector_selection(&mut self, direction: ToolInspectorDirection) -> bool {
+        let tool_calls = self.collect_tool_calls();
+        let current_index = match self.selected_tool_call_index(&tool_calls) {
+            Some(index) => index,
+            None => return false,
+        };
+        let next_index = match direction {
+            ToolInspectorDirection::Previous => current_index.saturating_sub(1),
+            ToolInspectorDirection::Next => {
+                let last_index = tool_calls.len().saturating_sub(1);
+                (current_index + 1).min(last_index)
+            }
+        };
+        if next_index == current_index {
+            return false;
+        }
+
+        self.select_tool_inspector_entry_by_index(next_index)
+    }
+
+    fn select_tool_inspector_entry_by_index(&mut self, index: usize) -> bool {
+        let tool_calls = self.collect_tool_calls();
+        let next_tool_id = match tool_calls.get(index) {
+            Some(tool_call) => tool_call.tool_id.to_string(),
+            None => return false,
+        };
+        let inspector = match self.tool_inspector.as_mut() {
+            Some(inspector) => inspector,
+            None => return false,
+        };
+
+        inspector.selected_tool_id = next_tool_id;
+        inspector.scroll_offset = 0;
+
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolInspectorDirection {
+    Previous,
+    Next,
 }
 
 #[derive(Debug, Clone)]
@@ -308,12 +490,6 @@ pub(super) fn context_length_for_model(model: &str) -> u32 {
     0
 }
 
-/// Truncates a string to at most `max_chars` characters.
-fn truncate_preview(s: &str, max_chars: usize) -> String {
-    let end = s.char_indices().nth(max_chars).map_or(s.len(), |(i, _)| i);
-    s.get(..end).unwrap_or(s).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,6 +591,33 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_completion_preserves_full_output_for_inspection() {
+        let mut pane = Pane::new("sess-1");
+        let repeated_detail = "detail ".repeat(20);
+        let full_output = format!(
+            "line 1 {repeated_detail}\nline 2 with extra detail\nline 3 with trailing context"
+        );
+
+        pane.start_tool_call("t1", "read_file", "path=/foo");
+        pane.complete_tool_call("t1", true, &full_output, 42);
+
+        let last_message = pane.messages.last().expect("tool call message");
+        let last_part = last_message.parts.last().expect("tool call part");
+
+        match last_part {
+            MessagePart::ToolCall { status, .. } => match status {
+                ToolStatus::Done { output, .. } => {
+                    assert_eq!(output.as_str(), full_output.as_str());
+                }
+                ToolStatus::Running { .. } => {
+                    panic!("expected completed tool call output");
+                }
+            },
+            other => panic!("expected ToolCall part, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn set_status_records_instant() {
         let mut pane = Pane::new("sess-1");
         assert!(pane.status_message.is_none());
@@ -457,6 +660,52 @@ mod tests {
         let taken = pane.staged_message.take();
         assert_eq!(taken.as_deref(), Some("queued"));
         assert!(pane.staged_message.is_none());
+    }
+
+    #[test]
+    fn tool_inspector_defaults_to_none() {
+        let pane = Pane::new("sess-1");
+
+        assert!(pane.tool_inspector.is_none());
+    }
+
+    #[test]
+    fn opening_latest_tool_inspector_selects_latest_tool_call() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.start_tool_call("t1", "read_file", "path=/tmp/one");
+        pane.complete_tool_call("t1", true, "first output", 10);
+        pane.start_tool_call("t2", "shell", "ls -la");
+        pane.complete_tool_call("t2", true, "second output", 20);
+
+        let opened = pane.open_latest_tool_inspector();
+        let selected_tool_id = pane
+            .tool_inspector
+            .as_ref()
+            .map(|state| state.selected_tool_id.as_str());
+
+        assert!(opened, "expected latest tool inspector to open");
+        assert_eq!(selected_tool_id, Some("t2"));
+    }
+
+    #[test]
+    fn tool_inspector_can_move_to_previous_tool_call() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.start_tool_call("t1", "read_file", "path=/tmp/one");
+        pane.complete_tool_call("t1", true, "first output", 10);
+        pane.start_tool_call("t2", "shell", "ls -la");
+        pane.complete_tool_call("t2", true, "second output", 20);
+        pane.open_latest_tool_inspector();
+
+        let moved = pane.select_previous_tool_inspector_entry();
+        let selected_tool_id = pane
+            .tool_inspector
+            .as_ref()
+            .map(|state| state.selected_tool_id.as_str());
+
+        assert!(moved, "expected inspector to move to previous tool call");
+        assert_eq!(selected_tool_id, Some("t1"));
     }
 
     // -- context_length_for_model tests --

@@ -25,6 +25,9 @@ pub(super) trait SpinnerView {
     fn spinner_frame(&self) -> usize;
     fn dots_frame(&self) -> usize;
     fn loop_state(&self) -> &str;
+    fn loop_action(&self) -> &str {
+        ""
+    }
     fn loop_iteration(&self) -> u32;
     fn status_message(&self) -> Option<(&str, &Instant)>;
 }
@@ -46,6 +49,11 @@ pub(super) fn render_spinner(
         } else {
             format!(" | {}", pane.loop_state())
         };
+        let action_info = if pane.loop_action().is_empty() {
+            String::new()
+        } else {
+            format!(" | {}", pane.loop_action())
+        };
 
         Line::from(vec![
             Span::styled(
@@ -59,6 +67,7 @@ pub(super) fn render_spinner(
                 Style::default().fg(palette.text),
             ),
             Span::styled(state_info, Style::default().fg(palette.dim)),
+            Span::styled(action_info, Style::default().fg(palette.info)),
             Span::styled(format!(" {dots}"), Style::default().fg(palette.warning)),
         ])
     } else if let Some((msg, when)) = pane.status_message() {
@@ -99,6 +108,7 @@ mod tests {
         spinner_frame: usize,
         dots_frame: usize,
         loop_state: String,
+        loop_action: String,
         loop_iteration: u32,
         status_message: Option<(String, Instant)>,
     }
@@ -110,6 +120,7 @@ mod tests {
                 spinner_frame: 0,
                 dots_frame: 0,
                 loop_state: String::new(),
+                loop_action: String::new(),
                 loop_iteration: 0,
                 status_message: None,
             }
@@ -120,7 +131,8 @@ mod tests {
                 running: true,
                 spinner_frame: 1,
                 dots_frame: 2,
-                loop_state: "calling model".into(),
+                loop_state: "requesting provider".into(),
+                loop_action: "10 messages | est. 500 tok".into(),
                 loop_iteration: 2,
                 status_message: None,
             }
@@ -139,6 +151,9 @@ mod tests {
         }
         fn loop_state(&self) -> &str {
             &self.loop_state
+        }
+        fn loop_action(&self) -> &str {
+            &self.loop_action
         }
         fn loop_iteration(&self) -> u32 {
             self.loop_iteration
@@ -181,7 +196,7 @@ mod tests {
 
     #[test]
     fn running_renders_iteration_and_state() {
-        let backend = TestBackend::new(60, 1);
+        let backend = TestBackend::new(90, 1);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let pane = TestSpinner::active();
         let palette = Palette::dark();
@@ -194,7 +209,14 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(text.contains("Iteration 2"), "should show iteration number");
-        assert!(text.contains("calling model"), "should show loop state");
+        assert!(
+            text.contains("requesting provider"),
+            "should show loop state"
+        );
+        assert!(
+            text.contains("10 messages | est. 500 tok"),
+            "should show loop action summary"
+        );
     }
 
     #[test]

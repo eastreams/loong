@@ -37,10 +37,102 @@ impl TuiObserver {
     }
 }
 
+fn format_phase_label(phase: ConversationTurnPhase) -> String {
+    let raw_phase = phase.as_str();
+    let mut words = Vec::new();
+
+    for (index, segment) in raw_phase.split('_').enumerate() {
+        if segment.is_empty() {
+            continue;
+        }
+
+        let word = if index == 0 {
+            let mut chars = segment.chars();
+            let Some(first_char) = chars.next() else {
+                continue;
+            };
+
+            let first_upper = first_char.to_ascii_uppercase();
+            let remaining = chars.as_str();
+            let mut capitalized = String::new();
+            capitalized.push(first_upper);
+            capitalized.push_str(remaining);
+            capitalized
+        } else {
+            segment.to_owned()
+        };
+
+        words.push(word);
+    }
+
+    words.join(" ")
+}
+
+fn format_lane_label(lane: crate::conversation::ExecutionLane) -> &'static str {
+    match lane {
+        crate::conversation::ExecutionLane::Fast => "fast",
+        crate::conversation::ExecutionLane::Safe => "safe",
+    }
+}
+
+fn format_compact_count(value: usize) -> String {
+    if value < 1_000 {
+        return value.to_string();
+    }
+
+    let whole_thousands = value / 1_000;
+    let fractional_hundreds = (value % 1_000) / 100;
+
+    if whole_thousands >= 10 || fractional_hundreds == 0 {
+        return format!("{whole_thousands}k");
+    }
+
+    format!("{whole_thousands}.{fractional_hundreds}k")
+}
+
+fn summarize_phase_action(event: &ConversationTurnPhaseEvent) -> String {
+    let mut parts = Vec::new();
+
+    if let Some(lane) = event.lane {
+        let lane_label = format_lane_label(lane);
+        let lane_summary = format!("{lane_label} lane");
+        parts.push(lane_summary);
+    }
+
+    if event.tool_call_count > 0 {
+        let tool_label = if event.tool_call_count == 1 {
+            "tool"
+        } else {
+            "tools"
+        };
+        let tool_summary = format!("{} {tool_label}", event.tool_call_count);
+        parts.push(tool_summary);
+    }
+
+    if let Some(message_count) = event.message_count {
+        let message_label = if message_count == 1 {
+            "message"
+        } else {
+            "messages"
+        };
+        let message_summary = format!("{message_count} {message_label}");
+        parts.push(message_summary);
+    }
+
+    if let Some(estimated_tokens) = event.estimated_tokens {
+        let compact_tokens = format_compact_count(estimated_tokens);
+        let token_summary = format!("est. {compact_tokens} tok");
+        parts.push(token_summary);
+    }
+
+    parts.join(" | ")
+}
+
 impl ConversationTurnObserver for TuiObserver {
     fn on_phase(&self, event: ConversationTurnPhaseEvent) {
-        let phase_str = format!("{:?}", event.phase);
+        let phase_str = format_phase_label(event.phase);
         let iteration = event.provider_round.unwrap_or(0) as u32;
+        let action = summarize_phase_action(&event);
 
         {
             let mut state = self.lock_state();
@@ -50,7 +142,7 @@ impl ConversationTurnObserver for TuiObserver {
         let _ = self.tx.send(UiEvent::PhaseChange {
             phase: phase_str,
             iteration,
-            action: String::new(),
+            action,
         });
 
         if event.phase == ConversationTurnPhase::Completed {
@@ -199,14 +291,39 @@ mod tests {
                 iteration,
                 action,
             } => {
-                assert_eq!(phase, "RequestingProvider");
+                assert_eq!(phase, "Requesting provider");
                 assert_eq!(iteration, 2);
-                assert!(action.is_empty());
+                assert_eq!(action, "10 messages | est. 500 tok");
             }
             other => panic!("expected PhaseChange, got {:?}", other),
         }
 
         assert!(rx.try_recv().is_err(), "no extra events expected");
+    }
+
+    #[test]
+    fn running_tools_phase_sends_lane_and_tool_summary() {
+        let (mut rx, observer) = setup();
+
+        observer.on_phase(ConversationTurnPhaseEvent::running_tools(
+            3,
+            crate::conversation::ExecutionLane::Safe,
+            2,
+        ));
+
+        let event = rx.try_recv().expect("should receive PhaseChange");
+        match event {
+            UiEvent::PhaseChange {
+                phase,
+                iteration,
+                action,
+            } => {
+                assert_eq!(phase, "Running tools");
+                assert_eq!(iteration, 3);
+                assert_eq!(action, "safe lane | 2 tools");
+            }
+            other => panic!("expected PhaseChange, got {:?}", other),
+        }
     }
 
     #[test]
@@ -262,6 +379,31 @@ mod tests {
                 assert_eq!(output_tokens, 0);
             }
             other => panic!("expected ResponseDone, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn running_tools_phase_sends_lane_and_tool_summary_action() {
+        let (mut rx, observer) = setup();
+
+        observer.on_phase(ConversationTurnPhaseEvent::running_tools(
+            3,
+            crate::conversation::ExecutionLane::Safe,
+            2,
+        ));
+
+        let event = rx.try_recv().expect("should receive PhaseChange");
+        match event {
+            UiEvent::PhaseChange {
+                phase,
+                iteration,
+                action,
+            } => {
+                assert_eq!(phase, "Running tools");
+                assert_eq!(iteration, 3);
+                assert_eq!(action, "safe lane | 2 tools");
+            }
+            other => panic!("expected PhaseChange, got {:?}", other),
         }
     }
 

@@ -2,6 +2,7 @@
 pub(crate) enum FocusLayer {
     Composer,
     Help,
+    ToolInspector,
     ClarifyDialog,
 }
 

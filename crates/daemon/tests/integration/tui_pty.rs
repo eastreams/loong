@@ -371,10 +371,15 @@ fn wait_for_fullscreen_onboarding_start(
     let deadline = Instant::now() + timeout;
     let visible_screen = fixture.read_screen(timeout)?;
     if visible_screen.trim().is_empty() {
-        return Err(
-            "timed out waiting for the first visible fullscreen frame before onboarding copy"
-                .to_owned(),
-        );
+        let child_state = match fixture.child.try_wait() {
+            Ok(Some(status)) => format!("child exited with code {}", status.exit_code()),
+            Ok(None) => "child still running".to_owned(),
+            Err(error) => format!("failed to query child status: {error}"),
+        };
+
+        return Err(format!(
+            "timed out waiting for the first visible fullscreen frame before onboarding copy ({child_state})"
+        ));
     }
 
     for marker in ONBOARDING_START_MARKERS {
