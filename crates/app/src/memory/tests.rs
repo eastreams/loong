@@ -25,6 +25,13 @@ fn isolated_memory_workspace(prefix: &str) -> (PathBuf, runtime_config::MemoryRu
     (root, config)
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn cleanup_memory_workspace(workspace_root: &std::path::Path, db_path: &std::path::Path) {
+    let _ = drop_cached_sqlite_runtime(db_path);
+    let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_dir(workspace_root);
+}
+
 #[test]
 fn fallback_memory_operation_stays_compatible() {
     let outcome = execute_memory_core(MemoryCoreRequest {
@@ -293,7 +300,7 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
     let config = runtime_config::MemoryRuntimeConfig {
         profile: MemoryProfile::ProfilePlusWindow,
         mode: MemoryMode::ProfilePlusWindow,
-        sqlite_path: Some(db_path),
+        sqlite_path: Some(db_path.clone()),
         sliding_window: 2,
         profile_note: None,
         personalization: Some(personalization),
@@ -328,7 +335,7 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
     assert!(profile_content.contains("Timezone: Asia/Shanghai"));
     assert!(!profile_content.contains("## Resolved Runtime Identity"));
 
-    std::fs::remove_dir_all(&workspace_root).expect("remove diagnostics workspace");
+    cleanup_memory_workspace(&workspace_root, &db_path);
 }
 
 #[cfg(feature = "memory-sqlite")]
