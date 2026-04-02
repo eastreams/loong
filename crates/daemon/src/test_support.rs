@@ -176,6 +176,7 @@ mod tests {
     struct ForbiddenAliasScope {
         module_aliases: BTreeSet<String>,
         scoped_env_aliases: BTreeSet<String>,
+        scoped_env_visible_from_glob_import: bool,
     }
 
     #[derive(Debug, Default)]
@@ -232,6 +233,33 @@ mod tests {
             }
         }
 
+        fn record_glob_import(&mut self, kind: ForbiddenImportKind) {
+            match kind {
+                ForbiddenImportKind::Module => {
+                    let current_scope = self.current_scope_mut();
+                    current_scope.scoped_env_visible_from_glob_import = true;
+                }
+                ForbiddenImportKind::ScopedEnv => {
+                    self.mark_forbidden_reference();
+                }
+            }
+        }
+
+        fn path_uses_glob_visible_scoped_env(path_segments: &[String]) -> bool {
+            for qualifier_segment in path_segments {
+                let is_relative_qualifier =
+                    matches!(qualifier_segment.as_str(), "self" | "super" | "crate");
+
+                if is_relative_qualifier {
+                    continue;
+                }
+
+                return qualifier_segment == "ScopedEnv";
+            }
+
+            false
+        }
+
         fn path_uses_forbidden_scoped_env(&self, path: &syn::Path) -> bool {
             let path_segments = path_segment_names(path);
             let uses_forbidden_path = path_contains_forbidden_scoped_env_path(&path_segments);
@@ -250,6 +278,20 @@ mod tests {
 
                 if uses_scoped_env_alias {
                     return true;
+                }
+            }
+
+            let uses_glob_visible_scoped_env =
+                Self::path_uses_glob_visible_scoped_env(&path_segments);
+
+            if uses_glob_visible_scoped_env {
+                for scope in self.alias_scopes.iter().rev() {
+                    let scoped_env_visible_from_glob_import =
+                        scope.scoped_env_visible_from_glob_import;
+
+                    if scoped_env_visible_from_glob_import {
+                        return true;
+                    }
                 }
             }
 
@@ -297,8 +339,8 @@ mod tests {
                     let imported_path = prefix.clone();
                     let import_kind = forbidden_import_kind_for_use_path(&imported_path);
 
-                    if import_kind.is_some() {
-                        self.mark_forbidden_reference();
+                    if let Some(import_kind) = import_kind {
+                        self.record_glob_import(import_kind);
                     }
                 }
                 syn::UseTree::Group(use_group) => {
@@ -315,7 +357,14 @@ mod tests {
                 return;
             };
 
-            self.mark_forbidden_reference();
+            let should_mark_forbidden_reference = match import_kind {
+                ForbiddenImportKind::Module => false,
+                ForbiddenImportKind::ScopedEnv => true,
+            };
+
+            if should_mark_forbidden_reference {
+                self.mark_forbidden_reference();
+            }
 
             let alias_name = match alias {
                 Some(alias_name) => alias_name,
@@ -682,6 +731,95 @@ mod tests {
         assert!(
             daemon_source_uses_forbidden_env_guard(sample_source),
             "daemon source guard should flag aliases to forbidden scoped env items"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_allows_non_scoped_env_helper_via_forbidden_module_alias() {
+        let sample_source = r#"
+            use crate::mvp::test_support as app_test_support;
+
+            fn build_helper() {
+                let path = app_test_support::unique_temp_dir("daemon-helper");
+                assert!(path.to_string_lossy().contains("daemon-helper"));
+            }
+        "#;
+
+        assert!(
+            !daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should not flag non-ScopedEnv helper usage through a forbidden test support alias"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_allows_non_scoped_env_helper_via_forbidden_glob_import() {
+        let sample_source = r#"
+            use crate::mvp::test_support::*;
+
+            fn build_helper() {
+                let path = unique_temp_dir("daemon-helper");
+                assert!(path.to_string_lossy().contains("daemon-helper"));
+            }
+        "#;
+
+        assert!(
+            !daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should not flag non-ScopedEnv helper usage through a forbidden glob import"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_scoped_env_usage_via_forbidden_glob_import() {
+        let sample_source = r#"
+            use crate::mvp::test_support::*;
+
+            fn build_guard() {
+                let mut env = ScopedEnv::new();
+                drop(env);
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag ScopedEnv usage introduced through a forbidden glob import"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_self_qualified_scoped_env_via_forbidden_glob_import() {
+        let sample_source = r#"
+            use crate::mvp::test_support::*;
+
+            fn build_guard() {
+                let mut env = self::ScopedEnv::new();
+                drop(env);
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag self-qualified ScopedEnv usage introduced through a forbidden glob import"
+        );
+    }
+
+    #[test]
+    fn daemon_source_guard_flags_parent_qualified_scoped_env_via_forbidden_glob_import() {
+        let sample_source = r#"
+            mod outer {
+                use crate::mvp::test_support::*;
+
+                mod inner {
+                    fn build_guard() {
+                        let mut env = super::ScopedEnv::new();
+                        drop(env);
+                    }
+                }
+            }
+        "#;
+
+        assert!(
+            daemon_source_uses_forbidden_env_guard(sample_source),
+            "daemon source guard should flag parent-qualified ScopedEnv usage introduced through a forbidden glob import"
         );
     }
 
