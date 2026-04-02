@@ -7,8 +7,6 @@ use loongclaw_contracts::ToolCoreOutcome;
 use loongclaw_spec::CliResult;
 use serde_json::{Value, json};
 
-const TASKS_SESSION_SELECTOR_LATEST: &str = "latest";
-
 #[derive(Subcommand, Debug, Clone, PartialEq, Eq)]
 pub enum TasksCommands {
     /// Queue one async background task on top of the current session runtime
@@ -543,18 +541,17 @@ fn resolve_session_scope(
     memory_config: &mvp::memory::runtime_config::MemoryRuntimeConfig,
 ) -> CliResult<String> {
     let session = normalize_session_scope(raw)?;
-    let should_resolve_latest = session == TASKS_SESSION_SELECTOR_LATEST;
+    let should_resolve_latest = session == mvp::session::LATEST_SESSION_SELECTOR;
     if !should_resolve_latest {
         return Ok(session);
     }
 
-    let repo = mvp::session::repository::SessionRepository::new(memory_config)?;
-    let latest_session = repo.latest_resumable_root_session_summary()?;
-    let latest_session = latest_session.ok_or_else(|| {
+    let latest_session_id = mvp::session::latest_resumable_root_session_id(memory_config)?;
+    let latest_session_id = latest_session_id.ok_or_else(|| {
         "tasks CLI session selector `latest` did not find any resumable root session".to_owned()
     })?;
 
-    Ok(latest_session.session_id)
+    Ok(latest_session_id)
 }
 
 fn execute_app_tool_request(

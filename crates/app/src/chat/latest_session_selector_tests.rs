@@ -128,7 +128,7 @@ fn cli_runtime_latest_session_selector_updates_startup_summary_session_id() {
 
     assert_eq!(runtime.session_id, "selected-session");
     assert_eq!(summary.session_id, "selected-session");
-    assert_ne!(summary.session_id, CLI_SESSION_SELECTOR_LATEST);
+    assert_ne!(summary.session_id, crate::session::LATEST_SESSION_SELECTOR);
 
     cleanup_chat_test_memory(&sqlite_path);
 }

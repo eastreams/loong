@@ -55,7 +55,9 @@ use super::memory;
 #[cfg(feature = "memory-sqlite")]
 use super::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use super::session::repository::SessionRepository;
+use super::session::LATEST_SESSION_SELECTOR;
+#[cfg(feature = "memory-sqlite")]
+use super::session::latest_resumable_root_session_id;
 use super::tui_surface::{
     TuiActionSpec, TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec,
     TuiHeaderStyle, TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec,
@@ -63,7 +65,6 @@ use super::tui_surface::{
 };
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
-const CLI_SESSION_SELECTOR_LATEST: &str = "latest";
 const TEST_ONBOARD_EXECUTABLE_ENV: &str = "LOONGCLAW_TEST_ONBOARD_EXECUTABLE";
 const CLI_CHAT_LIVE_PREVIEW_MIN_EMIT_CHARS: usize = 80;
 const CLI_CHAT_LIVE_PREVIEW_MAX_EMIT_CHARS: usize = 240;
@@ -561,19 +562,18 @@ fn resolve_cli_runtime_session_id(
 ) -> CliResult<String> {
     let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
     let should_resolve_latest = session_requirement == CliSessionRequirement::AllowImplicitDefault
-        && session_id == CLI_SESSION_SELECTOR_LATEST;
+        && session_id == LATEST_SESSION_SELECTOR;
 
     if !should_resolve_latest {
         return Ok(session_id);
     }
 
-    let repo = SessionRepository::new(memory_config)?;
-    let latest_session = repo.latest_resumable_root_session_summary()?;
-    let latest_session = latest_session.ok_or_else(|| {
+    let latest_session_id = latest_resumable_root_session_id(memory_config)?;
+    let latest_session_id = latest_session_id.ok_or_else(|| {
         "CLI session selector `latest` did not find any resumable root session".to_owned()
     })?;
 
-    Ok(latest_session.session_id)
+    Ok(latest_session_id)
 }
 
 #[allow(clippy::print_stdout)] // CLI output
