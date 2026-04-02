@@ -1,5 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+const GUIDED_SPINE_WIDTH: u16 = 15;
+
 pub(crate) struct OnboardLayoutAreas {
     pub header: Rect,
     #[allow(dead_code)] // used in tests; will be rendered when wide spine is enabled
@@ -10,7 +12,7 @@ pub(crate) struct OnboardLayoutAreas {
 
 /// Compute the four layout areas for the onboard wizard.
 ///
-/// `wide_spine = true` allocates an 18-column spine on the left; otherwise the
+/// `wide_spine = true` allocates a compact spine on the left; otherwise the
 /// spine is `Rect::ZERO` and the full body width goes to `content`.
 #[allow(clippy::indexing_slicing)] // Layout::split returns exactly as many Rects as constraints
 pub(crate) fn compute_layout(area: Rect, wide_spine: bool) -> OnboardLayoutAreas {
@@ -31,8 +33,8 @@ pub(crate) fn compute_layout(area: Rect, wide_spine: bool) -> OnboardLayoutAreas
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(18), // spine
-                Constraint::Min(20),    // content
+                Constraint::Length(GUIDED_SPINE_WIDTH), // spine
+                Constraint::Min(20),                    // content
             ])
             .split(body);
         (cols[0], cols[1])
@@ -57,7 +59,7 @@ mod tests {
     fn wide_layout_allocates_spine_column() {
         let area = Rect::new(0, 0, 80, 24);
         let layout = compute_layout(area, true);
-        assert_eq!(layout.spine.width, 18);
+        assert_eq!(layout.spine.width, GUIDED_SPINE_WIDTH);
         assert!(layout.content.width > 40);
         assert_eq!(layout.header.height, 1);
         assert_eq!(layout.footer.height, 1);

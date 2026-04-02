@@ -463,6 +463,14 @@ fn supported_provider_list_matches_canonical_provider_catalog() {
 }
 
 #[test]
+fn supported_provider_selector_list_adds_onboarding_only_routes() {
+    let selectors = loongclaw_daemon::onboard_cli::supported_provider_selector_list();
+
+    assert!(selectors.contains("openai"));
+    assert!(selectors.contains("openai-codex-oauth"));
+}
+
+#[test]
 fn non_interactive_requires_explicit_risk_acknowledgement() {
     let denied = loongclaw_daemon::onboard_cli::validate_non_interactive_risk_gate(true, false)
         .expect_err("risk gate should reject non-interactive without acknowledgement");
@@ -690,7 +698,7 @@ async fn non_interactive_onboard_keeps_matching_existing_config_despite_persiste
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
+async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning_for_openai_codex_oauth() {
     let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let root = unique_temp_path("non-interactive-skip-model-probe-root");
     std::fs::create_dir_all(&root).expect("create test root");
@@ -700,6 +708,7 @@ async fn non_interactive_onboard_allows_explicit_skip_model_probe_warning() {
     }
 
     let mut options = default_non_interactive_onboard_options(&output);
+    options.provider = Some("openai-codex-oauth".to_owned());
     options.skip_model_probe = true;
     options.model = Some("openai/gpt-5.1-codex".to_owned());
 
@@ -1246,7 +1255,7 @@ fn preferred_api_key_env_default_stays_blank_when_provider_has_no_default_env() 
 }
 
 #[test]
-fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
+fn preferred_api_key_env_default_prefers_api_key_default_for_fresh_openai() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.provider.kind = mvp::config::ProviderKind::Openai;
     config.provider.api_key = None;
@@ -1257,8 +1266,8 @@ fn preferred_api_key_env_default_prefers_oauth_default_for_fresh_openai() {
     let value = loongclaw_daemon::onboard_cli::preferred_api_key_env_default(&config);
 
     assert_eq!(
-        value, "OPENAI_CODEX_OAUTH_TOKEN",
-        "fresh OpenAI onboarding should surface the provider-preferred oauth env before the api-key fallback: {value:?}"
+        value, "OPENAI_API_KEY",
+        "fresh OpenAI onboarding should default to the OpenAI API key route unless the user explicitly chooses the Codex OAuth path: {value:?}"
     );
 }
 
@@ -5134,8 +5143,8 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- credential source: OPENAI_CODEX_OAUTH_TOKEN")),
-        "review should keep the provider-preferred credential env visible for fresh setup flows: {lines:#?}"
+            .any(|line| line.contains("- credential source: OPENAI_API_KEY")),
+        "review should keep the OpenAI API credential env visible for fresh setup flows unless the operator explicitly chooses the Codex OAuth route: {lines:#?}"
     );
     assert!(
         lines

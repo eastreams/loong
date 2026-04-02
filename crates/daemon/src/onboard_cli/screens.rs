@@ -1619,6 +1619,12 @@ pub(super) fn build_onboard_review_digest_display_lines_without_protocols(
         }
     }
 
+    lines.push(onboard_display_line("- cli: ", cli_status_value(config)));
+    lines.push(onboard_display_line(
+        "- external skills: ",
+        &external_skills_status_value(config),
+    ));
+
     lines.push(onboard_display_line(
         "- memory profile: ",
         memory_profile_id(config.memory.profile),
@@ -1643,14 +1649,195 @@ pub(super) fn build_onboard_review_digest_display_lines_without_protocols(
         .into_iter()
         .filter(|channel| channel != "cli")
         .collect::<Vec<_>>();
+    let mut enabled_channels = enabled_channels;
+    enabled_channels.sort();
     if !enabled_channels.is_empty() {
         lines.push(onboard_display_line(
             "- channels: ",
             &enabled_channels.join(", "),
         ));
     }
+    for channel_id in enabled_channels {
+        let channel_pairing_lines = channel_pairing_review_lines(config, &channel_id);
+        lines.extend(channel_pairing_lines);
+    }
 
     lines
+}
+
+fn channel_pairing_review_lines(
+    config: &mvp::config::LoongClawConfig,
+    channel_id: &str,
+) -> Vec<String> {
+    let Some(entry) = channel_catalog_entry_by_id(channel_id) else {
+        return Vec::new();
+    };
+    let Some(operation) = channel_primary_operation_for_review(&entry) else {
+        return Vec::new();
+    };
+
+    let mut lines = Vec::new();
+    let mut seen_labels = std::collections::BTreeSet::new();
+    for requirement in operation.requirements {
+        if requirement.id == "enabled" {
+            continue;
+        }
+        let Some(line) = channel_requirement_review_line(config, entry.label, requirement) else {
+            continue;
+        };
+        if seen_labels.insert(line.clone()) {
+            lines.push(line);
+        }
+    }
+
+    lines
+}
+
+fn channel_catalog_entry_by_id(channel_id: &str) -> Option<mvp::channel::ChannelCatalogEntry> {
+    let catalog = mvp::channel::list_channel_catalog();
+    catalog.into_iter().find(|entry| entry.id == channel_id)
+}
+
+fn channel_primary_operation_for_review(
+    entry: &mvp::channel::ChannelCatalogEntry,
+) -> Option<&mvp::channel::ChannelCatalogOperation> {
+    let implemented_send = entry.operation("send").filter(|operation| {
+        operation.availability == mvp::channel::ChannelCatalogOperationAvailability::Implemented
+    });
+    let implemented_serve = entry.operation("serve").filter(|operation| {
+        operation.availability == mvp::channel::ChannelCatalogOperationAvailability::Implemented
+    });
+
+    match entry.implementation_status {
+        mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked => {
+            implemented_serve.or(implemented_send)
+        }
+        mvp::channel::ChannelCatalogImplementationStatus::ConfigBacked
+        | mvp::channel::ChannelCatalogImplementationStatus::Stub => {
+            implemented_send.or(implemented_serve)
+        }
+    }
+}
+
+fn channel_requirement_review_line(
+    config: &mvp::config::LoongClawConfig,
+    channel_label: &str,
+    requirement: &mvp::channel::ChannelCatalogOperationRequirement,
+) -> Option<String> {
+    let display_channel_label = onboarding_channel_display_name(channel_label);
+
+    let env_pointer_path = requirement
+        .env_pointer_paths
+        .iter()
+        .find(|path| !path.contains("<account>"))
+        .copied();
+    if let Some(env_pointer_path) = env_pointer_path {
+        let env_value = review_display_path_value(config, env_pointer_path)?;
+        let review_line = format!(
+            "- {display_channel_label} {} env: {env_value}",
+            requirement.label
+        );
+        return Some(review_line);
+    }
+
+    let config_path = requirement
+        .config_paths
+        .iter()
+        .find(|path| !path.contains("<account>"))
+        .copied()?;
+    let config_value = review_display_path_value(config, config_path)?;
+    let review_line = format!(
+        "- {display_channel_label} {}: {config_value}",
+        requirement.label
+    );
+    Some(review_line)
+}
+
+fn onboarding_channel_display_name(raw: &str) -> String {
+    let mut words = Vec::new();
+    for segment in raw.split(['-', ' ']) {
+        let trimmed_segment = segment.trim();
+        if trimmed_segment.is_empty() {
+            continue;
+        }
+
+        let mut characters = trimmed_segment.chars();
+        let Some(first_character) = characters.next() else {
+            continue;
+        };
+        let first_character = first_character.to_ascii_uppercase();
+        let remainder = characters.as_str().to_ascii_lowercase();
+        let word = format!("{first_character}{remainder}");
+        words.push(word);
+    }
+
+    words.join(" ")
+}
+
+fn review_display_path_value(config: &mvp::config::LoongClawConfig, path: &str) -> Option<String> {
+    let config_value = serde_json::to_value(config).ok()?;
+    let path_value = review_json_path_value(&config_value, path)?;
+
+    match path_value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::String(value) => {
+            let trimmed_value = value.trim();
+            if trimmed_value.is_empty() {
+                return None;
+            }
+            Some(trimmed_value.to_owned())
+        }
+        serde_json::Value::Array(values) => {
+            let mut rendered_values = Vec::new();
+            for value in values {
+                let Some(rendered_value) = review_json_scalar_value(value) else {
+                    continue;
+                };
+                rendered_values.push(rendered_value);
+            }
+            if rendered_values.is_empty() {
+                return None;
+            }
+            Some(rendered_values.join(", "))
+        }
+        serde_json::Value::Object(_) => serde_json::to_string(path_value).ok(),
+    }
+}
+
+fn review_json_path_value<'a>(
+    config_value: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    let mut current_value = config_value;
+    for segment in path.split('.') {
+        let trimmed_segment = segment.trim();
+        if trimmed_segment.is_empty() {
+            continue;
+        }
+        let object = current_value.as_object()?;
+        current_value = object.get(trimmed_segment)?;
+    }
+    Some(current_value)
+}
+
+fn review_json_scalar_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::String(value) => {
+            let trimmed_value = value.trim();
+            if trimmed_value.is_empty() {
+                return None;
+            }
+            Some(trimmed_value.to_owned())
+        }
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            serde_json::to_string(value).ok()
+        }
+    }
 }
 
 pub(super) fn build_onboard_protocol_review_digest_display_lines(
@@ -1699,6 +1886,34 @@ pub(crate) fn summarize_prompt_mode(config: &mvp::config::LoongClawConfig) -> St
     "inline system prompt override".to_owned()
 }
 
+fn cli_status_value(config: &mvp::config::LoongClawConfig) -> &'static str {
+    if config.cli.enabled {
+        "enabled"
+    } else {
+        "disabled"
+    }
+}
+
+fn external_skills_status_value(config: &mvp::config::LoongClawConfig) -> String {
+    if !config.external_skills.enabled {
+        return "disabled".to_owned();
+    }
+
+    let mut notes = Vec::new();
+    if config.external_skills.require_download_approval {
+        notes.push("approval enforced");
+    }
+    if !config.external_skills.auto_expose_installed {
+        notes.push("auto expose disabled");
+    }
+
+    if notes.is_empty() {
+        "enabled".to_owned()
+    } else {
+        format!("enabled ({})", notes.join(", "))
+    }
+}
+
 pub(crate) fn summarize_prompt_addendum(config: &mvp::config::LoongClawConfig) -> Option<String> {
     config
         .cli
@@ -1715,7 +1930,7 @@ pub(crate) fn summarize_provider_credential(
     if secret_ref_has_inline_literal(provider.oauth_access_token.as_ref()) {
         return Some(OnboardingCredentialSummary {
             label: "credential",
-            value: "inline oauth token".to_owned(),
+            value: "authorized via browser OAuth".to_owned(),
         });
     }
     if let Some(configured_env) = render_configured_provider_credential_source_value(provider) {
@@ -1730,11 +1945,17 @@ pub(crate) fn summarize_provider_credential(
             value: "inline api key".to_owned(),
         });
     }
-    provider_credential_policy::preferred_provider_credential_env_binding(provider)
-        .and_then(|binding| {
-            provider_credential_policy::render_provider_credential_source_value(Some(
-                binding.env_name.as_str(),
-            ))
+
+    let fallback_env_name = if provider.kind == mvp::config::ProviderKind::Openai {
+        provider.kind.default_api_key_env().map(str::to_owned)
+    } else {
+        provider_credential_policy::preferred_provider_credential_env_binding(provider)
+            .map(|binding| binding.env_name)
+    };
+    fallback_env_name
+        .as_deref()
+        .and_then(|env_name| {
+            provider_credential_policy::render_provider_credential_source_value(Some(env_name))
         })
         .map(|credential_env| OnboardingCredentialSummary {
             label: "credential source",
@@ -1935,6 +2156,14 @@ pub(super) fn resolve_onboard_shortcut_kind(
     options: &OnboardCommandOptions,
     starting_selection: &StartingConfigSelection,
 ) -> Option<OnboardShortcutKind> {
+    let requires_guided_protocol_review =
+        crate::onboard_preflight::onboard_acp_backend_requires_guided_review(
+            &starting_selection.config,
+        );
+    if requires_guided_protocol_review {
+        return None;
+    }
+
     if should_offer_current_setup_shortcut(
         options,
         starting_selection.current_setup_state,
@@ -2067,6 +2296,15 @@ pub fn supported_provider_list() -> String {
         .map(|kind| kind.as_str())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+pub fn supported_provider_selector_list() -> String {
+    let mut selectors = mvp::config::ProviderKind::all_sorted()
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>();
+    selectors.push("openai-codex-oauth");
+    selectors.join(", ")
 }
 
 pub fn supported_personality_list() -> &'static str {

@@ -36,6 +36,7 @@ use crate::onboard_preflight::{
 #[cfg(test)]
 use crate::onboard_state::OnboardInteractionMode;
 use crate::onboard_state::{OnboardDraft, OnboardOutcome, OnboardValueOrigin, OnboardWizardStep};
+use crate::onboard_tui::LaunchDeckResult;
 pub use crate::onboard_types::OnboardingCredentialSummary;
 #[cfg(test)]
 use crate::onboard_web_search::{
@@ -61,6 +62,7 @@ const ONBOARD_CUSTOM_MODEL_OPTION_SLUG: &str = "__custom_model__";
 const ONBOARD_ESCAPE_CANCEL_HINT: &str = "- press Esc then Enter to cancel onboarding";
 const ONBOARD_SINGLE_LINE_INPUT_HINT: &str = "- single-line input only";
 const ONBOARD_BACK_NAVIGATION_SIGNAL: &str = "__loongclaw_onboard_back_navigation__";
+const OPENAI_CODEX_OAUTH_PROVIDER_SELECTOR: &str = "openai-codex-oauth";
 
 #[derive(Debug, Clone)]
 pub struct OnboardCommandOptions {
@@ -481,6 +483,54 @@ fn print_stdout_message(line: impl Into<String>) -> CliResult<()> {
     Ok(())
 }
 
+fn is_openai_codex_oauth_provider_selector(raw: &str) -> bool {
+    raw.trim()
+        .eq_ignore_ascii_case(OPENAI_CODEX_OAUTH_PROVIDER_SELECTOR)
+}
+
+fn apply_onboard_provider_selector_defaults(
+    provider: &mut mvp::config::ProviderConfig,
+    selector: &str,
+) -> bool {
+    if !is_openai_codex_oauth_provider_selector(selector) {
+        return false;
+    }
+
+    let profile = mvp::config::ProviderKind::Openai.profile();
+    provider.kind = mvp::config::ProviderKind::Openai;
+    provider.base_url = profile.base_url.to_owned();
+    provider.chat_completions_path = profile.chat_completions_path.to_owned();
+    provider.api_key = None;
+    provider.clear_api_key_env_binding();
+    provider.oauth_access_token = None;
+
+    let oauth_env_name = mvp::config::ProviderKind::Openai
+        .default_oauth_access_token_env()
+        .unwrap_or("OPENAI_CODEX_OAUTH_TOKEN");
+    provider.set_oauth_access_token_env_binding(Some(oauth_env_name.to_owned()));
+    true
+}
+
+fn launch_chat_config_path(
+    summary: &OnboardingSuccessSummary,
+    launch_result: Option<LaunchDeckResult>,
+) -> Option<String> {
+    let launch_result = launch_result?;
+    if !launch_result.open_chat {
+        return None;
+    }
+    if summary.outcome == OnboardOutcome::Blocked {
+        return None;
+    }
+
+    let config_path = summary.config_path.trim();
+    if config_path.is_empty() {
+        return None;
+    }
+
+    Some(config_path.to_owned())
+}
+
 fn is_explicit_onboard_clear_input(raw: &str) -> bool {
     raw.trim().eq_ignore_ascii_case(ONBOARD_CLEAR_INPUT_TOKEN)
 }
@@ -755,17 +805,21 @@ fn apply_non_interactive_overrides(
 ) -> CliResult<()> {
     // --- provider ---
     if let Some(provider_raw) = options.provider.as_deref() {
-        let kind = parse_provider_kind(provider_raw).ok_or_else(|| {
-            format!(
-                "unsupported provider value \"{provider_raw}\". accepted: {}",
-                supported_provider_list()
-            )
-        })?;
-        let profile = kind.profile();
         let mut provider = draft.config.provider.clone();
-        provider.kind = kind;
-        provider.base_url = profile.base_url.to_owned();
-        provider.chat_completions_path = profile.chat_completions_path.to_owned();
+        let selector_applied =
+            apply_onboard_provider_selector_defaults(&mut provider, provider_raw);
+        if !selector_applied {
+            let kind = parse_provider_kind(provider_raw).ok_or_else(|| {
+                format!(
+                    "unsupported provider value \"{provider_raw}\". accepted: {}",
+                    supported_provider_selector_list()
+                )
+            })?;
+            let profile = kind.profile();
+            provider.kind = kind;
+            provider.base_url = profile.base_url.to_owned();
+            provider.chat_completions_path = profile.chat_completions_path.to_owned();
+        }
         draft.set_provider_config(provider);
     }
 
@@ -879,20 +933,15 @@ async fn run_onboard_cli_inner(
         None
     };
 
-    // --- Pre-flow: risk acknowledgement ---
-    if !options.non_interactive
-        && !options.accept_risk
-        && let Some(runner) = &mut tui_runner
-        && !runner.run_risk_screen()?
-    {
-        return Err("onboarding cancelled: risk acknowledgement declined".to_owned());
-    }
-
     let output_path = options
         .output
         .as_deref()
         .map(mvp::config::expand_path)
         .unwrap_or_else(mvp::config::default_config_path);
+
+    if let Some(runner) = &mut tui_runner {
+        runner.run_opening_screen()?;
+    }
 
     // --- Pre-flow: entry choice + import selection ---
     let starting_selection =
@@ -903,6 +952,9 @@ async fn run_onboard_cli_inner(
         output_path.clone(),
         initial_draft_origin(starting_selection.entry_choice),
     ));
+    if let Some(runner) = &mut tui_runner {
+        runner.set_provider_selection_plan(starting_selection.provider_selection.clone());
+    }
 
     // --- Pre-flow: shortcut choice ---
     let shortcut_kind = resolve_onboard_shortcut_kind(&options, &starting_selection);
@@ -929,6 +981,7 @@ async fn run_onboard_cli_inner(
     // --- Guided wizard flow ---
     if !skip_detailed_setup && !options.non_interactive {
         if let Some(runner) = &mut tui_runner {
+            runner.skip_next_guided_welcome_once();
             flow = run_guided_onboard_flow(flow, runner).await?;
         }
     } else if !skip_detailed_setup && options.non_interactive {
@@ -958,9 +1011,6 @@ async fn run_onboard_cli_inner(
     let has_failures = checks
         .iter()
         .any(|check| check.level == OnboardCheckLevel::Fail);
-    let has_warnings = checks
-        .iter()
-        .any(|check| check.level == OnboardCheckLevel::Warn);
     let existing_output_config = load_existing_output_config(&output_path);
     let skip_config_write =
         should_skip_config_write(existing_output_config.as_ref(), &flow.draft().config);
@@ -992,7 +1042,7 @@ async fn run_onboard_cli_inner(
             return Err(warning_message);
         }
     } else if tui_runner.is_some() {
-        // --- Post-flow: preflight results (TUI) ---
+        // --- Post-flow: hard-stop verification failures (TUI) ---
         // For hard failures, drop the TUI runner first so raw mode is
         // restored before the error string is printed to stderr.
         if let Some(message) = config_validation_failure {
@@ -1004,14 +1054,9 @@ async fn run_onboard_cli_inner(
             drop(tui_runner);
             return Err(message);
         }
-        if let Some(runner) = &mut tui_runner
-            && !runner.run_preflight_screen(&checks)?
-        {
-            return Err("onboarding cancelled: unresolved preflight warnings".to_owned());
-        }
     }
 
-    // --- Post-flow: review screen ---
+    // --- Post-flow: verify + write screen ---
     if let Some(runner) = &mut tui_runner
         && !skip_config_write
     {
@@ -1029,16 +1074,13 @@ async fn run_onboard_cli_inner(
             review_flow_style,
             false,
         );
-        runner.run_review_screen(&review_lines)?;
-    }
-
-    // --- Post-flow: write confirmation ---
-    if let Some(runner) = &mut tui_runner
-        && !skip_config_write
-        && !runner
-            .run_write_confirmation_screen(&output_path.display().to_string(), has_warnings)?
-    {
-        return Err("onboarding cancelled: review declined before write".to_owned());
+        if !runner.run_verify_and_write_screen(
+            &checks,
+            &review_lines,
+            &output_path.display().to_string(),
+        )? {
+            return Err("onboarding cancelled: review declined before write".to_owned());
+        }
     }
 
     let mut deferred_backup_message: Option<String> = None;
@@ -1152,13 +1194,9 @@ async fn run_onboard_cli_inner(
                         blocked_outcome,
                         Some(verification_check.detail.as_str()),
                     );
-                    let blocked_lines = render_onboarding_success_summary_lines(
-                        &blocked_summary,
-                        context.render_width,
-                        false,
-                    );
+                    let mut blocked_launch_result: Option<LaunchDeckResult> = None;
                     if let Some(runner) = &mut tui_runner {
-                        let _ = runner.run_success_screen(&blocked_lines);
+                        blocked_launch_result = runner.run_launch_screen(&blocked_summary).ok();
                     } else {
                         print_guided_step_boundary(OnboardWizardStep::Ready)?;
                         let styled_blocked_lines = render_onboarding_success_summary_lines(
@@ -1167,6 +1205,16 @@ async fn run_onboard_cli_inner(
                             true,
                         );
                         print_stdout_lines(styled_blocked_lines)?;
+                    }
+                    drop(tui_runner);
+                    if let Some(msg) = deferred_backup_message.take() {
+                        print_stdout_message(msg)?;
+                    }
+                    let blocked_chat_config_path =
+                        launch_chat_config_path(&blocked_summary, blocked_launch_result);
+                    if let Some(config_path) = blocked_chat_config_path.as_deref() {
+                        crate::run_chat_cli(Some(config_path), None, false, false, &[], None)
+                            .await?;
                     }
                     return Err(failure);
                 }
@@ -1196,11 +1244,10 @@ async fn run_onboard_cli_inner(
             OnboardOutcome::Blocked => "blocked after verification",
         }),
     );
-    let success_summary_lines =
-        render_onboarding_success_summary_lines(&success_summary, context.render_width, false);
-
+    let mut launch_result: Option<LaunchDeckResult> = None;
     if let Some(runner) = &mut tui_runner {
-        runner.run_success_screen(&success_summary_lines)?;
+        let result = runner.run_launch_screen(&success_summary)?;
+        launch_result = Some(result);
     } else {
         print_guided_step_boundary(OnboardWizardStep::Ready)?;
         let styled_lines =
@@ -1214,6 +1261,10 @@ async fn run_onboard_cli_inner(
     // Print deferred messages now that raw mode is restored.
     if let Some(msg) = deferred_backup_message {
         print_stdout_message(msg)?;
+    }
+    let chat_config_path = launch_chat_config_path(&success_summary, launch_result);
+    if let Some(config_path) = chat_config_path.as_deref() {
+        crate::run_chat_cli(Some(config_path), None, false, false, &[], None).await?;
     }
 
     Ok(())
@@ -1350,11 +1401,20 @@ pub fn resolve_provider_config_from_selector(
         crate::migration::ImportedChoiceSelectorResolution::NoMatch => {}
     }
 
+    if is_openai_codex_oauth_provider_selector(selector) {
+        let mut provider = crate::migration::resolve_provider_config_from_selection(
+            current_provider,
+            provider_selection,
+            mvp::config::ProviderKind::Openai,
+        );
+        let _ = apply_onboard_provider_selector_defaults(&mut provider, selector);
+        return Ok(provider);
+    }
     let kind = parse_provider_kind(selector).ok_or_else(|| {
         if provider_selection.imported_choices.is_empty() {
             return format!(
                 "unsupported provider value \"{selector}\". accepted selectors: {}. {}",
-                supported_provider_list(),
+                supported_provider_selector_list(),
                 crate::migration::provider_selection::PROVIDER_SELECTOR_NOTE,
             );
         }
@@ -1605,6 +1665,10 @@ pub fn preferred_api_key_env_default(config: &mvp::config::LoongClawConfig) -> S
     if provider_credential_policy::provider_has_inline_credential(provider) {
         return String::new();
     }
+    if provider.kind == mvp::config::ProviderKind::Openai {
+        let api_key_env = provider.kind.default_api_key_env().unwrap_or_default();
+        return api_key_env.to_owned();
+    }
     provider_credential_policy::preferred_provider_credential_env_binding(provider)
         .map(|binding| binding.env_name)
         .unwrap_or_default()
@@ -1733,11 +1797,17 @@ fn load_import_starting_config_with_tui(
             .iter()
             .map(|opt| (opt.label.to_owned(), opt.detail.clone()))
             .collect();
+        let snapshot_lines = build_starting_point_snapshot_lines(
+            current_setup_state,
+            current_candidate.as_ref(),
+            &import_candidates,
+            context.workspace_root.as_deref(),
+        );
         let default_idx = entry_options
             .iter()
             .position(|opt| opt.recommended)
             .unwrap_or(0);
-        let idx = runner.run_entry_choice_screen(&tui_options, default_idx)?;
+        let idx = runner.run_entry_choice_screen(&tui_options, default_idx, &snapshot_lines)?;
         let choice = entry_options
             .get(idx)
             .map(|opt| opt.choice)
@@ -1802,8 +1872,14 @@ fn select_interactive_import_starting_config_with_tui(
             (label, detail)
         })
         .collect();
+    let summary_lines = import_candidates
+        .first()
+        .map(build_detected_candidate_summary_lines)
+        .unwrap_or_else(|| {
+            vec!["Choose a detected source to inspect how much setup it carries.".to_owned()]
+        });
 
-    match runner.run_import_candidate_screen(&tui_candidates, 0)? {
+    match runner.run_import_candidate_screen(&tui_candidates, 0, &summary_lines)? {
         Some(idx) => {
             if let Some(candidate) = import_candidates.get(idx) {
                 Ok(starting_config_selection_from_import_candidate(
@@ -1915,6 +1991,45 @@ fn split_onboard_candidates(
     }
 
     (current_candidate, import_candidates)
+}
+
+fn build_starting_point_snapshot_lines(
+    current_setup_state: crate::migration::CurrentSetupState,
+    current_candidate: Option<&ImportCandidate>,
+    import_candidates: &[ImportCandidate],
+    workspace_root: Option<&Path>,
+) -> Vec<String> {
+    let recommended_plan_available = import_candidates.iter().any(|candidate| {
+        candidate.source_kind == crate::migration::ImportSourceKind::RecommendedPlan
+    });
+    let mut lines = render_detected_settings_digest_lines(
+        current_setup_state,
+        current_candidate,
+        import_candidates,
+        workspace_root,
+        recommended_plan_available,
+    );
+    if lines.is_empty() {
+        lines.push("No reusable local setup was detected.".to_owned());
+    }
+    lines
+}
+
+fn build_detected_candidate_summary_lines(candidate: &ImportCandidate) -> Vec<String> {
+    let mut lines = vec![format!(
+        "Source: {}",
+        onboard_starting_point_label(Some(candidate.source_kind), &candidate.source)
+    )];
+    if let Some(reason_line) =
+        format_starting_point_reason(&collect_starting_point_fit_hints(candidate))
+    {
+        lines.push(reason_line);
+    }
+    let preview_candidate = migration_candidate_for_onboard_display(candidate);
+    lines.extend(crate::migration::render::candidate_preview_display_lines(
+        &preview_candidate,
+    ));
+    lines
 }
 
 fn select_non_interactive_starting_config(

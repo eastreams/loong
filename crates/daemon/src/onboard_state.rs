@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use loongclaw_app as mvp;
+use loongclaw_contracts::SecretRef;
+use serde_json::Map;
+use serde_json::Value;
 
+use crate::CliResult;
 use crate::provider_credential_policy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -86,9 +91,17 @@ impl OnboardDraft {
     pub const CLI_PERSONALITY_KEY: &'static str = "cli.personality";
     pub const CLI_PROMPT_ADDENDUM_KEY: &'static str = "cli.prompt_addendum";
     pub const CLI_SYSTEM_PROMPT_KEY: &'static str = "cli.system_prompt";
+    pub const CLI_ENABLED_KEY: &'static str = "cli.enabled";
     pub const MEMORY_PROFILE_KEY: &'static str = "memory.profile";
     pub const WEB_SEARCH_PROVIDER_KEY: &'static str = "tools.web_search.default_provider";
     pub const WEB_SEARCH_CREDENTIAL_KEY: &'static str = "tools.web_search.credential";
+    pub const CHANNELS_ENABLED_KEY: &'static str = "channels.enabled";
+    pub const CHANNELS_PAIRING_KEY: &'static str = "channels.pairing";
+    pub const EXTERNAL_SKILLS_ENABLED_KEY: &'static str = "external_skills.enabled";
+    pub const EXTERNAL_SKILLS_REQUIRE_APPROVAL_KEY: &'static str =
+        "external_skills.require_download_approval";
+    pub const EXTERNAL_SKILLS_AUTO_EXPOSE_KEY: &'static str =
+        "external_skills.auto_expose_installed";
     pub const WORKSPACE_SQLITE_PATH_KEY: &'static str = "memory.sqlite_path";
     pub const WORKSPACE_FILE_ROOT_KEY: &'static str = "tools.file_root";
     pub const ACP_ENABLED_KEY: &'static str = "acp.enabled";
@@ -129,9 +142,15 @@ impl OnboardDraft {
             draft.seed_origin(Self::CLI_PERSONALITY_KEY, origin);
             draft.seed_origin(Self::CLI_PROMPT_ADDENDUM_KEY, origin);
             draft.seed_origin(Self::CLI_SYSTEM_PROMPT_KEY, origin);
+            draft.seed_origin(Self::CLI_ENABLED_KEY, origin);
             draft.seed_origin(Self::MEMORY_PROFILE_KEY, origin);
             draft.seed_origin(Self::WEB_SEARCH_PROVIDER_KEY, origin);
             draft.seed_origin(Self::WEB_SEARCH_CREDENTIAL_KEY, origin);
+            draft.seed_origin(Self::CHANNELS_ENABLED_KEY, origin);
+            draft.seed_origin(Self::CHANNELS_PAIRING_KEY, origin);
+            draft.seed_origin(Self::EXTERNAL_SKILLS_ENABLED_KEY, origin);
+            draft.seed_origin(Self::EXTERNAL_SKILLS_REQUIRE_APPROVAL_KEY, origin);
+            draft.seed_origin(Self::EXTERNAL_SKILLS_AUTO_EXPOSE_KEY, origin);
         }
         draft
     }
@@ -179,6 +198,46 @@ impl OnboardDraft {
         self.mark_user_selected(Self::PROVIDER_CREDENTIAL_KEY);
     }
 
+    pub fn set_provider_oauth_access_token(&mut self, access_token: String) {
+        let trimmed_access_token = access_token.trim();
+        if trimmed_access_token.is_empty() {
+            self.config.provider.oauth_access_token = None;
+            self.config.provider.clear_oauth_access_token_env_binding();
+            self.mark_user_selected(Self::PROVIDER_CREDENTIAL_KEY);
+            return;
+        }
+
+        self.config.provider.api_key = None;
+        self.config.provider.clear_api_key_env_binding();
+        self.config.provider.clear_oauth_access_token_env_binding();
+        self.config.provider.oauth_access_token =
+            Some(SecretRef::Inline(trimmed_access_token.to_owned()));
+        self.mark_user_selected(Self::PROVIDER_CREDENTIAL_KEY);
+    }
+
+    pub fn set_provider_runtime_profiles(
+        &mut self,
+        profiles: std::collections::BTreeMap<String, mvp::config::ProviderProfileConfig>,
+        active_profile_id: String,
+    ) -> CliResult<()> {
+        let active_profile_id = active_profile_id.trim().to_owned();
+        if active_profile_id.is_empty() {
+            return Err("active provider profile id cannot be empty".to_owned());
+        }
+
+        self.config.providers = profiles;
+        self.config.active_provider = Some(active_profile_id.clone());
+        self.config.last_provider = None;
+        let selected_profile_id = self
+            .config
+            .switch_active_provider(active_profile_id.as_str())?;
+        self.config.active_provider = Some(selected_profile_id);
+        self.mark_user_selected(Self::PROVIDER_CONFIG_KEY);
+        self.mark_user_selected(Self::PROVIDER_MODEL_KEY);
+        self.mark_user_selected(Self::PROVIDER_CREDENTIAL_KEY);
+        Ok(())
+    }
+
     pub fn use_native_prompt_pack(
         &mut self,
         personality: mvp::prompt::PromptPersonality,
@@ -216,6 +275,11 @@ impl OnboardDraft {
         self.mark_user_selected(Self::CLI_SYSTEM_PROMPT_KEY);
     }
 
+    pub fn set_cli_enabled(&mut self, enabled: bool) {
+        self.config.cli.enabled = enabled;
+        self.mark_user_selected(Self::CLI_ENABLED_KEY);
+    }
+
     pub fn set_memory_profile(&mut self, profile: mvp::config::MemoryProfile) {
         self.config.memory.profile = profile;
         self.mark_user_selected(Self::MEMORY_PROFILE_KEY);
@@ -249,6 +313,35 @@ impl OnboardDraft {
         self.workspace.file_root = file_root.clone();
         self.config.tools.file_root = Some(file_root.display().to_string());
         self.mark_user_selected(Self::WORKSPACE_FILE_ROOT_KEY);
+    }
+
+    pub fn set_enabled_service_channels<I>(&mut self, channel_ids: I)
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let normalized_ids = normalize_selected_service_channel_ids(channel_ids);
+        let _ = set_selected_service_channels_in_config(&mut self.config, &normalized_ids);
+        self.mark_user_selected(Self::CHANNELS_ENABLED_KEY);
+    }
+
+    pub fn set_channel_pairing_string_path(&mut self, path: &str, value: Option<String>) -> bool {
+        let normalized_value = value
+            .map(|raw_value| raw_value.trim().to_owned())
+            .filter(|raw_value| !raw_value.is_empty());
+        let updated = set_optional_string_path_in_config(&mut self.config, path, normalized_value);
+        if updated {
+            self.mark_user_selected(Self::CHANNELS_PAIRING_KEY);
+        }
+        updated
+    }
+
+    pub fn set_external_skills_runtime_enabled(&mut self, enabled: bool) {
+        self.config.external_skills.enabled = enabled;
+        self.config.external_skills.require_download_approval = true;
+        self.config.external_skills.auto_expose_installed = false;
+        self.mark_user_selected(Self::EXTERNAL_SKILLS_ENABLED_KEY);
+        self.mark_user_selected(Self::EXTERNAL_SKILLS_REQUIRE_APPROVAL_KEY);
+        self.mark_user_selected(Self::EXTERNAL_SKILLS_AUTO_EXPOSE_KEY);
     }
 
     pub fn set_acp_enabled(&mut self, enabled: bool) {
@@ -309,9 +402,174 @@ impl OnboardDraft {
     }
 }
 
+fn normalize_selected_service_channel_ids<I>(channel_ids: I) -> BTreeSet<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let supported_ids = mvp::config::service_channel_descriptors()
+        .into_iter()
+        .map(|descriptor| descriptor.id.to_owned())
+        .collect::<BTreeSet<_>>();
+    let mut normalized_ids = BTreeSet::new();
+
+    for raw_id in channel_ids {
+        let trimmed_id = raw_id.trim();
+        let channel_is_blank = trimmed_id.is_empty();
+        if channel_is_blank {
+            continue;
+        }
+
+        let normalized_id = trimmed_id.to_ascii_lowercase();
+        let channel_is_supported = supported_ids.contains(normalized_id.as_str());
+        if !channel_is_supported {
+            continue;
+        }
+
+        normalized_ids.insert(normalized_id);
+    }
+
+    normalized_ids
+}
+
+fn set_selected_service_channels_in_config(
+    config: &mut mvp::config::LoongClawConfig,
+    selected_ids: &BTreeSet<String>,
+) -> bool {
+    let config_value_result = serde_json::to_value(&*config);
+    let Ok(mut config_value) = config_value_result else {
+        return false;
+    };
+    let Some(config_object) = config_value.as_object_mut() else {
+        return false;
+    };
+
+    let mut changed = false;
+    let descriptors = mvp::config::service_channel_descriptors();
+
+    for descriptor in descriptors {
+        let field_name = descriptor.id.replace('-', "_");
+        let should_enable = selected_ids.contains(descriptor.id);
+        let field_changed =
+            set_channel_enabled_flag_in_value(config_object, field_name.as_str(), should_enable);
+        if field_changed {
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return false;
+    }
+
+    let next_config_result = serde_json::from_value(config_value);
+    let Ok(next_config) = next_config_result else {
+        return false;
+    };
+    *config = next_config;
+    true
+}
+
+fn set_channel_enabled_flag_in_value(
+    config_object: &mut Map<String, Value>,
+    field_name: &str,
+    enabled: bool,
+) -> bool {
+    let Some(channel_value) = config_object.get_mut(field_name) else {
+        return false;
+    };
+    let Some(channel_object) = channel_value.as_object_mut() else {
+        return false;
+    };
+
+    let current_enabled = channel_object
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if current_enabled == enabled {
+        return false;
+    }
+
+    let enabled_value = Value::Bool(enabled);
+    channel_object.insert("enabled".to_owned(), enabled_value);
+    true
+}
+
+fn set_optional_string_path_in_config(
+    config: &mut mvp::config::LoongClawConfig,
+    path: &str,
+    value: Option<String>,
+) -> bool {
+    let config_value_result = serde_json::to_value(&*config);
+    let Ok(mut config_value) = config_value_result else {
+        return false;
+    };
+    let Some(config_object) = config_value.as_object_mut() else {
+        return false;
+    };
+
+    let next_value = value.map(Value::String).unwrap_or(Value::Null);
+    let changed = set_json_value_at_path(config_object, path, next_value);
+    if !changed {
+        return false;
+    }
+
+    let next_config_result = serde_json::from_value(config_value);
+    let Ok(next_config) = next_config_result else {
+        return false;
+    };
+    *config = next_config;
+    true
+}
+
+fn set_json_value_at_path(
+    config_object: &mut Map<String, Value>,
+    path: &str,
+    next_value: Value,
+) -> bool {
+    let mut path_segments = path
+        .split('.')
+        .filter(|segment| !segment.trim().is_empty())
+        .peekable();
+    let Some(first_segment) = path_segments.next() else {
+        return false;
+    };
+
+    let current_value = config_object.get_mut(first_segment);
+    let Some(current_value) = current_value else {
+        return false;
+    };
+
+    let mut current_value = current_value;
+    while let Some(segment) = path_segments.next() {
+        let is_leaf_segment = path_segments.peek().is_none();
+        if is_leaf_segment {
+            let Some(current_object) = current_value.as_object_mut() else {
+                return false;
+            };
+            let existing_value = current_object.get(segment);
+            if existing_value.is_some_and(|existing_value| *existing_value == next_value) {
+                return false;
+            }
+            current_object.insert(segment.to_owned(), next_value);
+            return true;
+        }
+
+        let Some(current_object) = current_value.as_object_mut() else {
+            return false;
+        };
+        let nested_value = current_object.get_mut(segment);
+        let Some(nested_value) = nested_value else {
+            return false;
+        };
+        current_value = nested_value;
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use loongclaw_contracts::SecretRef;
 
     fn sample_config() -> mvp::config::LoongClawConfig {
         let mut config = mvp::config::LoongClawConfig::default();
@@ -398,6 +656,105 @@ mod tests {
         assert_eq!(
             draft.origin_for(OnboardDraft::WEB_SEARCH_CREDENTIAL_KEY),
             None
+        );
+    }
+
+    #[test]
+    fn service_channel_selection_updates_enabled_service_channel_ids_and_origin() {
+        let mut draft =
+            OnboardDraft::from_config(sample_config(), PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_enabled_service_channels([
+            "telegram".to_owned(),
+            "wecom".to_owned(),
+            "telegram".to_owned(),
+        ]);
+
+        assert_eq!(
+            draft.config.enabled_service_channel_ids(),
+            vec!["telegram".to_owned(), "wecom".to_owned()]
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CHANNELS_ENABLED_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+    }
+
+    #[test]
+    fn service_channel_selection_clears_unselected_runtime_channels() {
+        let mut config = sample_config();
+        config.telegram.enabled = true;
+        config.wecom.enabled = true;
+        let mut draft = OnboardDraft::from_config(config, PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_enabled_service_channels(["telegram".to_owned()]);
+
+        assert_eq!(
+            draft.config.enabled_service_channel_ids(),
+            vec!["telegram".to_owned()]
+        );
+        assert!(draft.config.telegram.enabled);
+        assert!(!draft.config.wecom.enabled);
+    }
+
+    #[test]
+    fn cli_enabled_toggle_updates_config_and_origin() {
+        let mut draft =
+            OnboardDraft::from_config(sample_config(), PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_cli_enabled(false);
+
+        assert!(!draft.config.cli.enabled);
+        assert_eq!(
+            draft.origin_for(OnboardDraft::CLI_ENABLED_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+    }
+
+    #[test]
+    fn external_skills_runtime_toggle_applies_safe_policy_defaults_and_origin() {
+        let mut config = sample_config();
+        config.external_skills.enabled = false;
+        config.external_skills.require_download_approval = false;
+        config.external_skills.auto_expose_installed = true;
+        let mut draft = OnboardDraft::from_config(config, PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_external_skills_runtime_enabled(true);
+
+        assert!(draft.config.external_skills.enabled);
+        assert!(draft.config.external_skills.require_download_approval);
+        assert!(!draft.config.external_skills.auto_expose_installed);
+        assert_eq!(
+            draft.origin_for(OnboardDraft::EXTERNAL_SKILLS_ENABLED_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::EXTERNAL_SKILLS_REQUIRE_APPROVAL_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::EXTERNAL_SKILLS_AUTO_EXPOSE_KEY),
+            Some(OnboardValueOrigin::UserSelected)
+        );
+    }
+
+    #[test]
+    fn provider_oauth_access_token_updates_config_and_origin() {
+        let mut draft =
+            OnboardDraft::from_config(sample_config(), PathBuf::from("/tmp/current.toml"), None);
+
+        draft.set_provider_oauth_access_token("oauth-inline-token".to_owned());
+
+        assert_eq!(draft.config.provider.api_key, None);
+        assert_eq!(draft.config.provider.api_key_env, None);
+        assert_eq!(draft.config.provider.oauth_access_token_env, None);
+        assert_eq!(
+            draft.config.provider.oauth_access_token,
+            Some(SecretRef::Inline("oauth-inline-token".to_owned()))
+        );
+        assert_eq!(
+            draft.origin_for(OnboardDraft::PROVIDER_CREDENTIAL_KEY),
+            Some(OnboardValueOrigin::UserSelected)
         );
     }
 }

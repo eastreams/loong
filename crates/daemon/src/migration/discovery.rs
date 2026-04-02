@@ -50,6 +50,9 @@ pub fn classify_current_setup(output_path: &Path) -> CurrentSetupState {
     if channel_blockers {
         return CurrentSetupState::Repairable;
     }
+    if crate::onboard_preflight::onboard_acp_backend_requires_guided_review(&config) {
+        return CurrentSetupState::Repairable;
+    }
 
     let default_config = mvp::config::LoongClawConfig::default();
     let has_only_provider_selection_changes = config.provider.has_only_selection_changes()
@@ -682,6 +685,19 @@ fn memory_behavior_summary(config: &mvp::config::MemoryConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_config_path(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let file_name = format!(
+            "loongclaw-onboard-discovery-{label}-{}-{timestamp}.toml",
+            std::process::id()
+        );
+        std::env::temp_dir().join(file_name)
+    }
 
     #[test]
     fn cli_import_surface_detects_prompt_pack_metadata_changes() {
@@ -709,5 +725,52 @@ mod tests {
         let surface = provider_import_surface(&config).expect("provider surface should exist");
 
         assert_eq!(surface.level, ImportSurfaceLevel::Ready);
+    }
+
+    #[test]
+    fn classify_current_setup_marks_invalid_acp_backend_repairable() {
+        let config_path = unique_temp_config_path("invalid-acp-backend");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "inline-openai-key".to_owned(),
+        ));
+        config.acp.enabled = true;
+        config.acp.backend = Some("builtin".to_owned());
+        let rendered = mvp::config::render(&config).expect("render config with invalid ACP id");
+        std::fs::write(&config_path, rendered).expect("write config with invalid ACP id");
+
+        let state = classify_current_setup(&config_path);
+
+        assert_eq!(
+            state,
+            CurrentSetupState::Repairable,
+            "stale ACP backend ids should be treated as repairable instead of healthy"
+        );
+
+        let _ = std::fs::remove_file(&config_path);
+    }
+
+    #[test]
+    fn classify_current_setup_marks_placeholder_acp_backend_repairable() {
+        let config_path = unique_temp_config_path("placeholder-acp-backend");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+            "inline-openai-key".to_owned(),
+        ));
+        config.acp.enabled = true;
+        config.acp.backend = Some("planning_stub".to_owned());
+        let rendered =
+            mvp::config::render(&config).expect("render config with placeholder ACP backend");
+        std::fs::write(&config_path, rendered).expect("write config with placeholder ACP backend");
+
+        let state = classify_current_setup(&config_path);
+
+        assert_eq!(
+            state,
+            CurrentSetupState::Repairable,
+            "placeholder ACP backends should still require guided review"
+        );
+
+        let _ = std::fs::remove_file(&config_path);
     }
 }

@@ -13,6 +13,81 @@ use crate::onboard_web_search::{
 };
 use crate::test_support::ScopedEnv;
 
+fn sample_launch_handoff_summary() -> OnboardingSuccessSummary {
+    OnboardingSuccessSummary {
+        outcome: OnboardOutcome::Success,
+        import_source: Some("recommended plan".to_owned()),
+        config_path: "/tmp/loongclaw.toml".to_owned(),
+        config_status: Some("config written".to_owned()),
+        verification_status: Some("passed".to_owned()),
+        provider: "OpenAI".to_owned(),
+        saved_provider_profiles: vec!["openai".to_owned()],
+        model: "gpt-5".to_owned(),
+        transport: "api".to_owned(),
+        provider_endpoint: None,
+        credential: None,
+        prompt_mode: "native".to_owned(),
+        personality: Some("default".to_owned()),
+        prompt_addendum: None,
+        memory_profile: "window_plus_summary".to_owned(),
+        web_search_provider: "Brave".to_owned(),
+        web_search_credential: None,
+        memory_path: Some("/tmp/memory.sqlite3".to_owned()),
+        channels: vec!["cli".to_owned()],
+        suggested_channels: Vec::new(),
+        domain_outcomes: Vec::new(),
+        next_actions: vec![
+            OnboardingAction {
+                kind: OnboardingActionKind::Ask,
+                label: "first answer".to_owned(),
+                command: "loong ask \"hello\"".to_owned(),
+            },
+            OnboardingAction {
+                kind: OnboardingActionKind::Chat,
+                label: "chat".to_owned(),
+                command: "loong chat".to_owned(),
+            },
+        ],
+    }
+}
+
+#[test]
+fn launch_chat_config_path_returns_saved_config_for_ready_chat_open() {
+    let summary = sample_launch_handoff_summary();
+    let result = LaunchDeckResult {
+        focused_action: None,
+        open_chat: true,
+    };
+
+    let config_path = launch_chat_config_path(&summary, Some(result));
+
+    assert_eq!(config_path.as_deref(), Some("/tmp/loongclaw.toml"));
+}
+
+#[test]
+fn launch_chat_config_path_stays_empty_for_blocked_or_cancelled_flows() {
+    let mut blocked_summary = sample_launch_handoff_summary();
+    blocked_summary.outcome = OnboardOutcome::Blocked;
+
+    let blocked_path = launch_chat_config_path(
+        &blocked_summary,
+        Some(LaunchDeckResult {
+            focused_action: None,
+            open_chat: true,
+        }),
+    );
+    let cancelled_path = launch_chat_config_path(
+        &sample_launch_handoff_summary(),
+        Some(LaunchDeckResult {
+            focused_action: None,
+            open_chat: false,
+        }),
+    );
+
+    assert!(blocked_path.is_none());
+    assert!(cancelled_path.is_none());
+}
+
 #[test]
 fn degraded_terminal_uses_plain_prompt_fallback() {
     let mode = resolve_onboard_interaction_mode_for_test(false, true, false);
@@ -189,6 +264,24 @@ fn recommended_import_entry_options() -> Vec<OnboardEntryOption> {
     ]
 }
 
+fn sample_shortcut_options() -> OnboardCommandOptions {
+    OnboardCommandOptions {
+        output: None,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn run_preflight_checks_includes_provider_transport_review_for_responses_compatibility_mode()
 {
@@ -340,6 +433,56 @@ fn provider_model_probe_transport_failure_prioritizes_route_guidance() {
     assert!(
         !check.detail.contains("below"),
         "transport probe failures should not promise a later probe section that may not exist in non-interactive output: {check:#?}"
+    );
+}
+
+#[test]
+fn resolve_onboard_shortcut_kind_blocks_quick_path_for_invalid_acp_backend() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
+    config.acp.enabled = true;
+    config.acp.backend = Some("builtin".to_owned());
+
+    let starting_selection = StartingConfigSelection {
+        config,
+        import_source: Some("current setup".to_owned()),
+        provider_selection: crate::migration::ProviderSelectionPlan::default(),
+        entry_choice: OnboardEntryChoice::ContinueCurrentSetup,
+        current_setup_state: crate::migration::CurrentSetupState::Healthy,
+        review_candidate: None,
+    };
+    let options = sample_shortcut_options();
+
+    let shortcut_kind = resolve_onboard_shortcut_kind(&options, &starting_selection);
+
+    assert_eq!(
+        shortcut_kind, None,
+        "invalid ACP backend should force guided review instead of offering the shortcut"
+    );
+}
+
+#[test]
+fn resolve_onboard_shortcut_kind_blocks_quick_path_for_placeholder_acp_backend() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
+    config.acp.enabled = true;
+    config.acp.backend = Some("planning_stub".to_owned());
+
+    let starting_selection = StartingConfigSelection {
+        config,
+        import_source: Some("current setup".to_owned()),
+        provider_selection: crate::migration::ProviderSelectionPlan::default(),
+        entry_choice: OnboardEntryChoice::ContinueCurrentSetup,
+        current_setup_state: crate::migration::CurrentSetupState::Healthy,
+        review_candidate: None,
+    };
+    let options = sample_shortcut_options();
+
+    let shortcut_kind = resolve_onboard_shortcut_kind(&options, &starting_selection);
+
+    assert_eq!(
+        shortcut_kind, None,
+        "placeholder ACP backend should force guided review instead of pretending the shortcut is safe"
     );
 }
 
@@ -678,12 +821,31 @@ fn preferred_api_key_env_default_ignores_invalid_configured_secret_literal() {
     let default_env = preferred_api_key_env_default(&config);
 
     assert_eq!(
-        default_env, "OPENAI_CODEX_OAUTH_TOKEN",
+        default_env, "OPENAI_API_KEY",
         "invalid configured credential env values should fall back to the provider's safe onboarding default instead of being reused as the interactive prompt default"
     );
     assert!(
         !default_env.contains(secret),
         "prompt defaults must never echo the rejected secret-like value"
+    );
+}
+
+#[test]
+fn apply_onboard_provider_selector_defaults_routes_openai_codex_oauth_to_oauth_binding() {
+    let mut provider =
+        mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);
+    provider.set_api_key_env_binding(Some("OPENAI_API_KEY".to_owned()));
+
+    let applied = apply_onboard_provider_selector_defaults(&mut provider, "openai-codex-oauth");
+
+    assert!(applied);
+    assert_eq!(provider.kind, mvp::config::ProviderKind::Openai);
+    assert_eq!(provider.configured_api_key_env_override(), None);
+    assert_eq!(
+        provider
+            .configured_oauth_access_token_env_override()
+            .as_deref(),
+        Some("OPENAI_CODEX_OAUTH_TOKEN")
     );
 }
 
@@ -1347,6 +1509,59 @@ fn detected_shortcut_snapshot_wraps_starting_point_like_review_rows() {
             "detected shortcut snapshots should wrap the starting-point row with the same helper used by the review digest: {lines:#?}"
         );
     }
+}
+
+#[test]
+fn build_onboard_review_digest_displays_cli_and_external_skills_status() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.cli.enabled = false;
+    config.external_skills.enabled = true;
+    config.external_skills.require_download_approval = true;
+    config.external_skills.auto_expose_installed = false;
+
+    let lines = build_onboard_review_digest_display_lines(&config);
+
+    assert!(
+        lines.iter().any(|line| line == "- cli: disabled"),
+        "digest should note when CLI is disabled: {lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| {
+            line == "- external skills: enabled (approval enforced, auto expose disabled)"
+        }),
+        "digest should summarize external skills policy when enabled: {lines:#?}"
+    );
+}
+
+#[test]
+fn build_onboard_review_digest_includes_enabled_service_channels() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+
+    let lines = build_onboard_review_digest_display_lines(&config);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| { line.starts_with("- channels: ") && line.contains("telegram") }),
+        "digest should list enabled service channels in addition to CLI: {lines:#?}"
+    );
+}
+
+#[test]
+fn build_onboard_review_digest_includes_configured_channel_bindings() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.telegram.enabled = true;
+    config.telegram.bot_token_env = Some("${LC_TELEGRAM_TOKEN}".to_owned());
+
+    let lines = build_onboard_review_digest_display_lines(&config);
+
+    assert!(
+        lines
+            .iter()
+            .any(|line| { line == "- Telegram bot token env: ${LC_TELEGRAM_TOKEN}" }),
+        "digest should expose paired channel bindings, not just the enabled channel list: {lines:#?}"
+    );
 }
 
 #[test]

@@ -2,8 +2,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+
+use crate::onboard_tui::theme::OnboardPalette;
 
 pub(crate) struct TextInputState {
     value: String,
@@ -57,6 +59,14 @@ impl TextInputState {
         } else {
             &self.value
         }
+    }
+
+    pub fn is_default_active(&self) -> bool {
+        self.default_active
+    }
+
+    pub fn has_default(&self) -> bool {
+        self.default.is_some()
     }
 
     pub fn push(&mut self, c: char) {
@@ -149,6 +159,13 @@ impl TextInputState {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.default_active = false;
+        self.value.clear();
+        self.cursor = 0;
+        self.error = None;
+    }
+
     #[allow(dead_code)] // used in tests
     pub fn set_error(&mut self, error: Option<String>) {
         self.error = error;
@@ -166,42 +183,55 @@ impl TextInputState {
 
 pub(crate) struct TextInputWidget {
     label: String,
+    show_label: bool,
 }
 
 impl TextInputWidget {
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
+            show_label: true,
         }
     }
 
+    pub fn without_label(mut self) -> Self {
+        self.show_label = false;
+        self
+    }
+
     pub fn render_with_state(&self, area: Rect, buf: &mut Buffer, state: &TextInputState) {
+        let palette = OnboardPalette::current();
         if area.height < 1 {
             return;
         }
-        let label_span = Span::styled(&self.label, Style::default().fg(Color::Gray));
         let value_style = if state.default_active {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette.muted_text)
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(palette.text)
         };
-        let cursor_span = Span::styled("\u{258f}", Style::default().fg(Color::Cyan));
-        let line = if state.default_active {
-            // Show cursor before placeholder to indicate "start typing to replace"
+        let cursor_span = Span::styled("\u{258f}", Style::default().fg(palette.brand));
+        let mut spans = Vec::new();
+
+        if self.show_label {
+            let label_span = Span::styled(&self.label, Style::default().fg(palette.secondary_text));
+            spans.push(label_span);
+            spans.push(Span::raw(" "));
+        }
+
+        if state.default_active {
             let value_span = Span::styled(state.display_value(), value_style);
-            Line::from(vec![label_span, Span::raw(" "), cursor_span, value_span])
+            spans.push(cursor_span);
+            spans.push(value_span);
         } else {
             let (before, after) = state.value().split_at(state.cursor_position());
             let before_span = Span::styled(before, value_style);
             let after_span = Span::styled(after, value_style);
-            Line::from(vec![
-                label_span,
-                Span::raw(" "),
-                before_span,
-                cursor_span,
-                after_span,
-            ])
-        };
+            spans.push(before_span);
+            spans.push(cursor_span);
+            spans.push(after_span);
+        }
+
+        let line = Line::from(spans);
         buf.set_line(area.x, area.y, &line, area.width);
 
         if let Some(error) = &state.error
@@ -209,7 +239,7 @@ impl TextInputWidget {
         {
             let err_line = Line::from(Span::styled(
                 format!("  \u{26a0} {error}"),
-                Style::default().fg(Color::Red),
+                Style::default().fg(palette.error),
             ));
             buf.set_line(area.x, area.y + 1, &err_line, area.width);
         }
@@ -219,7 +249,9 @@ impl TextInputWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::test_support::ScopedEnv;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     #[test]
     fn input_state_appends_characters() {
         let mut state = TextInputState::new();
@@ -331,5 +363,37 @@ mod tests {
         assert!(state.default_active);
         state.move_end();
         assert!(state.default_active);
+    }
+
+    #[test]
+    fn text_input_label_tracks_light_palette() {
+        let mut env = ScopedEnv::new();
+        env.set("LOONGCLAW_ONBOARD_THEME", "light");
+        env.remove("NO_COLOR");
+        env.remove("COLORFGBG");
+
+        let widget = TextInputWidget::new("Path");
+        let state = TextInputState::new();
+        let area = Rect::new(0, 0, 40, 2);
+        let mut buf = Buffer::empty(area);
+        widget.render_with_state(area, &mut buf, &state);
+
+        assert_eq!(buf[(0, 0)].fg, OnboardPalette::light().secondary_text);
+    }
+
+    #[test]
+    fn value_only_input_omits_label_prefix() {
+        let widget = TextInputWidget::new("Feishu credential env").without_label();
+        let state = TextInputState::with_default("FEISHU_APP_ID");
+        let area = Rect::new(0, 0, 32, 2);
+        let mut buf = Buffer::empty(area);
+
+        widget.render_with_state(area, &mut buf, &state);
+
+        let rendered = (0..area.width)
+            .map(|x| buf[(x, 0)].symbol().chars().next().unwrap_or(' '))
+            .collect::<String>();
+        assert!(!rendered.contains("Feishu"));
+        assert!(rendered.contains("FEISHU_APP_ID"));
     }
 }

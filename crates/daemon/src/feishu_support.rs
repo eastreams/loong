@@ -1,12 +1,10 @@
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
 use clap::ValueEnum;
-use rand::RngExt;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
+pub(crate) use crate::oauth_support::{build_pkce_pair, generate_oauth_state};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 
@@ -98,17 +96,6 @@ pub fn unix_ts_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or_default()
-}
-
-pub fn generate_oauth_state() -> String {
-    random_urlsafe_token(24)
-}
-
-pub fn build_pkce_pair() -> (String, String) {
-    let verifier = random_urlsafe_token(32);
-    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(Sha256::digest(verifier.as_bytes()));
-    (verifier, challenge)
 }
 
 pub fn resolve_scopes(
@@ -313,12 +300,6 @@ pub fn resolve_selected_grant(
     }
 
     Ok(None)
-}
-
-fn random_urlsafe_token(bytes_len: usize) -> String {
-    let mut bytes = vec![0_u8; bytes_len.max(16)];
-    rand::rng().fill(bytes.as_mut_slice());
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn normalize_scope(raw: &str) -> Option<String> {

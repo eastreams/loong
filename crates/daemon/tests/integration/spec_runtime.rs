@@ -129,7 +129,8 @@ fn example_spec_fixtures_parse_as_runner_specs() {
 fn run_spec_cli_render_summary_preserves_stdout_json_and_writes_trust_search_summary() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let spec_path = workspace_root.join("examples/spec/tool-search-trusted.json");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = std::process::Command::new(binary_path)
         .arg("run-spec")
         .arg("--spec")
         .arg(&spec_path)
@@ -191,7 +192,8 @@ fn run_spec_cli_render_summary_preserves_stdout_json_and_writes_trust_search_sum
 fn run_spec_cli_render_summary_surfaces_blocked_plugin_trust_review() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let spec_path = workspace_root.join("examples/spec/plugin-bootstrap-trust-policy.json");
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = std::process::Command::new(binary_path)
         .arg("run-spec")
         .arg("--spec")
         .arg(&spec_path)
@@ -639,7 +641,8 @@ fn run_spec_cli_emits_bridge_support_provenance_in_final_report() {
     )
     .expect("write spec file");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = Command::new(binary_path)
         .args(["run-spec", "--spec"])
         .arg(&spec_path)
         .current_dir(&root)
@@ -749,7 +752,8 @@ fn run_spec_cli_resolves_bridge_support_delta_override_relative_to_process_cwd()
     )
     .expect("write spec");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = Command::new(binary_path)
         .args([
             "run-spec",
             "--spec",
@@ -817,7 +821,8 @@ fn run_spec_cli_rejects_bridge_support_sha256_pins_without_policy_source() {
     )
     .expect("write spec");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = Command::new(binary_path)
         .args([
             "run-spec",
             "--spec",

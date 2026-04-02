@@ -3,6 +3,7 @@
 use super::*;
 pub use clap::{CommandFactory, Parser};
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 const CLI_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -38,6 +39,14 @@ fn cli_command_name() -> String {
         let command = Cli::command();
         command.get_name().to_owned()
     })
+}
+
+fn cli_binary_path() -> PathBuf {
+    let command_name = loongclaw_daemon::CLI_COMMAND_NAME.replace('-', "_");
+    let env_name = format!("CARGO_BIN_EXE_{command_name}");
+    let binary_path = std::env::var_os(&env_name)
+        .unwrap_or_else(|| panic!("missing cargo binary env var `{env_name}`"));
+    PathBuf::from(binary_path)
 }
 
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {

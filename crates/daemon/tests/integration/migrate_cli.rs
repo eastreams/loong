@@ -372,7 +372,8 @@ fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
 
 #[test]
 fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+    let binary_path = cli_binary_path();
+    let output = std::process::Command::new(binary_path)
         .args(["migrate", "--help"])
         .output()
         .expect("run loongclaw migrate --help");

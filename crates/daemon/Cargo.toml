@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+autobins = false
 default-run = "loong"
 
 [lib]
@@ -82,10 +83,6 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 
 [[bin]]
 name = "loong"
-path = "src/main.rs"
-
-[[bin]]
-name = "loongclaw"
 path = "src/main.rs"
 
 [dev-dependencies]

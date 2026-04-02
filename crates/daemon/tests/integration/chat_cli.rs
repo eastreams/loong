@@ -99,7 +99,8 @@ impl ChatCliFixture {
         stdin_bytes: Option<&[u8]>,
         fake_onboard_exit_code: Option<i32>,
     ) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
+        let binary_path = cli_binary_path();
+        let mut command = Command::new(binary_path);
         command
             .arg("chat")
             .current_dir(&self.root)
@@ -213,14 +214,16 @@ fn chat_without_config_forwards_explicit_config_path_to_onboard() {
 fn chat_without_config_decline_hint_preserves_explicit_config_path() {
     let fixture = ChatCliFixture::new("decline-explicit-config");
     let explicit_config = fixture.root.join("custom-config.toml");
+    let command_name = cli_command_name();
+    let onboard_command = format!(
+        "{command_name} onboard --output {}",
+        explicit_config.display()
+    );
 
     let output = fixture.run_chat_command(Some(&explicit_config), Some(b"n\n"));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
-    let expected_hint = format!(
-        "You can run 'loongclaw onboard --output {}' later to get started.",
-        explicit_config.display()
-    );
+    let expected_hint = format!("You can run '{onboard_command}' later to get started.");
     let compacted_stdout = stdout.split_whitespace().collect::<String>();
     let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
@@ -242,6 +245,8 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
 #[test]
 fn chat_without_config_treats_explicit_no_as_decline() {
     let fixture = ChatCliFixture::new("explicit-no");
+    let command_name = cli_command_name();
+    let expected_hint = format!("You can run '{command_name} onboard' later to get started.");
 
     let output = fixture.run_chat_command(None, Some(b"n\n"));
     let stdout = render_output(&output.stdout);
@@ -257,7 +262,7 @@ fn chat_without_config_treats_explicit_no_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        stdout.contains(expected_hint.as_str()),
         "explicit no should leave a follow-up hint: {stdout:?}"
     );
 }
@@ -265,6 +270,8 @@ fn chat_without_config_treats_explicit_no_as_decline() {
 #[test]
 fn chat_without_config_treats_eof_as_decline() {
     let fixture = ChatCliFixture::new("eof");
+    let command_name = cli_command_name();
+    let expected_hint = format!("You can run '{command_name} onboard' later to get started.");
 
     let output = fixture.run_chat_command(None, None);
     let stdout = render_output(&output.stdout);
@@ -280,7 +287,7 @@ fn chat_without_config_treats_eof_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        stdout.contains(expected_hint.as_str()),
         "eof should still leave the follow-up hint: {stdout:?}"
     );
 }

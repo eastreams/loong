@@ -169,6 +169,34 @@ pub(crate) fn config_validation_failure_message(checks: &[OnboardCheck]) -> Opti
         .map(|check| format!("onboard preflight failed: {}", check.detail))
 }
 
+pub(crate) fn supports_onboard_acp_runtime(metadata: &mvp::acp::AcpBackendMetadata) -> bool {
+    let capabilities = &metadata.capabilities;
+    let supports_session_lifecycle =
+        capabilities.contains(&mvp::acp::AcpCapability::SessionLifecycle);
+    let supports_turn_execution = capabilities.contains(&mvp::acp::AcpCapability::TurnExecution);
+
+    supports_session_lifecycle && supports_turn_execution
+}
+
+pub(crate) fn onboard_acp_backend_requires_guided_review(
+    config: &mvp::config::LoongClawConfig,
+) -> bool {
+    if !config.acp.enabled {
+        return false;
+    }
+
+    let Some(backend_id) = config.acp.backend_id() else {
+        return true;
+    };
+
+    let metadata = mvp::acp::describe_acp_backend(Some(backend_id.as_str()));
+    let Ok(metadata) = metadata else {
+        return true;
+    };
+
+    !supports_onboard_acp_runtime(&metadata)
+}
+
 pub(crate) fn non_interactive_preflight_failure_message(checks: &[OnboardCheck]) -> String {
     let detail = checks
         .iter()

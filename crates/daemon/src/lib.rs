@@ -99,11 +99,13 @@ mod onboard_finalize;
 pub mod onboard_flow;
 mod onboard_preflight;
 // onboard_presentation moved to onboard_cli::presentation
+mod oauth_support;
 pub mod onboard_state;
 pub(crate) mod onboard_tui;
 mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
+mod openai_codex_oauth;
 pub mod plugins_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
