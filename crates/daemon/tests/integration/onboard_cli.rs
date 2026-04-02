@@ -7727,6 +7727,17 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         loongclaw_daemon::onboard_cli::build_onboarding_success_summary(&path, &config, None);
     let lines =
         loongclaw_daemon::onboard_cli::render_onboarding_success_summary_with_width(&summary, 100);
+    let ask_position = summary
+        .next_actions
+        .iter()
+        .position(|action| action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Ask);
+    let chat_position = summary.next_actions.iter().position(|action| {
+        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Chat
+    });
+    let personalize_position = summary.next_actions.iter().position(|action| {
+        action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Personalize
+            && action.label == "working preferences"
+    });
     let doctor_position = summary.next_actions.iter().position(|action| {
         action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
             && action.label == "verify managed bridges"
@@ -7737,11 +7748,30 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
         .position(|action| action.label == "channels");
 
     assert_eq!(
-        doctor_position,
-        Some(2),
-        "cli-enabled plugin-backed setups should keep ask/chat first, then add diagnostics before the generic channel catalog: {summary:#?}"
+        ask_position,
+        Some(0),
+        "cli-enabled plugin-backed setups should keep the direct ask handoff first: {summary:#?}"
     );
-    assert_eq!(catalog_position, Some(3));
+    assert_eq!(
+        chat_position,
+        Some(1),
+        "cli-enabled plugin-backed setups should keep the chat handoff second: {summary:#?}"
+    );
+    let personalize_position = personalize_position.expect(
+        "cli-enabled plugin-backed setups should keep the working-preferences handoff visible before diagnostics",
+    );
+    let doctor_position =
+        doctor_position.expect("managed-bridge diagnostics should remain available");
+    let catalog_position =
+        catalog_position.expect("generic channel catalog handoff should remain available");
+    assert!(
+        personalize_position < doctor_position,
+        "working preferences should stay ahead of managed-bridge diagnostics in cli-enabled setups: {summary:#?}"
+    );
+    assert!(
+        doctor_position < catalog_position,
+        "managed-bridge diagnostics should still appear before the generic channel catalog: {summary:#?}"
+    );
     assert!(
         lines.iter().any(|line| {
             line.contains("verify managed bridges")

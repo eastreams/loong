@@ -103,9 +103,9 @@ pub mod onboard_presentation;
 mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
-pub mod plugins_cli;
 pub mod operator_prompt;
 pub mod personalize_cli;
+pub mod plugins_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
 pub mod provider_presentation;
@@ -1680,8 +1680,7 @@ mod first_run_entry_tests {
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
-            rendered
-                .contains("loong personalize --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            rendered.contains("loong personalize --config '/tmp/loongclaw'\"'\"'s config.toml'"),
             "welcome banner should include a quoted personalize command: {rendered}"
         );
         assert!(
