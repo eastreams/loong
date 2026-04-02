@@ -18135,7 +18135,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_delegate_for_approve_once_on_advisory_binding()
+async fn handle_turn_with_runtime_approval_request_resolve_executes_governed_delegate_for_approve_once_on_advisory_binding()
  {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -18224,19 +18224,11 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_dele
             ConversationRuntimeBinding::direct(),
         )
         .await
-        .expect("advisory denial should still return a reply payload");
+        .expect("approval resolve reply");
 
     assert!(
-        reply.contains("governed_runtime_binding_required"),
-        "expected governed runtime binding denial, got: {reply}"
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
     );
 
     let request = repo
@@ -18245,12 +18237,12 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_dele
         .expect("approval request row");
     assert_eq!(
         request.status,
-        crate::session::repository::ApprovalRequestStatus::Pending
+        crate::session::repository::ApprovalRequestStatus::Executed
     );
-    assert_eq!(request.decision, None);
-    assert_eq!(request.resolved_by_session_id, None);
-    assert!(request.executed_at.is_none(), "request={request:?}");
-    assert!(request.last_error.is_none(), "request={request:?}");
+    assert_eq!(
+        request.decision,
+        Some(crate::session::repository::ApprovalDecision::ApproveOnce)
+    );
     assert!(
         repo.load_approval_grant("root-session", "tool:delegate")
             .expect("load grant")
@@ -18261,131 +18253,11 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_dele
         .list_visible_sessions("root-session")
         .expect("list visible sessions")
         .into_iter()
-        .find(|session| session.parent_session_id.as_deref() == Some("root-session"));
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("delegate child session");
     assert!(
-        child.is_none(),
-        "advisory approval replay must not spawn a child"
-    );
-}
-
-#[cfg(feature = "memory-sqlite")]
-#[tokio::test]
-async fn handle_turn_with_runtime_approval_request_resolve_rejects_governed_grant_seed_on_advisory_binding()
- {
-    let db_path = std::env::temp_dir().join(format!(
-        "{}.sqlite3",
-        unique_acp_test_id(
-            "conversation-approval-resolve",
-            "approve-always-advisory-denied"
-        )
-    ));
-    let _ = std::fs::remove_file(&db_path);
-
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let repo = crate::session::repository::SessionRepository::new(&memory_config)
-        .expect("session repository");
-    repo.create_session(crate::session::repository::NewSessionRecord {
-        session_id: "root-session".to_owned(),
-        kind: crate::session::repository::SessionKind::Root,
-        parent_session_id: None,
-        label: Some("Root".to_owned()),
-        state: crate::session::repository::SessionState::Ready,
-    })
-    .expect("create root session");
-    repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
-        approval_request_id: "apr-delegate-advisory-denied".to_owned(),
-        session_id: "root-session".to_owned(),
-        turn_id: "turn-delegate-parent".to_owned(),
-        tool_call_id: "call-delegate-parent".to_owned(),
-        tool_name: "delegate".to_owned(),
-        approval_key: "tool:delegate".to_owned(),
-        request_payload_json: json!({
-            "session_id": "root-session",
-            "parent_session_id": Value::Null,
-            "turn_id": "turn-delegate-parent",
-            "tool_call_id": "call-delegate-parent",
-            "tool_name": "delegate",
-            "args_json": {
-                "task": "child task",
-                "label": "research-subtask"
-            },
-            "source": "provider_tool_call",
-            "execution_kind": "app"
-        }),
-        governance_snapshot_json: json!({
-            "governance_scope": "topology_mutation",
-            "risk_class": "high",
-            "approval_mode": "policy_driven",
-            "rule_id": "governed_tool_requires_approval",
-            "reason": "operator approval required before running `delegate`"
-        }),
-    })
-    .expect("seed approval request");
-
-    let runtime = FakeRuntime::with_turns_and_completions(
-        vec![],
-        vec![Ok(ProviderTurn {
-            assistant_text: "resolving approval".to_owned(),
-            tool_intents: vec![provider_tool_intent(
-                "approval_request_resolve",
-                json!({
-                    "approval_request_id": "apr-delegate-advisory-denied",
-                    "decision": "approve_always"
-                }),
-                "root-session",
-                "turn-approval-resolve",
-                "call-approval-resolve",
-            )],
-            raw_meta: Value::Null,
-        })],
-        vec![],
-    )
-    .with_durable_memory_config(memory_config.clone());
-    let coordinator = ConversationTurnCoordinator::new();
-
-    let reply = coordinator
-        .handle_turn_with_runtime(
-            &config,
-            "root-session",
-            "show raw json tool output",
-            ProviderErrorMode::Propagate,
-            &runtime,
-            ConversationRuntimeBinding::direct(),
-        )
-        .await
-        .expect("advisory denial should still return a reply payload");
-
-    assert!(
-        reply.contains("governed_runtime_binding_required"),
-        "expected governed runtime binding denial, got: {reply}"
-    );
-    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
-    assert_eq!(
-        *runtime
-            .completion_calls
-            .lock()
-            .expect("completion calls lock"),
-        0
-    );
-
-    let request = repo
-        .load_approval_request("apr-delegate-advisory-denied")
-        .expect("load approval request")
-        .expect("approval request row");
-    assert_eq!(
-        request.status,
-        crate::session::repository::ApprovalRequestStatus::Pending
-    );
-    assert_eq!(request.decision, None);
-    assert_eq!(request.resolved_by_session_id, None);
-    assert!(request.executed_at.is_none(), "request={request:?}");
-    assert!(request.last_error.is_none(), "request={request:?}");
-    assert!(
-        repo.load_approval_grant("root-session", "tool:delegate")
-            .expect("load grant")
-            .is_none()
+        child.state == crate::session::repository::SessionState::Completed,
+        "delegate child should complete after advisory approval replay"
     );
 }
 

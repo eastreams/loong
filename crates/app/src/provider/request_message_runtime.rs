@@ -311,16 +311,6 @@ fn render_governed_runtime_binding_section(binding: ProviderRuntimeBinding<'_>) 
     )
 }
 
-pub(super) fn build_base_messages_for_view(
-    config: &LoongClawConfig,
-    include_system_prompt: bool,
-    tool_view: &ToolView,
-) -> Vec<Value> {
-    build_system_message_for_view(config, include_system_prompt, tool_view)
-        .into_iter()
-        .collect()
-}
-
 fn build_base_artifacts(messages: &[Value]) -> Vec<ContextArtifactDescriptor> {
     if messages.is_empty() {
         return Vec::new();
@@ -437,6 +427,22 @@ pub(super) fn build_messages_for_session(
         &runtime_tool_view,
     )
     .map(|projected| projected.messages)
+}
+
+#[cfg(test)]
+pub(crate) fn build_projected_context_for_session(
+    config: &LoongClawConfig,
+    session_id: &str,
+    include_system_prompt: bool,
+) -> CliResult<ProjectedMessageContext> {
+    let runtime_tool_view = tools::runtime_tool_view_from_loongclaw_config(config);
+
+    build_projected_context_for_session_in_view(
+        config,
+        session_id,
+        include_system_prompt,
+        &runtime_tool_view,
+    )
 }
 
 pub(crate) async fn build_projected_context_for_session_with_binding(

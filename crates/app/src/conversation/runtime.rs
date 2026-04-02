@@ -27,7 +27,7 @@ use super::context_engine_registry::{
 };
 use super::prompt_orchestrator::seed_prompt_fragments_from_context;
 use super::prompt_orchestrator::sync_prompt_fragments_into_context;
-use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
+use super::runtime_binding::ConversationRuntimeBinding;
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
 use super::turn_middleware::{
