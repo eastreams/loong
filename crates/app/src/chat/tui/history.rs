@@ -19,6 +19,8 @@ pub(super) trait PaneView {
     fn streaming_active(&self) -> bool;
 }
 
+const JUMP_TO_LATEST_HINT: &str = " End latest ";
+
 // ---------------------------------------------------------------------------
 // Top-level render entry point
 // ---------------------------------------------------------------------------
@@ -98,6 +100,33 @@ pub(super) fn render_history(
             &mut sb_state,
         );
     }
+
+    let show_jump_to_latest_hint =
+        total_lines > visible && pane.scroll_offset() > 0 && area.height > 0;
+    if show_jump_to_latest_hint {
+        render_jump_to_latest_hint(frame, area, palette);
+    }
+}
+
+fn render_jump_to_latest_hint(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    let hint_width = JUMP_TO_LATEST_HINT.chars().count() as u16;
+    let required_width = hint_width.saturating_add(2);
+    if area.width < required_width {
+        return;
+    }
+
+    let hint_x = area.x + area.width.saturating_sub(required_width);
+    let hint_y = area.y + area.height.saturating_sub(1);
+    let hint_area = Rect::new(hint_x, hint_y, hint_width, 1);
+    let hint_line = Line::styled(
+        JUMP_TO_LATEST_HINT.to_owned(),
+        Style::default()
+            .fg(palette.warning)
+            .add_modifier(Modifier::BOLD),
+    );
+    let hint_widget = Paragraph::new(hint_line);
+
+    frame.render_widget(hint_widget, hint_area);
 }
 
 // ---------------------------------------------------------------------------
@@ -736,5 +765,69 @@ mod tests {
             .collect();
         assert!(text.contains("~ thinking ~"), "header present");
         assert!(text.contains("deep thought"), "content visible");
+    }
+
+    #[test]
+    fn scrolled_history_shows_jump_to_latest_hint() {
+        let mut long_lines = Vec::new();
+        for index in 0..40 {
+            long_lines.push(format!("line {index}"));
+        }
+
+        let surface_message = Message::surface(long_lines.join("\n"));
+        let pane = TestPane {
+            messages: vec![surface_message],
+            scroll_offset: 6,
+            streaming_active: false,
+        };
+        let palette = Palette::dark();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal creation failed");
+
+        terminal
+            .draw(|f| {
+                render_history(f, f.area(), &pane, &palette, false);
+            })
+            .expect("draw failed");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("End latest"),
+            "scrolled history should show a jump-to-latest hint: {text:?}"
+        );
+    }
+
+    #[test]
+    fn tail_follow_history_hides_jump_to_latest_hint() {
+        let mut long_lines = Vec::new();
+        for index in 0..40 {
+            long_lines.push(format!("line {index}"));
+        }
+
+        let surface_message = Message::surface(long_lines.join("\n"));
+        let pane = TestPane {
+            messages: vec![surface_message],
+            scroll_offset: 0,
+            streaming_active: false,
+        };
+        let palette = Palette::dark();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).expect("terminal creation failed");
+
+        terminal
+            .draw(|f| {
+                render_history(f, f.area(), &pane, &palette, false);
+            })
+            .expect("draw failed");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            !text.contains("End latest"),
+            "tail-follow history should not show the jump-to-latest hint: {text:?}"
+        );
     }
 }

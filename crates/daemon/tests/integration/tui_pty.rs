@@ -61,6 +61,12 @@ struct TuiPtyFixture {
     _root: PathBuf,
 }
 
+const ONBOARDING_START_MARKERS: &[&str] = &[
+    "Security Check",
+    "Setup Wizard",
+    "review the trust boundary",
+];
+
 impl TuiPtyFixture {
     fn spawn_chat_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
         Self::spawn_command(label, write_config, extra_env, |cmd, config_path| {
@@ -358,6 +364,29 @@ impl TuiPtyFixture {
     }
 }
 
+fn wait_for_fullscreen_onboarding_start(
+    fixture: &mut TuiPtyFixture,
+    timeout: Duration,
+) -> Result<String, String> {
+    let deadline = Instant::now() + timeout;
+    let visible_screen = fixture.read_screen(timeout)?;
+    if visible_screen.trim().is_empty() {
+        return Err(
+            "timed out waiting for the first visible fullscreen frame before onboarding copy"
+                .to_owned(),
+        );
+    }
+
+    for marker in ONBOARDING_START_MARKERS {
+        if visible_screen.contains(marker) {
+            return Ok(visible_screen);
+        }
+    }
+
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    fixture.wait_for_any(ONBOARDING_START_MARKERS, remaining)
+}
+
 impl Drop for TuiPtyFixture {
     fn drop(&mut self) {
         // Best-effort kill of the child process.
@@ -421,15 +450,7 @@ fn tui_shows_welcome_message() {
 fn chat_tui_missing_config_starts_fullscreen_onboarding() {
     let mut fixture = TuiPtyFixture::spawn_without_config("missing-config-onboarding");
 
-    let screen = fixture
-        .wait_for_any(
-            &[
-                "Security Check",
-                "Setup Wizard",
-                "review the trust boundary",
-            ],
-            Duration::from_secs(10),
-        )
+    let screen = wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
         .expect("chat --ui tui should enter fullscreen onboarding when config is missing");
 
     assert!(
@@ -446,15 +467,7 @@ fn chat_tui_missing_config_starts_fullscreen_onboarding() {
 fn tui_subcommand_missing_config_starts_fullscreen_onboarding() {
     let mut fixture = TuiPtyFixture::spawn_tui_without_config("tui-subcommand-onboarding");
 
-    let screen = fixture
-        .wait_for_any(
-            &[
-                "Security Check",
-                "Setup Wizard",
-                "review the trust boundary",
-            ],
-            Duration::from_secs(10),
-        )
+    let screen = wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
         .expect("loong tui should enter fullscreen onboarding when config is missing");
 
     assert!(
@@ -475,15 +488,7 @@ fn chat_tui_missing_config_can_finish_fullscreen_onboarding_and_enter_chat() {
         &[("OPENAI_CODEX_OAUTH_TOKEN", "test-oauth-token")],
     );
 
-    fixture
-        .wait_for_any(
-            &[
-                "Security Check",
-                "Setup Wizard",
-                "review the trust boundary",
-            ],
-            Duration::from_secs(10),
-        )
+    wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
         .expect("missing-config tui should start on the fullscreen onboarding risk screen");
 
     fixture.type_text("y").expect("accept risk");

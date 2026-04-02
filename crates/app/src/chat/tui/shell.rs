@@ -26,6 +26,7 @@ use super::events::UiEvent;
 use super::focus::{FocusLayer, FocusStack};
 use super::history::PaneView;
 use super::input::InputView;
+use super::layout;
 use super::message::Message;
 use super::observer::build_tui_observer;
 use super::render::{self, ShellView};
@@ -86,6 +87,9 @@ impl StatusBarView for state::Pane {
     }
     fn session_id(&self) -> &str {
         &self.session_id
+    }
+    fn scroll_offset(&self) -> u16 {
+        self.scroll_offset
     }
     fn status_message(&self) -> Option<(&str, &Instant)> {
         self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
@@ -296,6 +300,93 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HistoryNavigationAction {
+    ScrollLineUp,
+    ScrollLineDown,
+    ScrollPageUp,
+    ScrollPageDown,
+    JumpTop,
+    JumpLatest,
+}
+
+fn textarea_is_empty(textarea: &tui_textarea::TextArea<'_>) -> bool {
+    let lines = textarea.lines();
+    let has_non_empty_line = lines.iter().any(|line| !line.is_empty());
+    !has_non_empty_line
+}
+
+fn history_navigation_action(
+    key: KeyEvent,
+    composer_is_empty: bool,
+) -> Option<HistoryNavigationAction> {
+    match key.code {
+        KeyCode::Up if composer_is_empty && key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::ScrollLineUp)
+        }
+        KeyCode::Down if composer_is_empty && key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::ScrollLineDown)
+        }
+        KeyCode::PageUp => Some(HistoryNavigationAction::ScrollPageUp),
+        KeyCode::PageDown => Some(HistoryNavigationAction::ScrollPageDown),
+        KeyCode::Home if composer_is_empty && key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::JumpTop)
+        }
+        KeyCode::End if composer_is_empty && key.modifiers.is_empty() => {
+            Some(HistoryNavigationAction::JumpLatest)
+        }
+        _ => None,
+    }
+}
+
+fn history_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
+    let terminal_size = crossterm::terminal::size();
+    let (width, height) = terminal_size.unwrap_or((80, 24));
+
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let input_height = textarea.lines().len() as u16 + 2;
+    let shell_areas = layout::compute(area, input_height);
+    let history_height = shell_areas.history.height;
+    let page_step = history_height.saturating_sub(1);
+
+    page_step.max(1)
+}
+
+fn apply_history_navigation(
+    shell: &mut state::Shell,
+    textarea: &tui_textarea::TextArea<'_>,
+    action: HistoryNavigationAction,
+) {
+    match action {
+        HistoryNavigationAction::ScrollLineUp => {
+            let next_offset = shell.pane.scroll_offset.saturating_add(1);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::ScrollLineDown => {
+            let next_offset = shell.pane.scroll_offset.saturating_sub(1);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::ScrollPageUp => {
+            let page_step = history_page_step(textarea);
+            let next_offset = shell.pane.scroll_offset.saturating_add(page_step);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::ScrollPageDown => {
+            let page_step = history_page_step(textarea);
+            let next_offset = shell.pane.scroll_offset.saturating_sub(page_step);
+            shell.pane.scroll_offset = next_offset;
+        }
+        HistoryNavigationAction::JumpTop => {
+            shell.pane.scroll_offset = u16::MAX;
+            shell.pane.set_status("Viewing oldest output".to_owned());
+        }
+        HistoryNavigationAction::JumpLatest => {
+            shell.pane.scroll_offset = 0;
+            shell.pane.set_status("Jumped to latest output".to_owned());
+        }
+    }
+}
+
 fn apply_terminal_event(
     shell: &mut state::Shell,
     textarea: &mut tui_textarea::TextArea<'_>,
@@ -348,6 +439,13 @@ fn apply_terminal_event(
     }
 
     // --- Global shortcuts ---------------------------------------------
+    let composer_is_empty = textarea_is_empty(textarea);
+    let navigation_action = history_navigation_action(key, composer_is_empty);
+    if let Some(action) = navigation_action {
+        apply_history_navigation(shell, textarea, action);
+        return;
+    }
+
     #[allow(clippy::wildcard_enum_match_arm)]
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -358,14 +456,6 @@ fn apply_terminal_event(
             shell.show_thinking = !shell.show_thinking;
             let label = if shell.show_thinking { "on" } else { "off" };
             shell.pane.set_status(format!("Thinking display: {label}"));
-            return;
-        }
-        KeyCode::PageUp => {
-            shell.pane.scroll_offset = shell.pane.scroll_offset.saturating_add(5);
-            return;
-        }
-        KeyCode::PageDown => {
-            shell.pane.scroll_offset = shell.pane.scroll_offset.saturating_sub(5);
             return;
         }
         _ => {}
@@ -379,6 +469,11 @@ fn apply_terminal_event(
     }
 
     // --- Enter to submit (or stage if agent is running) ---------------
+    if key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT) {
+        textarea.insert_newline();
+        return;
+    }
+
     if key.code == KeyCode::Enter && !key.modifiers.contains(KeyModifiers::SHIFT) {
         let text: String = textarea.lines().join("\n");
         let trimmed = text.trim();
@@ -427,6 +522,12 @@ fn apply_terminal_event(
         }
         KeyCode::Right => {
             textarea.move_cursor(tui_textarea::CursorMove::Forward);
+        }
+        KeyCode::Up => {
+            textarea.move_cursor(tui_textarea::CursorMove::Up);
+        }
+        KeyCode::Down => {
+            textarea.move_cursor(tui_textarea::CursorMove::Down);
         }
         KeyCode::Home => {
             textarea.move_cursor(tui_textarea::CursorMove::Head);
@@ -938,4 +1039,107 @@ async fn run_inner(
 
     drop(guard);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crossterm::event::{KeyEventKind, KeyEventState};
+
+    fn plain_key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    #[test]
+    fn end_key_routes_to_history_when_composer_is_empty() {
+        let key = plain_key(KeyCode::End);
+        let action = history_navigation_action(key, true);
+
+        assert_eq!(action, Some(HistoryNavigationAction::JumpLatest));
+    }
+
+    #[test]
+    fn end_key_stays_with_input_when_composer_has_text() {
+        let key = plain_key(KeyCode::End);
+        let action = history_navigation_action(key, false);
+
+        assert_eq!(action, None);
+    }
+
+    #[test]
+    fn home_key_routes_to_history_when_composer_is_empty() {
+        let key = plain_key(KeyCode::Home);
+        let action = history_navigation_action(key, true);
+
+        assert_eq!(action, Some(HistoryNavigationAction::JumpTop));
+    }
+
+    #[test]
+    fn up_key_scrolls_history_when_composer_is_empty() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let up_event = Event::Key(plain_key(KeyCode::Up));
+
+        apply_terminal_event(&mut shell, &mut textarea, up_event, &tx, &mut submit_text);
+
+        assert_eq!(
+            shell.pane.scroll_offset, 1,
+            "Up should scroll transcript when composer is empty"
+        );
+    }
+
+    #[test]
+    fn down_key_scrolls_history_toward_latest_when_composer_is_empty() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let down_event = Event::Key(plain_key(KeyCode::Down));
+
+        shell.pane.scroll_offset = 2;
+
+        apply_terminal_event(&mut shell, &mut textarea, down_event, &tx, &mut submit_text);
+
+        assert_eq!(
+            shell.pane.scroll_offset, 1,
+            "Down should move transcript toward latest output when composer is empty"
+        );
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_in_composer() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let enter_event = Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+
+        textarea.insert_str("hello");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            enter_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        let lines = textarea.lines();
+
+        assert_eq!(lines.len(), 2, "Shift+Enter should create a new line");
+        assert_eq!(lines[0], "hello");
+        assert_eq!(lines[1], "");
+        assert!(
+            submit_text.is_none(),
+            "Shift+Enter should not submit composer contents"
+        );
+    }
 }

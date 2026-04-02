@@ -232,8 +232,10 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
             &[
                 ("Enter", "Send message"),
                 ("Shift+Enter", "New line"),
+                ("Up/Down", "Scroll history when empty"),
+                ("PageUp/Dn", "Page scroll history"),
+                ("Home/End", "Jump top/latest when empty"),
                 ("Ctrl+C", "Interrupt / cancel"),
-                ("PageUp/Dn", "Scroll history"),
                 ("Esc", "Close dialogs"),
             ],
         ),
