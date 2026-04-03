@@ -3739,6 +3739,36 @@ where
         Ok(())
     }
 
+    fn persist_session_consent_if_requested(
+        repo: &SessionRepository,
+        approval_request: &ApprovalRequestRecord,
+        current_session_id: &str,
+        session_consent_mode: Option<ToolConsentMode>,
+    ) -> Result<(), String> {
+        let Some(session_consent_mode) = session_consent_mode else {
+            return Ok(());
+        };
+
+        let scope_session_id = repo
+            .lineage_root_session_id(&approval_request.session_id)?
+            .ok_or_else(|| {
+                format!(
+                    "approval_request_session_not_found: `{}`",
+                    approval_request.session_id
+                )
+            })?;
+
+        let consent_record = NewSessionToolConsentRecord {
+            scope_session_id,
+            mode: session_consent_mode,
+            updated_by_session_id: Some(current_session_id.to_owned()),
+        };
+
+        repo.upsert_session_tool_consent(consent_record)?;
+
+        Ok(())
+    }
+
     fn replay_shell_request(
         &self,
         approval_request: &ApprovalRequestRecord,
@@ -3960,6 +3990,13 @@ where
                 &request.current_session_id,
             )?;
         }
+
+        Self::persist_session_consent_if_requested(
+            repo,
+            &approval_request,
+            &request.current_session_id,
+            request.session_consent_mode,
+        )?;
 
         self.finish_approved_resolution(repo, approval_request)
             .await
@@ -4197,22 +4234,12 @@ where
                             .await;
                     }
                 };
-                if let Some(session_consent_mode) = request.session_consent_mode {
-                    let scope_session_id = repo
-                        .lineage_root_session_id(&approved.session_id)?
-                        .ok_or_else(|| {
-                            format!(
-                                "approval_request_session_not_found: `{}`",
-                                approved.session_id
-                            )
-                        })?;
-                    let updated_by_session_id = Some(request.current_session_id.clone());
-                    repo.upsert_session_tool_consent(NewSessionToolConsentRecord {
-                        scope_session_id,
-                        mode: session_consent_mode,
-                        updated_by_session_id,
-                    })?;
-                }
+                Self::persist_session_consent_if_requested(
+                    &repo,
+                    &approved,
+                    &request.current_session_id,
+                    request.session_consent_mode,
+                )?;
                 self.finish_approved_resolution(&repo, approved).await
             }
             ApprovalDecision::ApproveAlways => {
@@ -9310,6 +9337,85 @@ mod tests {
             Some(ApprovalDecision::ApproveOnce)
         );
         assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_retries_missing_session_mode_after_approval() {
+        let runtime = ApprovalControlRuntime::default();
+        let mut config = LoongClawConfig::default();
+        let memory_config = sqlite_memory_config("approval-control-session-mode-retry");
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        let repo = SessionRepository::new(&memory_config).expect("repository");
+        repo.ensure_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("ensure root session");
+        seed_pending_approval_request(
+            &repo,
+            "root-session",
+            "apr-auto-retry",
+            "sessions_list",
+            "app",
+        );
+        repo.transition_approval_request_if_current(
+            "apr-auto-retry",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("root-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition approval request")
+        .expect("approval request should be pending");
+
+        let fallback = DefaultAppToolDispatcher::new(memory_config.clone(), ToolConfig::default());
+        let approval_runtime = CoordinatorApprovalResolutionRuntime {
+            config: &config,
+            runtime: &runtime,
+            fallback: &fallback,
+            binding: ConversationRuntimeBinding::direct(),
+        };
+        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
+            &approval_runtime,
+            crate::tools::approval::ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-auto-retry".to_owned(),
+                decision: ApprovalDecision::ApproveOnce,
+                session_consent_mode: Some(ToolConsentMode::Auto),
+                visibility: crate::config::SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request retry should succeed");
+
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Approved
+        );
+
+        let stored = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+        assert_eq!(stored.mode, ToolConsentMode::Auto);
+        assert_eq!(
+            stored.updated_by_session_id.as_deref(),
+            Some("root-session")
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]

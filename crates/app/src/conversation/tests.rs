@@ -10872,6 +10872,10 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
 
 #[test]
 fn binding_first_approval_boundary_turn_engine_source_does_not_expose_optional_kernel_hook() {
+    // This source-level check protects the binding-based approval boundary.
+    // It intentionally guards the exact optional-kernel seams that used to
+    // exist in turn_engine.rs. If these strings move during a refactor, update
+    // this test or replace it with a stronger semantic boundary check.
     let source = include_str!("turn_engine.rs");
 
     assert!(

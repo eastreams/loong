@@ -165,9 +165,79 @@ run_report_fails_on_missing_hotspot_test() {
   assert_contains "$output_file" "crates/spec/src/spec_runtime.rs"
 }
 
+run_check_fails_on_missing_boundary_file_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  rm "$fixture/crates/app/src/conversation/turn_engine.rs"
+
+  local output_file="$fixture/check-boundary.out"
+  if (
+    cd "$fixture" &&
+      LOONGCLAW_ARCH_STRICT=true scripts/check_architecture_boundaries.sh >"$output_file" 2>&1
+  ); then
+    echo "expected architecture boundary check to fail when a tracked boundary file is missing" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "$output_file" "missing boundary file"
+  assert_contains "$output_file" "crates/app/src/conversation/turn_engine.rs"
+}
+
+run_report_fails_on_missing_boundary_file_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  rm "$fixture/crates/app/src/conversation/turn_engine.rs"
+
+  local report_file="$fixture/architecture-drift-2099-01.md"
+  local output_file="$fixture/report-boundary.out"
+  if (
+    cd "$fixture" &&
+      LOONGCLAW_ARCH_REPORT_MONTH="2099-01" \
+        scripts/generate_architecture_drift_report.sh "$report_file" >"$output_file" 2>&1
+  ); then
+    echo "expected architecture drift report generation to fail when a tracked boundary file is missing" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "$output_file" "missing boundary file"
+  assert_contains "$output_file" "crates/app/src/conversation/turn_engine.rs"
+}
+
+run_boundary_scan_matches_optional_kernel_context_with_whitespace_test() {
+  local fixture
+  fixture="$(make_fixture_repo)"
+  trap 'rm -rf "$fixture"' RETURN
+
+  cat <<'EOF_SIGNATURE' >>"$fixture/crates/app/src/conversation/turn_engine.rs"
+fn fixture_optional_kernel_signature(
+    kernel_ctx: Option< &'a KernelContext >,
+) {
+    let _ = kernel_ctx;
+}
+EOF_SIGNATURE
+
+  local output_file="$fixture/boundary-hits.out"
+  (
+    cd "$fixture" &&
+      architecture_conversation_app_dispatcher_optional_kernel_context_hits >"$output_file"
+  )
+
+  assert_contains "$output_file" "turn_engine.rs"
+  assert_contains "$output_file" "kernel_ctx: Option< &'a KernelContext >"
+}
+
 run_hotspot_metadata_helpers_test
 run_hotspot_pressure_helpers_test
 run_check_fails_on_missing_hotspot_test
 run_report_fails_on_missing_hotspot_test
+run_check_fails_on_missing_boundary_file_test
+run_report_fails_on_missing_boundary_file_test
+run_boundary_scan_matches_optional_kernel_context_with_whitespace_test
 
 echo "architecture budget script checks passed"

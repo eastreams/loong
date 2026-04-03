@@ -248,10 +248,22 @@ architecture_conversation_app_dispatcher_optional_kernel_context_hits() {
     "crates/app/src/conversation/turn_engine.rs"
     "crates/app/src/conversation/turn_coordinator.rs"
   )
+  local file
+  local pattern
+
+  for file in "${files[@]}"; do
+    if [[ ! -f "$file" ]]; then
+      echo "missing boundary file: $file" >&2
+      return 1
+    fi
+  done
+
+  pattern='kernel_ctx:[[:space:]]*Option<[[:space:]]*&[^>]*KernelContext[^>]*>'
+
   if have_rg; then
-    rg -n 'kernel_ctx: Option<&KernelContext>' "${files[@]}" || true
+    rg -n "$pattern" "${files[@]}" || true
   else
-    grep -En 'kernel_ctx: Option<&KernelContext>' "${files[@]}" || true
+    grep -En "$pattern" "${files[@]}" || true
   fi
 }
 
@@ -327,7 +339,7 @@ architecture_boundary_hits() {
 architecture_boundary_status() {
   local key="$1"
   local hits
-  hits="$(architecture_boundary_hits "$key")"
+  hits="$(architecture_boundary_hits "$key")" || return 1
   if [[ -n "$hits" ]]; then
     echo "FAIL"
   else
@@ -338,7 +350,7 @@ architecture_boundary_status() {
 architecture_boundary_detail_single_line() {
   local key="$1"
   local hits
-  hits="$(architecture_boundary_hits "$key")"
+  hits="$(architecture_boundary_hits "$key")" || return 1
   if [[ -z "$hits" ]]; then
     architecture_boundary_pass_summary "$key"
     return 0
