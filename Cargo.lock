@@ -2184,6 +2184,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "wait-timeout",
  "wat",
 ]
 

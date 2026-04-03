@@ -1,15 +1,14 @@
 use std::io::ErrorKind;
+use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
 use loongclaw_app as mvp;
-use tokio::process::Command;
-use tokio::time::timeout;
+use wait_timeout::ChildExt;
 
 pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion install";
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
-const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,10 +34,13 @@ impl BrowserCompanionDiagnostics {
             BrowserCompanionInstallStatus::MissingBinary { command } => {
                 format!("command `{command}` was not found on PATH")
             }
-            BrowserCompanionInstallStatus::ProbeTimedOut { command } => {
+            BrowserCompanionInstallStatus::ProbeTimedOut {
+                command,
+                timeout_seconds,
+            } => {
                 format!(
                     "command `{command} {BROWSER_COMPANION_VERSION_ARG}` timed out after {}s",
-                    BROWSER_COMPANION_PROBE_TIMEOUT.as_secs()
+                    timeout_seconds
                 )
             }
             BrowserCompanionInstallStatus::ProbeFailed { command, error } => {
@@ -98,6 +100,7 @@ pub(crate) enum BrowserCompanionInstallStatus {
     },
     ProbeTimedOut {
         command: String,
+        timeout_seconds: u64,
     },
     ProbeFailed {
         command: String,
@@ -139,6 +142,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 
     let runtime_ready = runtime.is_runtime_ready();
     let expected_version = runtime.expected_version;
+    let probe_timeout_seconds = runtime.timeout_seconds;
     let Some(command) = runtime.command else {
         return Some(BrowserCompanionDiagnostics {
             command: None,
@@ -149,7 +153,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
         });
     };
 
-    match probe_browser_companion_version(&command).await {
+    match probe_browser_companion_version(&command, probe_timeout_seconds).await {
         Ok(observed_version) => {
             let install_status = match expected_version.as_deref() {
                 Some(expected_version)
@@ -178,13 +182,20 @@ pub(crate) async fn collect_browser_companion_diagnostics(
             runtime_ready,
             install_status: BrowserCompanionInstallStatus::MissingBinary { command },
         }),
-        Err(BrowserCompanionProbeError::TimedOut) => Some(BrowserCompanionDiagnostics {
-            command: Some(command.clone()),
-            expected_version,
-            observed_version: None,
-            runtime_ready,
-            install_status: BrowserCompanionInstallStatus::ProbeTimedOut { command },
-        }),
+        Err(BrowserCompanionProbeError::TimedOut) => {
+            let timed_out_command = command.clone();
+            let install_status = BrowserCompanionInstallStatus::ProbeTimedOut {
+                command,
+                timeout_seconds: probe_timeout_seconds,
+            };
+            Some(BrowserCompanionDiagnostics {
+                command: Some(timed_out_command),
+                expected_version,
+                observed_version: None,
+                runtime_ready,
+                install_status,
+            })
+        }
         Err(BrowserCompanionProbeError::SpawnFailed(error)) => Some(BrowserCompanionDiagnostics {
             command: Some(command.clone()),
             expected_version,
@@ -211,32 +222,91 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 
 async fn probe_browser_companion_version(
     command: &str,
+    timeout_seconds: u64,
 ) -> Result<String, BrowserCompanionProbeError> {
-    let mut probe = Command::new(command);
-    probe.arg(BROWSER_COMPANION_VERSION_ARG);
-    probe.kill_on_drop(true);
+    let command = command.to_owned();
+    let join_result = tokio::task::spawn_blocking(move || {
+        probe_browser_companion_version_blocking(command.as_str(), timeout_seconds)
+    })
+    .await;
 
-    match timeout(BROWSER_COMPANION_PROBE_TIMEOUT, probe.output()).await {
-        Ok(Ok(output)) => {
-            let observed = observed_output(&output.stdout, &output.stderr);
-            if output.status.success() {
-                Ok(observed)
-            } else {
-                Err(BrowserCompanionProbeError::Exited {
-                    observed,
-                    exit_status: output.status.code(),
-                })
-            }
-        }
-        Ok(Err(error)) => {
-            if error.kind() == ErrorKind::NotFound {
-                Err(BrowserCompanionProbeError::MissingBinary)
-            } else {
-                Err(BrowserCompanionProbeError::SpawnFailed(error.to_string()))
-            }
-        }
-        Err(_) => Err(BrowserCompanionProbeError::TimedOut),
+    match join_result {
+        Ok(result) => result,
+        Err(error) => Err(BrowserCompanionProbeError::SpawnFailed(error.to_string())),
     }
+}
+
+fn probe_browser_companion_version_blocking(
+    command: &str,
+    timeout_seconds: u64,
+) -> Result<String, BrowserCompanionProbeError> {
+    let child = spawn_browser_companion_probe_process(command)?;
+    let output = wait_for_browser_companion_probe_output(child, timeout_seconds)?;
+    interpret_browser_companion_probe_output(output)
+}
+
+fn spawn_browser_companion_probe_process(
+    command: &str,
+) -> Result<std::process::Child, BrowserCompanionProbeError> {
+    let mut process = Command::new(command);
+    process.arg(BROWSER_COMPANION_VERSION_ARG);
+    process.stdin(Stdio::null());
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
+
+    let spawn_result = process.spawn();
+    match spawn_result {
+        Ok(child) => Ok(child),
+        Err(error) => {
+            if error.kind() == ErrorKind::NotFound {
+                return Err(BrowserCompanionProbeError::MissingBinary);
+            }
+
+            let error_message = error.to_string();
+            Err(BrowserCompanionProbeError::SpawnFailed(error_message))
+        }
+    }
+}
+
+fn wait_for_browser_companion_probe_output(
+    mut child: std::process::Child,
+    timeout_seconds: u64,
+) -> Result<Output, BrowserCompanionProbeError> {
+    let timeout_duration = Duration::from_secs(timeout_seconds.max(1));
+    let wait_result = child.wait_timeout(timeout_duration);
+    let status_option = wait_result.map_err(|error| {
+        let error_message = error.to_string();
+        BrowserCompanionProbeError::SpawnFailed(error_message)
+    })?;
+
+    if status_option.is_some() {
+        let output_result = child.wait_with_output();
+        return output_result.map_err(|error| {
+            let error_message = error.to_string();
+            BrowserCompanionProbeError::SpawnFailed(error_message)
+        });
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(BrowserCompanionProbeError::TimedOut)
+}
+
+fn interpret_browser_companion_probe_output(
+    output: Output,
+) -> Result<String, BrowserCompanionProbeError> {
+    let observed = observed_output(&output.stdout, &output.stderr);
+    let status = output.status;
+
+    if status.success() {
+        return Ok(observed);
+    }
+
+    let exit_status = status.code();
+    Err(BrowserCompanionProbeError::Exited {
+        observed,
+        exit_status,
+    })
 }
 
 fn observed_output(stdout: &[u8], stderr: &[u8]) -> String {
@@ -261,15 +331,11 @@ fn observed_version_matches_expected(observed_version: &str, expected_version: &
 mod tests {
     use super::*;
     #[cfg(unix)]
-    use std::ffi::OsString;
-    #[cfg(unix)]
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     #[cfg(unix)]
     use std::path::{Path, PathBuf};
-    #[cfg(unix)]
-    use std::sync::MutexGuard;
     #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -301,55 +367,17 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn set_browser_companion_env_var(key: &str, value: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so no concurrent env readers/writers
-        // observe racy updates while these tests run.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
-    #[cfg(unix)]
-    fn remove_browser_companion_env_var(key: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so removing the variable here is
-        // coordinated with all other env-mutating daemon tests.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
-
-    #[cfg(unix)]
     struct BrowserCompanionEnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved_ready: Option<OsString>,
+        _env: crate::test_support::ScopedEnv,
     }
 
     #[cfg(unix)]
     impl BrowserCompanionEnvGuard {
         fn runtime_gate_closed() -> Self {
-            let lock = crate::test_support::lock_daemon_test_environment();
             let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            let saved_ready = std::env::var_os(key);
-            remove_browser_companion_env_var(key);
-            Self {
-                _lock: lock,
-                saved_ready,
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for BrowserCompanionEnvGuard {
-        fn drop(&mut self) {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            match self.saved_ready.take() {
-                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
-                None => remove_browser_companion_env_var(key),
-            }
+            let mut env = crate::test_support::ScopedEnv::new();
+            env.remove(key);
+            Self { _env: env }
         }
     }
 
@@ -368,6 +396,7 @@ mod tests {
         config.tools.browser_companion.enabled = true;
         config.tools.browser_companion.command = Some(script_path.display().to_string());
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        config.tools.browser_companion.timeout_seconds = 3;
 
         let diagnostics = collect_browser_companion_diagnostics(&config)
             .await
@@ -384,6 +413,39 @@ mod tests {
                     && observed_version == "loongclaw-browser-companion 11.5.0"
             ),
             "partial version matches should still warn as mismatches: {diagnostics:#?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn collect_browser_companion_diagnostics_times_out_stalled_probe() {
+        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
+        let temp_dir = browser_companion_temp_dir("stalled-probe");
+        let script_path = temp_dir.join("browser-companion");
+        write_browser_companion_script(
+            &script_path,
+            "#!/bin/sh\n/bin/sleep 5\necho 'loongclaw-browser-companion 1.5.0'\n",
+        );
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.browser_companion.enabled = true;
+        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        config.tools.browser_companion.timeout_seconds = 3;
+
+        let diagnostics = collect_browser_companion_diagnostics(&config)
+            .await
+            .expect("diagnostics should be collected");
+
+        let install_status = &diagnostics.install_status;
+        let timed_out = matches!(
+            install_status,
+            BrowserCompanionInstallStatus::ProbeTimedOut { .. }
+        );
+
+        assert!(
+            timed_out,
+            "stalled probes should time out deterministically: {diagnostics:#?}"
         );
     }
 

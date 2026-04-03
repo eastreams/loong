@@ -1887,16 +1887,12 @@ fn push_unique_step(steps: &mut Vec<String>, step: String) {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(unix)]
-    use std::ffi::OsString;
     use std::fs::Permissions;
     #[cfg(unix)]
     use std::io::Write;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    #[cfg(unix)]
-    use std::sync::MutexGuard;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -1925,15 +1921,19 @@ mod tests {
         let mut file = std::fs::File::create(script_path).expect("create browser companion script");
         file.write_all(body.as_bytes())
             .expect("write browser companion script");
-        let mut permissions = file.metadata().expect("script metadata").permissions();
+        file.sync_all()
+            .expect("sync browser companion script to disk");
+        drop(file);
+
+        let metadata = std::fs::metadata(script_path).expect("script metadata");
+        let mut permissions = metadata.permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
     }
 
     #[cfg(unix)]
     struct BrowserCompanionEnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved_ready: Option<OsString>,
+        _env: ScopedEnv,
     }
 
     struct PermissionRestore {
@@ -1954,28 +1954,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn set_browser_companion_env_var(key: &str, value: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so no concurrent env readers/writers
-        // observe racy updates while these tests run.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
-    #[cfg(unix)]
-    fn remove_browser_companion_env_var(key: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so removing the variable here is
-        // coordinated with all other env-mutating daemon tests.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::remove_var(key);
-        }
-    }
-
-    #[cfg(unix)]
     impl BrowserCompanionEnvGuard {
         fn runtime_gate_closed() -> Self {
             Self::set_ready(None)
@@ -1986,28 +1964,13 @@ mod tests {
         }
 
         fn set_ready(value: Option<&str>) -> Self {
-            let lock = crate::test_support::lock_daemon_test_environment();
             let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            let saved_ready = std::env::var_os(key);
+            let mut env = ScopedEnv::new();
             match value {
-                Some(value) => set_browser_companion_env_var(key, value),
-                None => remove_browser_companion_env_var(key),
+                Some(value) => env.set(key, value),
+                None => env.remove(key),
             }
-            Self {
-                _lock: lock,
-                saved_ready,
-            }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for BrowserCompanionEnvGuard {
-        fn drop(&mut self) {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            match self.saved_ready.take() {
-                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
-                None => remove_browser_companion_env_var(key),
-            }
+            Self { _env: env }
         }
     }
 

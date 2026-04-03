@@ -1,12 +1,11 @@
-use std::ffi::{OsStr, OsString};
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
-
 use crate::mvp;
 use crate::{Capability, OperationSpec};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 pub use crate::SecurityScanProfile;
 
@@ -19,9 +18,8 @@ pub fn lock_daemon_test_environment() -> MutexGuard<'static, ()> {
 }
 
 fn set_test_env_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
-    // SAFETY: daemon tests serialize process env mutations behind
-    // `lock_daemon_test_environment`, so no concurrent env readers or writers
-    // observe racy updates while these helpers are active.
+    // SAFETY: daemon tests hold `mvp::test_support::ScopedEnv` inside this
+    // wrapper, so daemon-side env mutations serialize with app-side env tests.
     #[allow(unsafe_code, clippy::disallowed_methods)]
     unsafe {
         std::env::set_var(key, value);
@@ -29,9 +27,8 @@ fn set_test_env_var(key: impl AsRef<OsStr>, value: impl AsRef<OsStr>) {
 }
 
 fn remove_test_env_var(key: impl AsRef<OsStr>) {
-    // SAFETY: daemon tests serialize process env mutations behind
-    // `lock_daemon_test_environment`, so removals are coordinated with all
-    // other daemon-side env mutation helpers.
+    // SAFETY: daemon tests hold `mvp::test_support::ScopedEnv` inside this
+    // wrapper, so daemon-side env removals serialize with app-side env tests.
     #[allow(unsafe_code, clippy::disallowed_methods)]
     unsafe {
         std::env::remove_var(key);
@@ -40,12 +37,12 @@ fn remove_test_env_var(key: impl AsRef<OsStr>) {
 
 pub struct ScopedEnv {
     saved: Vec<(String, Option<OsString>)>,
-    _lock: MutexGuard<'static, ()>,
+    _lock: mvp::test_support::ScopedEnv,
 }
 
 impl ScopedEnv {
     pub fn new() -> Self {
-        let lock = lock_daemon_test_environment();
+        let lock = mvp::test_support::ScopedEnv::new();
         let saved = Vec::new();
         Self { saved, _lock: lock }
     }

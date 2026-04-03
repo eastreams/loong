@@ -5974,11 +5974,10 @@ fn resolve_write_plan(
 mod tests {
     use super::*;
     use std::collections::VecDeque;
-    use std::ffi::OsString;
     use std::io::Write;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::{Arc, MutexGuard};
 
     use crate::test_support::ScopedEnv;
 
@@ -6296,28 +6295,7 @@ mod tests {
     }
 
     struct BrowserCompanionEnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved_ready: Option<OsString>,
-    }
-
-    fn set_browser_companion_env_var(key: &str, value: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so no concurrent env readers/writers
-        // observe racy updates while these tests run.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-
-    fn remove_browser_companion_env_var(key: &str) {
-        // SAFETY: daemon tests serialize process env mutations behind
-        // `lock_daemon_test_environment`, so removing the variable here is
-        // coordinated with all other env-mutating daemon tests.
-        #[allow(unsafe_code, clippy::disallowed_methods)]
-        unsafe {
-            std::env::remove_var(key);
-        }
+        _env: ScopedEnv,
     }
 
     impl BrowserCompanionEnvGuard {
@@ -6330,61 +6308,28 @@ mod tests {
         }
 
         fn set_ready(value: Option<&str>) -> Self {
-            let lock = crate::test_support::lock_daemon_test_environment();
             let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            let saved_ready = std::env::var_os(key);
+            let mut env = ScopedEnv::new();
             match value {
-                Some(value) => set_browser_companion_env_var(key, value),
-                None => remove_browser_companion_env_var(key),
+                Some(value) => env.set(key, value),
+                None => env.remove(key),
             }
-            Self {
-                _lock: lock,
-                saved_ready,
-            }
+            Self { _env: env }
         }
     }
 
     struct PasteDrainWindowEnvGuard {
-        _lock: MutexGuard<'static, ()>,
-        saved_value: Option<OsString>,
+        _env: ScopedEnv,
     }
 
     impl PasteDrainWindowEnvGuard {
         fn set(value: Option<&str>) -> Self {
-            let lock = crate::test_support::lock_daemon_test_environment();
-            let saved_value = std::env::var_os(ONBOARD_PASTE_DRAIN_WINDOW_ENV);
+            let mut env = ScopedEnv::new();
             match value {
-                Some(value) => set_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV, value),
-                None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
+                Some(value) => env.set(ONBOARD_PASTE_DRAIN_WINDOW_ENV, value),
+                None => env.remove(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
             }
-            Self {
-                _lock: lock,
-                saved_value,
-            }
-        }
-    }
-
-    impl Drop for PasteDrainWindowEnvGuard {
-        fn drop(&mut self) {
-            match &self.saved_value {
-                Some(value) => {
-                    set_browser_companion_env_var(
-                        ONBOARD_PASTE_DRAIN_WINDOW_ENV,
-                        &value.to_string_lossy(),
-                    );
-                }
-                None => remove_browser_companion_env_var(ONBOARD_PASTE_DRAIN_WINDOW_ENV),
-            }
-        }
-    }
-
-    impl Drop for BrowserCompanionEnvGuard {
-        fn drop(&mut self) {
-            let key = "LOONGCLAW_BROWSER_COMPANION_READY";
-            match self.saved_ready.take() {
-                Some(value) => set_browser_companion_env_var(key, &value.to_string_lossy()),
-                None => remove_browser_companion_env_var(key),
-            }
+            Self { _env: env }
         }
     }
 
