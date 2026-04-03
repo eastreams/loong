@@ -203,6 +203,7 @@ architecture_boundary_check_keys() {
 memory_literals
 provider_mod_helper_definitions
 conversation_provider_optional_binding_roundtrip
+conversation_app_dispatcher_optional_kernel_context
 spec_app_dependency
 BOUNDARIES
 }
@@ -242,6 +243,18 @@ architecture_conversation_provider_optional_binding_roundtrip_hits() {
   fi
 }
 
+architecture_conversation_app_dispatcher_optional_kernel_context_hits() {
+  local files=(
+    "crates/app/src/conversation/turn_engine.rs"
+    "crates/app/src/conversation/turn_coordinator.rs"
+  )
+  if have_rg; then
+    rg -n 'kernel_ctx: Option<&KernelContext>' "${files[@]}" || true
+  else
+    grep -En 'kernel_ctx: Option<&KernelContext>' "${files[@]}" || true
+  fi
+}
+
 architecture_boundary_pass_summary() {
   case "$1" in
     memory_literals)
@@ -252,6 +265,9 @@ architecture_boundary_pass_summary() {
       ;;
     conversation_provider_optional_binding_roundtrip)
       echo "conversation/runtime.rs translates explicit conversation bindings into provider bindings without optional-kernel roundtrips"
+      ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      echo "conversation app-tool dispatcher approval hooks stay binding-based without optional kernel fallbacks"
       ;;
     spec_app_dependency)
       echo "spec crate remains detached from app crate at the Cargo dependency boundary"
@@ -273,6 +289,9 @@ architecture_boundary_fail_summary() {
     conversation_provider_optional_binding_roundtrip)
       echo "conversation/runtime.rs still rebuilds provider bindings from optional kernel context"
       ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      echo "conversation app-tool dispatcher approval hooks still expose raw optional kernel context"
+      ;;
     spec_app_dependency)
       echo "spec crate depends on app crate directly"
       ;;
@@ -292,6 +311,9 @@ architecture_boundary_hits() {
       ;;
     conversation_provider_optional_binding_roundtrip)
       architecture_conversation_provider_optional_binding_roundtrip_hits
+      ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      architecture_conversation_app_dispatcher_optional_kernel_context_hits
       ;;
     spec_app_dependency)
       architecture_spec_app_dependency_hits

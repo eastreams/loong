@@ -292,6 +292,14 @@ impl ToolDescriptor {
     pub fn governance_profile(&self) -> ToolGovernanceProfile {
         self.policy.governance_profile
     }
+
+    pub fn requires_kernel_binding(&self) -> bool {
+        let governance_profile = self.governance_profile();
+        let approval_mode = governance_profile.approval_mode;
+        let execution_kind = self.execution_kind;
+
+        execution_kind == ToolExecutionKind::App && approval_mode == ToolApprovalMode::PolicyDriven
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

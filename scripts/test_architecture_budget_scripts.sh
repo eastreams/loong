@@ -80,6 +80,10 @@ copy_boundary_fixture_files() {
   cp "$REPO_ROOT/crates/app/src/provider/mod.rs" "$fixture/crates/app/src/provider/mod.rs"
   cp "$REPO_ROOT/crates/app/src/memory/mod.rs" "$fixture/crates/app/src/memory/mod.rs"
   cp "$REPO_ROOT/crates/app/src/conversation/runtime.rs" "$fixture/crates/app/src/conversation/runtime.rs"
+  cp "$REPO_ROOT/crates/app/src/conversation/turn_engine.rs" \
+    "$fixture/crates/app/src/conversation/turn_engine.rs"
+  cp "$REPO_ROOT/crates/app/src/conversation/turn_coordinator.rs" \
+    "$fixture/crates/app/src/conversation/turn_coordinator.rs"
 }
 
 run_hotspot_metadata_helpers_test() {

@@ -10749,13 +10749,12 @@ async fn turn_engine_routes_direct_binding_to_app_dispatcher() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent() {
+async fn turn_engine_requires_governed_approval_before_later_app_intent_execution() {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
     #[derive(Default)]
     struct ApprovalBarrierDispatcher {
-        approval_checks: Mutex<usize>,
         executed: Mutex<Vec<String>>,
     }
 
@@ -10845,28 +10844,23 @@ async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent(
         .await;
 
     match result {
-        TurnResult::ToolDenied(failure) => {
-            assert_eq!(failure.code, "governed_runtime_binding_required");
-            assert_eq!(failure.reason, "governed_runtime_binding_required");
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
+            assert_eq!(
+                requirement.approval_request_id.as_deref(),
+                Some("apr-test-approval-barrier")
+            );
         }
         other @ TurnResult::FinalText(_)
         | other @ TurnResult::StreamingText(_)
         | other @ TurnResult::StreamingDone(_)
-        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
-            panic!("expected ToolDenied, got: {other:?}")
+            panic!("expected NeedsApproval, got: {other:?}")
         }
     }
 
-    assert_eq!(
-        *dispatcher
-            .approval_checks
-            .lock()
-            .expect("approval checks lock"),
-        1,
-        "only the earlier low-risk app intent should reach approval routing"
-    );
     assert!(
         dispatcher
             .executed
@@ -10878,107 +10872,18 @@ async fn turn_engine_fails_closed_before_governed_approval_for_later_app_intent(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn app_tool_dispatcher_preserves_optional_kernel_approval_hook_compatibility() {
-    use async_trait::async_trait;
+#[test]
+fn binding_first_approval_boundary_turn_engine_source_does_not_expose_optional_kernel_hook() {
+    let source = include_str!("turn_engine.rs");
 
-    #[derive(Default)]
-    struct LegacyApprovalDispatcher {
-        kernel_binding_states: Mutex<Vec<bool>>,
-    }
-
-    #[async_trait]
-    impl crate::conversation::AppToolDispatcher for LegacyApprovalDispatcher {
-        async fn maybe_require_approval(
-            &self,
-            _session_context: &crate::conversation::SessionContext,
-            _intent: &crate::conversation::ToolIntent,
-            descriptor: &crate::tools::ToolDescriptor,
-            kernel_ctx: Option<&KernelContext>,
-        ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
-            let mut kernel_binding_states = self
-                .kernel_binding_states
-                .lock()
-                .expect("kernel binding states lock");
-            kernel_binding_states.push(kernel_ctx.is_some());
-            drop(kernel_binding_states);
-
-            Ok(Some(
-                crate::conversation::turn_engine::ApprovalRequirement {
-                    kind: crate::conversation::turn_engine::ApprovalRequirementKind::GovernedTool,
-                    reason: format!("legacy approval compatibility for `{}`", descriptor.name),
-                    rule_id: "legacy_optional_kernel_approval_hook".to_owned(),
-                    tool_name: Some(descriptor.name.to_owned()),
-                    approval_key: Some(format!("tool:{}", descriptor.name)),
-                    approval_request_id: Some(format!("apr-legacy-{}", descriptor.name)),
-                },
-            ))
-        }
-
-        async fn execute_app_tool(
-            &self,
-            _session_context: &crate::conversation::SessionContext,
-            request: ToolCoreRequest,
-            _binding: crate::conversation::ConversationRuntimeBinding<'_>,
-        ) -> Result<ToolCoreOutcome, String> {
-            Err(format!(
-                "legacy approval compatibility should preflight before executing {}",
-                request.tool_name
-            ))
-        }
-    }
-
-    let dispatcher = LegacyApprovalDispatcher::default();
-    let engine = TurnEngine::new(1);
-    let turn = ProviderTurn {
-        assistant_text: "".to_owned(),
-        tool_intents: vec![provider_tool_intent(
-            "sessions_list",
-            json!({}),
-            "root-session",
-            "turn-legacy-approval-compatibility",
-            "call-legacy-approval-compatibility",
-        )],
-        raw_meta: Value::Null,
-    };
-    let session_context = crate::conversation::SessionContext::root_with_tool_view(
-        "root-session",
-        crate::tools::planned_root_tool_view(),
-    );
-
-    let direct_result = engine
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::direct(),
-            None,
-        )
-        .await;
     assert!(
-        matches!(direct_result, TurnResult::NeedsApproval(_)),
-        "legacy optional-kernel hook should still drive direct binding approval"
+        !source.contains("async fn maybe_require_approval("),
+        "Turn engine approval hooks should stay binding-based"
     );
-
-    let (kernel_ctx, _invocations) = build_kernel_context(Arc::new(InMemoryAuditSink::default()));
-    let kernel_result = engine
-        .execute_turn_in_context(
-            &turn,
-            &session_context,
-            &dispatcher,
-            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
-            None,
-        )
-        .await;
     assert!(
-        matches!(kernel_result, TurnResult::NeedsApproval(_)),
-        "legacy optional-kernel hook should still drive kernel-bound approval"
+        !source.contains("kernel_ctx: Option<&KernelContext>"),
+        "Turn engine approval hooks should not expose optional kernel context"
     );
-
-    let kernel_binding_states = dispatcher
-        .kernel_binding_states
-        .lock()
-        .expect("kernel binding states lock");
-    assert_eq!(kernel_binding_states.as_slice(), &[false, true]);
 }
 
 #[test]
@@ -11000,7 +10905,7 @@ fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_bindi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on_advisory_binding()
+async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advisory_binding()
 {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
@@ -11083,17 +10988,20 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
         .await;
 
     match result {
-        TurnResult::ToolDenied(failure) => {
-            assert_eq!(failure.code, "governed_runtime_binding_required");
-            assert_eq!(failure.reason, "governed_runtime_binding_required");
+        TurnResult::NeedsApproval(requirement) => {
+            assert_eq!(requirement.tool_name.as_deref(), Some("delegate_async"));
+            assert_eq!(
+                requirement.approval_request_id.as_deref(),
+                Some("apr-test-governed-runtime-binding")
+            );
         }
         other @ TurnResult::FinalText(_)
         | other @ TurnResult::StreamingText(_)
         | other @ TurnResult::StreamingDone(_)
-        | other @ TurnResult::NeedsApproval(_)
+        | other @ TurnResult::ToolDenied(_)
         | other @ TurnResult::ToolError(_)
         | other @ TurnResult::ProviderError(_) => {
-            panic!("expected ToolDenied, got: {other:?}")
+            panic!("expected NeedsApproval, got: {other:?}")
         }
     }
 
@@ -11102,8 +11010,8 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
             .approval_checks
             .lock()
             .expect("approval checks lock"),
-        0,
-        "advisory binding should fail before approval routing"
+        1,
+        "advisory binding should still route governed app tools through approval preflight"
     );
     assert!(
         dispatcher
@@ -11120,7 +11028,7 @@ async fn governed_runtime_binding_rejects_mutating_app_intent_before_approval_on
     assert_eq!(decision.tool_name, "delegate_async");
     assert_eq!(
         decision.decision_kind,
-        crate::conversation::turn_engine::ToolDecisionKind::Deny
+        crate::conversation::turn_engine::ToolDecisionKind::ApprovalRequired
     );
     assert_eq!(
         decision.capability_action_class.as_deref(),
@@ -18344,7 +18252,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_approval_request_resolve_executes_governed_delegate_for_approve_once_on_advisory_binding()
+async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserves_consent_without_replay_when_direct()
  {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -18439,6 +18347,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_executes_governed_del
         reply.contains("\"tool\":\"approval_request_resolve\""),
         "expected raw approval resolve tool output, got: {reply}"
     );
+    assert_eq!(*runtime.turn_calls.lock().expect("turn calls lock"), 1);
 
     let request = repo
         .load_approval_request("apr-delegate-1")
@@ -18446,27 +18355,29 @@ async fn handle_turn_with_runtime_approval_request_resolve_executes_governed_del
         .expect("approval request row");
     assert_eq!(
         request.status,
-        crate::session::repository::ApprovalRequestStatus::Executed
+        crate::session::repository::ApprovalRequestStatus::Approved
     );
     assert_eq!(
         request.decision,
         Some(crate::session::repository::ApprovalDecision::ApproveOnce)
     );
+    assert_eq!(
+        request.resolved_by_session_id.as_deref(),
+        Some("root-session")
+    );
+    assert!(request.executed_at.is_none(), "request={request:?}");
+    assert!(request.last_error.is_none(), "request={request:?}");
     assert!(
         repo.load_approval_grant("root-session", "tool:delegate")
             .expect("load grant")
             .is_none()
     );
-
-    let child = repo
-        .list_visible_sessions("root-session")
-        .expect("list visible sessions")
-        .into_iter()
-        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
-        .expect("delegate child session");
     assert!(
-        child.state == crate::session::repository::SessionState::Completed,
-        "delegate child should complete after advisory approval replay"
+        repo.list_visible_sessions("root-session")
+            .expect("list visible sessions")
+            .into_iter()
+            .all(|session| session.parent_session_id.as_deref() != Some("root-session")),
+        "direct approve_once should not replay the stored delegate call"
     );
 }
 
@@ -18587,11 +18498,11 @@ async fn handle_turn_with_runtime_approval_request_resolve_rejects_core_replay_f
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_before_binding_gate_for_stale_governed_retry()
+async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previously_direct_approved_request()
  {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
-        unique_acp_test_id("conversation-approval-resolve", "stale-governed-retry")
+        unique_acp_test_id("conversation-approval-resolve", "approve-once-direct-then-kernel")
     ));
     let _ = std::fs::remove_file(&db_path);
 
@@ -18609,7 +18520,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_b
     })
     .expect("create root session");
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
-        approval_request_id: "apr-delegate-stale".to_owned(),
+        approval_request_id: "apr-delegate-1".to_owned(),
         session_id: "root-session".to_owned(),
         turn_id: "turn-delegate-parent".to_owned(),
         tool_call_id: "call-delegate-parent".to_owned(),
@@ -18637,44 +18548,26 @@ async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_b
         }),
     })
     .expect("seed approval request");
-    let stale_request = repo
-        .transition_approval_request_if_current(
-            "apr-delegate-stale",
-            crate::session::repository::TransitionApprovalRequestIfCurrentRequest {
-                expected_status: crate::session::repository::ApprovalRequestStatus::Pending,
-                next_status: crate::session::repository::ApprovalRequestStatus::Denied,
-                decision: Some(crate::session::repository::ApprovalDecision::Deny),
-                resolved_by_session_id: Some("root-session".to_owned()),
-                executed_at: None,
-                last_error: None,
-            },
-        )
-        .expect("transition stale approval request")
-        .expect("stale approval request should exist");
-    assert_eq!(
-        stale_request.status,
-        crate::session::repository::ApprovalRequestStatus::Denied
-    );
 
-    let runtime = FakeRuntime::with_turns_and_completions(
+    let direct_runtime = FakeRuntime::with_turns_and_completions(
         vec![],
         vec![
             Ok(ProviderTurn {
-                assistant_text: "retry stale approval".to_owned(),
+                assistant_text: "resolving approval".to_owned(),
                 tool_intents: vec![provider_tool_intent(
                     "approval_request_resolve",
                     json!({
-                        "approval_request_id": "apr-delegate-stale",
+                        "approval_request_id": "apr-delegate-1",
                         "decision": "approve_once"
                     }),
                     "root-session",
-                    "turn-approval-resolve-stale",
-                    "call-approval-resolve-stale",
+                    "turn-approval-direct",
+                    "call-approval-direct",
                 )],
                 raw_meta: Value::Null,
             }),
             Ok(ProviderTurn {
-                assistant_text: "unused".to_owned(),
+                assistant_text: "approval recorded".to_owned(),
                 tool_intents: vec![],
                 raw_meta: Value::Null,
             }),
@@ -18684,38 +18577,95 @@ async fn handle_turn_with_runtime_approval_request_resolve_reports_not_pending_b
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
 
+    coordinator
+        .handle_turn_with_runtime(
+            &config,
+            "root-session",
+            "show raw json tool output",
+            ProviderErrorMode::Propagate,
+            &direct_runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("direct approval resolve reply");
+
+    let approved = repo
+        .load_approval_request("apr-delegate-1")
+        .expect("load approval request")
+        .expect("approval request row");
+    assert_eq!(
+        approved.status,
+        crate::session::repository::ApprovalRequestStatus::Approved
+    );
+    assert!(
+        approved.decision == Some(crate::session::repository::ApprovalDecision::ApproveOnce)
+    );
+
+    let kernel_runtime = FakeRuntime::with_turns_and_completions(
+        vec![],
+        vec![
+            Ok(ProviderTurn {
+                assistant_text: "replaying approval".to_owned(),
+                tool_intents: vec![provider_tool_intent(
+                    "approval_request_resolve",
+                    json!({
+                        "approval_request_id": "apr-delegate-1",
+                        "decision": "approve_once"
+                    }),
+                    "root-session",
+                    "turn-approval-kernel",
+                    "call-approval-kernel",
+                )],
+                raw_meta: Value::Null,
+            }),
+            Ok(ProviderTurn {
+                assistant_text: "Child final output".to_owned(),
+                tool_intents: vec![],
+                raw_meta: Value::Null,
+            }),
+        ],
+        vec![],
+    )
+    .with_durable_memory_config(memory_config.clone());
+    let kernel_ctx = test_kernel_context("conversation-approval-resolve-approve-once-replay");
+
     let reply = coordinator
         .handle_turn_with_runtime(
             &config,
             "root-session",
-            "retry approval resolution",
+            "show raw json tool output",
             ProviderErrorMode::Propagate,
-            &runtime,
-            ConversationRuntimeBinding::direct(),
+            &kernel_runtime,
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
-        .expect("stale advisory retry should still return a reply payload");
+        .expect("kernel approval resolve reply");
 
     assert!(
-        reply.contains("approval_request_not_pending"),
-        "expected stale approval retry to report not_pending, got: {reply}"
-    );
-    assert!(
-        !reply.contains("governed_runtime_binding_required"),
-        "stale approval retry should not be rewritten as a binding denial: {reply}"
+        reply.contains("\"tool\":\"approval_request_resolve\""),
+        "expected raw approval resolve tool output, got: {reply}"
     );
 
     let request = repo
-        .load_approval_request("apr-delegate-stale")
-        .expect("load stale approval request")
-        .expect("stale approval request row");
+        .load_approval_request("apr-delegate-1")
+        .expect("load approval request")
+        .expect("approval request row");
     assert_eq!(
         request.status,
-        crate::session::repository::ApprovalRequestStatus::Denied
+        crate::session::repository::ApprovalRequestStatus::Executed
     );
+    assert!(request.executed_at.is_some(), "request={request:?}");
+    assert!(request.last_error.is_none(), "request={request:?}");
+
+    let child = repo
+        .list_visible_sessions("root-session")
+        .expect("list visible sessions")
+        .into_iter()
+        .find(|session| session.parent_session_id.as_deref() == Some("root-session"))
+        .expect("child session summary");
     assert_eq!(
-        request.decision,
-        Some(crate::session::repository::ApprovalDecision::Deny)
+        child.state,
+        crate::session::repository::SessionState::Completed
     );
 }
 
@@ -19564,12 +19514,14 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
 
     assert_eq!(
         resolved.status,
-        crate::session::repository::ApprovalRequestStatus::Executed
+        crate::session::repository::ApprovalRequestStatus::Approved
     );
     assert_eq!(
         resolved.decision,
         Some(crate::session::repository::ApprovalDecision::ApproveAlways)
     );
+    assert!(resolved.executed_at.is_none(), "request={resolved:?}");
+    assert!(resolved.last_error.is_none(), "request={resolved:?}");
 
     let grant = repo
         .load_approval_grant("root-session", "tool:delegate")
