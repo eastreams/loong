@@ -11,6 +11,7 @@ Catalog of design documents and architectural decisions.
 | [Local Product Control Plane](local-product-control-plane.md) | Localhost-only platform layer above the runtime and below future HTTP/Web UI surfaces | Active |
 | [Discovery-First Tool Runtime Contract](discovery-first-tool-runtime-contract.md) | Provider-core tools, leases, parser rewrites, and follow-up turn contract | Active |
 | [External Authoring Contract](external-authoring-contract.md) | Public contract for capability packages and reusable capability assets | Active |
+| [Governance Evidence Gap Analysis](governance-evidence-gap-analysis.md) | External calibration against AGT and LoongClaw priority refinement | Active |
 | [Governance Simplification Classification](governance-simplification-classification.md) | Classifies governance surfaces as structural, transitional, cleanup-safe, or replacement-first | Active |
 | [Internal Integration SDK Contract](internal-integration-sdk-contract.md) | Maintainer-facing descriptor, registry, and projection contract for repository-owned surfaces | Active |
 | [Layered Kernel Design](layered-kernel-design.md) | L0-L9 kernel layer specification and boundary rules | Living |

@@ -1,6 +1,7 @@
 # LoongClaw Roadmap
 
 Last updated: 2026-03-29
+Last updated: 2026-04-03
 
 This roadmap is execution-focused. Every stage has:
 
@@ -25,6 +26,66 @@ Build a layered Agentic OS kernel that is:
 3. High-risk actions require human authorization under policy.
 4. Untrusted plugins default to strict scan + restricted runtime.
 5. Every security-critical decision must be auditable.
+
+## Comparison-Derived Priorities
+
+External calibration against `microsoft/agent-governance-toolkit` reinforces
+that LoongClaw should keep its kernel-first direction while tightening the
+operator-verifiable evidence and productization around it.
+
+Immediate priority refinements:
+
+1. Publish stronger governance evidence:
+   threat model, benchmark method, and explicit control-coverage narratives
+   should become first-class repository artifacts rather than remaining implied
+   by architecture and roadmap text alone.
+2. Formalize a trust and identity plane:
+   capability and route governance are already strong, but agent identity,
+   delegation narrowing, provenance, and trust decay should become a dedicated
+   runtime surface.
+3. Finish runtime isolation before aggressively widening external surfaces:
+   WASM and process resource controls, rollback-on-failure, and health-check
+   semantics remain high-leverage differentiators.
+4. Treat plugin supply-chain trust as a core adoption surface:
+   signing, provenance, trust tiers, and reproducible verification should stay
+   central to Stage 4 rather than feeling like later ecosystem polish.
+5. Consolidate reliability into an explicit governed runtime story:
+   existing retry, circuit-breaker, and concurrency controls should mature into
+   a named operator-facing reliability surface instead of remaining scattered
+   planning details.
+
+See [Governance Evidence Gap Analysis](design-docs/governance-evidence-gap-analysis.md)
+for the detailed comparison and recommended ordering.
+
+## Comparison-Derived Priorities
+
+External calibration against `microsoft/agent-governance-toolkit` reinforces
+that LoongClaw should keep its kernel-first direction while tightening the
+operator-verifiable evidence and productization around it.
+
+Immediate priority refinements:
+
+1. Publish stronger governance evidence:
+   threat model, benchmark method, and explicit control-coverage narratives
+   should become first-class repository artifacts rather than remaining implied
+   by architecture and roadmap text alone.
+2. Formalize a trust and identity plane:
+   capability and route governance are already strong, but agent identity,
+   delegation narrowing, provenance, and trust decay should become a dedicated
+   runtime surface.
+3. Finish runtime isolation before aggressively widening external surfaces:
+   WASM and process resource controls, rollback-on-failure, and health-check
+   semantics remain high-leverage differentiators.
+4. Treat plugin supply-chain trust as a core adoption surface:
+   signing, provenance, trust tiers, and reproducible verification should stay
+   central to Stage 4 rather than feeling like later ecosystem polish.
+5. Consolidate reliability into an explicit governed runtime story:
+   existing retry, circuit-breaker, and concurrency controls should mature into
+   a named operator-facing reliability surface instead of remaining scattered
+   planning details.
+
+See [Governance Evidence Gap Analysis](design-docs/governance-evidence-gap-analysis.md)
+for the detailed comparison and recommended ordering.
 
 ## Stage 0: Kernel Contract Freeze (Done)
 
