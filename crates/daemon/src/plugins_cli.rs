@@ -300,6 +300,9 @@ pub struct PluginInitCommand {
     /// Runtime bridge surface declared by the plugin package
     #[arg(long, value_enum)]
     pub bridge_kind: PluginInitBridgeKindArg,
+    /// Optional sanctioned plugin-backed channel surface to scaffold from catalog truth
+    #[arg(long)]
+    pub channel: Option<String>,
     /// Source language for language-specific bridges such as process_stdio or native_ffi
     #[arg(long)]
     pub source_language: Option<String>,
@@ -718,9 +721,12 @@ pub struct PluginsInitExecution {
     pub connector_name: String,
     pub version: String,
     pub bridge_kind: String,
+    pub channel_id: Option<String>,
     pub source_language: Option<String>,
     pub adapter_family: String,
     pub entrypoint: String,
+    pub transport_family: Option<String>,
+    pub target_contract: Option<String>,
     pub files_written: Vec<String>,
 }
 
@@ -1042,10 +1048,14 @@ struct PluginPackageScaffoldManifestDocument {
     plugin_id: String,
     provider_id: String,
     connector_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    channel_id: Option<String>,
     capabilities: BTreeSet<Capability>,
     metadata: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup: Option<crate::kernel::PluginSetup>,
     compatibility: PluginCompatibility,
 }
 
@@ -1058,10 +1068,13 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         .unwrap_or_else(|| plugin_id.clone());
     let version = normalize_required_cli_value("--version", &command.version)?;
     let summary = normalize_optional_cli_value(command.summary.as_deref());
+    let channel = normalize_optional_cli_value(command.channel.as_deref());
     let bridge_kind = command.bridge_kind.as_bridge_kind();
 
     validate_plugin_scaffold_version(&version)?;
 
+    let channel_bridge_profile =
+        resolve_plugin_init_channel_bridge_scaffold_profile(channel.as_deref())?;
     let scaffold_defaults =
         plugin_runtime_scaffold_defaults(bridge_kind, command.source_language.as_deref())
             .map_err(|error| format!("plugins init failed: {error}; use --source-language when required by the selected bridge"))?;
@@ -1073,6 +1086,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         &version,
         summary,
         &scaffold_defaults,
+        channel_bridge_profile.as_ref(),
     );
 
     let package_root_path = Path::new(package_root.as_str());
@@ -1088,6 +1102,7 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         package_root.as_str(),
         plugin_id.as_str(),
         bridge_kind.as_str(),
+        channel_bridge_profile.as_ref(),
     );
 
     write_plugin_scaffold_files(
@@ -1099,6 +1114,11 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
 
     let manifest_path_string = manifest_path.display().to_string();
     let readme_path_string = readme_path.display().to_string();
+    let channel_id = manifest.channel_id.clone();
+    let adapter_family = required_scaffold_manifest_metadata_value(&manifest, "adapter_family")?;
+    let entrypoint = required_scaffold_manifest_metadata_value(&manifest, "entrypoint")?;
+    let transport_family = optional_scaffold_manifest_metadata_value(&manifest, "transport_family");
+    let target_contract = optional_scaffold_manifest_metadata_value(&manifest, "target_contract");
     let files_written = vec![manifest_path_string.clone(), readme_path_string.clone()];
 
     Ok(PluginsInitExecution {
@@ -1112,9 +1132,12 @@ fn execute_plugins_init(command: PluginInitCommand) -> CliResult<PluginsInitExec
         connector_name,
         version,
         bridge_kind: bridge_kind.as_str().to_owned(),
+        channel_id,
         source_language: scaffold_defaults.source_language,
-        adapter_family: scaffold_defaults.adapter_family,
-        entrypoint: scaffold_defaults.entrypoint_hint,
+        adapter_family,
+        entrypoint,
+        transport_family,
+        target_contract,
         files_written,
     })
 }
@@ -1179,6 +1202,46 @@ fn validate_plugin_scaffold_version(version: &str) -> CliResult<()> {
         .map_err(|error| format!("plugins init requires --version to be valid semver: {error}"))
 }
 
+fn resolve_plugin_init_channel_bridge_scaffold_profile(
+    raw_channel_id: Option<&str>,
+) -> CliResult<Option<loongclaw_app::channel::ChannelPluginBridgeScaffoldProfile>> {
+    let normalized_channel_id = normalize_optional_cli_value(raw_channel_id);
+    let Some(normalized_channel_id) = normalized_channel_id else {
+        return Ok(None);
+    };
+
+    let channel_bridge_profile =
+        loongclaw_app::channel::resolve_channel_plugin_bridge_scaffold_profile(
+            normalized_channel_id.as_str(),
+        );
+    let Some(channel_bridge_profile) = channel_bridge_profile else {
+        return Err(format!(
+            "plugins init failed: --channel `{normalized_channel_id}` is not a sanctioned plugin-backed bridge surface"
+        ));
+    };
+
+    Ok(Some(channel_bridge_profile))
+}
+
+fn required_scaffold_manifest_metadata_value(
+    manifest: &PluginManifest,
+    key: &str,
+) -> CliResult<String> {
+    let value = manifest.metadata.get(key).cloned();
+    let Some(value) = value else {
+        return Err(format!("scaffold manifest is missing metadata.{key}"));
+    };
+
+    Ok(value)
+}
+
+fn optional_scaffold_manifest_metadata_value(
+    manifest: &PluginManifest,
+    key: &str,
+) -> Option<String> {
+    manifest.metadata.get(key).cloned()
+}
+
 fn ensure_empty_plugin_scaffold_root(package_root: &Path) -> CliResult<()> {
     if package_root.exists() {
         let root_is_directory = package_root.is_dir();
@@ -1226,6 +1289,7 @@ fn build_plugin_scaffold_manifest(
     version: &str,
     summary: Option<String>,
     scaffold_defaults: &crate::kernel::PluginRuntimeScaffoldDefaults,
+    channel_bridge_profile: Option<&loongclaw_app::channel::ChannelPluginBridgeScaffoldProfile>,
 ) -> PluginManifest {
     let mut capabilities = BTreeSet::new();
     capabilities.insert(Capability::InvokeConnector);
@@ -1247,6 +1311,32 @@ fn build_plugin_scaffold_manifest(
         metadata.insert("source_language".to_owned(), source_language.clone());
     }
 
+    let mut channel_id = None;
+    let mut setup = None;
+
+    if let Some(channel_bridge_profile) = channel_bridge_profile {
+        channel_id = Some(channel_bridge_profile.channel_id.clone());
+        setup = Some(build_plugin_scaffold_channel_bridge_setup(
+            channel_bridge_profile,
+        ));
+        metadata.insert(
+            "adapter_family".to_owned(),
+            channel_bridge_profile.adapter_family.clone(),
+        );
+        metadata.insert(
+            "transport_family".to_owned(),
+            channel_bridge_profile.transport_family.clone(),
+        );
+        metadata.insert(
+            "target_contract".to_owned(),
+            channel_bridge_profile.target_contract.clone(),
+        );
+
+        if let Some(account_scope) = channel_bridge_profile.account_scope.as_ref() {
+            metadata.insert("account_scope".to_owned(), account_scope.clone());
+        }
+    }
+
     let host_version_req = format!(">={}", env!("CARGO_PKG_VERSION"));
     let compatibility = PluginCompatibility {
         host_api: Some(CURRENT_PLUGIN_HOST_API.to_owned()),
@@ -1259,7 +1349,7 @@ fn build_plugin_scaffold_manifest(
         plugin_id: plugin_id.to_owned(),
         provider_id: provider_id.to_owned(),
         connector_name: connector_name.to_owned(),
-        channel_id: None,
+        channel_id,
         endpoint: None,
         capabilities,
         trust_tier: Default::default(),
@@ -1269,9 +1359,27 @@ fn build_plugin_scaffold_manifest(
         input_examples: Vec::new(),
         output_examples: Vec::new(),
         defer_loading: false,
-        setup: None,
+        setup,
         slot_claims: Vec::new(),
         compatibility: Some(compatibility),
+    }
+}
+
+fn build_plugin_scaffold_channel_bridge_setup(
+    channel_bridge_profile: &loongclaw_app::channel::ChannelPluginBridgeScaffoldProfile,
+) -> crate::kernel::PluginSetup {
+    let required_setup_surface = channel_bridge_profile.required_setup_surface.clone();
+    let required_config_keys = channel_bridge_profile.required_config_keys.clone();
+
+    crate::kernel::PluginSetup {
+        mode: crate::kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(required_setup_surface),
+        required_env_vars: Vec::new(),
+        recommended_env_vars: Vec::new(),
+        required_config_keys,
+        default_env_var: None,
+        docs_urls: Vec::new(),
+        remediation: None,
     }
 }
 
@@ -1297,20 +1405,27 @@ fn plugin_scaffold_manifest_document(
         plugin_id: manifest.plugin_id.clone(),
         provider_id: manifest.provider_id.clone(),
         connector_name: manifest.connector_name.clone(),
+        channel_id: manifest.channel_id.clone(),
         capabilities: manifest.capabilities.clone(),
         metadata: manifest.metadata.clone(),
         summary: manifest.summary.clone(),
+        setup: manifest.setup.clone(),
         compatibility,
     })
 }
 
-fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kind: &str) -> String {
+fn render_plugin_scaffold_readme(
+    package_root: &str,
+    plugin_id: &str,
+    bridge_kind: &str,
+    channel_bridge_profile: Option<&loongclaw_app::channel::ChannelPluginBridgeScaffoldProfile>,
+) -> String {
     let doctor_command =
         format!("loongclaw plugins doctor --root \"{package_root}\" --profile sdk-release");
     let actions_command =
         format!("loongclaw plugins actions --root \"{package_root}\" --profile sdk-release");
 
-    [
+    let mut lines = vec![
         format!("# {plugin_id}"),
         String::new(),
         "This package was scaffolded by `loongclaw plugins init`.".to_owned(),
@@ -1318,30 +1433,56 @@ fn render_plugin_scaffold_readme(package_root: &str, plugin_id: &str, bridge_kin
         format!("- Bridge kind: `{bridge_kind}`"),
         format!("- Manifest: `{PACKAGE_MANIFEST_FILE_NAME}`"),
         "- Trust default: `unverified`".to_owned(),
-        String::new(),
-        "## Next Steps".to_owned(),
-        String::new(),
-        format!(
-            "1. Replace the scaffolded bridge entrypoint in `{PACKAGE_MANIFEST_FILE_NAME}` with the real runtime entry for your package."
-        ),
-        format!(
+    ];
+
+    if let Some(channel_bridge_profile) = channel_bridge_profile {
+        lines.push(format!(
+            "- Channel bridge surface: `{}`",
+            channel_bridge_profile.channel_id
+        ));
+        lines.push(format!(
+            "- Stable target contract: `{}`",
+            channel_bridge_profile.target_contract
+        ));
+    }
+
+    lines.push(String::new());
+    lines.push("## Next Steps".to_owned());
+    lines.push(String::new());
+    lines.push(format!(
+        "1. Replace the scaffolded bridge entrypoint in `{PACKAGE_MANIFEST_FILE_NAME}` with the real runtime entry for your package."
+    ));
+
+    if let Some(channel_bridge_profile) = channel_bridge_profile {
+        lines.push(format!(
+            "2. Review the generated channel bridge contract in `{PACKAGE_MANIFEST_FILE_NAME}`, including `channel_id`, `setup.surface`, and the stable target contract for `{}`.",
+            channel_bridge_profile.channel_id
+        ));
+    } else {
+        lines.push(format!(
             "2. Fill in `summary`, `setup`, `slot_claims`, `tags`, and examples in `{PACKAGE_MANIFEST_FILE_NAME}` as your package contract becomes concrete."
-        ),
+        ));
+    }
+
+    lines.push(
         "3. Diagnose the package contract through the shared author-facing governance surface:"
             .to_owned(),
-        String::new(),
-        "```bash".to_owned(),
-        doctor_command,
-        "```".to_owned(),
-        String::new(),
+    );
+    lines.push(String::new());
+    lines.push("```bash".to_owned());
+    lines.push(doctor_command);
+    lines.push("```".to_owned());
+    lines.push(String::new());
+    lines.push(
         "4. Review the deduplicated operator action plan before release or marketplace handoff:"
             .to_owned(),
-        String::new(),
-        "```bash".to_owned(),
-        actions_command,
-        "```".to_owned(),
-    ]
-    .join("\n")
+    );
+    lines.push(String::new());
+    lines.push("```bash".to_owned());
+    lines.push(actions_command);
+    lines.push("```".to_owned());
+
+    lines.join("\n")
 }
 
 fn render_plugins_cli_text(execution: &PluginsCommandExecution) -> String {
@@ -1373,6 +1514,14 @@ fn render_plugins_init_text(execution: &PluginsInitExecution) -> String {
         "- bridge_kind={} source_language={} adapter_family={} entrypoint={}",
         execution.bridge_kind, source_language, execution.adapter_family, execution.entrypoint
     ));
+    if let Some(channel_id) = execution.channel_id.as_deref() {
+        let transport_family = display_text_or_dash(execution.transport_family.as_deref());
+        let target_contract = display_text_or_dash(execution.target_contract.as_deref());
+        lines.push(format!(
+            "- channel_id={} transport_family={} target_contract={}",
+            channel_id, transport_family, target_contract
+        ));
+    }
     lines.push(format!("- manifest={}", execution.manifest_path));
     lines.push(format!("- readme={}", execution.readme_path));
     lines.push(format!(
@@ -4072,6 +4221,7 @@ mod tests {
                 provider_id: None,
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                channel: None,
                 source_language: None,
                 version: "0.1.0".to_owned(),
                 summary: Some("Tavily-backed search package".to_owned()),
@@ -4093,6 +4243,7 @@ mod tests {
         assert_eq!(execution.provider_id, "tavily-search");
         assert_eq!(execution.connector_name, "tavily-search");
         assert_eq!(execution.bridge_kind, "http_json");
+        assert_eq!(execution.channel_id, None);
         assert_eq!(execution.source_language, None);
         assert_eq!(execution.adapter_family, "http-adapter");
         assert_eq!(execution.entrypoint, "https://localhost/invoke");
@@ -4192,6 +4343,7 @@ mod tests {
                 provider_id: None,
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                channel: None,
                 source_language: None,
                 version: "0.1.0".to_owned(),
                 summary: None,
@@ -4217,6 +4369,7 @@ mod tests {
                 provider_id: None,
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                channel: None,
                 source_language: None,
                 version: "not-semver".to_owned(),
                 summary: None,
@@ -4242,6 +4395,7 @@ mod tests {
                 provider_id: Some("weather".to_owned()),
                 connector_name: Some("weather-stdio".to_owned()),
                 bridge_kind: PluginInitBridgeKindArg::ProcessStdio,
+                channel: None,
                 source_language: Some("py".to_owned()),
                 version: "0.2.0".to_owned(),
                 summary: Some("Python weather bridge".to_owned()),
@@ -4288,6 +4442,143 @@ mod tests {
         );
         assert_eq!(ir.runtime.adapter_family, "python-stdio-adapter");
         assert_eq!(ir.runtime.entrypoint_hint, "stdin/stdout::invoke");
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_scaffolds_weixin_channel_bridge_manifest() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-weixin-channel");
+        let package_root = format!("{temp_root}/weixin-bridge");
+
+        let execution = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "weixin-clawbot-bridge".to_owned(),
+                provider_id: Some("weixin-bridge".to_owned()),
+                connector_name: Some("weixin-clawbot-http".to_owned()),
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                channel: Some("weixin".to_owned()),
+                source_language: None,
+                version: "0.1.0".to_owned(),
+                summary: Some("ClawBot-compatible bridge".to_owned()),
+            }),
+        })
+        .await
+        .expect("channel-aware scaffold should succeed");
+
+        let PluginsCommandExecution::Init(execution) = execution else {
+            panic!("expected init execution");
+        };
+
+        assert_eq!(execution.channel_id.as_deref(), Some("weixin"));
+        assert_eq!(execution.bridge_kind, "http_json");
+        assert_eq!(execution.adapter_family, "channel-bridge");
+
+        let rendered_manifest =
+            fs::read_to_string(&execution.manifest_path).expect("manifest should exist");
+        let manifest: crate::kernel::PluginManifest =
+            serde_json::from_str(&rendered_manifest).expect("manifest should decode");
+
+        let setup = manifest
+            .setup
+            .as_ref()
+            .expect("channel scaffold should include setup");
+
+        assert_eq!(manifest.channel_id.as_deref(), Some("weixin"));
+        assert_eq!(setup.surface.as_deref(), Some("channel"));
+        assert_eq!(
+            setup.required_config_keys,
+            vec![
+                "weixin.enabled".to_owned(),
+                "weixin.bridge_url".to_owned(),
+                "weixin.bridge_access_token".to_owned(),
+            ]
+        );
+        assert_eq!(
+            manifest.metadata.get("adapter_family").map(String::as_str),
+            Some("channel-bridge")
+        );
+        assert_eq!(
+            manifest
+                .metadata
+                .get("transport_family")
+                .map(String::as_str),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            manifest.metadata.get("target_contract").map(String::as_str),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert_eq!(
+            manifest.metadata.get("account_scope").map(String::as_str),
+            Some("multi_account")
+        );
+
+        let rendered_readme =
+            fs::read_to_string(&execution.readme_path).expect("readme should exist");
+        assert!(
+            rendered_readme.contains("weixin"),
+            "README should mention the scaffolded channel surface: {rendered_readme}"
+        );
+        assert!(
+            rendered_readme.contains("weixin:<account>:contact:<id>"),
+            "README should mention the stable target contract: {rendered_readme}"
+        );
+
+        let scanner = crate::kernel::PluginScanner::new();
+        let scan_report = scanner
+            .scan_path(&execution.package_root)
+            .expect("channel bridge scaffold should scan cleanly");
+        let translator = crate::kernel::PluginTranslator::new();
+        let translation_report = translator.translate_scan_report(&scan_report);
+        let ir = &translation_report.entries[0];
+        let channel_bridge = ir
+            .channel_bridge
+            .as_ref()
+            .expect("channel bridge scaffold should translate channel bridge contract");
+
+        assert_eq!(
+            ir.runtime.bridge_kind,
+            crate::kernel::PluginBridgeKind::HttpJson
+        );
+        assert_eq!(ir.runtime.adapter_family, "channel-bridge");
+        assert_eq!(channel_bridge.channel_id.as_deref(), Some("weixin"));
+        assert_eq!(channel_bridge.setup_surface.as_deref(), Some("channel"));
+        assert_eq!(
+            channel_bridge.transport_family.as_deref(),
+            Some("wechat_clawbot_ilink_bridge")
+        );
+        assert_eq!(
+            channel_bridge.target_contract.as_deref(),
+            Some("weixin:<account>:contact:<id> | weixin:<account>:room:<id>")
+        );
+        assert!(channel_bridge.readiness.ready);
+    }
+
+    #[tokio::test]
+    async fn execute_plugins_init_rejects_unsupported_channel_bridge_surface() {
+        let temp_root = unique_temp_dir("loongclaw-plugins-cli-init-unsupported-channel");
+        let package_root = format!("{temp_root}/telegram-bridge");
+
+        let error = execute_plugins_command(PluginsCommandOptions {
+            json: false,
+            command: PluginsCommands::Init(PluginInitCommand {
+                package_root,
+                plugin_id: "telegram-bridge".to_owned(),
+                provider_id: None,
+                connector_name: None,
+                bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                channel: Some("telegram".to_owned()),
+                source_language: None,
+                version: "0.1.0".to_owned(),
+                summary: None,
+            }),
+        })
+        .await
+        .expect_err("runtime-backed channels should not resolve plugin bridge scaffolds");
+
+        assert!(error.contains("--channel"));
+        assert!(error.contains("telegram"));
     }
 
     #[test]
@@ -4339,6 +4630,7 @@ mod tests {
                 provider_id: None,
                 connector_name: None,
                 bridge_kind: PluginInitBridgeKindArg::HttpJson,
+                channel: None,
                 source_language: None,
                 version: "0.1.0".to_owned(),
                 summary: None,

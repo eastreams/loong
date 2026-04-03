@@ -3,8 +3,12 @@
 use super::*;
 pub use clap::{CommandFactory, Parser};
 use std::ffi::OsString;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CLI_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+static INTEGRATION_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn with_cli_stack<T, F>(thread_name: &str, operation: F) -> T
 where
@@ -42,6 +46,20 @@ fn cli_command_name() -> String {
 
 fn active_cli_command_name() -> &'static str {
     mvp::config::active_cli_command_name()
+}
+
+fn unique_temp_dir(label: &str) -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time before unix epoch")
+        .as_nanos();
+    let counter = INTEGRATION_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    let process_id = std::process::id();
+    let directory_name = format!("loongclaw-integration-{label}-{process_id}-{nanos}-{counter}");
+
+    canonical_temp_dir.join(directory_name)
 }
 
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
@@ -86,117 +104,6 @@ fn validation_diagnostic_with_severity(
     }
 }
 
-fn managed_bridge_manifest(
-    channel_id: &str,
-    setup_surface: Option<&str>,
-    metadata: BTreeMap<String, String>,
-) -> loongclaw_daemon::kernel::PluginManifest {
-    let setup = setup_surface.map(|surface| loongclaw_daemon::kernel::PluginSetup {
-        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
-        surface: Some(surface.to_owned()),
-        required_env_vars: Vec::new(),
-        recommended_env_vars: Vec::new(),
-        required_config_keys: Vec::new(),
-        default_env_var: None,
-        docs_urls: Vec::new(),
-        remediation: None,
-    });
-
-    managed_bridge_manifest_with_setup(channel_id, metadata, setup)
-}
-
-fn managed_bridge_manifest_with_setup(
-    channel_id: &str,
-    metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
-) -> loongclaw_daemon::kernel::PluginManifest {
-    let plugin_id = format!("{channel_id}-managed-bridge");
-
-    managed_bridge_manifest_with_plugin_id(plugin_id.as_str(), channel_id, metadata, setup)
-}
-
-fn managed_bridge_manifest_with_plugin_id(
-    plugin_id: &str,
-    channel_id: &str,
-    metadata: BTreeMap<String, String>,
-    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
-) -> loongclaw_daemon::kernel::PluginManifest {
-    loongclaw_daemon::kernel::PluginManifest {
-        api_version: Some("v1alpha1".to_owned()),
-        version: Some("1.0.0".to_owned()),
-        plugin_id: plugin_id.to_owned(),
-        provider_id: format!("{channel_id}-provider"),
-        connector_name: format!("{channel_id}-connector"),
-        channel_id: Some(channel_id.to_owned()),
-        endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
-        capabilities: BTreeSet::new(),
-        trust_tier: loongclaw_daemon::kernel::PluginTrustTier::Unverified,
-        metadata,
-        summary: None,
-        tags: Vec::new(),
-        input_examples: Vec::new(),
-        output_examples: Vec::new(),
-        defer_loading: false,
-        setup,
-        slot_claims: Vec::new(),
-        compatibility: None,
-    }
-}
-
-fn managed_bridge_setup_with_guidance(
-    surface: &str,
-    required_env_vars: Vec<&str>,
-    required_config_keys: Vec<&str>,
-    docs_urls: Vec<&str>,
-    remediation: Option<&str>,
-) -> loongclaw_daemon::kernel::PluginSetup {
-    let normalized_required_env_vars = required_env_vars.into_iter().map(str::to_owned).collect();
-    let normalized_required_config_keys = required_config_keys
-        .into_iter()
-        .map(str::to_owned)
-        .collect();
-    let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
-    let normalized_remediation = remediation.map(str::to_owned);
-
-    loongclaw_daemon::kernel::PluginSetup {
-        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
-        surface: Some(surface.to_owned()),
-        required_env_vars: normalized_required_env_vars,
-        recommended_env_vars: Vec::new(),
-        required_config_keys: normalized_required_config_keys,
-        default_env_var: None,
-        docs_urls: normalized_docs_urls,
-        remediation: normalized_remediation,
-    }
-}
-
-fn compatible_managed_bridge_metadata(
-    transport_family: &str,
-    target_contract: &str,
-) -> BTreeMap<String, String> {
-    let mut metadata = BTreeMap::new();
-
-    metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
-    metadata.insert("transport_family".to_owned(), transport_family.to_owned());
-    metadata.insert("target_contract".to_owned(), target_contract.to_owned());
-
-    metadata
-}
-
-fn write_managed_bridge_manifest(
-    install_root: &Path,
-    directory_name: &str,
-    manifest: &loongclaw_daemon::kernel::PluginManifest,
-) {
-    let plugin_directory = install_root.join(directory_name);
-    let manifest_path = plugin_directory.join("loongclaw.plugin.json");
-    let encoded_manifest =
-        serde_json::to_string_pretty(manifest).expect("serialize managed bridge manifest");
-
-    std::fs::create_dir_all(&plugin_directory).expect("create managed bridge plugin directory");
-    std::fs::write(&manifest_path, encoded_manifest).expect("write managed bridge plugin manifest");
-}
-
 mod acp;
 mod architecture;
 mod ask_cli;
@@ -212,6 +119,8 @@ mod gateway_read_models;
 mod import_cli;
 mod latest_selector_process_support;
 mod logging;
+mod managed_bridge_fixtures;
+mod managed_bridge_parity;
 mod memory_context_benchmark_cli;
 mod migrate_cli;
 mod migration;
@@ -229,6 +138,8 @@ mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
 mod tasks_cli;
+
+pub(crate) use managed_bridge_fixtures::*;
 
 #[test]
 fn cli_uses_loong_program_name() {
@@ -1272,7 +1183,7 @@ fn render_channel_surfaces_text_reports_managed_plugin_bridge_discovery() {
     );
     assert!(
         rendered.contains(
-            "managed_plugin_bridge_discovery status=not_configured managed_install_root=- scan_issue=- compatible=0 compatible_plugin_ids=- ambiguity_status=- incomplete=0 incompatible=0"
+            "managed_plugin_bridge_discovery status=not_configured managed_install_root=- scan_issue=- configured_plugin_id=- selected_plugin_id=- selection_status=- compatible=0 compatible_plugin_ids=- ambiguity_status=- incomplete=0 incompatible=0"
         ),
         "rendered channel surfaces should include managed discovery summaries: {rendered}"
     );
@@ -1318,6 +1229,10 @@ fn render_channel_surfaces_text_reports_managed_plugin_bridge_ambiguity_and_setu
         .expect("weixin managed discovery");
 
     discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound;
+    discovery.selection_status =
+        Some(mvp::channel::ChannelPluginBridgeSelectionStatus::NotConfigured);
+    discovery.configured_plugin_id = None;
+    discovery.selected_plugin_id = None;
     discovery.ambiguity_status =
         Some(mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins);
     discovery.compatible_plugins = 2;
@@ -1371,6 +1286,44 @@ fn render_channel_surfaces_text_reports_managed_plugin_bridge_ambiguity_and_setu
             "setup_remediation=\"Run the ClawBot setup flow before enabling this bridge.\\nThen verify only one managed bridge remains.\""
         ),
         "rendered channel surfaces should expose managed bridge setup remediation text: {rendered}"
+    );
+}
+
+#[test]
+fn render_channel_surfaces_text_reports_plugin_bridge_account_summary_for_mixed_multi_account_surface()
+ {
+    let install_root = unique_temp_dir("text-render-managed-bridge-account-summary");
+    let mut config = mixed_account_weixin_plugin_bridge_config();
+
+    install_ready_weixin_managed_bridge(install_root.as_path());
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains("selected_plugin_id=weixin-managed-bridge"),
+        "text rendering should keep the selected plugin identity visible: {rendered}"
+    );
+    assert!(
+        rendered.contains("account_summary="),
+        "text rendering should expose the bounded mixed-account summary line: {rendered}"
+    );
+    assert!(
+        rendered.contains("configured_account=ops"),
+        "text rendering should mention the ready default account in the mixed-account summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("(default): ready"),
+        "text rendering should mark the default account as ready in the mixed-account summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("configured_account=backup"),
+        "text rendering should mention blocked non-default accounts in the mixed-account summary: {rendered}"
+    );
+    assert!(
+        rendered.contains("bridge_url is missing"),
+        "text rendering should keep the blocking contract detail visible in the mixed-account summary: {rendered}"
     );
 }
 
@@ -1844,6 +1797,10 @@ fn build_channels_cli_json_payload_includes_managed_plugin_bridge_guidance_field
         .expect("weixin managed discovery");
 
     discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound;
+    discovery.selection_status =
+        Some(mvp::channel::ChannelPluginBridgeSelectionStatus::NotConfigured);
+    discovery.configured_plugin_id = None;
+    discovery.selected_plugin_id = None;
     discovery.ambiguity_status =
         Some(mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins);
     discovery.compatible_plugins = 2;
@@ -1913,6 +1870,124 @@ fn build_channels_cli_json_payload_includes_managed_plugin_bridge_guidance_field
             .expect("setup remediation should be string"),
         "Run the ClawBot setup flow before enabling this bridge."
     );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_duplicate_managed_bridge_selection_fields() {
+    let config = mvp::config::LoongClawConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin_surface = inventory
+        .channel_surfaces
+        .iter_mut()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin_surface
+        .plugin_bridge_discovery
+        .as_mut()
+        .expect("weixin managed discovery");
+
+    discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound;
+    discovery.configured_plugin_id = Some("weixin-bridge-shared".to_owned());
+    discovery.selected_plugin_id = None;
+    discovery.selection_status =
+        Some(mvp::channel::ChannelPluginBridgeSelectionStatus::ConfiguredPluginIdDuplicated);
+    discovery.ambiguity_status = Some(
+        mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::DuplicateCompatiblePluginIds,
+    );
+    discovery.compatible_plugins = 2;
+    discovery.compatible_plugin_ids = vec![
+        "weixin-bridge-shared".to_owned(),
+        "weixin-bridge-shared".to_owned(),
+    ];
+
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+    let surfaces = encoded["channel_surfaces"]
+        .as_array()
+        .expect("channel surfaces array");
+    let weixin = surfaces
+        .iter()
+        .find(|surface| {
+            surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("id"))
+                .and_then(serde_json::Value::as_str)
+                == Some("weixin")
+        })
+        .expect("weixin surface entry");
+
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["configured_plugin_id"]
+            .as_str()
+            .expect("configured_plugin_id should be string"),
+        "weixin-bridge-shared"
+    );
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["selection_status"]
+            .as_str()
+            .expect("selection_status should be string"),
+        "configured_plugin_id_duplicated"
+    );
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["ambiguity_status"]
+            .as_str()
+            .expect("ambiguity_status should be string"),
+        "duplicate_compatible_plugin_ids"
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_plugin_bridge_account_summary_for_mixed_multi_account_surface()
+ {
+    let install_root = unique_temp_dir("channels-json-managed-bridge-account-summary");
+    let mut config = mixed_account_weixin_plugin_bridge_config();
+
+    install_ready_weixin_managed_bridge(install_root.as_path());
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+    let surfaces = encoded["channel_surfaces"]
+        .as_array()
+        .expect("channel surfaces array");
+    let weixin = surfaces
+        .iter()
+        .find(|surface| {
+            surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("id"))
+                .and_then(serde_json::Value::as_str)
+                == Some("weixin")
+        })
+        .expect("weixin surface entry");
+    let account_summary = weixin["plugin_bridge_account_summary"]
+        .as_str()
+        .expect("plugin bridge account summary should be string");
+
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["selected_plugin_id"]
+            .as_str()
+            .expect("selected_plugin_id should be string"),
+        "weixin-managed-bridge"
+    );
+    assert!(
+        account_summary.contains("configured_account=ops"),
+        "channels json should mention the ready default account in the bounded summary: {weixin:#?}"
+    );
+    assert!(
+        account_summary.contains("(default): ready"),
+        "channels json should mark the default account as ready in the bounded summary: {weixin:#?}"
+    );
+    assert!(
+        account_summary.contains("configured_account=backup"),
+        "channels json should mention blocked non-default accounts in the bounded summary: {weixin:#?}"
+    );
+    assert!(
+        account_summary.contains("bridge_url is missing"),
+        "channels json should keep the blocking contract detail visible in the bounded summary: {weixin:#?}"
+    );
+    assert_eq!(account_summary, MIXED_ACCOUNT_WEIXIN_PLUGIN_BRIDGE_SUMMARY);
 }
 
 #[test]

@@ -9,6 +9,7 @@ use crate::CHANNELS_CLI_JSON_SCHEMA_VERSION;
 use crate::RUNTIME_SNAPSHOT_CLI_JSON_SCHEMA_VERSION;
 use crate::RuntimeSnapshotCliState;
 use crate::mvp;
+use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 
 use super::state::GatewayOwnerStatus;
 
@@ -29,10 +30,18 @@ pub struct GatewayChannelInventoryReadModel {
     pub channels: Vec<mvp::channel::ChannelStatusSnapshot>,
     pub catalog_only_channels: Vec<mvp::channel::ChannelCatalogEntry>,
     pub channel_catalog: Vec<mvp::channel::ChannelCatalogEntry>,
-    pub channel_surfaces: Vec<mvp::channel::ChannelSurface>,
+    pub channel_surfaces: Vec<GatewayChannelSurfaceReadModel>,
 }
 
 pub type ChannelsCliJsonPayload = GatewayChannelInventoryReadModel;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GatewayChannelSurfaceReadModel {
+    #[serde(flatten)]
+    pub surface: mvp::channel::ChannelSurface,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_bridge_account_summary: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GatewayAcpBindingScopeReadModel {
@@ -225,12 +234,14 @@ pub struct GatewayOperatorControlSurfaceReadModel {
 pub struct GatewayOperatorChannelSurfaceReadModel {
     pub channel_id: String,
     pub label: String,
+    pub implementation_status: String,
     pub configured_account_count: usize,
     pub enabled_account_count: usize,
     pub misconfigured_account_count: usize,
     pub ready_send_account_count: usize,
     pub ready_serve_account_count: usize,
     pub default_configured_account_id: Option<String>,
+    pub plugin_bridge_account_summary: Option<String>,
     pub service_enabled: bool,
     pub service_ready: bool,
 }
@@ -280,7 +291,12 @@ pub fn build_channel_inventory_read_model(
     let channels = inventory.channels.clone();
     let catalog_only_channels = inventory.catalog_only_channels.clone();
     let channel_catalog = inventory.channel_catalog.clone();
-    let channel_surfaces = inventory.channel_surfaces.clone();
+    let channel_surfaces = inventory
+        .channel_surfaces
+        .iter()
+        .cloned()
+        .map(build_channel_surface_read_model)
+        .collect();
 
     GatewayChannelInventoryReadModel {
         config,
@@ -289,6 +305,17 @@ pub fn build_channel_inventory_read_model(
         catalog_only_channels,
         channel_catalog,
         channel_surfaces,
+    }
+}
+
+fn build_channel_surface_read_model(
+    surface: mvp::channel::ChannelSurface,
+) -> GatewayChannelSurfaceReadModel {
+    let plugin_bridge_account_summary = plugin_bridge_account_summary(&surface);
+
+    GatewayChannelSurfaceReadModel {
+        surface,
+        plugin_bridge_account_summary,
     }
 }
 
@@ -642,7 +669,7 @@ fn build_operator_channels_summary_read_model(
     let configured_channel_count = channel_inventory
         .channel_surfaces
         .iter()
-        .filter(|surface| !surface.configured_accounts.is_empty())
+        .filter(|surface| !surface.surface.configured_accounts.is_empty())
         .count();
     let configured_account_count = channel_inventory.channels.len();
     let enabled_account_count = channel_inventory
@@ -688,7 +715,7 @@ fn build_operator_channels_summary_read_model(
 }
 
 fn build_operator_channel_surface_read_models(
-    channel_surfaces: &[mvp::channel::ChannelSurface],
+    channel_surfaces: &[GatewayChannelSurfaceReadModel],
     enabled_service_channel_ids: &[String],
 ) -> Vec<GatewayOperatorChannelSurfaceReadModel> {
     let mut surfaces = Vec::with_capacity(channel_surfaces.len());
@@ -703,49 +730,54 @@ fn build_operator_channel_surface_read_models(
 }
 
 fn build_operator_channel_surface_read_model(
-    channel_surface: &mvp::channel::ChannelSurface,
+    channel_surface: &GatewayChannelSurfaceReadModel,
     enabled_service_channel_ids: &[String],
 ) -> GatewayOperatorChannelSurfaceReadModel {
-    let channel_id = channel_surface.catalog.id.to_owned();
-    let label = channel_surface.catalog.label.to_owned();
-    let configured_account_count = channel_surface.configured_accounts.len();
-    let enabled_account_count = channel_surface
+    let surface = &channel_surface.surface;
+    let channel_id = surface.catalog.id.to_owned();
+    let label = surface.catalog.label.to_owned();
+    let implementation_status = surface.catalog.implementation_status.as_str().to_owned();
+    let configured_account_count = surface.configured_accounts.len();
+    let enabled_account_count = surface
         .configured_accounts
         .iter()
         .filter(|account| account.enabled)
         .count();
-    let misconfigured_account_count = channel_surface
+    let misconfigured_account_count = surface
         .configured_accounts
         .iter()
         .filter(|account| channel_account_is_misconfigured(account))
         .count();
-    let ready_send_account_count = channel_surface
+    let ready_send_account_count = surface
         .configured_accounts
         .iter()
         .filter(|account| {
             channel_account_operation_is_ready(account, mvp::channel::CHANNEL_OPERATION_SEND_ID)
         })
         .count();
-    let ready_serve_account_count = channel_surface
+    let ready_serve_account_count = surface
         .configured_accounts
         .iter()
         .filter(|account| {
             channel_account_operation_is_ready(account, mvp::channel::CHANNEL_OPERATION_SERVE_ID)
         })
         .count();
-    let default_configured_account_id = channel_surface.default_configured_account_id.clone();
+    let default_configured_account_id = surface.default_configured_account_id.clone();
+    let plugin_bridge_account_summary = channel_surface.plugin_bridge_account_summary.clone();
     let service_enabled = enabled_service_channel_ids.contains(&channel_id);
     let service_ready = service_enabled && ready_serve_account_count > 0;
 
     GatewayOperatorChannelSurfaceReadModel {
         channel_id,
         label,
+        implementation_status,
         configured_account_count,
         enabled_account_count,
         misconfigured_account_count,
         ready_send_account_count,
         ready_serve_account_count,
         default_configured_account_id,
+        plugin_bridge_account_summary,
         service_enabled,
         service_ready,
     }
@@ -822,4 +854,72 @@ fn json_string_field(value: &Value, field: &str) -> Option<String> {
     let value = object.get(field)?;
     let text = value.as_str()?;
     Some(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operator_channel_surface_read_model_keeps_plugin_backed_summary_context() {
+        let config: mvp::config::LoongClawConfig = serde_json::from_value(serde_json::json!({
+            "weixin": {
+                "enabled": true,
+                "default_account": "ops",
+                "accounts": {
+                    "ops": {
+                        "enabled": true,
+                        "bridge_url": "https://bridge.example.test/ops",
+                        "bridge_access_token": "ops-token",
+                        "allowed_contact_ids": ["wxid_ops"]
+                    },
+                    "backup": {
+                        "enabled": true,
+                        "bridge_access_token": "backup-token",
+                        "allowed_contact_ids": ["wxid_backup"]
+                    }
+                }
+            }
+        }))
+        .expect("deserialize weixin config");
+        let inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .into_iter()
+            .find(|surface| surface.catalog.id == "weixin")
+            .expect("weixin surface");
+        let read_model = build_channel_surface_read_model(surface);
+        let operator_surface = build_operator_channel_surface_read_model(&read_model, &Vec::new());
+
+        assert_eq!(operator_surface.channel_id, "weixin");
+        assert_eq!(operator_surface.implementation_status, "plugin_backed");
+        assert_eq!(
+            operator_surface.plugin_bridge_account_summary.as_deref(),
+            Some(
+                "configured_account=ops (default): ready; configured_account=backup: bridge_url is missing"
+            )
+        );
+    }
+
+    #[test]
+    fn operator_channel_surface_read_model_keeps_non_plugin_backed_summary_empty() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.telegram.enabled = true;
+        config.telegram.bot_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "123456:test-token".to_owned(),
+        ));
+        config.telegram.allowed_chat_ids = vec![1];
+        let inventory = mvp::channel::channel_inventory(&config);
+        let surface = inventory
+            .channel_surfaces
+            .into_iter()
+            .find(|surface| surface.catalog.id == "telegram")
+            .expect("telegram surface");
+        let read_model = build_channel_surface_read_model(surface);
+        let operator_surface = build_operator_channel_surface_read_model(&read_model, &Vec::new());
+
+        assert_eq!(operator_surface.channel_id, "telegram");
+        assert_eq!(operator_surface.implementation_status, "runtime_backed");
+        assert_eq!(operator_surface.plugin_bridge_account_summary, None);
+    }
 }

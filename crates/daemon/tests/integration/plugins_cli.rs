@@ -359,6 +359,50 @@ fn plugins_init_cli_parses_manifest_scaffold_request() {
 }
 
 #[test]
+fn plugins_init_cli_parses_channel_bridge_scaffold_request() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "plugins",
+        "init",
+        "/tmp/weixin-bridge",
+        "--plugin-id",
+        "weixin-clawbot-bridge",
+        "--bridge-kind",
+        "http_json",
+        "--channel",
+        "weixin",
+        "--json",
+    ])
+    .expect("plugins init CLI should parse channel bridge scaffold request");
+
+    match cli.command {
+        Some(Commands::Plugins { json, command }) => {
+            assert!(json);
+            match command {
+                loongclaw_daemon::plugins_cli::PluginsCommands::Init(command) => {
+                    assert_eq!(command.package_root, "/tmp/weixin-bridge");
+                    assert_eq!(command.plugin_id, "weixin-clawbot-bridge");
+                    assert_eq!(
+                        command.bridge_kind,
+                        loongclaw_daemon::plugins_cli::PluginInitBridgeKindArg::HttpJson
+                    );
+                    assert_eq!(command.channel.as_deref(), Some("weixin"));
+                }
+                other @ loongclaw_daemon::plugins_cli::PluginsCommands::Doctor(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeProfiles(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Inventory(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::BridgeTemplate(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Preflight(_)
+                | other @ loongclaw_daemon::plugins_cli::PluginsCommands::Actions(_) => {
+                    panic!("unexpected plugins subcommand parsed: {other:?}");
+                }
+            }
+        }
+        other => panic!("unexpected parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn plugins_help_mentions_preflight_and_action_plan() {
     let help = render_cli_help(["plugins"]);
     let help_lists_init_subcommand = help.lines().any(|line| {
@@ -431,6 +475,7 @@ fn plugins_init_help_mentions_bridge_contract_flags() {
     assert!(help.contains("<PACKAGE_ROOT>"), "help: {help}");
     assert!(help.contains("--plugin-id <PLUGIN_ID>"), "help: {help}");
     assert!(help.contains("--bridge-kind <BRIDGE_KIND>"), "help: {help}");
+    assert!(help.contains("--channel <CHANNEL>"), "help: {help}");
     assert!(
         help.contains("--source-language <SOURCE_LANGUAGE>"),
         "help: {help}"

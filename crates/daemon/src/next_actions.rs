@@ -48,6 +48,8 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
     let mut actions = Vec::new();
     let channel_actions =
         crate::migration::channels::collect_channel_next_actions(config, config_path);
+    let unresolved_plugin_bridge_surfaces =
+        collect_unresolved_plugin_bridge_surface_ids(config, &channel_actions);
     let browser_preview =
         crate::browser_preview::inspect_browser_preview_state_with_path_env(config, path_env);
     if config.cli.enabled {
@@ -81,8 +83,9 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
             });
         }
     }
-    if should_add_managed_bridge_doctor_action(config, &channel_actions) {
-        let doctor_action = build_managed_bridge_doctor_action(config_path);
+    if !unresolved_plugin_bridge_surfaces.is_empty() {
+        let doctor_action =
+            build_managed_bridge_doctor_action(config_path, &unresolved_plugin_bridge_surfaces);
         actions.push(doctor_action);
     }
     let channel_setup_actions = channel_actions
@@ -141,17 +144,17 @@ pub(crate) fn collect_setup_next_actions_with_path_env(
     actions
 }
 
-fn should_add_managed_bridge_doctor_action(
+fn collect_unresolved_plugin_bridge_surface_ids(
     config: &mvp::config::LoongClawConfig,
     channel_actions: &[crate::migration::channels::ChannelNextAction],
-) -> bool {
+) -> Vec<&'static str> {
     let has_catalog_only_channel_handoff = channel_actions_are_catalog_only(channel_actions);
 
     if !has_catalog_only_channel_handoff {
-        return false;
+        return Vec::new();
     }
 
-    has_unresolved_plugin_bridge_preflight(config)
+    unresolved_plugin_bridge_surface_ids(config)
 }
 
 fn channel_actions_are_catalog_only(
@@ -168,34 +171,26 @@ fn channel_actions_are_catalog_only(
     action.id == crate::migration::channels::CHANNEL_CATALOG_ACTION_ID
 }
 
-fn has_unresolved_plugin_bridge_preflight(config: &mvp::config::LoongClawConfig) -> bool {
-    let plugin_bridge_surface_names = collect_enabled_plugin_bridge_surface_names(config);
-
-    if plugin_bridge_surface_names.is_empty() {
-        return false;
-    }
-
-    let channel_checks = crate::migration::channels::collect_channel_preflight_checks(config);
-
-    channel_checks.into_iter().any(|check| {
-        let check_name = check.name;
-        let check_is_plugin_bridge_surface = plugin_bridge_surface_names.contains(check_name);
-        let check_needs_review = check.level != crate::migration::channels::ChannelCheckLevel::Pass;
-
-        check_is_plugin_bridge_surface && check_needs_review
-    })
-}
-
-fn collect_enabled_plugin_bridge_surface_names(
+fn unresolved_plugin_bridge_surface_ids(
     config: &mvp::config::LoongClawConfig,
-) -> BTreeSet<&'static str> {
+) -> Vec<&'static str> {
     let inventory = mvp::channel::channel_inventory(config);
+    let channel_checks = crate::migration::channels::collect_channel_preflight_checks(config);
+    let unresolved_surface_names = channel_checks
+        .into_iter()
+        .filter(|check| check.level != crate::migration::channels::ChannelCheckLevel::Pass)
+        .map(|check| check.name)
+        .collect::<BTreeSet<_>>();
 
     inventory
         .channel_surfaces
         .into_iter()
         .filter(enabled_plugin_bridge_surface)
-        .map(|surface| plugin_bridge_surface_name(surface.catalog.id))
+        .filter(|surface| {
+            let surface_name = plugin_bridge_surface_name(surface.catalog.id);
+            unresolved_surface_names.contains(surface_name)
+        })
+        .map(|surface| surface.catalog.id)
         .collect()
 }
 
@@ -221,16 +216,47 @@ fn plugin_bridge_surface_name(channel_id: &'static str) -> &'static str {
     }
 }
 
-fn build_managed_bridge_doctor_action(config_path: &str) -> SetupNextAction {
+fn build_managed_bridge_doctor_action(
+    config_path: &str,
+    unresolved_surface_ids: &[&'static str],
+) -> SetupNextAction {
     let command = crate::cli_handoff::format_subcommand_with_config("doctor", config_path);
+    let label = managed_bridge_doctor_action_label(unresolved_surface_ids);
 
     SetupNextAction {
         kind: SetupNextActionKind::Doctor,
         channel_action_id: None,
         browser_preview_phase: None,
-        label: "verify managed bridges".to_owned(),
+        label,
         command,
     }
+}
+
+fn managed_bridge_doctor_action_label(unresolved_surface_ids: &[&'static str]) -> String {
+    if unresolved_surface_ids.len() == 1 {
+        let surface_id = unresolved_surface_ids
+            .first()
+            .copied()
+            .unwrap_or("managed bridge");
+        return format!("verify {surface_id} managed bridge");
+    }
+
+    if unresolved_surface_ids.is_empty() {
+        return "verify managed bridges".to_owned();
+    }
+
+    let rendered_surface_ids = unresolved_surface_ids.join(", ");
+    let label = format!("verify managed bridges: {rendered_surface_ids}");
+
+    label
+}
+
+pub(crate) fn is_managed_bridge_doctor_action(action: &SetupNextAction) -> bool {
+    let is_doctor = action.kind == SetupNextActionKind::Doctor;
+    let label = action.label.as_str();
+    let is_managed_bridge_label = label.starts_with("verify ") && label.contains("managed bridge");
+
+    is_doctor && is_managed_bridge_label
 }
 
 fn channel_next_action_to_setup_action(
@@ -568,5 +594,117 @@ mod tests {
         );
 
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_setup_next_actions_labels_single_unresolved_plugin_bridge_surface() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.weixin.enabled = true;
+        config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+        config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "weixin-token".to_owned(),
+        ));
+        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+        let doctor_action = actions
+            .iter()
+            .find(|action| action.kind == SetupNextActionKind::Doctor)
+            .expect("managed bridge doctor action");
+
+        assert_eq!(doctor_action.label, "verify weixin managed bridge");
+        assert_eq!(
+            doctor_action.command,
+            "loong doctor --config '/tmp/loongclaw.toml'"
+        );
+    }
+
+    #[test]
+    fn collect_setup_next_actions_labels_multiple_unresolved_plugin_bridge_surfaces() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.weixin.enabled = true;
+        config.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+        config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+            "weixin-token".to_owned(),
+        ));
+        config.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+        config.qqbot.enabled = true;
+        config.qqbot.app_id = Some(loongclaw_contracts::SecretRef::Inline("10001".to_owned()));
+        config.qqbot.client_secret = Some(loongclaw_contracts::SecretRef::Inline(
+            "qqbot-secret".to_owned(),
+        ));
+        config.qqbot.allowed_peer_ids = vec!["openid-alice".to_owned()];
+
+        let actions = collect_setup_next_actions_with_path_env(
+            &config,
+            "/tmp/loongclaw.toml",
+            Some(std::ffi::OsStr::new("")),
+        );
+        let doctor_action = actions
+            .iter()
+            .find(|action| action.kind == SetupNextActionKind::Doctor)
+            .expect("managed bridge doctor action");
+
+        assert_eq!(doctor_action.label, "verify managed bridges: weixin, qqbot");
+        assert_eq!(
+            doctor_action.command,
+            "loong doctor --config '/tmp/loongclaw.toml'"
+        );
+    }
+
+    #[test]
+    fn is_managed_bridge_doctor_action_matches_single_surface_label() {
+        let action = SetupNextAction {
+            kind: SetupNextActionKind::Doctor,
+            channel_action_id: None,
+            browser_preview_phase: None,
+            label: "verify weixin managed bridge".to_owned(),
+            command: "loong doctor --config '/tmp/loongclaw.toml'".to_owned(),
+        };
+
+        assert!(is_managed_bridge_doctor_action(&action));
+    }
+
+    #[test]
+    fn is_managed_bridge_doctor_action_matches_multi_surface_label() {
+        let action = SetupNextAction {
+            kind: SetupNextActionKind::Doctor,
+            channel_action_id: None,
+            browser_preview_phase: None,
+            label: "verify managed bridges: weixin, qqbot".to_owned(),
+            command: "loong doctor --config '/tmp/loongclaw.toml'".to_owned(),
+        };
+
+        assert!(is_managed_bridge_doctor_action(&action));
+    }
+
+    #[test]
+    fn is_managed_bridge_doctor_action_rejects_unrelated_doctor_action() {
+        let action = SetupNextAction {
+            kind: SetupNextActionKind::Doctor,
+            channel_action_id: None,
+            browser_preview_phase: None,
+            label: "doctor".to_owned(),
+            command: "loong doctor --config '/tmp/loongclaw.toml'".to_owned(),
+        };
+
+        assert!(!is_managed_bridge_doctor_action(&action));
+    }
+
+    #[test]
+    fn is_managed_bridge_doctor_action_rejects_non_doctor_action() {
+        let action = SetupNextAction {
+            kind: SetupNextActionKind::Channel,
+            channel_action_id: Some(crate::migration::channels::CHANNEL_CATALOG_ACTION_ID),
+            browser_preview_phase: None,
+            label: "verify weixin managed bridge".to_owned(),
+            command: "loong channels --config '/tmp/loongclaw.toml'".to_owned(),
+        };
+
+        assert!(!is_managed_bridge_doctor_action(&action));
     }
 }

@@ -503,10 +503,7 @@ fn select_primary_import_apply_action(
 }
 
 fn is_managed_bridge_doctor_action(action: &crate::next_actions::SetupNextAction) -> bool {
-    let is_doctor = action.kind == crate::next_actions::SetupNextActionKind::Doctor;
-    let is_managed_bridge_label = action.label == "verify managed bridges";
-
-    is_doctor && is_managed_bridge_label
+    crate::next_actions::is_managed_bridge_doctor_action(action)
 }
 
 #[derive(Serialize)]

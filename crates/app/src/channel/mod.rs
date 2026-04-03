@@ -78,7 +78,8 @@ pub use registry::{
     ChannelOperationHealth, ChannelOperationStatus, ChannelPluginBridgeContract,
     ChannelPluginBridgeDiscovery, ChannelPluginBridgeDiscoveryAmbiguityStatus,
     ChannelPluginBridgeDiscoveryStatus, ChannelPluginBridgeManifestStatus,
-    ChannelPluginBridgeManifestValidation, ChannelPluginBridgeStableTarget,
+    ChannelPluginBridgeManifestValidation, ChannelPluginBridgeScaffoldProfile,
+    ChannelPluginBridgeSelectionStatus, ChannelPluginBridgeStableTarget,
     ChannelRuntimeCommandDescriptor, ChannelStatusSnapshot, ChannelSurface,
     DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR, DISCORD_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
     EMAIL_CATALOG_COMMAND_FAMILY_DESCRIPTOR, FEISHU_CATALOG_COMMAND_FAMILY_DESCRIPTOR,
@@ -101,8 +102,8 @@ pub use registry::{
     resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
     resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
     resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
-    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
-    validate_plugin_channel_bridge_manifest,
+    resolve_channel_operation_descriptor, resolve_channel_plugin_bridge_scaffold_profile,
+    resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
 pub use runtime_state::ChannelOperationRuntime;
 use runtime_state::ChannelOperationRuntimeTracker;

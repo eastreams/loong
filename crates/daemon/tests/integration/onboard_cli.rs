@@ -2482,6 +2482,92 @@ fn managed_bridge_onboard_preflight_passes_when_single_compatible_plugin_is_avai
 }
 
 #[test]
+fn managed_bridge_onboard_preflight_warns_when_bridge_contract_is_misconfigured_even_with_ready_plugin()
+ {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-contract-misconfigured");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("bridge_url is missing")
+        }),
+        "onboard preflight should keep bridge contract issues visible even when managed bridge discovery is ready: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_summarizes_mixed_multi_account_detail() {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-multi-account-detail");
+    let mut config = super::mixed_account_weixin_plugin_bridge_config();
+
+    super::install_ready_weixin_managed_bridge(install_root.as_path());
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let weixin_check = checks
+        .iter()
+        .find(|check| check.name == "weixin channel")
+        .expect("weixin preflight check");
+    let detail = weixin_check.detail.as_str();
+
+    assert_eq!(
+        weixin_check.level,
+        loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+    );
+    assert!(
+        detail.contains("weixin-managed-bridge"),
+        "multi-account onboard preflight should keep the selected plugin identity visible: {checks:#?}"
+    );
+    assert!(
+        detail.contains("configured_account=ops"),
+        "multi-account onboard preflight should mention the ready default account: {checks:#?}"
+    );
+    assert!(
+        detail.contains("(default): ready"),
+        "multi-account onboard preflight should mark the default account as ready when it passes contract checks: {checks:#?}"
+    );
+    assert!(
+        detail.contains("configured_account=backup"),
+        "multi-account onboard preflight should mention blocked non-default accounts: {checks:#?}"
+    );
+    assert!(
+        detail.contains("bridge_url is missing"),
+        "multi-account onboard preflight should keep the blocking contract detail visible: {checks:#?}"
+    );
+    assert!(
+        detail.contains(super::MIXED_ACCOUNT_WEIXIN_PLUGIN_BRIDGE_SUMMARY),
+        "onboard preflight detail should keep the shared mixed-account summary inside the discovery-ready prefix: {checks:#?}"
+    );
+}
+
+#[test]
 fn detect_env_import_starting_config_enables_ready_channels() {
     let imported =
         loongclaw_daemon::onboard_cli::detect_import_starting_config_with_channel_readiness(
@@ -7685,7 +7771,10 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
         loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor,
         "plugin-backed channel setups should guide operators into diagnostics before the generic channel catalog: {summary:#?}"
     );
-    assert_eq!(summary.next_actions[0].label, "verify managed bridges");
+    assert_eq!(
+        summary.next_actions[0].label,
+        "verify weixin managed bridge"
+    );
     assert_eq!(
         summary.next_actions[0].command,
         format!(
@@ -7701,12 +7790,17 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert_eq!(summary.next_actions[1].label, "channels");
     assert!(
         lines.iter().any(|line| line == "start here")
+            && lines
+                .iter()
+                .any(|line| line.contains("verify weixin managed bridge"))
             && lines.iter().any(|line| {
-                line == &format!(
-                    "- verify managed bridges: {} doctor --config '/tmp/loongclaw-config.toml'",
-                    super::active_cli_command_name()
+                line.contains(
+                    format!("{} doctor --config", super::active_cli_command_name()).as_str(),
                 )
-            }),
+            })
+            && lines
+                .iter()
+                .any(|line| line.contains("/tmp/loongclaw-config.toml")),
         "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
     );
 }
@@ -7740,7 +7834,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     });
     let doctor_position = summary.next_actions.iter().position(|action| {
         action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
-            && action.label == "verify managed bridges"
+            && action.label == "verify weixin managed bridge"
     });
     let catalog_position = summary
         .next_actions
@@ -7774,7 +7868,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     );
     assert!(
         lines.iter().any(|line| {
-            line.contains("verify managed bridges")
+            line.contains("verify weixin managed bridge")
                 && line.contains(
                     format!(
                         "{} doctor --config '/tmp/loongclaw-config.toml'",
