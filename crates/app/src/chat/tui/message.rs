@@ -1,5 +1,29 @@
 use std::time::Instant;
 
+use serde_json::Value;
+
+pub(super) fn format_tool_args_preview(tool_name: &str, raw_args: &str) -> String {
+    let trimmed_args = raw_args.trim();
+
+    if trimmed_args.is_empty() {
+        return String::new();
+    }
+
+    let parsed_args = serde_json::from_str::<Value>(trimmed_args);
+
+    let Ok(parsed_args) = parsed_args else {
+        return trimmed_args.to_owned();
+    };
+
+    let formatted_args =
+        crate::conversation::turn_engine::format_tool_arguments_preview(tool_name, &parsed_args);
+
+    match formatted_args {
+        Some(formatted_args) => formatted_args,
+        None => trimmed_args.to_owned(),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Role {
     User,
@@ -163,5 +187,22 @@ mod tests {
             MessagePart::ThinkBlock(t) => assert_eq!(t, "thought"),
             _ => panic!("expected ThinkBlock"),
         }
+    }
+
+    #[test]
+    fn tool_args_preview_summarizes_file_write_payload() {
+        let raw_args = "{\"path\":\"src/main.rs\",\"content\":\"fn main() {}\\n\"}";
+        let preview = format_tool_args_preview("file.write", raw_args);
+
+        assert!(preview.contains("src/main.rs"));
+        assert!(preview.contains("12 chars"));
+    }
+
+    #[test]
+    fn tool_args_preview_summarizes_shell_exec_payload() {
+        let raw_args = "{\"command\":\"git\",\"args\":[\"status\",\"--short\"]}";
+        let preview = format_tool_args_preview("shell.exec", raw_args);
+
+        assert_eq!(preview, "git status --short");
     }
 }

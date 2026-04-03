@@ -209,6 +209,19 @@ impl ConversationTurnToolEvent {
         }
     }
 
+    pub fn running_with_detail(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.into(),
+            tool_name: tool_name.into(),
+            state: ConversationTurnToolState::Running,
+            detail: Some(detail.into()),
+        }
+    }
+
     pub fn completed(
         tool_call_id: impl Into<String>,
         tool_name: impl Into<String>,

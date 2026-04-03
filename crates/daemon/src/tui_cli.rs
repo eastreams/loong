@@ -4,6 +4,14 @@ pub async fn run_tui_cli(config_path: Option<&str>, session: Option<&str>) -> mv
     run_tui_cli_with_system_message(config_path, session, None).await
 }
 
+pub async fn run_existing_config_tui_with_system_message(
+    config_path: Option<&str>,
+    session: Option<&str>,
+    system_message: Option<String>,
+) -> mvp::CliResult<()> {
+    mvp::chat::run_tui_with_system_message(config_path, session, system_message).await
+}
+
 pub async fn run_tui_cli_with_system_message(
     config_path: Option<&str>,
     session: Option<&str>,
@@ -20,10 +28,11 @@ pub async fn run_tui_cli_with_system_message(
     })?;
 
     if config_exists {
-        return mvp::chat::run_tui_with_system_message(config_path, session, system_message).await;
+        return run_existing_config_tui_with_system_message(config_path, session, system_message)
+            .await;
     }
 
-    let boot_flow =
-        crate::onboard_cli::build_first_run_fullscreen_boot_flow(config_path.map(str::to_owned));
-    mvp::chat::run_tui_with_boot_flow(config_path, session, boot_flow).await
+    let _ = session;
+
+    crate::onboard_cli::run_first_run_fullscreen_onboard(config_path.map(str::to_owned)).await
 }

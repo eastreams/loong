@@ -11,6 +11,10 @@ pub(super) enum UiEvent {
         tool_name: String,
         args_preview: String,
     },
+    ToolArgsDelta {
+        tool_id: String,
+        chunk: String,
+    },
     ToolDone {
         tool_id: String,
         success: bool,

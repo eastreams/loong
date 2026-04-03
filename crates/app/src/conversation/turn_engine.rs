@@ -1222,12 +1222,26 @@ pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .to_owned()
 }
 
+pub(crate) fn summarize_tool_intent_start_detail(intent: &ToolIntent) -> Option<String> {
+    let tool_name = effective_result_tool_name(intent);
+    let preview = format_tool_arguments_preview(tool_name.as_str(), &intent.args_json);
+
+    if preview.is_some() {
+        return preview;
+    }
+
+    let encoded = serde_json::to_string(&intent.args_json).ok()?;
+    let summary = summarize_trace_snippet(encoded.as_str(), 120);
+
+    Some(summary)
+}
+
 fn build_tool_intent_completed_trace(
     intent: &ToolIntent,
     outcome: &ToolCoreOutcome,
 ) -> ToolBatchExecutionIntentTrace {
     let tool_name = effective_result_tool_name(intent);
-    let detail = summarize_completed_tool_trace_detail(tool_name.as_str(), outcome);
+    let detail = summarize_completed_tool_trace_detail(intent, tool_name.as_str(), outcome);
 
     ToolBatchExecutionIntentTrace {
         tool_call_id: intent.tool_call_id.clone(),
@@ -1238,6 +1252,7 @@ fn build_tool_intent_completed_trace(
 }
 
 fn summarize_completed_tool_trace_detail(
+    intent: &ToolIntent,
     tool_name: &str,
     outcome: &ToolCoreOutcome,
 ) -> Option<String> {
@@ -1247,9 +1262,247 @@ fn summarize_completed_tool_trace_detail(
     }
 
     match tool_name {
+        "file.write" => summarize_file_write_completed_trace_detail(intent, &outcome.payload),
+        "file.edit" => summarize_file_edit_completed_trace_detail(intent, &outcome.payload),
+        "shell.exec" => summarize_shell_exec_completed_trace_detail(intent, &outcome.payload),
         "tool.search" => summarize_tool_search_completed_trace_detail(&outcome.payload),
         _ => None,
     }
+}
+
+pub(crate) fn format_tool_arguments_preview(
+    tool_name: &str,
+    args_json: &serde_json::Value,
+) -> Option<String> {
+    match tool_name {
+        "file.read" => format_file_read_arguments_preview(args_json),
+        "file.write" => format_file_write_arguments_preview(args_json),
+        "file.edit" => format_file_edit_arguments_preview(args_json),
+        "shell.exec" => format_shell_exec_arguments_preview(args_json),
+        "tool.search" => format_tool_search_arguments_preview(args_json),
+        _ => None,
+    }
+}
+
+fn format_file_read_arguments_preview(args_json: &serde_json::Value) -> Option<String> {
+    let path = tool_argument_string(args_json, "path")?;
+    let summary = format!("path: {path}");
+
+    Some(summary)
+}
+
+fn format_file_write_arguments_preview(args_json: &serde_json::Value) -> Option<String> {
+    let path = tool_argument_string(args_json, "path")?;
+    let content = tool_argument_string(args_json, "content")?;
+    let trimmed_content = content.trim_end_matches(['\r', '\n']);
+    let content_chars = trimmed_content.chars().count();
+    let summary = format!("path: {path} | {content_chars} chars");
+
+    Some(summary)
+}
+
+fn format_file_edit_arguments_preview(args_json: &serde_json::Value) -> Option<String> {
+    let path = tool_argument_string(args_json, "path")?;
+    let old_string = tool_argument_string(args_json, "old_string")?;
+    let new_string = tool_argument_string(args_json, "new_string")?;
+    let old_preview = summarize_trace_snippet(old_string, 32);
+    let new_preview = summarize_trace_snippet(new_string, 32);
+    let summary = format!("path: {path}\nreplace: {old_preview} -> {new_preview}");
+
+    Some(summary)
+}
+
+fn format_shell_exec_arguments_preview(args_json: &serde_json::Value) -> Option<String> {
+    let command = tool_argument_string(args_json, "command")?;
+    let args_array = tool_argument_array(args_json, "args");
+    let mut parts = Vec::new();
+
+    parts.push(command.to_owned());
+
+    if let Some(args_array) = args_array {
+        for value in args_array {
+            let argument = match value.as_str() {
+                Some(argument) => argument,
+                None => continue,
+            };
+
+            parts.push(argument.to_owned());
+        }
+    }
+
+    let joined = parts.join(" ");
+    let preview = summarize_trace_snippet(joined.as_str(), 80);
+
+    Some(preview)
+}
+
+fn format_tool_search_arguments_preview(args_json: &serde_json::Value) -> Option<String> {
+    let query = tool_argument_string(args_json, "query")?;
+    let summary = format!("query: {query}");
+
+    Some(summary)
+}
+
+fn summarize_file_write_completed_trace_detail(
+    intent: &ToolIntent,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    let path = resolved_trace_path(intent, payload)?;
+    let bytes_written = payload.get("bytes_written")?.as_u64()?;
+    let summary = format!("wrote {path} | {bytes_written} bytes");
+
+    Some(summary)
+}
+
+fn summarize_file_edit_completed_trace_detail(
+    intent: &ToolIntent,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    let path = resolved_trace_path(intent, payload)?;
+    let replacements_made = payload.get("replacements_made")?.as_u64()?;
+    let replacement_noun = if replacements_made == 1 {
+        "replacement"
+    } else {
+        "replacements"
+    };
+    let old_string = tool_argument_string(&intent.args_json, "old_string")?;
+    let new_string = tool_argument_string(&intent.args_json, "new_string")?;
+    let old_preview = summarize_trace_snippet(old_string, 48);
+    let new_preview = summarize_trace_snippet(new_string, 48);
+    let summary = format!(
+        "edited {path} | {replacements_made} {replacement_noun} | - {old_preview} | + {new_preview}"
+    );
+
+    Some(summary)
+}
+
+fn summarize_shell_exec_completed_trace_detail(
+    intent: &ToolIntent,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    let command_preview = summarize_shell_command_preview(intent, payload)?;
+    let exit_code = payload.get("exit_code").and_then(serde_json::Value::as_i64);
+    let exit_summary = match exit_code {
+        Some(exit_code) => format!("exit {exit_code}"),
+        None => "exit ?".to_owned(),
+    };
+    let stdout_text = payload.get("stdout").and_then(serde_json::Value::as_str);
+    let stderr_text = payload.get("stderr").and_then(serde_json::Value::as_str);
+    let stdout_lines = counted_output_lines(stdout_text);
+    let stderr_lines = counted_output_lines(stderr_text);
+
+    if stderr_lines > 0 {
+        let summary = format!(
+            "{command_preview} | {exit_summary} | {stdout_lines} stdout lines | {stderr_lines} stderr lines"
+        );
+        return Some(summary);
+    }
+
+    if stdout_lines > 0 {
+        let summary = format!("{command_preview} | {exit_summary} | {stdout_lines} stdout lines");
+        return Some(summary);
+    }
+
+    let summary = format!("{command_preview} | {exit_summary} | no output");
+    Some(summary)
+}
+
+fn resolved_trace_path(intent: &ToolIntent, payload: &serde_json::Value) -> Option<String> {
+    let payload_path = payload.get("path").and_then(serde_json::Value::as_str);
+    if let Some(payload_path) = payload_path {
+        return Some(payload_path.to_owned());
+    }
+
+    let request_path = tool_argument_string(&intent.args_json, "path")?;
+    Some(request_path.to_owned())
+}
+
+fn summarize_trace_snippet(value: &str, limit: usize) -> String {
+    let trimmed = value.trim();
+    let char_count = trimmed.chars().count();
+    if char_count <= limit {
+        return trimmed.to_owned();
+    }
+
+    let mut preview = String::new();
+    for ch in trimmed.chars().take(limit.saturating_sub(1)) {
+        preview.push(ch);
+    }
+    preview.push('\u{2026}');
+    preview
+}
+
+fn summarize_shell_command_preview(
+    intent: &ToolIntent,
+    payload: &serde_json::Value,
+) -> Option<String> {
+    let command = payload
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| tool_argument_string(&intent.args_json, "command"))?;
+    let args_array = payload
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .or_else(|| tool_argument_array(&intent.args_json, "args"));
+    let mut preview_payload = serde_json::Map::new();
+    let mut args_value = serde_json::Value::Null;
+
+    preview_payload.insert(
+        "command".to_owned(),
+        serde_json::Value::String(command.to_owned()),
+    );
+
+    if let Some(args_array) = args_array {
+        args_value = serde_json::Value::Array(args_array.clone());
+    }
+
+    if !args_value.is_null() {
+        preview_payload.insert("args".to_owned(), args_value);
+    }
+
+    let preview_value = serde_json::Value::Object(preview_payload);
+    let preview = format_shell_exec_arguments_preview(&preview_value)?;
+
+    Some(preview)
+}
+
+fn counted_output_lines(output: Option<&str>) -> usize {
+    let Some(output) = output else {
+        return 0;
+    };
+
+    output.lines().count()
+}
+
+fn tool_argument_string<'a>(args_json: &'a serde_json::Value, field_name: &str) -> Option<&'a str> {
+    let direct_value = args_json
+        .get(field_name)
+        .and_then(serde_json::Value::as_str);
+    if direct_value.is_some() {
+        return direct_value;
+    }
+
+    args_json
+        .get("arguments")
+        .and_then(|arguments| arguments.get(field_name))
+        .and_then(serde_json::Value::as_str)
+}
+
+fn tool_argument_array<'a>(
+    args_json: &'a serde_json::Value,
+    field_name: &str,
+) -> Option<&'a Vec<serde_json::Value>> {
+    let direct_value = args_json
+        .get(field_name)
+        .and_then(serde_json::Value::as_array);
+    if direct_value.is_some() {
+        return direct_value;
+    }
+
+    args_json
+        .get("arguments")
+        .and_then(|arguments| arguments.get(field_name))
+        .and_then(serde_json::Value::as_array)
 }
 
 fn summarize_tool_search_completed_trace_detail(payload: &serde_json::Value) -> Option<String> {
@@ -2474,6 +2727,95 @@ mod tests {
             turn_id: turn_id.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
         }
+    }
+
+    #[test]
+    fn completed_trace_summarizes_file_write_path_and_bytes() {
+        let intent = provider_app_tool_intent(
+            "file.write",
+            json!({
+                "path": "src/main.rs",
+                "content": "fn main() {}\n"
+            }),
+            "session-1",
+            "turn-1",
+            "call-file-write",
+        );
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "path": "/workspace/src/main.rs",
+                "bytes_written": 13
+            }),
+        };
+
+        let trace = build_tool_intent_completed_trace(&intent, &outcome);
+        let detail = trace.detail.expect("file.write should produce a summary");
+
+        assert!(detail.contains("src/main.rs"));
+        assert!(detail.contains("13 bytes"));
+    }
+
+    #[test]
+    fn completed_trace_summarizes_file_edit_replacements() {
+        let intent = provider_app_tool_intent(
+            "file.edit",
+            json!({
+                "path": "docs/notes.md",
+                "old_string": "draft heading",
+                "new_string": "final heading"
+            }),
+            "session-1",
+            "turn-1",
+            "call-file-edit",
+        );
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "path": "/workspace/docs/notes.md",
+                "replacements_made": 1,
+                "bytes_written": 48
+            }),
+        };
+
+        let trace = build_tool_intent_completed_trace(&intent, &outcome);
+        let detail = trace.detail.expect("file.edit should produce a summary");
+
+        assert!(detail.contains("docs/notes.md"));
+        assert!(detail.contains("1 replacement"));
+        assert!(detail.contains("draft heading"));
+        assert!(detail.contains("final heading"));
+    }
+
+    #[test]
+    fn completed_trace_summarizes_shell_exec_command_and_result() {
+        let intent = provider_app_tool_intent(
+            "shell.exec",
+            json!({
+                "command": "git",
+                "args": ["status", "--short"]
+            }),
+            "session-1",
+            "turn-1",
+            "call-shell-exec",
+        );
+        let outcome = ToolCoreOutcome {
+            status: "ok".to_owned(),
+            payload: json!({
+                "command": "git",
+                "args": ["status", "--short"],
+                "exit_code": 0,
+                "stdout": "M src/main.rs\n?? tests/new.rs\n",
+                "stderr": ""
+            }),
+        };
+
+        let trace = build_tool_intent_completed_trace(&intent, &outcome);
+        let detail = trace.detail.expect("shell.exec should produce a summary");
+
+        assert!(detail.contains("git status --short"));
+        assert!(detail.contains("exit 0"));
+        assert!(detail.contains("2 stdout lines"));
     }
 
     fn fast_lane_observed_execution_turn(

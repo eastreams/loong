@@ -15,6 +15,12 @@ pub(super) struct ToolInspectorState {
     pub(super) scroll_offset: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct TranscriptReviewState {
+    pub(super) cursor_line: usize,
+    pub(super) anchor_line: Option<usize>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ToolCallRecord<'a> {
     pub(super) tool_id: &'a str,
@@ -55,6 +61,7 @@ pub(super) struct Pane {
     /// once the current agent turn completes.
     pub(super) staged_message: Option<String>,
     pub(super) tool_inspector: Option<ToolInspectorState>,
+    pub(super) transcript_review: TranscriptReviewState,
 }
 
 impl Pane {
@@ -80,6 +87,10 @@ impl Pane {
             input_hint_override: None,
             staged_message: None,
             tool_inspector: None,
+            transcript_review: TranscriptReviewState {
+                cursor_line: 0,
+                anchor_line: None,
+            },
         }
     }
 
@@ -115,6 +126,25 @@ impl Pane {
     /// Adds a `ToolCall` part with `ToolStatus::Running` to the last assistant
     /// message.
     pub(super) fn start_tool_call(&mut self, tool_id: &str, tool_name: &str, args_preview: &str) {
+        if let Some(tool_call) = self.find_tool_call_mut(tool_id) {
+            let MessagePart::ToolCall {
+                tool_name: existing_tool_name,
+                args_preview: existing_args_preview,
+                ..
+            } = tool_call
+            else {
+                return;
+            };
+
+            if existing_tool_name.is_empty() && !tool_name.is_empty() {
+                *existing_tool_name = tool_name.to_string();
+            }
+
+            merge_tool_args_preview(existing_args_preview, args_preview);
+
+            return;
+        }
+
         self.ensure_assistant_message();
         if let Some(msg) = self.messages.last_mut() {
             msg.parts.push(MessagePart::ToolCall {
@@ -126,6 +156,21 @@ impl Pane {
                 },
             });
         }
+    }
+
+    pub(super) fn append_tool_call_args(&mut self, tool_id: &str, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+
+        let Some(tool_call) = self.find_tool_call_mut(tool_id) else {
+            return;
+        };
+        let MessagePart::ToolCall { args_preview, .. } = tool_call else {
+            return;
+        };
+
+        merge_tool_args_preview(args_preview, chunk);
     }
 
     /// Finds the matching tool call by `tool_id` and transitions it to
@@ -180,6 +225,147 @@ impl Pane {
 
     pub(super) fn clear_input_hint_override(&mut self) {
         self.input_hint_override = None;
+    }
+
+    pub(super) fn set_transcript_cursor_to_latest(&mut self, total_lines: usize) {
+        if total_lines == 0 {
+            self.transcript_review.cursor_line = 0;
+            self.transcript_review.anchor_line = None;
+            return;
+        }
+
+        let latest_line_index = total_lines.saturating_sub(1);
+
+        self.transcript_review.cursor_line = latest_line_index;
+        self.clamp_transcript_selection_anchor(total_lines);
+    }
+
+    pub(super) fn move_transcript_cursor_up(&mut self, amount: usize, total_lines: usize) {
+        if total_lines == 0 {
+            self.transcript_review.cursor_line = 0;
+            self.transcript_review.anchor_line = None;
+            return;
+        }
+
+        let clamped_cursor = self.clamped_transcript_cursor_line(total_lines);
+        let next_cursor = clamped_cursor.saturating_sub(amount);
+
+        self.transcript_review.cursor_line = next_cursor;
+        self.clamp_transcript_selection_anchor(total_lines);
+    }
+
+    pub(super) fn move_transcript_cursor_down(&mut self, amount: usize, total_lines: usize) {
+        if total_lines == 0 {
+            self.transcript_review.cursor_line = 0;
+            self.transcript_review.anchor_line = None;
+            return;
+        }
+
+        let clamped_cursor = self.clamped_transcript_cursor_line(total_lines);
+        let latest_line_index = total_lines.saturating_sub(1);
+        let next_cursor = clamped_cursor.saturating_add(amount).min(latest_line_index);
+
+        self.transcript_review.cursor_line = next_cursor;
+        self.clamp_transcript_selection_anchor(total_lines);
+    }
+
+    pub(super) fn jump_transcript_cursor_top(&mut self, total_lines: usize) {
+        if total_lines == 0 {
+            self.transcript_review.cursor_line = 0;
+            self.transcript_review.anchor_line = None;
+            return;
+        }
+
+        self.transcript_review.cursor_line = 0;
+        self.clamp_transcript_selection_anchor(total_lines);
+    }
+
+    pub(super) fn jump_transcript_cursor_latest(&mut self, total_lines: usize) {
+        self.set_transcript_cursor_to_latest(total_lines);
+    }
+
+    pub(super) fn begin_transcript_selection(&mut self) {
+        if self.transcript_review.anchor_line.is_none() {
+            self.transcript_review.anchor_line = Some(self.transcript_review.cursor_line);
+        }
+    }
+
+    pub(super) fn toggle_transcript_selection(&mut self) -> bool {
+        if self.transcript_review.anchor_line.is_some() {
+            self.transcript_review.anchor_line = None;
+            return false;
+        }
+
+        self.transcript_review.anchor_line = Some(self.transcript_review.cursor_line);
+        true
+    }
+
+    pub(super) fn clear_transcript_selection(&mut self) -> bool {
+        let had_selection = self.transcript_review.anchor_line.is_some();
+
+        self.transcript_review.anchor_line = None;
+
+        had_selection
+    }
+
+    pub(super) fn transcript_cursor_line(&self, total_lines: usize) -> Option<usize> {
+        if total_lines == 0 {
+            return None;
+        }
+
+        Some(self.clamped_transcript_cursor_line(total_lines))
+    }
+
+    pub(super) fn transcript_selection_range(&self, total_lines: usize) -> Option<(usize, usize)> {
+        if total_lines == 0 {
+            return None;
+        }
+
+        let anchor_line = self.transcript_review.anchor_line?;
+        let cursor_line = self.clamped_transcript_cursor_line(total_lines);
+        let latest_line_index = total_lines.saturating_sub(1);
+        let clamped_anchor_line = anchor_line.min(latest_line_index);
+        let range_start = clamped_anchor_line.min(cursor_line);
+        let range_end = clamped_anchor_line.max(cursor_line);
+
+        Some((range_start, range_end))
+    }
+
+    pub(super) fn transcript_selection_line_count(&self, total_lines: usize) -> usize {
+        let selection_range = self.transcript_selection_range(total_lines);
+
+        match selection_range {
+            Some((range_start, range_end)) => range_end.saturating_sub(range_start) + 1,
+            None => 0,
+        }
+    }
+
+    pub(super) fn transcript_selection_line_count_hint(&self) -> usize {
+        let anchor_line = match self.transcript_review.anchor_line {
+            Some(anchor_line) => anchor_line,
+            None => return 0,
+        };
+        let cursor_line = self.transcript_review.cursor_line;
+        let range_start = anchor_line.min(cursor_line);
+        let range_end = anchor_line.max(cursor_line);
+
+        range_end.saturating_sub(range_start) + 1
+    }
+
+    pub(super) fn transcript_copy_text(&self, plain_lines: &[String]) -> Option<String> {
+        let copy_range = self.transcript_copy_range(plain_lines.len())?;
+        let (range_start, range_end) = copy_range;
+        let mut selected_lines = Vec::new();
+
+        for line in plain_lines
+            .iter()
+            .skip(range_start)
+            .take(range_end - range_start + 1)
+        {
+            selected_lines.push(line.clone());
+        }
+
+        Some(selected_lines.join("\n"))
     }
 
     pub(super) fn total_tokens(&self) -> u32 {
@@ -303,6 +489,62 @@ impl Pane {
         }
     }
 
+    fn find_tool_call_mut(&mut self, tool_id: &str) -> Option<&mut MessagePart> {
+        for message in self.messages.iter_mut().rev() {
+            for part in message.parts.iter_mut().rev() {
+                let MessagePart::ToolCall {
+                    tool_id: existing_tool_id,
+                    ..
+                } = part
+                else {
+                    continue;
+                };
+
+                if existing_tool_id == tool_id {
+                    return Some(part);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn clamped_transcript_cursor_line(&self, total_lines: usize) -> usize {
+        let latest_line_index = total_lines.saturating_sub(1);
+
+        self.transcript_review.cursor_line.min(latest_line_index)
+    }
+
+    fn clamp_transcript_selection_anchor(&mut self, total_lines: usize) {
+        if total_lines == 0 {
+            self.transcript_review.anchor_line = None;
+            return;
+        }
+
+        let latest_line_index = total_lines.saturating_sub(1);
+        let clamped_anchor = self
+            .transcript_review
+            .anchor_line
+            .map(|anchor_line| anchor_line.min(latest_line_index));
+
+        self.transcript_review.anchor_line = clamped_anchor;
+    }
+
+    fn transcript_copy_range(&self, total_lines: usize) -> Option<(usize, usize)> {
+        if total_lines == 0 {
+            return None;
+        }
+
+        let selection_range = self.transcript_selection_range(total_lines);
+        if selection_range.is_some() {
+            return selection_range;
+        }
+
+        let cursor_line = self.clamped_transcript_cursor_line(total_lines);
+
+        Some((cursor_line, cursor_line))
+    }
+
     fn collect_tool_calls(&self) -> Vec<ToolCallRecord<'_>> {
         let mut tool_calls = Vec::new();
 
@@ -376,6 +618,32 @@ impl Pane {
 
         true
     }
+}
+
+fn merge_tool_args_preview(existing_args_preview: &mut String, incoming_args_preview: &str) {
+    if incoming_args_preview.is_empty() {
+        return;
+    }
+
+    if existing_args_preview.is_empty() {
+        *existing_args_preview = incoming_args_preview.to_string();
+        return;
+    }
+
+    if existing_args_preview == incoming_args_preview {
+        return;
+    }
+
+    if incoming_args_preview.starts_with(existing_args_preview.as_str()) {
+        *existing_args_preview = incoming_args_preview.to_string();
+        return;
+    }
+
+    if existing_args_preview.ends_with(incoming_args_preview) {
+        return;
+    }
+
+    existing_args_preview.push_str(incoming_args_preview);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -613,8 +881,94 @@ mod tests {
                     panic!("expected completed tool call output");
                 }
             },
-            other => panic!("expected ToolCall part, got {:?}", other),
+            other @ MessagePart::Text(_) | other @ MessagePart::ThinkBlock(_) => {
+                panic!("expected ToolCall part, got {:?}", other)
+            }
         }
+    }
+
+    #[test]
+    fn repeated_tool_start_updates_existing_tool_call() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.start_tool_call("t1", "file.edit", "");
+        pane.start_tool_call("t1", "file.edit", "path: docs/notes.md");
+
+        assert_eq!(pane.messages.len(), 1);
+
+        let tool_call_count = pane.messages[0]
+            .parts
+            .iter()
+            .filter(|part| matches!(part, MessagePart::ToolCall { .. }))
+            .count();
+
+        assert_eq!(tool_call_count, 1);
+
+        let first_part = pane.messages[0]
+            .parts
+            .first()
+            .expect("tool call part should exist");
+
+        match first_part {
+            MessagePart::ToolCall {
+                tool_name,
+                args_preview,
+                status,
+                ..
+            } => {
+                assert_eq!(tool_name, "file.edit");
+                assert_eq!(args_preview, "path: docs/notes.md");
+                assert!(matches!(status, ToolStatus::Running { .. }));
+            }
+            other @ MessagePart::Text(_) | other @ MessagePart::ThinkBlock(_) => {
+                panic!("expected ToolCall part, got {:?}", other)
+            }
+        }
+    }
+
+    #[test]
+    fn starting_same_tool_call_twice_does_not_duplicate_entry() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.start_tool_call("t1", "file.write", "");
+        pane.start_tool_call("t1", "file.write", "{\"path\":\"src/main.rs\"}");
+
+        assert_eq!(pane.messages.len(), 1);
+
+        let Some(message) = pane.messages.first() else {
+            panic!("expected assistant message");
+        };
+        assert_eq!(message.parts.len(), 1);
+
+        let Some(MessagePart::ToolCall {
+            tool_id,
+            args_preview,
+            ..
+        }) = message.parts.first()
+        else {
+            panic!("expected tool call part");
+        };
+
+        assert_eq!(tool_id, "t1");
+        assert_eq!(args_preview, "{\"path\":\"src/main.rs\"}");
+    }
+
+    #[test]
+    fn append_tool_call_args_extends_existing_preview() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.start_tool_call("t1", "file.write", "");
+        pane.append_tool_call_args("t1", "{\"path\":");
+        pane.append_tool_call_args("t1", "\"src/main.rs\"}");
+
+        let Some(message) = pane.messages.first() else {
+            panic!("expected assistant message");
+        };
+        let Some(MessagePart::ToolCall { args_preview, .. }) = message.parts.first() else {
+            panic!("expected tool call part");
+        };
+
+        assert_eq!(args_preview, "{\"path\":\"src/main.rs\"}");
     }
 
     #[test]
@@ -757,5 +1111,53 @@ mod tests {
         assert_eq!(context_length_for_model("some-custom-model"), 0);
         assert_eq!(context_length_for_model("auto"), 0);
         assert_eq!(context_length_for_model(""), 0);
+    }
+
+    #[test]
+    fn transcript_selection_range_tracks_anchor_and_cursor() {
+        let mut pane = Pane::new("sess-1");
+
+        pane.set_transcript_cursor_to_latest(8);
+        pane.begin_transcript_selection();
+        pane.move_transcript_cursor_up(2, 8);
+
+        assert_eq!(pane.transcript_cursor_line(8), Some(5));
+        assert_eq!(pane.transcript_selection_range(8), Some((5, 7)));
+        assert_eq!(pane.transcript_selection_line_count(8), 3);
+    }
+
+    #[test]
+    fn transcript_copy_text_uses_selection_range_when_present() {
+        let mut pane = Pane::new("sess-1");
+        let plain_lines = vec![
+            "line 0".to_owned(),
+            "line 1".to_owned(),
+            "line 2".to_owned(),
+            "line 3".to_owned(),
+        ];
+
+        pane.set_transcript_cursor_to_latest(plain_lines.len());
+        pane.begin_transcript_selection();
+        pane.move_transcript_cursor_up(1, plain_lines.len());
+
+        let copied = pane
+            .transcript_copy_text(plain_lines.as_slice())
+            .expect("selection should copy");
+
+        assert_eq!(copied, "line 2\nline 3");
+    }
+
+    #[test]
+    fn transcript_copy_text_falls_back_to_cursor_line_without_selection() {
+        let mut pane = Pane::new("sess-1");
+        let plain_lines = vec!["line 0".to_owned(), "line 1".to_owned()];
+
+        pane.set_transcript_cursor_to_latest(plain_lines.len());
+
+        let copied = pane
+            .transcript_copy_text(plain_lines.as_slice())
+            .expect("cursor line should copy");
+
+        assert_eq!(copied, "line 1");
     }
 }

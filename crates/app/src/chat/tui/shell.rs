@@ -1,7 +1,8 @@
-use std::io;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::time::Instant;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -24,7 +25,7 @@ use super::commands::{self, SlashCommand};
 use super::dialog::ClarifyDialog;
 use super::events::UiEvent;
 use super::focus::{FocusLayer, FocusStack};
-use super::history::PaneView;
+use super::history::{self, PaneView};
 use super::input::InputView;
 use super::layout;
 use super::message::Message;
@@ -48,6 +49,12 @@ impl PaneView for state::Pane {
     }
     fn streaming_active(&self) -> bool {
         self.streaming_active
+    }
+    fn transcript_cursor_line(&self, total_lines: usize) -> Option<usize> {
+        state::Pane::transcript_cursor_line(self, total_lines)
+    }
+    fn transcript_selection_range(&self, total_lines: usize) -> Option<(usize, usize)> {
+        state::Pane::transcript_selection_range(self, total_lines)
     }
 }
 
@@ -94,6 +101,9 @@ impl StatusBarView for state::Pane {
     fn scroll_offset(&self) -> u16 {
         self.scroll_offset
     }
+    fn transcript_selection_line_count(&self) -> usize {
+        self.transcript_selection_line_count_hint()
+    }
     fn status_message(&self) -> Option<(&str, &Instant)> {
         self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
     }
@@ -105,6 +115,9 @@ impl InputView for state::Pane {
     }
     fn has_staged_message(&self) -> bool {
         self.staged_message.is_some()
+    }
+    fn transcript_selection_line_count(&self) -> usize {
+        self.transcript_selection_line_count_hint()
     }
     fn input_hint(&self) -> Option<&str> {
         self.input_hint_override.as_deref()
@@ -282,6 +295,9 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
                 .pane
                 .start_tool_call(&tool_id, &tool_name, &args_preview);
         }
+        UiEvent::ToolArgsDelta { tool_id, chunk } => {
+            shell.pane.append_tool_call_args(&tool_id, &chunk);
+        }
         UiEvent::ToolDone {
             tool_id,
             success,
@@ -336,6 +352,7 @@ fn textarea_is_empty(textarea: &tui_textarea::TextArea<'_>) -> bool {
     !has_non_empty_line
 }
 
+#[allow(clippy::wildcard_enum_match_arm)]
 fn history_navigation_action(
     key: KeyEvent,
     composer_is_empty: bool,
@@ -359,6 +376,7 @@ fn history_navigation_action(
     }
 }
 
+#[allow(clippy::wildcard_enum_match_arm)]
 fn transcript_navigation_action(key: KeyEvent) -> Option<HistoryNavigationAction> {
     match key.code {
         KeyCode::Up => Some(HistoryNavigationAction::ScrollLineUp),
@@ -385,6 +403,7 @@ fn transcript_navigation_action(key: KeyEvent) -> Option<HistoryNavigationAction
     }
 }
 
+#[allow(clippy::wildcard_enum_match_arm)]
 fn transcript_focus_returns_to_composer(key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Backspace => true,
@@ -462,13 +481,74 @@ fn apply_history_navigation(
     }
 }
 
-fn open_transcript_review(shell: &mut state::Shell) {
-    shell.focus.focus_transcript();
+fn transcript_plain_lines(shell: &state::Shell) -> Vec<String> {
+    let render_width = terminal_render_width();
 
+    history::transcript_plain_lines(shell.pane(), render_width, shell.show_thinking)
+}
+
+fn transcript_line_count(shell: &state::Shell) -> usize {
+    let plain_lines = transcript_plain_lines(shell);
+
+    plain_lines.len()
+}
+
+fn apply_transcript_navigation(
+    shell: &mut state::Shell,
+    textarea: &tui_textarea::TextArea<'_>,
+    action: HistoryNavigationAction,
+    extend_selection: bool,
+) {
+    let total_lines = transcript_line_count(shell);
+
+    if extend_selection {
+        shell.pane.begin_transcript_selection();
+    }
+
+    apply_history_navigation(shell, textarea, action);
+
+    match action {
+        HistoryNavigationAction::ScrollLineUp => {
+            shell.pane.move_transcript_cursor_up(1, total_lines);
+        }
+        HistoryNavigationAction::ScrollLineDown => {
+            shell.pane.move_transcript_cursor_down(1, total_lines);
+        }
+        HistoryNavigationAction::ScrollHalfPageUp => {
+            let step = usize::from(history_half_page_step(textarea));
+            shell.pane.move_transcript_cursor_up(step, total_lines);
+        }
+        HistoryNavigationAction::ScrollHalfPageDown => {
+            let step = usize::from(history_half_page_step(textarea));
+            shell.pane.move_transcript_cursor_down(step, total_lines);
+        }
+        HistoryNavigationAction::ScrollPageUp => {
+            let step = usize::from(history_page_step(textarea));
+            shell.pane.move_transcript_cursor_up(step, total_lines);
+        }
+        HistoryNavigationAction::ScrollPageDown => {
+            let step = usize::from(history_page_step(textarea));
+            shell.pane.move_transcript_cursor_down(step, total_lines);
+        }
+        HistoryNavigationAction::JumpTop => {
+            shell.pane.jump_transcript_cursor_top(total_lines);
+        }
+        HistoryNavigationAction::JumpLatest => {
+            shell.pane.jump_transcript_cursor_latest(total_lines);
+        }
+    }
+}
+
+fn open_transcript_review(shell: &mut state::Shell) {
+    let total_lines = transcript_line_count(shell);
+
+    shell.pane.set_transcript_cursor_to_latest(total_lines);
+    shell.focus.focus_transcript();
     shell.pane.set_status("Transcript review mode".to_owned());
 }
 
 fn close_transcript_review(shell: &mut state::Shell) {
+    shell.pane.clear_transcript_selection();
     shell.focus.focus_composer();
 
     shell.pane.set_status("Back to composer".to_owned());
@@ -507,6 +587,61 @@ fn close_tool_inspector(shell: &mut state::Shell) {
     shell.pane.close_tool_inspector();
     if shell.focus.top() == FocusLayer::ToolInspector {
         shell.focus.pop();
+    }
+}
+
+fn build_osc52_copy_sequence(text: &str) -> String {
+    let encoded_text = BASE64_STANDARD.encode(text.as_bytes());
+
+    format!("\u{1b}]52;c;{encoded_text}\u{7}")
+}
+
+fn copy_text_to_terminal_clipboard(text: &str) -> CliResult<()> {
+    let copy_sequence = build_osc52_copy_sequence(text);
+    let mut stdout = io::stdout();
+
+    stdout
+        .write_all(copy_sequence.as_bytes())
+        .map_err(|error| format!("failed to write clipboard escape sequence: {error}"))?;
+    stdout
+        .flush()
+        .map_err(|error| format!("failed to flush clipboard escape sequence: {error}"))?;
+
+    Ok(())
+}
+
+fn copy_transcript_selection(shell: &mut state::Shell) {
+    let plain_lines = transcript_plain_lines(shell);
+    let copied_text = shell.pane.transcript_copy_text(plain_lines.as_slice());
+
+    let Some(copied_text) = copied_text else {
+        shell.pane.set_status("Nothing to copy".to_owned());
+        return;
+    };
+
+    let copied_line_count = shell
+        .pane
+        .transcript_selection_line_count(plain_lines.len());
+    let effective_line_count = if copied_line_count == 0 {
+        1
+    } else {
+        copied_line_count
+    };
+    let line_label = if effective_line_count == 1 {
+        "line"
+    } else {
+        "lines"
+    };
+
+    match copy_text_to_terminal_clipboard(copied_text.as_str()) {
+        Ok(()) => {
+            shell
+                .pane
+                .set_status(format!("Copied {effective_line_count} {line_label}"));
+        }
+        Err(error) => {
+            shell.pane.set_status(format!("Copy failed: {error}"));
+        }
     }
 }
 
@@ -556,6 +691,8 @@ fn apply_terminal_event(
             let scroll_step = tool_inspector_scroll_step();
 
             #[allow(clippy::wildcard_enum_match_arm)]
+            #[allow(clippy::wildcard_enum_match_arm)]
+            #[allow(clippy::wildcard_enum_match_arm)]
             match key.code {
                 KeyCode::Esc => {
                     close_tool_inspector(shell);
@@ -600,12 +737,21 @@ fn apply_terminal_event(
         FocusLayer::Transcript => {
             let navigation_action = transcript_navigation_action(key);
             if let Some(action) = navigation_action {
-                apply_history_navigation(shell, textarea, action);
+                let extend_selection = key.modifiers.contains(KeyModifiers::SHIFT);
+                apply_transcript_navigation(shell, textarea, action, extend_selection);
                 return;
             }
 
             match key.code {
-                KeyCode::Esc | KeyCode::Enter => {
+                KeyCode::Esc => {
+                    if shell.pane.clear_transcript_selection() {
+                        shell.pane.set_status("Selection cleared".to_owned());
+                        return;
+                    }
+                    close_transcript_review(shell);
+                    return;
+                }
+                KeyCode::Enter => {
                     close_transcript_review(shell);
                     return;
                 }
@@ -625,7 +771,44 @@ fn apply_terminal_event(
                     open_tool_inspector(shell);
                     return;
                 }
-                _ => {
+                KeyCode::Char('v') if key.modifiers.is_empty() => {
+                    let selection_active = shell.pane.toggle_transcript_selection();
+                    if selection_active {
+                        shell.pane.set_status("Selection started".to_owned());
+                    } else {
+                        shell.pane.set_status("Selection cleared".to_owned());
+                    }
+                    return;
+                }
+                KeyCode::Char('y') if key.modifiers.is_empty() => {
+                    copy_transcript_selection(shell);
+                    return;
+                }
+                KeyCode::Backspace
+                | KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Tab
+                | KeyCode::BackTab
+                | KeyCode::Delete
+                | KeyCode::Insert
+                | KeyCode::F(_)
+                | KeyCode::Char(_)
+                | KeyCode::Null
+                | KeyCode::CapsLock
+                | KeyCode::ScrollLock
+                | KeyCode::NumLock
+                | KeyCode::PrintScreen
+                | KeyCode::Pause
+                | KeyCode::Menu
+                | KeyCode::KeypadBegin
+                | KeyCode::Media(_)
+                | KeyCode::Modifier(_) => {
                     if transcript_focus_returns_to_composer(key) {
                         close_transcript_review(shell);
                         continue_in_composer = true;
@@ -1296,6 +1479,15 @@ mod tests {
         }
     }
 
+    fn modified_key(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
     #[test]
     fn end_key_routes_to_history_when_composer_is_empty() {
         let key = plain_key(KeyCode::End);
@@ -1533,5 +1725,85 @@ mod tests {
 
         assert_eq!(shell.focus.top(), FocusLayer::Composer);
         assert!(shell.pane.tool_inspector.is_none());
+    }
+
+    #[test]
+    fn shift_up_in_transcript_focus_starts_selection() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let review_event = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let shift_up_event = Event::Key(modified_key(KeyCode::Up, KeyModifiers::SHIFT));
+
+        shell.pane.add_system_message("line 1");
+        shell.pane.add_system_message("line 2");
+        shell.pane.add_system_message("line 3");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            review_event,
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            shift_up_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        let total_lines = transcript_line_count(&shell);
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+        assert_eq!(
+            shell.pane.transcript_selection_range(total_lines),
+            Some((4, 5))
+        );
+    }
+
+    #[test]
+    fn esc_clears_transcript_selection_before_returning_to_composer() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let review_event = Event::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        let selection_event = Event::Key(plain_key(KeyCode::Char('v')));
+        let esc_event = Event::Key(plain_key(KeyCode::Esc));
+
+        shell.pane.add_system_message("line 1");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            review_event,
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            selection_event,
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(&mut shell, &mut textarea, esc_event, &tx, &mut submit_text);
+
+        let total_lines = transcript_line_count(&shell);
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+        assert_eq!(shell.pane.transcript_selection_range(total_lines), None);
+    }
+
+    #[test]
+    fn osc52_copy_sequence_encodes_clipboard_payload() {
+        let sequence = build_osc52_copy_sequence("hello");
+
+        assert!(sequence.starts_with("\u{1b}]52;c;"));
+        assert!(sequence.ends_with('\u{7}'));
+        assert!(sequence.contains("aGVsbG8="));
     }
 }

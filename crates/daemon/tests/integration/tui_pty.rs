@@ -72,6 +72,7 @@ const ONBOARD_OPENING_MARKERS: &[&str] = &[
     "Nothing is written until Verify & Write.",
 ];
 const ONBOARD_ENTRY_PATH_MARKERS: &[&str] = &["Choose A Path", "Start fresh"];
+const ONBOARD_SHORTCUT_MARKERS: &[&str] = &["Next Action", "Adjust settings"];
 const MODEL_STEP_MARKERS: &[&str] = &["choose model", "model"];
 const CREDENTIAL_STEP_MARKERS: &[&str] = &["credential source", "credential env"];
 const WEB_SEARCH_STEP_MARKERS: &[&str] = &["Web Search", "Default Web Search"];
@@ -406,21 +407,11 @@ fn wait_for_fullscreen_onboarding_start(
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let visible_screen = fixture.read_screen(timeout)?;
-    if visible_screen.trim().is_empty() {
-        let child_state = match fixture.child.try_wait() {
-            Ok(Some(status)) => format!("child exited with code {}", status.exit_code()),
-            Ok(None) => "child still running".to_owned(),
-            Err(error) => format!("failed to query child status: {error}"),
-        };
-
-        return Err(format!(
-            "timed out waiting for the first visible fullscreen frame before onboarding copy ({child_state})"
-        ));
-    }
-
-    for marker in GUIDED_ONBOARDING_START_MARKERS {
-        if visible_screen.contains(marker) {
-            return Ok(visible_screen);
+    if !visible_screen.trim().is_empty() {
+        for marker in GUIDED_ONBOARDING_START_MARKERS {
+            if visible_screen.contains(marker) {
+                return Ok(visible_screen);
+            }
         }
     }
 
@@ -434,21 +425,11 @@ fn wait_for_onboard_opening_screen(
 ) -> Result<String, String> {
     let deadline = Instant::now() + timeout;
     let visible_screen = fixture.read_screen(timeout)?;
-    if visible_screen.trim().is_empty() {
-        let child_state = match fixture.child.try_wait() {
-            Ok(Some(status)) => format!("child exited with code {}", status.exit_code()),
-            Ok(None) => "child still running".to_owned(),
-            Err(error) => format!("failed to query child status: {error}"),
-        };
-
-        return Err(format!(
-            "timed out waiting for the first visible fullscreen frame before the onboard opening deck ({child_state})"
-        ));
-    }
-
-    for marker in ONBOARD_OPENING_MARKERS {
-        if visible_screen.contains(marker) {
-            return Ok(visible_screen);
+    if !visible_screen.trim().is_empty() {
+        for marker in ONBOARD_OPENING_MARKERS {
+            if visible_screen.contains(marker) {
+                return Ok(visible_screen);
+            }
         }
     }
 
@@ -460,25 +441,53 @@ fn enter_onboard_cli_guided_flow(
     fixture: &mut TuiPtyFixture,
     timeout: Duration,
 ) -> Result<String, String> {
+    let [model_step_primary, model_step_secondary] = MODEL_STEP_MARKERS else {
+        return Err("model step markers should include exactly two entries".to_owned());
+    };
+    let [entry_path_primary, entry_path_secondary] = ONBOARD_ENTRY_PATH_MARKERS else {
+        return Err("entry path markers should include exactly two entries".to_owned());
+    };
+    let [shortcut_primary, shortcut_secondary] = ONBOARD_SHORTCUT_MARKERS else {
+        return Err("shortcut markers should include exactly two entries".to_owned());
+    };
+
     fixture.send_keys(b"\r")?;
 
     let mut next_screen = fixture.wait_for_any(
         &[
             "Providers",
-            MODEL_STEP_MARKERS[0],
-            MODEL_STEP_MARKERS[1],
-            ONBOARD_ENTRY_PATH_MARKERS[0],
-            ONBOARD_ENTRY_PATH_MARKERS[1],
+            model_step_primary,
+            model_step_secondary,
+            entry_path_primary,
+            entry_path_secondary,
+            shortcut_primary,
+            shortcut_secondary,
         ],
         timeout,
     )?;
 
-    if next_screen.contains(ONBOARD_ENTRY_PATH_MARKERS[0])
-        || next_screen.contains(ONBOARD_ENTRY_PATH_MARKERS[1])
-    {
-        fixture.send_keys(b"G")?;
+    if next_screen.contains(entry_path_primary) || next_screen.contains(entry_path_secondary) {
+        fixture.send_keys(b"2")?;
         fixture.send_keys(b"\r")?;
-        next_screen = fixture.wait_for_any(&["Providers", "choose model"], timeout)?;
+        next_screen = fixture.wait_for_any(
+            &[
+                "Providers",
+                model_step_primary,
+                model_step_secondary,
+                shortcut_primary,
+                shortcut_secondary,
+            ],
+            timeout,
+        )?;
+    }
+
+    if next_screen.contains(shortcut_primary) || next_screen.contains(shortcut_secondary) {
+        fixture.send_keys(b"2")?;
+        fixture.send_keys(b"\r")?;
+        next_screen = fixture.wait_for_any(
+            &["Providers", model_step_primary, model_step_secondary],
+            timeout,
+        )?;
     }
 
     if next_screen.contains("Providers") {
@@ -552,14 +561,14 @@ fn tui_shows_welcome_message() {
 fn chat_tui_missing_config_starts_fullscreen_onboarding() {
     let mut fixture = TuiPtyFixture::spawn_without_config("missing-config-onboarding");
 
-    let screen = wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
-        .expect("chat --ui tui should enter fullscreen onboarding when config is missing");
+    let screen = wait_for_onboard_opening_screen(&mut fixture, Duration::from_secs(10))
+        .expect("chat --ui tui should start on the fullscreen opening deck when config is missing");
 
     assert!(
-        screen.contains("Security Check")
-            || screen.contains("Setup Wizard")
-            || screen.contains("review the trust boundary"),
-        "missing-config tui should show onboarding content instead of the text fallback prompt: {screen:?}"
+        screen.contains("Press Enter to begin.")
+            || screen.contains("A focused full-screen deck for first setup")
+            || screen.contains("Nothing is written until Verify & Write."),
+        "missing-config tui should start on the opening deck instead of the risk screen: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");
@@ -569,14 +578,14 @@ fn chat_tui_missing_config_starts_fullscreen_onboarding() {
 fn tui_subcommand_missing_config_starts_fullscreen_onboarding() {
     let mut fixture = TuiPtyFixture::spawn_tui_without_config("tui-subcommand-onboarding");
 
-    let screen = wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
-        .expect("loong tui should enter fullscreen onboarding when config is missing");
+    let screen = wait_for_onboard_opening_screen(&mut fixture, Duration::from_secs(10))
+        .expect("loong tui should start on the fullscreen opening deck when config is missing");
 
     assert!(
-        screen.contains("Security Check")
-            || screen.contains("Setup Wizard")
-            || screen.contains("review the trust boundary"),
-        "missing-config tui subcommand should show onboarding content instead of exiting: {screen:?}"
+        screen.contains("Press Enter to begin.")
+            || screen.contains("A focused full-screen deck for first setup")
+            || screen.contains("Nothing is written until Verify & Write."),
+        "missing-config tui subcommand should start on the opening deck instead of exiting: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");
@@ -693,80 +702,87 @@ fn chat_tui_missing_config_can_finish_fullscreen_onboarding_and_enter_chat() {
         &[("OPENAI_CODEX_OAUTH_TOKEN", "test-oauth-token")],
     );
 
-    wait_for_fullscreen_onboarding_start(&mut fixture, Duration::from_secs(10))
-        .expect("missing-config tui should start on the fullscreen onboarding risk screen");
+    wait_for_onboard_opening_screen(&mut fixture, Duration::from_secs(10))
+        .expect("missing-config tui should start on the fullscreen opening deck");
 
-    fixture.type_text("y").expect("accept risk");
-    fixture.send_keys(b"\r").expect("submit risk acceptance");
+    enter_onboard_cli_guided_flow(&mut fixture, Duration::from_secs(10))
+        .expect("missing-config tui should advance from the opening deck into guided setup");
 
-    fixture
-        .wait_for("choose model", Duration::from_secs(10))
-        .expect("onboarding should continue to the model step");
     fixture.send_keys(b"\r").expect("keep default model");
 
     fixture
-        .wait_for("credential source", Duration::from_secs(10))
+        .wait_for_any(CREDENTIAL_STEP_MARKERS, Duration::from_secs(10))
         .expect("onboarding should continue to the credential step");
     fixture
         .send_keys(b"\r")
         .expect("keep default credential env");
 
     fixture
-        .wait_for("memory profile", Duration::from_secs(10))
+        .wait_for_any(WEB_SEARCH_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the web-search step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default web-search selection");
+
+    fixture
+        .wait_for_any(MEMORY_STEP_MARKERS, Duration::from_secs(10))
         .expect("onboarding should continue to the memory profile step");
     fixture
         .send_keys(b"\r")
         .expect("keep default memory profile");
 
     fixture
-        .wait_for("choose sqlite memory path", Duration::from_secs(10))
+        .wait_for_any(PERSONALITY_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the personality step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default CLI personality");
+
+    fixture
+        .wait_for_any(RUNTIME_SURFACES_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the runtime-surfaces step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default runtime-surfaces selection");
+
+    fixture
+        .wait_for_any(SQLITE_PATH_STEP_MARKERS, Duration::from_secs(10))
         .expect("onboarding should continue to the sqlite path step");
     fixture.send_keys(b"\r").expect("keep default sqlite path");
 
     fixture
-        .wait_for("choose workspace root", Duration::from_secs(10))
+        .wait_for_any(FILE_ROOT_STEP_MARKERS, Duration::from_secs(10))
         .expect("onboarding should continue to the workspace root step");
     fixture
         .send_keys(b"\r")
         .expect("keep default workspace root");
 
     fixture
-        .wait_for("choose protocol support", Duration::from_secs(10))
+        .wait_for_any(SERVICE_CHANNEL_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the service-channel step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default service-channel selection");
+
+    fixture
+        .wait_for_any(ACP_STEP_MARKERS, Duration::from_secs(10))
         .expect("onboarding should continue to the ACP enablement step");
     fixture.type_text("disabled").expect("disable ACP");
     fixture.send_keys(b"\r").expect("submit ACP selection");
 
     fixture
-        .wait_for_any(
-            &["verify before write", "preflight checks"],
-            Duration::from_secs(10),
-        )
-        .expect("onboarding should continue to the preflight step");
-    fixture.send_keys(b"\r").expect("continue from preflight");
-
-    fixture
-        .wait_for("review setup", Duration::from_secs(10))
-        .expect("onboarding should continue to the review step");
-    fixture.send_keys(b"\r").expect("continue from review");
-
-    fixture
-        .wait_for_any(
-            &["ready to write config", "Write config"],
-            Duration::from_secs(10),
-        )
-        .expect("onboarding should continue to the write-confirm step");
-    fixture.type_text("y").expect("confirm config write");
-    fixture.send_keys(b"\r").expect("submit config write");
-
-    fixture
-        .wait_for_any(
-            &["setup complete", "onboarding complete", "start here"],
-            Duration::from_secs(10),
-        )
-        .expect("onboarding should render the success summary after writing config");
+        .wait_for_any(VERIFY_WRITE_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the verify-and-write step");
     fixture
         .send_keys(b"\r")
-        .expect("enter chat from success screen");
+        .expect("write config from verify-and-write screen");
+
+    fixture
+        .wait_for_any(LAUNCH_HANDOFF_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should render the launch handoff after writing config");
+    fixture
+        .send_keys(b"\r")
+        .expect("enter chat from launch handoff");
 
     let screen = fixture
         .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))

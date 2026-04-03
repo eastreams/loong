@@ -16,7 +16,7 @@ use super::focus::{FocusLayer, FocusStack};
 use super::history::{self, PaneView};
 use super::input::{self, InputView};
 use super::layout;
-use super::message::ToolStatus;
+use super::message::{ToolStatus, format_tool_args_preview};
 use super::spinner::{self, SpinnerView};
 use super::status_bar::{self, StatusBarView};
 use super::theme::Palette;
@@ -70,6 +70,7 @@ pub(super) fn draw(
         state.pane(),
         palette,
         state.show_thinking(),
+        state.focus().has(FocusLayer::Transcript),
     );
 
     // 2. First separator
@@ -388,6 +389,14 @@ fn render_tool_inspector(
 
     let status_summary = render_tool_inspector_status(&tool_inspector, palette);
     let output_text = tool_inspector_output(tool_inspector.status);
+    let raw_args = tool_inspector.args_preview.trim();
+    let summarized_args = format_tool_args_preview(tool_inspector.tool_name, raw_args);
+    let args_display = if summarized_args.is_empty() {
+        "(awaiting tool input)".to_owned()
+    } else {
+        summarized_args.clone()
+    };
+    let show_raw_args = !raw_args.is_empty() && raw_args != summarized_args;
 
     let mut content_lines: Vec<Line<'_>> = Vec::new();
     let tool_position = tool_inspector.position + 1;
@@ -420,16 +429,29 @@ fn render_tool_inspector(
     ]));
     content_lines.push(Line::from(vec![
         Span::styled(" Args: ".to_string(), Style::default().fg(palette.dim)),
-        Span::styled(
-            tool_inspector.args_preview.to_string(),
-            Style::default().fg(palette.text),
-        ),
+        Span::styled(args_display, Style::default().fg(palette.text)),
     ]));
     content_lines.push(Line::from(vec![
         Span::styled(" Status: ".to_string(), Style::default().fg(palette.dim)),
         status_summary,
     ]));
     content_lines.push(Line::default());
+
+    if show_raw_args {
+        content_lines.push(Line::styled(
+            " Raw args",
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for raw_arg_line in raw_args.lines() {
+            let prefixed_line = format!(" {raw_arg_line}");
+            let line = Line::styled(prefixed_line, Style::default().fg(palette.dim));
+            content_lines.push(line);
+        }
+        content_lines.push(Line::default());
+    }
+
     content_lines.push(Line::styled(
         " Output",
         Style::default()
@@ -819,6 +841,47 @@ mod tests {
         assert!(
             text.contains("line 2"),
             "tool inspector should render tool output"
+        );
+    }
+
+    #[test]
+    fn draw_with_tool_inspector_overlay_renders_multiline_args() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::ToolInspector);
+        let tool_inspector = TestToolInspector {
+            tool_id: "tool-3".into(),
+            tool_name: "file.edit".into(),
+            args_preview: "path: docs/notes.md\nreplace: draft -> final".into(),
+            status: ToolStatus::Done {
+                success: true,
+                output: "edited docs/notes.md".into(),
+                duration_ms: 24,
+            },
+            scroll_offset: 0,
+            position: 0,
+            total: 1,
+        };
+        let shell = TestShell {
+            focus,
+            tool_inspector: Some(tool_inspector),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("replace: draft -> final"),
+            "tool inspector should render multiline args content"
         );
     }
 

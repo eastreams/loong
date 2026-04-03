@@ -16,6 +16,9 @@ use super::theme::Palette;
 pub(super) trait InputView {
     fn agent_running(&self) -> bool;
     fn has_staged_message(&self) -> bool;
+    fn transcript_selection_line_count(&self) -> usize {
+        0
+    }
     fn input_hint(&self) -> Option<&str> {
         None
     }
@@ -34,7 +37,11 @@ pub(super) fn render_input(
 
     let default_prompt_hint = match focus {
         FocusLayer::Transcript => {
-            " Review mode | Up/Down scroll | PgUp/PgDn page | Home/End jump | Esc return "
+            if pane.transcript_selection_line_count() > 0 {
+                " Review mode | Shift+Arrows extend | y copy | Esc clear "
+            } else {
+                " Review mode | v select | Shift+Arrows extend | y copy | Esc return "
+            }
         }
         FocusLayer::Composer
         | FocusLayer::Help
@@ -85,6 +92,22 @@ mod tests {
         }
         fn has_staged_message(&self) -> bool {
             self.staged
+        }
+    }
+
+    struct SelectionInput {
+        selection_count: usize,
+    }
+
+    impl InputView for SelectionInput {
+        fn agent_running(&self) -> bool {
+            false
+        }
+        fn has_staged_message(&self) -> bool {
+            false
+        }
+        fn transcript_selection_line_count(&self) -> usize {
+            self.selection_count
         }
     }
 
@@ -224,6 +247,39 @@ mod tests {
         assert!(
             text.contains("Review mode"),
             "transcript focus should explain that review mode is active: {text:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_focus_with_selection_shows_copy_hint() {
+        let backend = TestBackend::new(72, 5);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let pane = SelectionInput { selection_count: 3 };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                render_input(
+                    f,
+                    f.area(),
+                    &textarea,
+                    &pane,
+                    FocusLayer::Transcript,
+                    &palette,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("y copy"),
+            "selection hint should mention copy: {text:?}"
+        );
+        assert!(
+            text.contains("Esc clear"),
+            "selection hint should mention clearing selection: {text:?}"
         );
     }
 }

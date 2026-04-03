@@ -2,7 +2,6 @@ use std::env;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-mod fullscreen;
 #[path = "onboard_protocols.rs"]
 mod onboard_protocols;
 #[path = "onboard_workspace.rs"]
@@ -10,7 +9,6 @@ mod onboard_workspace;
 pub mod presentation;
 #[allow(dead_code)] // Contains functions accessed by integration tests via pub re-exports
 mod screens;
-pub(crate) use fullscreen::build_first_run_fullscreen_boot_flow;
 pub use screens::*;
 
 use loongclaw_app as mvp;
@@ -784,6 +782,26 @@ pub async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult<()> {
     run_onboard_cli_inner(options, &context).await
 }
 
+pub async fn run_first_run_fullscreen_onboard(output: Option<String>) -> CliResult<()> {
+    let options = OnboardCommandOptions {
+        output,
+        force: false,
+        non_interactive: false,
+        accept_risk: false,
+        provider: None,
+        model: None,
+        api_key_env: None,
+        web_search_provider: None,
+        web_search_api_key_env: None,
+        personality: None,
+        memory_profile: None,
+        system_prompt: None,
+        skip_model_probe: false,
+    };
+
+    run_onboard_cli(options).await
+}
+
 /// Test-only entrypoint that accepts an explicit runtime context, bypassing
 /// terminal detection and real filesystem defaults.
 #[doc(hidden)]
@@ -1215,13 +1233,9 @@ async fn run_onboard_cli_inner(
                     let blocked_chat_config_path =
                         launch_chat_config_path(&blocked_summary, blocked_launch_result);
                     if let Some(config_path) = blocked_chat_config_path.as_deref() {
-                        crate::run_chat_cli(
+                        crate::tui_cli::run_existing_config_tui_with_system_message(
                             Some(config_path),
                             None,
-                            crate::CliChatUiModeArg::Tui,
-                            false,
-                            false,
-                            &[],
                             None,
                         )
                         .await?;
@@ -1274,7 +1288,7 @@ async fn run_onboard_cli_inner(
     }
     let chat_config_path = launch_chat_config_path(&success_summary, launch_result);
     if let Some(config_path) = chat_config_path.as_deref() {
-        crate::tui_cli::run_tui_cli_with_system_message(
+        crate::tui_cli::run_existing_config_tui_with_system_message(
             Some(config_path),
             None,
             Some("Setup complete. Entering chat.".to_owned()),

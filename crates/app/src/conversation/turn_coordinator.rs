@@ -97,6 +97,7 @@ use super::turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, ProviderTurn, ProviderUsage,
     ToolBatchExecutionIntentStatus, ToolBatchExecutionTrace, ToolIntent, TurnEngine, TurnFailure,
     TurnFailureKind, TurnResult, TurnValidation, effective_result_tool_name,
+    summarize_tool_intent_start_detail,
 };
 use super::turn_observer::{
     ConversationTurnObserverHandle, ConversationTurnPhase, ConversationTurnPhaseEvent,
@@ -2426,7 +2427,15 @@ fn observe_provider_turn_tool_batch_started(
 
     for intent in &turn.tool_intents {
         let tool_name = effective_result_tool_name(intent);
-        let event = ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name);
+        let detail = summarize_tool_intent_start_detail(intent);
+        let event = match detail {
+            Some(detail) => ConversationTurnToolEvent::running_with_detail(
+                intent.tool_call_id.clone(),
+                tool_name,
+                detail,
+            ),
+            None => ConversationTurnToolEvent::running(intent.tool_call_id.clone(), tool_name),
+        };
         observer.on_tool(event);
     }
 }
@@ -7692,6 +7701,49 @@ mod tests {
         assert_eq!(events[1].tool_call_id, "call-2");
         assert_eq!(events[1].state, ConversationTurnToolState::Failed);
         assert_eq!(events[1].detail.as_deref(), Some("second tool failed"));
+    }
+
+    #[test]
+    fn observe_provider_turn_tool_batch_started_includes_tool_start_detail() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![ToolIntent {
+                tool_name: "file.edit".to_owned(),
+                args_json: json!({
+                    "path": "docs/notes.md",
+                    "old_string": "draft heading",
+                    "new_string": "final heading"
+                }),
+                source: "provider_tool_call".to_owned(),
+                session_id: "session-a".to_owned(),
+                turn_id: "turn-a".to_owned(),
+                tool_call_id: "call-file-edit".to_owned(),
+            }],
+            raw_meta: Value::Null,
+            usage: ProviderUsage::default(),
+        };
+        let observer = Arc::new(RecordingTurnObserver::default());
+        let observer_handle: ConversationTurnObserverHandle = observer.clone();
+
+        observe_provider_turn_tool_batch_started(Some(&observer_handle), &turn);
+
+        let tool_events = observer
+            .tool_events
+            .lock()
+            .expect("tool event lock should not be poisoned");
+
+        assert_eq!(tool_events.len(), 1);
+        assert_eq!(tool_events[0].state, ConversationTurnToolState::Running);
+        assert_eq!(tool_events[0].tool_call_id, "call-file-edit");
+
+        let detail = tool_events[0]
+            .detail
+            .as_deref()
+            .expect("running tool event should include detail");
+
+        assert!(detail.contains("docs/notes.md"));
+        assert!(detail.contains("draft heading"));
+        assert!(detail.contains("final heading"));
     }
 
     #[cfg(feature = "memory-sqlite")]

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -14,6 +14,8 @@ use super::events::UiEvent;
 
 struct ObserverState {
     tool_start_times: HashMap<String, Instant>,
+    stream_tool_call_ids: HashMap<usize, String>,
+    announced_tool_call_ids: HashSet<String>,
     latest_phase: String,
 }
 
@@ -21,6 +23,8 @@ impl ObserverState {
     fn new() -> Self {
         Self {
             tool_start_times: HashMap::new(),
+            stream_tool_call_ids: HashMap::new(),
+            announced_tool_call_ids: HashSet::new(),
             latest_phase: String::new(),
         }
     }
@@ -35,6 +39,13 @@ impl TuiObserver {
     fn lock_state(&self) -> std::sync::MutexGuard<'_, ObserverState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+fn remove_tool_call_tracking(state: &mut ObserverState, tool_call_id: &str) {
+    state.announced_tool_call_ids.remove(tool_call_id);
+    state
+        .stream_tool_call_ids
+        .retain(|_, tracked_tool_call_id| tracked_tool_call_id != tool_call_id);
 }
 
 fn format_phase_label(phase: ConversationTurnPhase) -> String {
@@ -137,6 +148,13 @@ impl ConversationTurnObserver for TuiObserver {
         {
             let mut state = self.lock_state();
             state.latest_phase = phase_str.clone();
+            if matches!(
+                event.phase,
+                ConversationTurnPhase::RequestingProvider
+                    | ConversationTurnPhase::RequestingFollowupProvider
+            ) {
+                state.stream_tool_call_ids.clear();
+            }
         }
 
         let _ = self.tx.send(UiEvent::PhaseChange {
@@ -160,38 +178,57 @@ impl ConversationTurnObserver for TuiObserver {
     fn on_tool(&self, event: ConversationTurnToolEvent) {
         match event.state {
             ConversationTurnToolState::Running => {
-                {
+                let tool_call_id = event.tool_call_id;
+                let tool_name = event.tool_name;
+                let args_preview = event.detail.unwrap_or_default();
+                let should_emit_tool_start = {
                     let mut state = self.lock_state();
                     state
                         .tool_start_times
-                        .insert(event.tool_call_id.clone(), Instant::now());
+                        .entry(tool_call_id.clone())
+                        .or_insert_with(Instant::now);
+                    state.announced_tool_call_ids.insert(tool_call_id.clone())
+                };
+
+                if should_emit_tool_start {
+                    let _ = self.tx.send(UiEvent::ToolStart {
+                        tool_id: tool_call_id,
+                        tool_name,
+                        args_preview,
+                    });
+                    return;
                 }
 
-                let _ = self.tx.send(UiEvent::ToolStart {
-                    tool_id: event.tool_call_id,
-                    tool_name: event.tool_name,
-                    args_preview: event.detail.unwrap_or_default(),
-                });
+                if !args_preview.is_empty() {
+                    let _ = self.tx.send(UiEvent::ToolArgsDelta {
+                        tool_id: tool_call_id,
+                        chunk: args_preview,
+                    });
+                }
             }
 
             ConversationTurnToolState::Completed
             | ConversationTurnToolState::Failed
             | ConversationTurnToolState::Interrupted => {
+                let tool_call_id = event.tool_call_id;
+                let output = event.detail.unwrap_or_default();
                 let duration_ms = {
                     let mut state = self.lock_state();
-                    state
+                    let duration = state
                         .tool_start_times
-                        .remove(&event.tool_call_id)
+                        .remove(&tool_call_id)
                         .map(|start| start.elapsed().as_millis().min(u32::MAX as u128) as u32)
-                        .unwrap_or(0)
+                        .unwrap_or(0);
+                    remove_tool_call_tracking(&mut state, tool_call_id.as_str());
+                    duration
                 };
 
                 let success = event.state == ConversationTurnToolState::Completed;
 
                 let _ = self.tx.send(UiEvent::ToolDone {
-                    tool_id: event.tool_call_id,
+                    tool_id: tool_call_id,
                     success,
-                    output: event.detail.unwrap_or_default(),
+                    output,
                     duration_ms,
                 });
             }
@@ -210,19 +247,23 @@ impl ConversationTurnObserver for TuiObserver {
             }
 
             ConversationTurnToolState::Denied => {
+                let tool_call_id = event.tool_call_id;
+                let output = event.detail.unwrap_or_else(|| "denied".to_owned());
                 let duration_ms = {
                     let mut state = self.lock_state();
-                    state
+                    let duration = state
                         .tool_start_times
-                        .remove(&event.tool_call_id)
+                        .remove(&tool_call_id)
                         .map(|start| start.elapsed().as_millis().min(u32::MAX as u128) as u32)
-                        .unwrap_or(0)
+                        .unwrap_or(0);
+                    remove_tool_call_tracking(&mut state, tool_call_id.as_str());
+                    duration
                 };
 
                 let _ = self.tx.send(UiEvent::ToolDone {
-                    tool_id: event.tool_call_id,
+                    tool_id: tool_call_id,
                     success: false,
-                    output: event.detail.unwrap_or_else(|| "denied".to_owned()),
+                    output,
                     duration_ms,
                 });
             }
@@ -246,6 +287,69 @@ impl ConversationTurnObserver for TuiObserver {
                         is_thinking: true,
                     });
                 }
+            }
+            "tool_call_start" => {
+                let stream_index = match event.index {
+                    Some(stream_index) => stream_index,
+                    None => return,
+                };
+                let tool_call = match event.delta.tool_call {
+                    Some(tool_call) => tool_call,
+                    None => return,
+                };
+                let tool_call_id = match tool_call.id {
+                    Some(tool_call_id) => tool_call_id,
+                    None => return,
+                };
+                let tool_name = match tool_call.name {
+                    Some(tool_name) => tool_name,
+                    None => return,
+                };
+                let should_emit_tool_start = {
+                    let mut state = self.lock_state();
+                    state
+                        .tool_start_times
+                        .entry(tool_call_id.clone())
+                        .or_insert_with(Instant::now);
+                    state
+                        .stream_tool_call_ids
+                        .insert(stream_index, tool_call_id.clone());
+                    state.announced_tool_call_ids.insert(tool_call_id.clone())
+                };
+
+                if should_emit_tool_start {
+                    let _ = self.tx.send(UiEvent::ToolStart {
+                        tool_id: tool_call_id,
+                        tool_name,
+                        args_preview: String::new(),
+                    });
+                }
+            }
+            "tool_call_input_delta" => {
+                let stream_index = match event.index {
+                    Some(stream_index) => stream_index,
+                    None => return,
+                };
+                let tool_call = match event.delta.tool_call {
+                    Some(tool_call) => tool_call,
+                    None => return,
+                };
+                let chunk = match tool_call.args {
+                    Some(chunk) => chunk,
+                    None => return,
+                };
+                let tool_call_id = {
+                    let state = self.lock_state();
+                    state.stream_tool_call_ids.get(&stream_index).cloned()
+                };
+                let Some(tool_call_id) = tool_call_id else {
+                    return;
+                };
+
+                let _ = self.tx.send(UiEvent::ToolArgsDelta {
+                    tool_id: tool_call_id,
+                    chunk,
+                });
             }
             _ => {}
         }
@@ -580,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_tool_call_events_are_ignored() {
+    fn streaming_tool_call_start_sends_tool_start() {
         let (mut rx, observer) = setup();
 
         let event = StreamingTokenEvent {
@@ -598,10 +702,98 @@ mod tests {
 
         observer.on_streaming_token(event);
 
+        let ui_event = rx.try_recv().expect("should receive ToolStart");
+        match ui_event {
+            UiEvent::ToolStart {
+                tool_id,
+                tool_name,
+                args_preview,
+            } => {
+                assert_eq!(tool_id, "call_5");
+                assert_eq!(tool_name, "search");
+                assert!(args_preview.is_empty());
+            }
+            other => panic!("expected ToolStart, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn streaming_tool_call_start_then_running_emits_single_tool_start() {
+        let (mut rx, observer) = setup();
+
+        let start_event = StreamingTokenEvent {
+            event_type: "tool_call_start".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: Some("search".to_owned()),
+                    args: None,
+                    id: Some("call_7".to_owned()),
+                }),
+            },
+            index: Some(0),
+        };
+
+        observer.on_streaming_token(start_event);
+        observer.on_tool(ConversationTurnToolEvent::running("call_7", "search"));
+
+        let first_event = rx.try_recv().expect("should receive ToolStart");
+        match first_event {
+            UiEvent::ToolStart {
+                tool_id, tool_name, ..
+            } => {
+                assert_eq!(tool_id, "call_7");
+                assert_eq!(tool_name, "search");
+            }
+            other => panic!("expected ToolStart, got {:?}", other),
+        }
+
         assert!(
             rx.try_recv().is_err(),
-            "tool_call_start should not produce a UiEvent"
+            "running event should not emit a duplicate ToolStart after streaming start"
         );
+    }
+
+    #[test]
+    fn streaming_tool_call_input_delta_emits_tool_args_delta() {
+        let (mut rx, observer) = setup();
+
+        observer.on_streaming_token(StreamingTokenEvent {
+            event_type: "tool_call_start".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: Some("file.write".to_owned()),
+                    args: None,
+                    id: Some("call_9".to_owned()),
+                }),
+            },
+            index: Some(2),
+        });
+
+        let _ = rx.try_recv().expect("should receive ToolStart");
+
+        observer.on_streaming_token(StreamingTokenEvent {
+            event_type: "tool_call_input_delta".to_owned(),
+            delta: crate::acp::TokenDelta {
+                text: None,
+                tool_call: Some(crate::acp::ToolCallDelta {
+                    name: None,
+                    args: Some("{\"path\":\"src/main.rs\"}".to_owned()),
+                    id: None,
+                }),
+            },
+            index: Some(2),
+        });
+
+        let ui_event = rx.try_recv().expect("should receive ToolArgsDelta");
+        match ui_event {
+            UiEvent::ToolArgsDelta { tool_id, chunk } => {
+                assert_eq!(tool_id, "call_9");
+                assert_eq!(chunk, "{\"path\":\"src/main.rs\"}");
+            }
+            other => panic!("expected ToolArgsDelta, got {:?}", other),
+        }
     }
 
     #[test]

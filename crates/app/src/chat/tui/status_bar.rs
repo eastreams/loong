@@ -24,6 +24,9 @@ pub(super) trait StatusBarView {
     fn scroll_offset(&self) -> u16 {
         0
     }
+    fn transcript_selection_line_count(&self) -> usize {
+        0
+    }
     /// Returns the current status message and the instant it was set.
     /// Defaults to `None` so existing implementations don't break.
     fn status_message(&self) -> Option<(&str, &Instant)> {
@@ -104,6 +107,19 @@ pub(super) fn render_status_bar(
         Style::default().fg(palette.separator),
     ));
     spans.push(focus_state_span(focus, palette));
+    let transcript_selection_line_count = pane.transcript_selection_line_count();
+    if focus == FocusLayer::Transcript && transcript_selection_line_count > 0 {
+        spans.push(Span::styled(
+            " | ".to_string(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(
+            format!("SEL {transcript_selection_line_count}"),
+            Style::default()
+                .fg(palette.warning)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if let Some(s) = status_span {
         spans.push(s);
     }
@@ -211,6 +227,9 @@ mod tests {
         }
         fn scroll_offset(&self) -> u16 {
             self.scroll_offset
+        }
+        fn transcript_selection_line_count(&self) -> usize {
+            0
         }
         fn status_message(&self) -> Option<(&str, &Instant)> {
             self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
@@ -440,6 +459,71 @@ mod tests {
         assert!(
             text.contains("REVIEW"),
             "transcript focus should expose the REVIEW indicator: {text:?}"
+        );
+    }
+
+    #[test]
+    fn transcript_focus_status_bar_shows_selection_count() {
+        let backend = TestBackend::new(90, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+
+        struct SelectionBar {
+            inner: TestBar,
+            selection_count: usize,
+        }
+
+        impl StatusBarView for SelectionBar {
+            fn model(&self) -> &str {
+                self.inner.model()
+            }
+            fn input_tokens(&self) -> u32 {
+                self.inner.input_tokens()
+            }
+            fn output_tokens(&self) -> u32 {
+                self.inner.output_tokens()
+            }
+            fn context_length(&self) -> u32 {
+                self.inner.context_length()
+            }
+            fn session_id(&self) -> &str {
+                self.inner.session_id()
+            }
+            fn scroll_offset(&self) -> u16 {
+                self.inner.scroll_offset()
+            }
+            fn transcript_selection_line_count(&self) -> usize {
+                self.selection_count
+            }
+            fn status_message(&self) -> Option<(&str, &Instant)> {
+                self.inner.status_message()
+            }
+        }
+
+        let bar = SelectionBar {
+            inner: TestBar {
+                model: "gpt-4".into(),
+                input_tokens: 0,
+                output_tokens: 0,
+                context_length: 0,
+                session_id: "sess-select".into(),
+                scroll_offset: 2,
+                status_message: None,
+            },
+            selection_count: 4,
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_status_bar(f, f.area(), &bar, FocusLayer::Transcript, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("SEL 4"),
+            "status bar should show selection count: {text:?}"
         );
     }
 }
