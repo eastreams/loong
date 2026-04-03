@@ -7,18 +7,18 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 | Domain | Grade | Last Reviewed | Gaps |
 |--------|-------|---------------|------|
 | Contracts (L0) | A | 2026-03-13 | `#[non_exhaustive]` applied; membrane field not yet enforced at runtime |
-| Kernel Security (L1) | B+ | 2026-03-13 | Policy only gates `shell.exec`; `file.read`/`file.write` bypass policy check |
+| Kernel Security (L1) | B+ | 2026-04-03 | Core tool execution now flows through capability checks and `PolicyExtensionChain`; remaining gaps are connector/ACP/runtime-only analytics and compatibility-seam closure |
 | Execution Planes (L2) | B | 2026-03-13 | Core/extension pattern solid; no WASM fuel metering yet |
 | Orchestration (L3) | B | 2026-03-13 | HarnessBroker routes correctly; context-engine selection is pluggable, but richer engine implementations and broader runtime coverage are still limited |
-| Observability (L4) | C+ | 2026-03-13 | Audit events in-memory only; no HMAC chain; no persistent sink |
+| Observability (L4) | B- | 2026-04-03 | Durable JSONL and fanout audit bootstraps exist; no tamper-evident chain, richer external sink adapters, or broader operator-facing audit evidence products yet |
 | Vertical Packs (L5) | B | 2026-03-13 | Pack validation works; namespace struct exists but not enforced |
 | Protocol (L5.5) | B+ | 2026-03-13 | Transport contracts and typed routing operational |
 | Integration (L6) | B | 2026-03-13 | Plugin scanning works; hotplug lifecycle incomplete |
 | Plugin IR (L7) | B- | 2026-03-13 | Bridge inference works; multi-language support limited |
-| Self-Awareness (L8) | B- | 2026-03-13 | Snapshots generated but not continuous; no drift detection agent |
+| Self-Awareness (L8) | B- | 2026-04-03 | Monthly drift review artifacts exist, but continuous drift detection and automated reviewer guidance are still limited |
 | Bootstrap (L9) | B | 2026-03-13 | Activation plans work; no policy-bounded bootstrap validation |
 | Context/Memory | C | 2026-03-13 | SQLite turns only; no scopes, no provenance, no FTS5 |
-| Documentation | A- | 2026-03-13 | Strong coverage across design docs, security, product sense, and quality tracking |
+| Documentation | A- | 2026-04-03 | Strong coverage across design docs, security, product sense, quality tracking, and AGT comparison context; still needs more release-grade benchmark and governance evidence summaries |
 | CI/Enforcement | A | 2026-03-13 | 8 CI workflows, convention-engineering (14 files, 11 checks), check:harness mirror gate |
 | Contributor Experience | A- | 2026-03-13 | Clear tracks and recipes; could add more examples |
 

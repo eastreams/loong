@@ -1,6 +1,6 @@
 # LoongClaw Roadmap
 
-Last updated: 2026-03-20
+Last updated: 2026-04-03
 
 This roadmap is execution-focused. Every stage has:
 
@@ -25,6 +25,24 @@ Build a layered Agentic OS kernel that is:
 3. High-risk actions require human authorization under policy.
 4. Untrusted plugins default to strict scan + restricted runtime.
 5. Every security-critical decision must be auditable.
+
+## Current Comparison-Driven Priorities
+
+The convergence layer captured in
+`docs/plans/2026-04-03-runtime-convergence-design.md`
+and
+`docs/plans/2026-04-03-runtime-convergence-implementation-plan.md`
+reinforces five near-term priorities for the current branch:
+
+1. keep architecture-truth docs aligned with the governed-path reality that the
+   code now implements
+2. continue shrinking optional-context and direct-mode compatibility seams so
+   `Direct` remains explicit and narrow
+3. finish Stage 2 runtime-isolation closure for WASM and process bridge lanes
+4. productize governance evidence through benchmark, verification, and
+   release-facing artifacts
+5. sequence ecosystem-facing packaging after the kernel/runtime closure work
+   above
 
 ## Stage 0: Kernel Contract Freeze (Done)
 
@@ -61,8 +79,9 @@ Delivered:
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
 - external profile signature verification (`security_scan.profile_signature`, ed25519)
 - JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
-- kernel-level tool-call policy gate (`PolicyEngine::check_tool_call`) with explicit
-  deny/approval-required outcomes before tool dispatch (Rule of Two)
+- kernel-level tool-call policy gate through `authorize_pack_operation` and the
+  `PolicyExtensionChain`, with explicit deny/approval-required outcomes before
+  core tool dispatch (Rule of Two)
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
@@ -75,6 +94,8 @@ Remaining:
 
 - profile signing key lifecycle (rotation/revocation) and trust anchor management
 - SIEM transport adapters beyond file JSONL (HTTP/syslog/event bus)
+- connector/ACP/runtime-only analytics and remaining direct compatibility seams
+  still need to converge on the same L1 governance path
 
 Exit criteria:
 
@@ -367,7 +388,15 @@ Trade-off: wiring now locks in the API surface; waiting allows more usage patter
 
 ### D2: Persistent audit sink
 
-`InMemoryAuditSink` loses all audit events on process restart. For security-critical decisions (policy denials, token revocations) to be auditable post-incident, a durable sink is needed.
+Production app bootstraps now support durable JSONL retention and fanout audit
+mode, so the remaining observability gap is narrower than the earlier
+baseline.
+
+The next problem is:
+
+1. stronger tamper-evident audit retention
+2. richer query and export ergonomics
+3. consistent evidence behavior across non-app runtime seams
 
 Options:
 - SQLite audit table (reuse existing rusqlite dependency)
@@ -466,11 +495,20 @@ instead of preceding it.
 
 ## Current Priority Order
 
+This order is now described in more detail by:
+
+- `docs/plans/2026-04-03-runtime-convergence-design.md`
+- `docs/plans/2026-04-03-runtime-convergence-implementation-plan.md`
+
+Current order:
+
 1. Kernel-first runtime closure and direct-path retirement
-2. Persistent audit sink and query baseline
-3. ACP control-plane hardening and recovery
-4. Shared execution security tiers across process/browser/WASM lanes
-5. First-party workflow packs on hardened runtime primitives
+2. Durable session and memory runtime with stronger audit evidence
+3. ACP and app-layer control-plane hardening and recovery
+4. Tool productization and scheduling on top of truthful runtime evidence
+5. Approval surface unification
+6. Shared execution security tiers across process/browser/WASM lanes
+7. First-party workflow packs on hardened runtime primitives
 
 Execution package for this order:
 
