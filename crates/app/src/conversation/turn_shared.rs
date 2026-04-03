@@ -5,8 +5,8 @@ use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
-    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolIntent,
-    ToolResultPayloadSemantics, TurnResult,
+    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolBatchExecutionIntentStatus,
+    ToolBatchExecutionTrace, ToolIntent, ToolResultPayloadSemantics, TurnResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -183,6 +183,54 @@ pub(crate) fn summarize_tool_followup_request(intents: &[ToolIntent]) -> Option<
 pub(crate) fn summarize_single_tool_followup_request(intent: &ToolIntent) -> Option<String> {
     let entry = tool_followup_request_entry(intent);
     serde_json::to_string(&entry).ok()
+}
+
+pub(crate) fn summarize_provider_lane_tool_request(
+    turn: &ProviderTurn,
+    turn_result: &TurnResult,
+    trace: Option<&ToolBatchExecutionTrace>,
+) -> Option<String> {
+    match turn_result {
+        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
+            summarize_tool_followup_request(&turn.tool_intents)
+        }
+        TurnResult::NeedsApproval(_)
+        | TurnResult::ToolDenied(_)
+        | TurnResult::ToolError(_)
+        | TurnResult::ProviderError(_) => summarize_failed_provider_lane_tool_request(turn, trace),
+    }
+}
+
+pub(crate) fn summarize_failed_provider_lane_tool_request(
+    turn: &ProviderTurn,
+    trace: Option<&ToolBatchExecutionTrace>,
+) -> Option<String> {
+    let failed_tool_call_id = trace.and_then(first_failed_provider_lane_tool_call_id);
+    if let Some(failed_tool_call_id) = failed_tool_call_id {
+        let failed_intent = turn
+            .tool_intents
+            .iter()
+            .find(|intent| intent.tool_call_id == failed_tool_call_id)?;
+        let summary = summarize_single_tool_followup_request(failed_intent);
+        return summary;
+    }
+
+    match turn.tool_intents.as_slice() {
+        [intent] => summarize_single_tool_followup_request(intent),
+        [] => None,
+        _ => summarize_tool_followup_request(&turn.tool_intents),
+    }
+}
+
+fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> Option<&str> {
+    let failed_outcome = trace.intent_outcomes.iter().find(|intent_outcome| {
+        !matches!(
+            intent_outcome.status,
+            ToolBatchExecutionIntentStatus::Completed
+        )
+    })?;
+    let tool_call_id = failed_outcome.tool_call_id.as_str();
+    Some(tool_call_id)
 }
 
 fn tool_followup_request_entry(intent: &ToolIntent) -> Value {
@@ -3054,6 +3102,46 @@ mod tests {
 
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
+    }
+
+    #[test]
+    fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_without_trace() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "Cargo.toml"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "shell.exec".to_owned(),
+                    args_json: json!({"command": "ls /root"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        };
+
+        let request_summary = summarize_failed_provider_lane_tool_request(&turn, None)
+            .expect("multi-intent failures should retain a request summary");
+        let request_summary_json: Value =
+            serde_json::from_str(&request_summary).expect("request summary should be valid json");
+        let request_entries = request_summary_json
+            .as_array()
+            .expect("multi-intent request summary should be an array");
+
+        assert_eq!(request_entries.len(), 2);
+        assert_eq!(request_entries[0]["tool"], "file.read");
+        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[1]["request"]["command"], "ls");
+        assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
     }
 
     #[test]

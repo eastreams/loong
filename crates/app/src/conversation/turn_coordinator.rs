@@ -113,9 +113,10 @@ use super::turn_shared::{
     build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, effective_followup_tool_name,
     format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback, summarize_single_tool_followup_request,
-    summarize_tool_followup_request, tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
-    tool_result_contains_truncation_signal, user_requested_raw_tool_output,
+    request_completion_with_raw_fallback, summarize_provider_lane_tool_request,
+    summarize_single_tool_followup_request, tool_driven_followup_payload,
+    tool_loop_circuit_breaker_reply, tool_result_contains_truncation_signal,
+    user_requested_raw_tool_output,
 };
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
@@ -2474,7 +2475,7 @@ fn build_provider_turn_tool_terminal_events(
 
     for intent in &turn.tool_intents {
         if let Some(event) = trace_events.remove(intent.tool_call_id.as_str()) {
-            let request_summary = summarize_tool_event_request(intent);
+            let request_summary = summarize_single_tool_followup_request(intent);
             let event = event.with_request_summary(request_summary);
             events.push(event);
             continue;
@@ -2540,17 +2541,13 @@ fn build_provider_turn_tool_terminal_events(
         };
 
         if let Some(fallback_event) = fallback_event {
-            let request_summary = summarize_tool_event_request(intent);
+            let request_summary = summarize_single_tool_followup_request(intent);
             let fallback_event = fallback_event.with_request_summary(request_summary);
             events.push(fallback_event);
         }
     }
 
     events
-}
-
-fn summarize_tool_event_request(intent: &ToolIntent) -> Option<String> {
-    summarize_single_tool_followup_request(intent)
 }
 fn provider_turn_observer_supports_streaming(
     config: &LoongClawConfig,
@@ -5327,54 +5324,6 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     }
 }
 
-fn summarize_provider_lane_tool_request(
-    turn: &ProviderTurn,
-    turn_result: &TurnResult,
-    trace: Option<&ToolBatchExecutionTrace>,
-) -> Option<String> {
-    match turn_result {
-        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
-            summarize_tool_followup_request(&turn.tool_intents)
-        }
-        TurnResult::NeedsApproval(_)
-        | TurnResult::ToolDenied(_)
-        | TurnResult::ToolError(_)
-        | TurnResult::ProviderError(_) => summarize_failed_provider_lane_tool_request(turn, trace),
-    }
-}
-
-fn summarize_failed_provider_lane_tool_request(
-    turn: &ProviderTurn,
-    trace: Option<&ToolBatchExecutionTrace>,
-) -> Option<String> {
-    let failed_tool_call_id = trace.and_then(first_failed_provider_lane_tool_call_id);
-    if let Some(failed_tool_call_id) = failed_tool_call_id {
-        let failed_intent = turn
-            .tool_intents
-            .iter()
-            .find(|intent| intent.tool_call_id == failed_tool_call_id)?;
-        let summary = summarize_single_tool_followup_request(failed_intent);
-        return summary;
-    }
-
-    match turn.tool_intents.as_slice() {
-        [intent] => summarize_single_tool_followup_request(intent),
-        [] => None,
-        _ => summarize_tool_followup_request(&turn.tool_intents),
-    }
-}
-
-fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> Option<&str> {
-    let failed_outcome = trace.intent_outcomes.iter().find(|intent_outcome| {
-        !matches!(
-            intent_outcome.status,
-            ToolBatchExecutionIntentStatus::Completed
-        )
-    })?;
-    let tool_call_id = failed_outcome.tool_call_id.as_str();
-    Some(tool_call_id)
-}
-
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
@@ -8067,45 +8016,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_without_trace() {
-        let turn = ProviderTurn {
-            assistant_text: String::new(),
-            tool_intents: vec![
-                ToolIntent {
-                    tool_name: "file.read".to_owned(),
-                    args_json: json!({"path": "Cargo.toml"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-a".to_owned(),
-                    turn_id: "turn-a".to_owned(),
-                    tool_call_id: "call-1".to_owned(),
-                },
-                ToolIntent {
-                    tool_name: "shell.exec".to_owned(),
-                    args_json: json!({"command": "ls /root"}),
-                    source: "provider_tool_call".to_owned(),
-                    session_id: "session-a".to_owned(),
-                    turn_id: "turn-a".to_owned(),
-                    tool_call_id: "call-2".to_owned(),
-                },
-            ],
-            raw_meta: Value::Null,
-        };
-
-        let request_summary = summarize_failed_provider_lane_tool_request(&turn, None)
-            .expect("multi-intent failures should retain a request summary");
-        let request_summary_json: Value =
-            serde_json::from_str(&request_summary).expect("request summary should be valid json");
-        let request_entries = request_summary_json
-            .as_array()
-            .expect("multi-intent request summary should be an array");
-
-        assert_eq!(request_entries.len(), 2);
-        assert_eq!(request_entries[0]["tool"], "file.read");
-        assert_eq!(request_entries[1]["tool"], "shell.exec");
-        assert_eq!(request_entries[1]["request"]["command"], "ls");
-        assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
-    }
     #[cfg(feature = "memory-sqlite")]
     fn finalize_recovered_child(
         repo: &SessionRepository,
