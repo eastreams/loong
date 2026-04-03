@@ -523,6 +523,29 @@ fn slash_command_matches(
     commands::completions(draft_prefix)
 }
 
+fn slash_command_palette_area(
+    textarea: &tui_textarea::TextArea<'_>,
+) -> Option<ratatui::layout::Rect> {
+    let matches = slash_command_matches(textarea);
+    if matches.is_empty() {
+        return None;
+    }
+
+    let shell_areas = terminal_shell_areas(textarea);
+    let input_area = shell_areas.input;
+    let popup_height = matches.len().min(5) as u16 + 2;
+    let popup_width = input_area.width.clamp(28, 72);
+    let popup_x = input_area.x;
+    let popup_y = input_area.y.saturating_sub(popup_height.saturating_sub(1));
+
+    Some(ratatui::layout::Rect::new(
+        popup_x,
+        popup_y,
+        popup_width,
+        popup_height,
+    ))
+}
+
 fn apply_selected_slash_command(
     shell: &mut state::Shell,
     textarea: &mut tui_textarea::TextArea<'_>,
@@ -573,6 +596,22 @@ fn cycle_slash_command_selection(
     shell.slash_command_selection = next_index;
 
     true
+}
+
+fn slash_command_index_at_mouse_row(
+    textarea: &tui_textarea::TextArea<'_>,
+    mouse_row: u16,
+) -> Option<usize> {
+    let palette_area = slash_command_palette_area(textarea)?;
+    let inner_top = palette_area.y.saturating_add(1);
+    let inner_bottom = palette_area
+        .y
+        .saturating_add(palette_area.height.saturating_sub(1));
+    if mouse_row < inner_top || mouse_row >= inner_bottom {
+        return None;
+    }
+
+    Some(usize::from(mouse_row.saturating_sub(inner_top)))
 }
 
 fn transcript_plain_lines(shell: &state::Shell) -> Vec<String> {
@@ -1118,6 +1157,7 @@ fn apply_mouse_event(
     let shell_areas = terminal_shell_areas(textarea);
     let column = mouse_event.column;
     let row = mouse_event.row;
+    let slash_palette_area = slash_command_palette_area(textarea);
 
     if shell.focus.top() == FocusLayer::ToolInspector {
         match mouse_event.kind {
@@ -1152,6 +1192,21 @@ fn apply_mouse_event(
             }
         }
         MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(palette_area) = slash_palette_area
+                && point_in_rect(palette_area, column, row)
+            {
+                let command_index = slash_command_index_at_mouse_row(textarea, row);
+                let Some(command_index) = command_index else {
+                    return;
+                };
+                shell.slash_command_selection = command_index;
+                let applied_selected_command = apply_selected_slash_command(shell, textarea);
+                if applied_selected_command {
+                    shell.slash_command_selection = 0;
+                }
+                return;
+            }
+
             if in_input {
                 shell.focus.focus_composer();
                 return;
@@ -1176,9 +1231,13 @@ fn apply_mouse_event(
                         plain_line_index,
                         tool_call_index,
                     } => {
-                        shell.pane.set_status(format!(
-                            "Tool {tool_call_index} selected. Press Enter for details."
-                        ));
+                        let opened = shell.pane.open_tool_inspector_for_index(tool_call_index);
+                        if opened {
+                            if !shell.focus.has(FocusLayer::ToolInspector) {
+                                shell.focus.push(FocusLayer::ToolInspector);
+                            }
+                            return;
+                        }
                         plain_line_index
                     }
                 };
@@ -1777,6 +1836,15 @@ mod tests {
         }
     }
 
+    fn mouse_event(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
     #[test]
     fn end_key_routes_to_history_when_composer_is_empty() {
         let key = plain_key(KeyCode::End);
@@ -2190,5 +2258,75 @@ mod tests {
         apply_terminal_event(&mut shell, &mut textarea, tab_event, &tx, &mut submit_text);
 
         assert_eq!(shell.slash_command_selection, 1);
+    }
+
+    #[test]
+    fn mouse_click_on_slash_palette_executes_command() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        textarea.insert_str("/re");
+
+        let palette_area = slash_command_palette_area(&textarea).expect("palette area");
+        let click_row = palette_area.y.saturating_add(1);
+        let click_col = palette_area.x.saturating_add(2);
+        let click_event = Event::Mouse(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            click_col,
+            click_row,
+        ));
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            click_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+    }
+
+    #[test]
+    fn mouse_click_on_tool_line_opens_matching_tool_inspector() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        shell
+            .pane
+            .start_tool_call("tool-1", "shell.exec", "git status --short");
+        shell
+            .pane
+            .complete_tool_call("tool-1", true, "diff --git a/file b/file", 12);
+
+        let shell_areas = terminal_shell_areas(&textarea);
+        let click_row = shell_areas.history.y.saturating_add(1);
+        let click_col = shell_areas.history.x.saturating_add(1);
+        let click_event = Event::Mouse(mouse_event(
+            MouseEventKind::Down(MouseButton::Left),
+            click_col,
+            click_row,
+        ));
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            click_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        let selected_tool_id = shell
+            .pane
+            .tool_inspector
+            .as_ref()
+            .map(|tool_inspector| tool_inspector.selected_tool_id.as_str());
+
+        assert_eq!(shell.focus.top(), FocusLayer::ToolInspector);
+        assert_eq!(selected_tool_id, Some("tool-1"));
     }
 }
