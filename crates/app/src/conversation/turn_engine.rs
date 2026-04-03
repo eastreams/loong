@@ -1266,13 +1266,6 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         binding: ConversationRuntimeBinding<'_>,
         budget_state: &AutonomyTurnBudgetState,
     ) -> Result<ToolPreflightOutcome, String> {
-        let requires_kernel_bound_runtime = requires_kernel_bound_runtime_for_preflight(descriptor);
-        let allows_mutation = binding.allows_mutation();
-        if requires_kernel_bound_runtime && !allows_mutation {
-            let denied = governed_runtime_binding_denied_outcome(descriptor);
-            return Ok(denied);
-        }
-
         let policy_snapshot = self.autonomy_policy_snapshot();
         let action_class = descriptor.capability_action_class();
         let policy_input = PolicyDecisionInput {

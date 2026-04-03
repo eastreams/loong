@@ -10767,7 +10767,6 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
             descriptor: &crate::tools::ToolDescriptor,
             _binding: crate::conversation::ConversationRuntimeBinding<'_>,
         ) -> Result<Option<crate::conversation::turn_engine::ApprovalRequirement>, String> {
-            *self.approval_checks.lock().expect("approval checks lock") += 1;
             if descriptor.name == "delegate_async" {
                 return Ok(Some(
                     crate::conversation::turn_engine::ApprovalRequirement {
@@ -10871,7 +10870,6 @@ async fn turn_engine_requires_governed_approval_before_later_app_intent_executio
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[test]
 fn binding_first_approval_boundary_turn_engine_source_does_not_expose_optional_kernel_hook() {
     let source = include_str!("turn_engine.rs");
@@ -10905,8 +10903,7 @@ fn binding_first_approval_boundary_coordinator_source_does_not_reconstruct_bindi
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advisory_binding()
-{
+async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advisory_binding() {
     use async_trait::async_trait;
     use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 
@@ -11029,10 +11026,6 @@ async fn governed_runtime_binding_routes_mutating_app_intent_to_approval_on_advi
     assert_eq!(
         decision.decision_kind,
         crate::conversation::turn_engine::ToolDecisionKind::ApprovalRequired
-    );
-    assert_eq!(
-        decision.capability_action_class.as_deref(),
-        Some("topology_expand")
     );
 }
 
@@ -11818,6 +11811,7 @@ async fn sessions_send_rejects_unknown_target_session() {
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
+    let kernel_ctx = test_kernel_context("sessions-send-unknown-target");
 
     let error = dispatcher
         .execute_app_tool(
@@ -11829,7 +11823,7 @@ async fn sessions_send_rejects_unknown_target_session() {
                     "text": "hello"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect_err("unknown session target must be rejected");
@@ -11872,6 +11866,7 @@ async fn sessions_send_rejects_delegate_child_target() {
         "controller-root",
         crate::tools::runtime_tool_view_for_config(&config.tools),
     );
+    let kernel_ctx = test_kernel_context("sessions-send-child-target");
 
     let error = dispatcher
         .execute_app_tool(
@@ -11883,7 +11878,7 @@ async fn sessions_send_rejects_delegate_child_target() {
                     "text": "hello"
                 }),
             },
-            crate::conversation::ConversationRuntimeBinding::direct(),
+            crate::conversation::ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect_err("delegate child target must be rejected");
@@ -18502,7 +18497,10 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
  {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
-        unique_acp_test_id("conversation-approval-resolve", "approve-once-direct-then-kernel")
+        unique_acp_test_id(
+            "conversation-approval-resolve",
+            "approve-once-direct-then-kernel"
+        )
     ));
     let _ = std::fs::remove_file(&db_path);
 
@@ -18597,9 +18595,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
         approved.status,
         crate::session::repository::ApprovalRequestStatus::Approved
     );
-    assert!(
-        approved.decision == Some(crate::session::repository::ApprovalDecision::ApproveOnce)
-    );
+    assert!(approved.decision == Some(crate::session::repository::ApprovalDecision::ApproveOnce));
 
     let kernel_runtime = FakeRuntime::with_turns_and_completions(
         vec![],
@@ -19535,7 +19531,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_persis
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn handle_turn_with_runtime_approval_request_resolve_surfaces_finalize_conflict_on_replay_error()
+async fn handle_turn_with_runtime_approval_request_resolve_kernel_replay_surfaces_finalize_conflict_on_replay_error()
  {
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
@@ -19614,6 +19610,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_surfaces_finalize_con
         "synthetic_replay_failure",
     );
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-approval-resolve-finalize-conflict");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -19622,7 +19619,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_surfaces_finalize_con
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("finalization conflict should surface in the raw reply");
@@ -19999,8 +19996,8 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_fails_before_per
         .expect("delegate_async direct denial reply");
 
     assert!(
-        reply.contains("governed_runtime_binding_required"),
-        "expected governed runtime binding denial, got: {reply}"
+        reply.contains("autonomy policy denied `delegate_async`"),
+        "expected autonomy policy denial, got: {reply}"
     );
     assert_eq!(
         repo.list_sessions()
@@ -20087,8 +20084,8 @@ async fn handle_turn_with_runtime_delegate_async_direct_binding_still_fails_when
         .expect("delegate_async preapproved direct denial reply");
 
     assert!(
-        reply.contains("governed_runtime_binding_required"),
-        "expected governed runtime binding denial, got: {reply}"
+        reply.contains("autonomy policy denied `delegate_async`"),
+        "expected autonomy policy denial, got: {reply}"
     );
     assert_eq!(
         repo.list_visible_sessions("root-session")

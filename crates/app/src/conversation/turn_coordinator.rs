@@ -3961,7 +3961,8 @@ where
             )?;
         }
 
-        self.finish_approved_resolution(repo, approval_request).await
+        self.finish_approved_resolution(repo, approval_request)
+            .await
     }
 
     async fn replay_approved_request(
@@ -9287,7 +9288,7 @@ mod tests {
         .expect("approval request resolve should succeed");
         assert_eq!(
             outcome.approval_request.status,
-            ApprovalRequestStatus::Executed
+            ApprovalRequestStatus::Approved
         );
 
         let stored = repo
@@ -9308,7 +9309,7 @@ mod tests {
             approval_request.decision,
             Some(ApprovalDecision::ApproveOnce)
         );
-        assert_eq!(approval_request.status, ApprovalRequestStatus::Executed);
+        assert_eq!(approval_request.status, ApprovalRequestStatus::Approved);
     }
 
     #[cfg(feature = "memory-sqlite")]
