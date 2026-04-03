@@ -3074,10 +3074,11 @@ impl TurnEngine {
         ingress: Option<&ConversationIngressContext>,
     ) -> Result<PreparedToolIntent, PreparedToolIntentFailure> {
         let Some(resolved_tool) = crate::tools::resolve_tool_execution(&intent.tool_name) else {
-            let reason = format!("tool_not_found: {}", intent.tool_name);
+            let denied_tool_name = effective_denied_tool_name(intent);
+            let reason = format!("tool_not_found: {denied_tool_name}");
             let turn_result = TurnResult::policy_denied("tool_not_found", reason.clone());
             let decision =
-                ToolDecisionTelemetry::deny(intent.tool_name.as_str(), reason, "tool_not_found");
+                ToolDecisionTelemetry::deny(denied_tool_name.as_str(), reason, "tool_not_found");
             return Err(PreparedToolIntentFailure {
                 intent: intent.clone(),
                 turn_result,
@@ -3089,11 +3090,15 @@ impl TurnEngine {
             intent.args_json.clone(),
             ingress,
         );
-        let injected_payload_uses_reserved_internal_context =
-            crate::tools::payload_uses_reserved_internal_tool_context(&injected.payload);
-        let augmented_payload = augment_tool_payload_for_kernel(
+        let normalized_payload = crate::tools::normalize_shell_payload_for_request(
             resolved_tool.canonical_name,
             injected.payload,
+        );
+        let injected_payload_uses_reserved_internal_context =
+            crate::tools::payload_uses_reserved_internal_tool_context(&normalized_payload);
+        let augmented_payload = augment_tool_payload_for_kernel(
+            resolved_tool.canonical_name,
+            normalized_payload.clone(),
             session_context,
         );
         let augmented_payload_uses_reserved_internal_context =
@@ -3101,6 +3106,14 @@ impl TurnEngine {
         let request = ToolCoreRequest {
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload,
+        };
+        let normalized_intent = ToolIntent {
+            tool_name: resolved_tool.canonical_name.to_owned(),
+            args_json: normalized_payload,
+            source: intent.source.clone(),
+            session_id: intent.session_id.clone(),
+            turn_id: intent.turn_id.clone(),
+            tool_call_id: intent.tool_call_id.clone(),
         };
         let (effective_execution_kind, effective_request, effective_intent, effective_tool_name) =
             if resolved_tool.canonical_name == "tool.invoke" {
@@ -3136,7 +3149,7 @@ impl TurnEngine {
                     _ => (
                         resolved_tool.execution_kind,
                         request,
-                        intent.clone(),
+                        normalized_intent,
                         resolved_tool.canonical_name.to_owned(),
                     ),
                 }
@@ -3144,7 +3157,7 @@ impl TurnEngine {
                 (
                     resolved_tool.execution_kind,
                     request,
-                    intent.clone(),
+                    normalized_intent,
                     resolved_tool.canonical_name.to_owned(),
                 )
             };
