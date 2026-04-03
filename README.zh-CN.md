@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/loongclaw-logo-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo/loongclaw-logo-light.png" />
-    <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loongclaw-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loongclaw-logo-light.png" />
+    <img src="./assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
   </picture>
 </p>
 <p align="center"><strong><em>“发轫于东，以会群友”</em></strong></p>
@@ -53,7 +53,7 @@
 **也因为无论你是小白还是极客，它都适合你：**
 
 - **⚡ 易于上手**：几条命令就能跑通，兼容 OpenClaw、Claude Code、Codex、OpenCode 等同类 AI 工具的已有配置。
-- **🧭 边界透明**：助手、网关、接入频道各自独立，不会混成一个模糊概念。
+- **🧭 边界透明**：助手、网关、接入频道各自独立，不会混在一起。
 - **🔌 内核与扩展分离**：provider、工具、接入频道、记忆、策略独立于内核，按需编译组合。
 - **🌱 不是玩具**：面向长期使用设计，能跟着你的需求一起成长。
 
@@ -101,27 +101,51 @@ pwsh $script -Onboard
 
 从源码安装：
 
+确保系统有 C 链接器（Rust 编译需要）：
+
 ```bash
-# 如果没有安装 Rust 工具链，先执行
+# Debian / Ubuntu
+sudo apt update && sudo apt install build-essential
+```
+
+```bash
+# Fedora
+sudo dnf groupinstall "Development Tools"
+```
+
+```bash
+# macOS
+xcode-select --install
+```
+
+安装 Rust 工具链（已安装可跳过）：
+
+```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
+
+构建并安装：
 
 ```bash
 bash scripts/install.sh --source --onboard
 ```
 
 ```bash
+# 或者只通过 Cargo 安装（不含 onboard 引导）
 cargo install --path crates/daemon
 ```
 
-### 第一条成功路径
+### 首次运行
 
 ```bash
-loong onboard
-loong ask --message "Summarize this repository and suggest the best next step."
-loong chat
-loong doctor --fix
+loong onboard                # 交互式初始化，配置 provider 和 model
+```
+
+```bash
+loong ask --message "用一句话总结这个仓库"  # 单轮提问，验证配置是否生效
+loong chat                   # 进入多轮对话
+loong doctor --fix           # 检查环境并自动修复常见问题
 ```
 
 `onboard` 是支持的 first-run 路径。它应该把你带到可用的 provider 配置和明确的下一条命令，而不是先逼你手改原始配置。

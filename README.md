@@ -2,9 +2,9 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo/loongclaw-logo-dark.png" />
-    <source media="(prefers-color-scheme: light)" srcset="assets/logo/loongclaw-logo-light.png" />
-    <img src="assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
+    <source media="(prefers-color-scheme: dark)" srcset="./assets/logo/loongclaw-logo-dark.png" />
+    <source media="(prefers-color-scheme: light)" srcset="./assets/logo/loongclaw-logo-light.png" />
+    <img src="./assets/logo/loongclaw-logo-light.png" alt="LoongClaw" width="800" />
   </picture>
 </p>
 <p align="center"><strong><em>"Originated from the East, here to benefit the world"</em></strong></p>
@@ -53,7 +53,7 @@
 **Also because whether you are a beginner or a power user, it fits you:**
 
 - **⚡ Easy to start**: a few commands to get running, compatible with existing configurations from OpenClaw, Claude Code, Codex, OpenCode, and other similar AI tools.
-- **🧭 Transparent boundaries**: assistant, gateway, and channels operate independently — no blurred lines.
+- **🧭 Transparent boundaries**: assistant, gateway, and channels operate independently — never tangled together.
 - **🔌 Core and extensions are separate**: providers, tools, channels, memory, and policy live outside the kernel — compile and compose as needed.
 - **🌱 Not a toy**: designed for long-term use, grows with your needs over time.
 
@@ -65,7 +65,7 @@ Also, if you want the longer public rationale behind this positioning, read
 <p align="center">
   <a href="https://www.byteplus.com/en/activity/codingplan?utm_campaign=loongclaw&utm_content=loongclaw&utm_medium=devrel&utm_source=OWO&utm_term=loongclaw">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="assets/sponsors_logo/volcengine/volcengine-logo-dark-en.png"/>
+      <source media="(prefers-color-scheme: dark)" srcset="./assets/sponsors_logo/volcengine/volcengine-logo-dark-en.png"/>
       <img src="assets/sponsors_logo/volcengine/volcengine-logo-light-en.png" alt="Volcengine" height="44"/>
     </picture>
   </a>
@@ -101,27 +101,51 @@ pwsh $script -Onboard
 
 From source:
 
+Ensure your system has a C linker (required by Rust):
+
 ```bash
-# Install the Rust toolchain first if you don't have it
+# Debian / Ubuntu
+sudo apt update && sudo apt install build-essential
+```
+
+```bash
+# Fedora
+sudo dnf groupinstall "Development Tools"
+```
+
+```bash
+# macOS
+xcode-select --install
+```
+
+Install the Rust toolchain (skip if already installed):
+
+```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
+
+Build and install:
 
 ```bash
 bash scripts/install.sh --source --onboard
 ```
 
 ```bash
+# Or install via Cargo only (without onboard setup)
 cargo install --path crates/daemon
 ```
 
 ### First Successful Flow
 
 ```bash
-loong onboard
-loong ask --message "Summarize this repository and suggest the best next step."
-loong chat
-loong doctor --fix
+loong onboard                # Interactive setup — configure provider and model
+```
+
+```bash
+loong ask --message "Summarize this repo in one sentence."  # Single-turn query to verify config
+loong chat                   # Start a multi-turn conversation
+loong doctor --fix           # Check environment and auto-fix common issues
 ```
 
 `onboard` is the supported first-run path. It should get you to a working provider configuration and a concrete next command without making you hand-edit raw config first.
