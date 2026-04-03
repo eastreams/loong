@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::audit::{
     AuditEvent, AuditEventKind, AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    probe_jsonl_audit_journal_runtime_ready,
+    probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal,
 };
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
@@ -48,6 +48,7 @@ fn sample_audit_event(event_id: &str, timestamp_epoch_s: u64) -> AuditEvent {
             operation: "shell.exec".to_owned(),
             required_capabilities: vec![Capability::InvokeTool],
         },
+        integrity: None,
     }
 }
 
@@ -71,6 +72,51 @@ fn jsonl_audit_sink_appends_one_json_line_per_event() {
         serde_json::from_str(lines[1]).expect("second JSON line should decode into AuditEvent");
     assert_eq!(first.event_id, "evt-1");
     assert_eq!(second.event_id, "evt-2");
+    assert!(first.integrity.is_some());
+    assert!(second.integrity.is_some());
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn verify_jsonl_audit_journal_accepts_freshly_written_chain() {
+    let path = fresh_audit_temp_path("jsonl-verify");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-verify-1", 300))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-verify-2", 301))
+        .expect("second event should record");
+
+    let report = verify_jsonl_audit_journal(&path).expect("verification should succeed");
+
+    assert!(report.valid);
+    assert_eq!(report.total_events, 2);
+    assert_eq!(report.verified_events, 2);
+    assert!(report.last_entry_hash.is_some());
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn verify_jsonl_audit_journal_rejects_tampered_chain_entry() {
+    let path = fresh_audit_temp_path("jsonl-tamper");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-tamper-1", 400))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-tamper-2", 401))
+        .expect("second event should record");
+
+    let contents = fs::read_to_string(&path).expect("read audit journal");
+    let tampered = contents.replacen("evt-tamper-2", "evt-tamper-x", 1);
+    fs::write(&path, tampered).expect("rewrite tampered audit journal");
+
+    let report = verify_jsonl_audit_journal(&path).expect("verification should run");
+
+    assert!(!report.valid);
+    assert_eq!(report.first_invalid_line, Some(2));
+    assert_eq!(report.reason.as_deref(), Some("entry_hash mismatch"));
 
     let _ = fs::remove_file(path);
 }

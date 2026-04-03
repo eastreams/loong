@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
-use kernel::probe_jsonl_audit_journal_runtime_ready;
+use kernel::{probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal};
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
@@ -138,6 +138,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         "create memory directory",
     ));
     checks.push(audit_retention_doctor_check(&config.audit));
+    checks.push(audit_integrity_doctor_check(&config.audit));
     if matches!(
         config.audit.mode,
         mvp::config::AuditMode::Jsonl | mvp::config::AuditMode::Fanout
@@ -439,6 +440,59 @@ fn durable_audit_runtime_probe(path: &Path) -> Result<(), String> {
         (Err(error), _) => Err(error),
         (Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn audit_integrity_doctor_check(audit: &mvp::config::AuditConfig) -> DoctorCheck {
+    if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        return DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "audit integrity verification is unavailable while audit.mode=in_memory"
+                .to_owned(),
+        };
+    }
+
+    let journal_path = audit.resolved_path();
+    if !journal_path.exists() {
+        return DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: format!(
+                "audit journal {} has not been created yet, so integrity verification is not available until the first durable write",
+                journal_path.display()
+            ),
+        };
+    }
+
+    match verify_jsonl_audit_journal(&journal_path) {
+        Ok(report) if report.valid => DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: format!(
+                "verified {} of {} audit events (last_entry_hash={})",
+                report.verified_events,
+                report.total_events,
+                report.last_entry_hash.as_deref().unwrap_or("-")
+            ),
+        },
+        Ok(report) => DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: format!(
+                "audit journal integrity failed at line {} ({})",
+                report
+                    .first_invalid_line
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                report.reason.as_deref().unwrap_or("unknown reason")
+            ),
+        },
+        Err(error) => DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: format!("audit integrity verification failed: {error}"),
+        },
     }
 }
 
@@ -2668,6 +2722,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::ScopedEnv;
+    use kernel::AuditSink;
     use mvp::channel::{
         ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
         ChannelStatusSnapshot,
@@ -2682,6 +2737,21 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
         temp_dir
+    }
+
+    fn sample_audit_event(
+        event_id: &str,
+        timestamp_epoch_s: u64,
+        agent_id: Option<&str>,
+        kind: kernel::AuditEventKind,
+    ) -> kernel::AuditEvent {
+        kernel::AuditEvent {
+            event_id: event_id.to_owned(),
+            timestamp_epoch_s,
+            agent_id: agent_id.map(str::to_owned),
+            kind,
+            integrity: None,
+        }
     }
 
     fn managed_bridge_manifest(
@@ -3898,6 +3968,90 @@ mod tests {
         assert_eq!(check.name, "audit retention");
         assert_eq!(check.level, DoctorCheckLevel::Warn);
         assert!(check.detail.contains("lost on restart"));
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_warns_for_in_memory_mode() {
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::InMemory,
+            ..mvp::config::AuditConfig::default()
+        });
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(
+            check
+                .detail
+                .contains("unavailable while audit.mode=in_memory")
+        );
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_passes_for_valid_chain() {
+        let temp_dir = browser_companion_temp_dir("audit-integrity-valid");
+        let journal_path = temp_dir.join("events.jsonl");
+        let sink = kernel::JsonlAuditSink::new(journal_path.clone()).expect("create jsonl sink");
+
+        sink.record(sample_audit_event(
+            "evt-integrity-1",
+            1_700_010_400,
+            Some("agent-a"),
+            kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-a".to_owned(),
+            },
+        ))
+        .expect("record event");
+
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Jsonl,
+            path: journal_path.display().to_string(),
+            retain_in_memory: false,
+        });
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(check.detail.contains("verified 1 of 1 audit events"));
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_fails_for_tampered_chain() {
+        let temp_dir = browser_companion_temp_dir("audit-integrity-tampered");
+        let journal_path = temp_dir.join("events.jsonl");
+        let sink = kernel::JsonlAuditSink::new(journal_path.clone()).expect("create jsonl sink");
+
+        sink.record(sample_audit_event(
+            "evt-integrity-1",
+            1_700_010_410,
+            Some("agent-a"),
+            kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-a".to_owned(),
+            },
+        ))
+        .expect("record event");
+
+        sink.record(sample_audit_event(
+            "evt-integrity-2",
+            1_700_010_411,
+            Some("agent-b"),
+            kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-b".to_owned(),
+            },
+        ))
+        .expect("record event");
+
+        let contents = std::fs::read_to_string(&journal_path).expect("read audit journal");
+        let tampered = contents.replacen("token-b", "token-x", 1);
+        std::fs::write(&journal_path, tampered).expect("rewrite tampered journal");
+
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Jsonl,
+            path: journal_path.display().to_string(),
+            retain_in_memory: false,
+        });
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(check.detail.contains("failed at line 2"));
     }
 
     #[test]

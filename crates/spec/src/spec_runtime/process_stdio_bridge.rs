@@ -128,11 +128,17 @@ pub async fn run_process_stdio_json_line_exchange(
     timeout_ms: u64,
     frame: OutboundFrame,
 ) -> Result<ProcessStdioExchangeOutcome, String> {
-    let mut child = TokioCommand::new(program)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
+    let mut process = TokioCommand::new(program);
+
+    process.env_clear();
+    process.envs(sanitized_env);
+    process.args(args);
+    process.stdin(Stdio::piped());
+    process.stdout(Stdio::piped());
+    process.stderr(Stdio::piped());
+
+    let mut child = process
         .spawn()
         .map_err(|error| format!("failed to spawn process command {program}: {error}"))?;
 

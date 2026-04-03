@@ -40,6 +40,7 @@ mod catalog;
 mod claw_migrate;
 pub(crate) mod delegate;
 mod direct_policy_preflight;
+pub(crate) mod download_guard;
 mod external_skills;
 mod external_skills_scan;
 mod external_skills_sources;

@@ -12,9 +12,11 @@ homepage.workspace = true
 loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
 async-trait.workspace = true
 futures-util.workspace = true
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 
 [features]

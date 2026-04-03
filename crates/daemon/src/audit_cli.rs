@@ -5,7 +5,7 @@ use std::path::Path;
 
 use clap::Subcommand;
 
-use crate::kernel::{AuditEvent, AuditEventKind, PluginTrustTier};
+use crate::kernel::{AuditEvent, AuditEventKind, PluginTrustTier, verify_jsonl_audit_journal};
 use loongclaw_spec::CliResult;
 use serde_json::{Map, Value, json};
 
@@ -101,6 +101,8 @@ pub enum AuditCommands {
         #[arg(long, value_parser = parse_audit_identity_filter)]
         agent_id: Option<String>,
     },
+    /// Verify the integrity chain of the durable audit journal
+    Verify,
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +259,14 @@ pub enum AuditCommandResult {
         revoked_agent_id: Option<String>,
         timeline: Vec<AuditEvent>,
     },
+    Verify {
+        loaded_events: usize,
+        verified_events: usize,
+        valid: bool,
+        last_entry_hash: Option<String>,
+        first_invalid_line: Option<usize>,
+        reason: Option<String>,
+    },
 }
 
 pub fn run_audit_cli(options: AuditCommandOptions) -> CliResult<()> {
@@ -392,9 +402,29 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             None,
             "audit token-trail",
         ),
+        AuditCommands::Verify => (
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "audit verify",
+        ),
     };
-    let limit = validate_audit_limit(limit, command_name)?;
-    validate_audit_time_range(since_epoch_s_filter, until_epoch_s_filter, command_name)?;
+    let _limit = if matches!(command, AuditCommands::Verify) {
+        0
+    } else {
+        validate_audit_limit(limit, command_name)?
+    };
+    if !matches!(command, AuditCommands::Verify) {
+        validate_audit_time_range(since_epoch_s_filter, until_epoch_s_filter, command_name)?;
+    }
     let filter = AuditEventFilter {
         since_epoch_s: since_epoch_s_filter,
         until_epoch_s: until_epoch_s_filter,
@@ -410,17 +440,27 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
 
     let (resolved_path, config) = crate::mvp::config::load(config.as_deref())?;
     let journal_path = config.audit.resolved_path();
-    let audit_window = load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
-    let total_matching_events = audit_window.total_matching_events;
-    let events = audit_window.events;
     let result = match command {
-        AuditCommands::Recent { limit, .. } => AuditCommandResult::Recent { limit, events },
+        AuditCommands::Recent { limit, .. } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
+            AuditCommandResult::Recent { limit, events }
+        }
         AuditCommands::Summary {
             limit, group_by, ..
-        } => summarize_audit_events(limit, group_by, &events),
+        } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
+            summarize_audit_events(limit, group_by, &events)
+        }
         AuditCommands::Discovery {
             limit, group_by, ..
         } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
             let correlated_summary_groups = if group_by.is_some() {
                 let broader_window = load_audit_event_window(
                     &config.audit,
@@ -442,7 +482,25 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
         }
         AuditCommands::TokenTrail {
             limit, token_id, ..
-        } => summarize_token_trail(limit, token_id, events, total_matching_events),
+        } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let total_matching_events = audit_window.total_matching_events;
+            let events = audit_window.events;
+            summarize_token_trail(limit, token_id, events, total_matching_events)
+        }
+        AuditCommands::Verify => {
+            let report = verify_jsonl_audit_journal(&journal_path)
+                .map_err(|error| format!("verify audit journal failed: {error}"))?;
+            AuditCommandResult::Verify {
+                loaded_events: report.total_events,
+                verified_events: report.verified_events,
+                valid: report.valid,
+                last_entry_hash: report.last_entry_hash,
+                first_invalid_line: report.first_invalid_line,
+                reason: report.reason,
+            }
+        }
     };
 
     Ok(AuditCommandExecution {
@@ -762,6 +820,23 @@ pub fn audit_cli_json(execution: &AuditCommandExecution) -> Value {
             );
             payload.insert("revoked_agent_id".to_owned(), json!(revoked_agent_id));
             payload.insert("timeline".to_owned(), json!(timeline));
+            Value::Object(payload)
+        }
+        AuditCommandResult::Verify {
+            loaded_events,
+            verified_events,
+            valid,
+            last_entry_hash,
+            first_invalid_line,
+            reason,
+        } => {
+            let mut payload = audit_cli_base_json(execution, "verify");
+            payload.insert("loaded_events".to_owned(), json!(loaded_events));
+            payload.insert("verified_events".to_owned(), json!(verified_events));
+            payload.insert("valid".to_owned(), json!(valid));
+            payload.insert("last_entry_hash".to_owned(), json!(last_entry_hash));
+            payload.insert("first_invalid_line".to_owned(), json!(first_invalid_line));
+            payload.insert("reason".to_owned(), json!(reason));
             Value::Object(payload)
         }
     }
@@ -1632,6 +1707,31 @@ pub fn render_audit_cli_text(execution: &AuditCommandExecution) -> CliResult<Str
                     detail
                 ));
             }
+        }
+        AuditCommandResult::Verify {
+            loaded_events,
+            verified_events,
+            valid,
+            last_entry_hash,
+            first_invalid_line,
+            reason,
+        } => {
+            lines.push(format!(
+                "audit verify config={} journal={} loaded_events={} verified_events={} valid={}",
+                execution.resolved_config_path,
+                execution.journal_path,
+                loaded_events,
+                verified_events,
+                valid
+            ));
+            lines.push(format!(
+                "last_entry_hash={} first_invalid_line={} reason={}",
+                last_entry_hash.as_deref().unwrap_or("-"),
+                first_invalid_line
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+                reason.as_deref().unwrap_or("-")
+            ));
         }
     }
     Ok(lines.join("\n"))
@@ -2936,7 +3036,8 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::kernel::{
-        AuditEvent, AuditEventKind, Capability, CapabilityToken, ExecutionPlane, PlaneTier,
+        AuditEvent, AuditEventKind, AuditSink, Capability, CapabilityToken, ExecutionPlane,
+        PlaneTier,
     };
     use crate::test_support::ScopedEnv;
 
@@ -2983,6 +3084,7 @@ mod tests {
             timestamp_epoch_s,
             agent_id: agent_id.map(str::to_owned),
             kind,
+            integrity: None,
         }
     }
 
@@ -6269,6 +6371,103 @@ mod tests {
             payload["last_triage_hint"],
             "grant the required capability or retry with a token scoped for the requested operation"
         );
+    }
+
+    #[test]
+    fn audit_verify_reports_valid_chain_for_fresh_journal() {
+        let root = unique_temp_dir("loongclaw-audit-cli-verify");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        let sink =
+            crate::kernel::JsonlAuditSink::new(journal_path).expect("jsonl sink should initialize");
+
+        sink.record(sample_audit_event(
+            "evt-verify-1",
+            1_700_010_300,
+            Some("agent-verify"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-verify-1".to_owned(),
+            },
+        ))
+        .expect("record first event");
+
+        sink.record(sample_audit_event(
+            "evt-verify-2",
+            1_700_010_301,
+            Some("agent-verify"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-verify-2".to_owned(),
+            },
+        ))
+        .expect("record second event");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Verify,
+        })
+        .expect("execute audit verify");
+
+        match execution.result {
+            AuditCommandResult::Verify {
+                loaded_events,
+                verified_events,
+                valid,
+                ..
+            } => {
+                assert_eq!(loaded_events, 2);
+                assert_eq!(verified_events, 2);
+                assert!(valid);
+            }
+            other => panic!("unexpected audit verify result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_verify_reports_first_invalid_line_for_tampered_chain() {
+        let root = unique_temp_dir("loongclaw-audit-cli-verify-tamper");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+
+        sink.record(sample_audit_event(
+            "evt-tamper-1",
+            1_700_010_310,
+            Some("agent-tamper"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-tamper-1".to_owned(),
+            },
+        ))
+        .expect("record first event");
+
+        sink.record(sample_audit_event(
+            "evt-tamper-2",
+            1_700_010_311,
+            Some("agent-tamper"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-tamper-2".to_owned(),
+            },
+        ))
+        .expect("record second event");
+
+        let contents = fs::read_to_string(&journal_path).expect("read audit journal");
+        let tampered = contents.replacen("token-tamper-2", "token-tamper-x", 1);
+        fs::write(&journal_path, tampered).expect("rewrite tampered journal");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: true,
+            command: AuditCommands::Verify,
+        })
+        .expect("execute audit verify");
+
+        let payload = audit_cli_json(&execution);
+
+        assert_eq!(payload["command"], "verify");
+        assert_eq!(payload["valid"], json!(false));
+        assert_eq!(payload["first_invalid_line"], json!(2));
+        assert_eq!(payload["reason"], json!("entry_hash mismatch"));
     }
 
     #[test]

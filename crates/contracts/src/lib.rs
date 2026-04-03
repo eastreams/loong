@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod audit_types;
+mod child_process_env;
 mod clock;
 mod contracts;
 mod errors;
@@ -18,7 +19,10 @@ mod task_state;
 mod tool_types;
 mod workflow_types;
 
-pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
+pub use audit_types::{AuditEvent, AuditEventKind, AuditIntegrity, ExecutionPlane, PlaneTier};
+pub use child_process_env::{
+    HIGH_RISK_CHILD_PROCESS_ENV_VARS, child_process_env_var_is_allowed, sanitized_child_process_env,
+};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use contracts::{
     Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, HarnessKind,

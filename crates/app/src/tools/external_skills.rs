@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{ErrorKind, Read},
+    io::{BufWriter, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
 use tar::Archive;
+use tempfile::Builder as TempFileBuilder;
 
 use super::external_skills_scan::{
     ExternalSkillSecurityDecision, parse_external_skill_security_decision, scan_external_skill_tree,
@@ -483,18 +484,8 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         "download",
     )?;
     let response = send_external_skill_get_request(&client, &validated_download_url, "download")?;
-
-    let mut body = Vec::new();
-    let mut limited_reader = response.take((max_bytes as u64).saturating_add(1));
-    limited_reader
-        .read_to_end(&mut body)
-        .map_err(|error| format!("failed to read external skills download body: {error}"))?;
-
-    if body.len() > max_bytes {
-        return Err(format!(
-            "external skills download exceeded max_bytes limit ({max_bytes} bytes)"
-        ));
-    }
+    let content_length = response.content_length();
+    let mut response = response;
 
     let output_dir = resolve_download_dir(config);
     fs::create_dir_all(&output_dir).map_err(|error| {
@@ -510,16 +501,14 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         .filter(|value| !value.is_empty());
     let derived_name = requested_name
         .unwrap_or_else(|| derive_filename_from_url(&validated_download_url.parsed_url));
-    let output_path = unique_output_path(&output_dir, &derived_name);
-
-    fs::write(&output_path, &body).map_err(|error| {
-        format!(
-            "failed to write downloaded external skill artifact {}: {error}",
-            output_path.display()
-        )
-    })?;
-
-    let sha256 = hex::encode(Sha256::digest(&body));
+    let download = stream_download_to_unique_path(
+        &mut response,
+        content_length,
+        max_bytes,
+        &output_dir,
+        &derived_name,
+        "external skills download",
+    )?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -529,9 +518,9 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
             "reference": reference,
             "url": download_plan.artifact_url,
             "host": validated_download_url.host,
-            "saved_path": output_path.display().to_string(),
-            "bytes_downloaded": body.len(),
-            "sha256": sha256,
+            "saved_path": download.path.display().to_string(),
+            "bytes_downloaded": download.bytes_downloaded,
+            "sha256": download.sha256,
             "approval_required": policy.require_download_approval,
             "approval_granted": approval_granted,
             "max_bytes": max_bytes,
@@ -2572,6 +2561,80 @@ fn unique_output_path(dir: &Path, filename: &str) -> PathBuf {
     }
 }
 
+#[derive(Debug)]
+struct StreamedDownload {
+    path: PathBuf,
+    bytes_downloaded: usize,
+    sha256: String,
+}
+
+fn stream_download_to_unique_path<R: Read>(
+    reader: &mut R,
+    content_length: Option<u64>,
+    max_bytes: usize,
+    output_dir: &Path,
+    filename: &str,
+    surface_name: &str,
+) -> Result<StreamedDownload, String> {
+    let mut budget = super::download_guard::ByteBudget::new(max_bytes);
+
+    budget.reject_if_content_length_exceeds(content_length, surface_name)?;
+
+    let target_path = unique_output_path(output_dir, filename);
+    let mut temp_file = TempFileBuilder::new()
+        .prefix(".download-")
+        .tempfile_in(output_dir)
+        .map_err(|error| {
+            format!(
+                "failed to create temporary download file in {}: {error}",
+                output_dir.display()
+            )
+        })?;
+    let mut writer = BufWriter::new(temp_file.as_file_mut());
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8_192];
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {surface_name} body: {error}"))?;
+        if read == 0 {
+            break;
+        }
+
+        budget.try_consume(read, surface_name)?;
+        let chunk = buffer
+            .get(..read)
+            .ok_or_else(|| format!("failed to slice {surface_name} buffer"))?;
+
+        writer
+            .write_all(chunk)
+            .map_err(|error| format!("failed to write {surface_name} body: {error}"))?;
+        hasher.update(chunk);
+    }
+
+    writer
+        .flush()
+        .map_err(|error| format!("failed to flush {surface_name} body: {error}"))?;
+    drop(writer);
+
+    temp_file.persist(&target_path).map_err(|error| {
+        format!(
+            "failed to persist downloaded artifact {}: {}",
+            target_path.display(),
+            error.error
+        )
+    })?;
+
+    let sha256 = hex::encode(hasher.finalize());
+
+    Ok(StreamedDownload {
+        path: target_path,
+        bytes_downloaded: budget.consumed(),
+        sha256,
+    })
+}
+
 fn unique_managed_install_transition_path(
     install_root: &Path,
     skill_id: &str,
@@ -4375,6 +4438,27 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
+    struct CountingReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        reads: usize,
+    }
+
+    impl CountingReader {
+        fn new(bytes: &[u8]) -> Self {
+            Self {
+                inner: std::io::Cursor::new(bytes.to_vec()),
+                reads: 0,
+            }
+        }
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            self.inner.read(buf)
+        }
+    }
+
     struct ScopedHomeFixture {
         _env: crate::test_support::ScopedEnv,
         path: PathBuf,
@@ -4511,6 +4595,83 @@ mod tests {
             "https://wry-manatee-359.convex.site/api/v1/download?slug=hybrid-deep-search"
         );
         assert_eq!(plan.source_skill_id.as_deref(), Some("hybrid-deep-search"));
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_rejects_declared_content_length_before_reading() {
+        let output_dir = unique_temp_dir("ext-skills-download-precheck");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"tiny");
+
+        let error = stream_download_to_unique_path(
+            &mut reader,
+            Some(10),
+            4,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect_err("declared oversize content length should fail closed");
+
+        assert!(error.contains("Content-Length"));
+        assert_eq!(reader.reads, 0);
+        assert!(
+            fs::read_dir(&output_dir)
+                .expect("list output dir")
+                .next()
+                .is_none()
+        );
+        fs::remove_dir_all(output_dir).ok();
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_rejects_streamed_body_past_limit() {
+        let output_dir = unique_temp_dir("ext-skills-download-stream-limit");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"0123456789");
+
+        let error = stream_download_to_unique_path(
+            &mut reader,
+            None,
+            4,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect_err("streamed oversize body should fail closed");
+
+        assert!(error.contains("exceeded max_bytes limit"));
+        assert!(
+            fs::read_dir(&output_dir)
+                .expect("list output dir")
+                .next()
+                .is_none()
+        );
+        fs::remove_dir_all(output_dir).ok();
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_writes_file_and_computes_digest() {
+        let output_dir = unique_temp_dir("ext-skills-download-success");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"skill-bytes");
+
+        let download = stream_download_to_unique_path(
+            &mut reader,
+            Some(11),
+            32,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect("streamed download should succeed");
+
+        let persisted = fs::read(&download.path).expect("read persisted artifact");
+
+        assert_eq!(download.bytes_downloaded, 11);
+        assert_eq!(persisted, b"skill-bytes");
+        assert_eq!(download.sha256, hex::encode(Sha256::digest(b"skill-bytes")));
+        fs::remove_dir_all(output_dir).ok();
     }
 
     #[test]

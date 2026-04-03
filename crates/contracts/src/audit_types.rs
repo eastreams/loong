@@ -110,9 +110,18 @@ pub enum AuditEventKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuditIntegrity {
+    pub algorithm: String,
+    pub prev_hash: Option<String>,
+    pub entry_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub event_id: String,
     pub timestamp_epoch_s: u64,
     pub agent_id: Option<String>,
     pub kind: AuditEventKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integrity: Option<AuditIntegrity>,
 }

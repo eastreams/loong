@@ -358,15 +358,26 @@ fn fetch_browser_page(
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
             .map(|value| value.to_owned());
+        let mut budget = super::download_guard::ByteBudget::new(max_bytes);
+
+        budget.reject_if_content_length_exceeds(response.content_length(), "browser response")?;
         let mut body = Vec::new();
         let mut limited_reader = response.take((max_bytes as u64).saturating_add(1));
-        limited_reader
-            .read_to_end(&mut body)
-            .map_err(|error| format!("failed to read browser response body: {error}"))?;
-        if body.len() > max_bytes {
-            return Err(format!(
-                "browser response exceeded max_bytes limit ({max_bytes} bytes)"
-            ));
+        let mut buffer = [0_u8; 8_192];
+
+        loop {
+            let read = limited_reader
+                .read(&mut buffer)
+                .map_err(|error| format!("failed to read browser response body: {error}"))?;
+            if read == 0 {
+                break;
+            }
+
+            budget.try_consume(read, "browser response")?;
+            let chunk = buffer
+                .get(..read)
+                .ok_or_else(|| "failed to slice browser response buffer".to_owned())?;
+            body.extend_from_slice(chunk);
         }
 
         let raw_text = String::from_utf8_lossy(&body).into_owned();
@@ -408,7 +419,7 @@ fn fetch_browser_page(
             raw_html: raw_text,
             page_text,
             links,
-            bytes_downloaded: body.len(),
+            bytes_downloaded: budget.consumed(),
             redirect_count,
         });
     }
@@ -918,6 +929,35 @@ mod tests {
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["title"], json!("Fixture Home"));
+        handle.join().expect("server thread");
+    }
+
+    #[test]
+    fn browser_open_rejects_declared_content_length_above_limit() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let address = listener.local_addr().expect("listener addr");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept stream");
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntiny";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+
+        let mut config = local_browser_config();
+        config.web_fetch.max_bytes = 4;
+
+        let error = execute_browser_tool_with_config(
+            scoped_request(
+                "browser.open",
+                json!({"url": format!("http://127.0.0.1:{}/", address.port())}),
+                "test-open-content-length",
+            ),
+            &config,
+        )
+        .expect_err("oversize declared content length should fail closed");
+
+        assert!(error.contains("Content-Length"));
         handle.join().expect("server thread");
     }
 

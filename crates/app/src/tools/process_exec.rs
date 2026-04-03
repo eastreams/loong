@@ -129,6 +129,10 @@ where
     S: AsRef<OsStr>,
 {
     let mut command = Command::new(program);
+    let sanitized_env = loongclaw_contracts::sanitized_child_process_env();
+
+    command.env_clear();
+    command.envs(sanitized_env);
     command.args(args);
     command.current_dir(cwd);
     command.stdout(Stdio::piped());

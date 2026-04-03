@@ -4789,6 +4789,7 @@ fn execute_feishu_messages_resource_get_tool_with_config(
                 &message_id,
                 &file_key,
                 resource_type,
+                media::FEISHU_MESSAGE_RESOURCE_DOWNLOAD_MAX_BYTES,
             )
             .await?;
             if let Some(parent) = save_path.parent() {

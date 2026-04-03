@@ -65,6 +65,7 @@ fn execute_web_fetch_tool_enabled(
 
     super::web_http::run_async(async {
         loop {
+            let mut budget = super::download_guard::ByteBudget::new(max_bytes);
             let response = client
                 .get(current_url.clone())
                 .send()
@@ -115,30 +116,18 @@ fn execute_web_fetch_tool_enabled(
                 .get(reqwest::header::CONTENT_TYPE)
                 .and_then(|value| value.to_str().ok())
                 .map(|value| value.to_owned());
+            budget.reject_if_content_length_exceeds(
+                response.content_length(),
+                "web.fetch response",
+            )?;
 
-            // Short-circuit on Content-Length when the server advertises it.
-            if let Some(content_length) = response.content_length()
-                && content_length > max_bytes as u64
-            {
-                return Err(format!(
-                    "web.fetch response Content-Length ({content_length}) exceeds max_bytes limit ({max_bytes} bytes)"
-                ));
-            }
-
-            // Stream the body with a hard cap at max_bytes + 1 to detect
-            // oversize responses without unbounded memory allocation.
-            let limit = (max_bytes as u64).saturating_add(1);
             let mut body = Vec::new();
             let mut stream = response.bytes_stream();
             use futures_util::StreamExt;
             while let Some(chunk) = stream.next().await {
                 let chunk = chunk
                     .map_err(|error| format!("failed to read web.fetch response body: {error}"))?;
-                if body.len() as u64 + chunk.len() as u64 > limit {
-                    return Err(format!(
-                        "web.fetch response exceeded max_bytes limit ({max_bytes} bytes)"
-                    ));
-                }
+                budget.try_consume(chunk.len(), "web.fetch response")?;
                 body.extend_from_slice(&chunk);
             }
 
@@ -174,7 +163,7 @@ fn execute_web_fetch_tool_enabled(
                     "mode": mode.as_str(),
                     "content": content,
                     "title": title,
-                    "bytes_downloaded": body.len(),
+                    "bytes_downloaded": budget.consumed(),
                     "redirect_count": redirect_count,
                 }),
             });
