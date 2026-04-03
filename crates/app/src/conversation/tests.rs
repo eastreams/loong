@@ -10346,6 +10346,21 @@ fn provider_failover_error_fixture() -> String {
     error.to_owned()
 }
 
+fn provider_auth_rejected_error_fixture() -> String {
+    let error = concat!(
+        "provider request failed for every model candidate ",
+        "(last_reason=auth_rejected) | provider_failover=",
+        "{\"reason\":\"auth_rejected\",",
+        "\"stage\":\"status_failure\",",
+        "\"model\":\"gpt-4o\",",
+        "\"attempt\":1,",
+        "\"max_attempts\":3,",
+        "\"status_code\":401}",
+    );
+
+    error.to_owned()
+}
+
 #[tokio::test]
 async fn handle_turn_with_runtime_inline_provider_error_persists_provider_failover_trust_event() {
     let runtime = FakeRuntime::new(vec![], Err(provider_failover_error_fixture()));
@@ -10414,7 +10429,39 @@ async fn handle_turn_with_runtime_propagated_provider_error_persists_provider_fa
     assert_eq!(payloads[0]["trust_event"]["provenance_ref"], "kernel");
     assert_eq!(
         payloads[0]["trust_event"]["evidence_ref"],
-        "provider:openai:model:gpt-4o"
+        "provider:openai:model:gpt-4o:stage:status_failure"
+    );
+}
+
+#[tokio::test]
+async fn handle_turn_with_runtime_auth_rejected_provider_error_marks_rejected_trust_state() {
+    let runtime = FakeRuntime::new(vec![], Err(provider_auth_rejected_error_fixture()));
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-provider-failover-auth-rejected",
+            "hello",
+            ProviderErrorMode::InlineMessage,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("inline provider error should still return assistant text");
+
+    assert!(reply.contains("[provider_error]"));
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "trust_provider_failover");
+
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["provider_failover"]["reason"], "auth_rejected");
+    assert_eq!(payloads[0]["trust_event"]["trust_state_hint"], "rejected");
+    assert_eq!(
+        payloads[0]["trust_event"]["evidence_ref"],
+        "provider:openai:model:gpt-4o:stage:status_failure"
     );
 }
 

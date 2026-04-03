@@ -81,6 +81,15 @@ pub(crate) fn embed_trust_event_payload(payload: Value, trust_event: TrustEventE
     Value::Object(payload_object)
 }
 
+pub(crate) fn extract_trust_event_payload(payload: &Value) -> Option<TrustEventEnvelope> {
+    let payload_object = payload.as_object()?;
+    let trust_event_value = payload_object.get(TRUST_EVENT_PAYLOAD_KEY)?;
+    let trust_event_value = trust_event_value.clone();
+    let trust_event = serde_json::from_value(trust_event_value).ok()?;
+
+    Some(trust_event)
+}
+
 pub(crate) fn delegate_child_trust_event(
     parent_session_id: &str,
     child_session_id: &str,
@@ -123,17 +132,35 @@ pub(crate) fn provider_failover_trust_event(
     provenance_ref: &str,
     reason_code: &str,
     model: &str,
+    stage: &str,
 ) -> TrustEventEnvelope {
+    let trust_state_hint = provider_failover_trust_state_hint(reason_code);
+
     TrustEventEnvelope {
         event_kind: TrustEventKind::TrustAttested,
         actor_id: provider_id.to_owned(),
         actor_kind: TrustActorKind::ProviderRuntime,
         source_surface: source_surface.to_owned(),
-        trust_state_hint: TrustStateHint::Degraded,
+        trust_state_hint,
         provenance_kind: TrustProvenanceKind::RuntimeBinding,
         provenance_ref: provenance_ref.to_owned(),
         reason_code: reason_code.to_owned(),
-        evidence_ref: format!("provider:{provider_id}:model:{model}"),
+        evidence_ref: format!("provider:{provider_id}:model:{model}:stage:{stage}"),
+    }
+}
+
+fn provider_failover_trust_state_hint(reason_code: &str) -> TrustStateHint {
+    match reason_code {
+        "auth_rejected" => TrustStateHint::Rejected,
+        "model_mismatch" => TrustStateHint::Rejected,
+        "payload_incompatible" => TrustStateHint::Rejected,
+        "request_rejected" => TrustStateHint::Rejected,
+        "rate_limited" => TrustStateHint::Degraded,
+        "provider_overloaded" => TrustStateHint::Degraded,
+        "transport_failure" => TrustStateHint::Degraded,
+        "response_decode_failure" => TrustStateHint::Degraded,
+        "response_shape_invalid" => TrustStateHint::Degraded,
+        _ => TrustStateHint::Unknown,
     }
 }
 
@@ -142,7 +169,7 @@ mod tests {
     use super::{
         TRUST_EVENT_PAYLOAD_KEY, TrustActorKind, TrustEventEnvelope, TrustEventKind,
         TrustProvenanceKind, TrustStateHint, delegate_child_trust_event, embed_trust_event_payload,
-        provider_failover_trust_event,
+        extract_trust_event_payload, provider_failover_trust_event,
     };
     use serde_json::json;
 
@@ -210,6 +237,7 @@ mod tests {
             "kernel",
             "rate_limited",
             "gpt-4o",
+            "status_failure",
         );
 
         assert_eq!(envelope.event_kind, TrustEventKind::TrustAttested);
@@ -221,6 +249,51 @@ mod tests {
         );
         assert_eq!(envelope.provenance_ref, "kernel");
         assert_eq!(envelope.reason_code, "rate_limited");
-        assert_eq!(envelope.evidence_ref, "provider:openai:model:gpt-4o");
+        assert_eq!(
+            envelope.evidence_ref,
+            "provider:openai:model:gpt-4o:stage:status_failure"
+        );
+    }
+
+    #[test]
+    fn provider_failover_trust_event_marks_rejected_provider_runtime_state_for_auth_failures() {
+        let envelope = provider_failover_trust_event(
+            "openai",
+            "provider.failover",
+            "kernel",
+            "auth_rejected",
+            "gpt-4o",
+            "status_failure",
+        );
+
+        assert_eq!(envelope.trust_state_hint, TrustStateHint::Rejected);
+    }
+
+    #[test]
+    fn extract_trust_event_payload_reads_embedded_trust_event() {
+        let trust_event =
+            delegate_child_trust_event("root-session", "child-session", "delegate.inline");
+        let payload = embed_trust_event_payload(json!({ "task": "child task" }), trust_event);
+
+        let extracted = extract_trust_event_payload(&payload).expect("extract trust event");
+
+        assert_eq!(extracted.event_kind, TrustEventKind::DelegationCreated);
+        assert_eq!(extracted.actor_kind, TrustActorKind::DelegateChildRuntime);
+    }
+
+    #[test]
+    fn extract_trust_event_payload_rejects_malformed_embedded_value() {
+        let payload = json!({
+            TRUST_EVENT_PAYLOAD_KEY: {
+                "event_kind": "delegation_created",
+                "actor_id": "child-session",
+                "actor_kind": "delegate_child_runtime",
+                "source_surface": "delegate.inline"
+            }
+        });
+
+        let extracted = extract_trust_event_payload(&payload);
+
+        assert!(extracted.is_none());
     }
 }

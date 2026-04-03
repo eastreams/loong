@@ -8,8 +8,8 @@ use crate::session::repository::{
     CreateSessionWithEventRequest, NewSessionRecord, SessionKind, SessionState,
 };
 use crate::trust::{
-    delegate_child_trust_event, embed_trust_event_payload, provider_failover_trust_event,
-    runtime_binding_missing_trust_event,
+    delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
+    provider_failover_trust_event, runtime_binding_missing_trust_event,
 };
 
 use super::super::config::LoongClawConfig;
@@ -43,8 +43,12 @@ pub(super) async fn emit_runtime_binding_trust_event_if_needed<R: ConversationRu
     let payload = json!({
         "source": "conversation_runtime",
         "failure_code": failure.code,
-        "trust_event": trust_event,
     });
+    let payload = embed_trust_event_payload(payload, trust_event);
+    let extracted = extract_trust_event_payload(&payload);
+    if extracted.is_none() {
+        return;
+    }
     let _ = persist_conversation_event(
         runtime,
         session_id,
@@ -75,6 +79,8 @@ pub(super) async fn emit_provider_failover_trust_event_if_needed<
         .unwrap_or("provider_failover");
     let model_value = provider_failover.get("model");
     let model = model_value.and_then(Value::as_str).unwrap_or("unknown");
+    let stage_value = provider_failover.get("stage");
+    let stage = stage_value.and_then(Value::as_str).unwrap_or("unknown");
     let provenance_ref = if binding.is_kernel_bound() {
         "kernel"
     } else {
@@ -86,14 +92,19 @@ pub(super) async fn emit_provider_failover_trust_event_if_needed<
         provenance_ref,
         reason_code,
         model,
+        stage,
     );
     let payload = json!({
         "source": "provider_runtime",
         "binding": provenance_ref,
         "provider_id": provider_id,
         "provider_failover": provider_failover,
-        "trust_event": trust_event,
     });
+    let payload = embed_trust_event_payload(payload, trust_event);
+    let extracted = extract_trust_event_payload(&payload);
+    if extracted.is_none() {
+        return;
+    }
     let _ = persist_conversation_event(
         runtime,
         session_id,
