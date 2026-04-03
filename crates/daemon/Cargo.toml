@@ -90,10 +90,6 @@ tracing-subscriber.workspace = true
 name = "loong"
 path = "src/main.rs"
 
-[[bin]]
-name = "loongclaw"
-path = "src/main.rs"
-
 [dev-dependencies]
 loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec", features = ["test-hooks"] }
 sha2.workspace = true
