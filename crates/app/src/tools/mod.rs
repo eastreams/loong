@@ -57,6 +57,7 @@ pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
+mod shell_request_prep;
 mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
@@ -80,6 +81,12 @@ pub use catalog::{
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::MvpToolAdapter;
+pub(crate) use shell_request_prep::{
+    TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TOKEN_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, inject_tool_lease_binding,
+    normalize_shell_payload_for_request, normalize_shell_request_for_execution,
+    prepare_kernel_tool_request,
+};
 #[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 pub use web_http::build_ssrf_safe_client;
 
@@ -425,176 +432,6 @@ pub(super) fn normalize_without_fs(path: &Path) -> PathBuf {
         }
     } else {
         normalized
-    }
-}
-
-const TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: &str = "_granted_capabilities";
-const TOOL_LEASE_TOKEN_ID_FIELD: &str = "_lease_token_id";
-const TOOL_LEASE_SESSION_ID_FIELD: &str = "_lease_session_id";
-const TOOL_LEASE_TURN_ID_FIELD: &str = "_lease_turn_id";
-
-pub(crate) fn normalize_shell_payload_for_request(tool_name: &str, payload: Value) -> Value {
-    match canonical_tool_name(tool_name) {
-        "shell.exec" => normalize_shell_payload_object(payload),
-        "tool.invoke" => normalize_shell_invoke_payload(payload),
-        _ => payload,
-    }
-}
-
-pub(crate) fn normalize_shell_request_for_execution(
-    mut request: ToolCoreRequest,
-) -> ToolCoreRequest {
-    request.payload =
-        normalize_shell_payload_for_request(request.tool_name.as_str(), request.payload);
-    request
-}
-
-fn normalize_shell_invoke_payload(payload: Value) -> Value {
-    let mut outer = match payload {
-        Value::Object(outer) => outer,
-        other @ Value::Null
-        | other @ Value::Bool(_)
-        | other @ Value::Number(_)
-        | other @ Value::String(_)
-        | other @ Value::Array(_) => return other,
-    };
-    let Some(tool_id) = outer
-        .get("tool_id")
-        .and_then(Value::as_str)
-        .map(canonical_tool_name)
-    else {
-        return Value::Object(outer);
-    };
-    if tool_id != "shell.exec" {
-        return Value::Object(outer);
-    }
-    let arguments = outer
-        .remove("arguments")
-        .map(normalize_shell_payload_object)
-        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
-    outer.insert("arguments".to_owned(), arguments);
-    Value::Object(outer)
-}
-
-fn normalize_shell_payload_object(payload: Value) -> Value {
-    let mut object = match payload {
-        Value::Object(object) => object,
-        other @ Value::Null
-        | other @ Value::Bool(_)
-        | other @ Value::Number(_)
-        | other @ Value::String(_)
-        | other @ Value::Array(_) => return other,
-    };
-    let args_missing = match object.get("args") {
-        None => true,
-        Some(Value::Array(values)) => values.is_empty(),
-        Some(_) => false,
-    };
-    if !args_missing {
-        return Value::Object(object);
-    }
-
-    let Some(command) = object.get("command").and_then(Value::as_str) else {
-        return Value::Object(object);
-    };
-    let Some((normalized_command, normalized_args)) = split_shell_command_if_safe(command) else {
-        return Value::Object(object);
-    };
-    object.insert("command".to_owned(), Value::String(normalized_command));
-    if normalized_args.is_empty() {
-        object.remove("args");
-    } else {
-        object.insert(
-            "args".to_owned(),
-            Value::Array(
-                normalized_args
-                    .into_iter()
-                    .map(Value::String)
-                    .collect::<Vec<_>>(),
-            ),
-        );
-    }
-    Value::Object(object)
-}
-
-fn split_shell_command_if_safe(command: &str) -> Option<(String, Vec<String>)> {
-    let trimmed = command.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let contains_newline = trimmed.chars().any(|ch| matches!(ch, '\n' | '\r'));
-    if contains_newline {
-        return None;
-    }
-    let contains_whitespace = trimmed.contains(char::is_whitespace);
-    if !contains_whitespace {
-        return None;
-    }
-    if trimmed.chars().any(|ch| {
-        matches!(
-            ch,
-            '\'' | '"' | '\\' | '`' | '|' | '&' | ';' | '<' | '>' | '(' | ')' | '$'
-        )
-    }) {
-        return None;
-    }
-    let mut parts = trimmed.split_whitespace();
-    let command = parts.next()?.to_owned();
-    let args = parts.map(str::to_owned).collect::<Vec<_>>();
-    if args.is_empty() {
-        return None;
-    }
-    Some((command, args))
-}
-pub(crate) fn prepare_kernel_tool_request(
-    mut request: ToolCoreRequest,
-    granted_capabilities: &BTreeSet<Capability>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) -> ToolCoreRequest {
-    request = normalize_shell_request_for_execution(request);
-    let canonical_tool_name = canonical_tool_name(request.tool_name.as_str());
-    if !matches!(canonical_tool_name, "tool.search" | "tool.invoke") {
-        return request;
-    }
-
-    if let Value::Object(payload) = &mut request.payload {
-        if canonical_tool_name == "tool.search" {
-            let granted =
-                serde_json::to_value(granted_capabilities.iter().copied().collect::<Vec<_>>())
-                    .unwrap_or_else(|_| Value::Array(Vec::new()));
-            payload.insert(TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD.to_owned(), granted);
-        }
-        inject_tool_lease_binding(payload, token_id, session_id, turn_id);
-    }
-
-    request
-}
-
-fn inject_tool_lease_binding(
-    payload: &mut serde_json::Map<String, Value>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) {
-    if let Some(token_id) = token_id {
-        payload.insert(
-            TOOL_LEASE_TOKEN_ID_FIELD.to_owned(),
-            Value::String(token_id.to_owned()),
-        );
-    }
-    if let Some(session_id) = session_id {
-        payload.insert(
-            TOOL_LEASE_SESSION_ID_FIELD.to_owned(),
-            Value::String(session_id.to_owned()),
-        );
-    }
-    if let Some(turn_id) = turn_id {
-        payload.insert(
-            TOOL_LEASE_TURN_ID_FIELD.to_owned(),
-            Value::String(turn_id.to_owned()),
-        );
     }
 }
 
