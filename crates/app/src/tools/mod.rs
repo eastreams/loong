@@ -739,6 +739,7 @@ fn execute_discoverable_tool_core_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let tool_name = request.tool_name.clone();
+    run_direct_tool_policy_preflight(&request, config)?;
     let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
 
     let inner = {
@@ -752,6 +753,30 @@ fn execute_discoverable_tool_core_with_config(
         }
         _ => inner(),
     }
+}
+
+fn run_direct_tool_policy_preflight(
+    request: &ToolCoreRequest,
+    config: &runtime_config::ToolRuntimeConfig,
+) -> Result<(), String> {
+    let payload = request.payload.as_object();
+    let Some(payload) = payload else {
+        return Ok(());
+    };
+
+    let tool_name = request.tool_name.as_str();
+    let is_shell_tool = tool_name == "shell.exec";
+    if is_shell_tool {
+        shell_policy_ext::authorize_direct_shell_payload(payload, config)?;
+        return Ok(());
+    }
+
+    let is_file_tool = matches!(tool_name, "file.read" | "file.write" | "file.edit");
+    if is_file_tool {
+        file_policy_ext::authorize_direct_file_payload(tool_name, payload, config)?;
+    }
+
+    Ok(())
 }
 
 fn tool_uses_dedicated_timeout(tool_name: &str) -> bool {
@@ -3431,6 +3456,27 @@ mod tests {
 
     #[cfg(feature = "tool-shell")]
     #[test]
+    fn direct_shell_exec_preflight_reuses_shared_shell_policy_default_deny() {
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        config.shell_allow = BTreeSet::new();
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({"command": "git"}),
+            },
+            &config,
+        )
+        .expect_err("unknown shell command should be denied by shared direct-path preflight");
+
+        assert_eq!(
+            error,
+            "policy_denied: tool call denied by policy for `shell.exec`: command `git` is not in the allow list (default-deny policy)"
+        );
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
     fn shell_exec_times_out_when_timeout_ms_is_small() {
         let mut config = test_tool_runtime_config(std::env::temp_dir());
         #[cfg(unix)]
@@ -3497,6 +3543,38 @@ mod tests {
         assert!(
             elapsed < std::time::Duration::from_millis(2_500),
             "timeout path should not wait for descendant pipe holders; elapsed={elapsed:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn direct_file_write_preflight_reuses_shared_file_policy_escape_guard() {
+        let root = unique_temp_dir("loongclaw-direct-file-write-preflight");
+        let config = test_tool_runtime_config(root);
+
+        let error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "file.write".to_owned(),
+                payload: json!({
+                    "path": "../outside.txt",
+                    "content": "blocked"
+                }),
+            },
+            &config,
+        )
+        .expect_err("escaped file path should be denied by direct-path preflight");
+
+        assert!(
+            error.starts_with("policy_denied: "),
+            "expected policy_denied prefix, got: {error}"
+        );
+        assert!(
+            error.contains("policy extension file-policy denied request"),
+            "expected shared file policy prefix, got: {error}"
+        );
+        assert!(
+            error.contains("escapes file root"),
+            "expected shared file policy denial, got: {error}"
         );
     }
 
