@@ -16,6 +16,9 @@ serde.workspace = true
 serde_json.workspace = true
 semver.workspace = true
 thiserror.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+rand.workspace = true
 
 [features]
 test-support = []

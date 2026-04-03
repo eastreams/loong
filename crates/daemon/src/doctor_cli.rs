@@ -5,7 +5,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
-use kernel::probe_jsonl_audit_journal_runtime_ready;
+use kernel::{
+    AuditJournalIntegrityStatus, probe_jsonl_audit_journal_runtime_ready,
+    verify_jsonl_audit_journal_integrity,
+};
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
 use loongclaw_spec::CliResult;
@@ -138,6 +141,9 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         "create memory directory",
     ));
     checks.push(audit_retention_doctor_check(&config.audit));
+    if let Some(check) = audit_integrity_doctor_check(&config.audit) {
+        checks.push(check);
+    }
     if matches!(
         config.audit.mode,
         mvp::config::AuditMode::Jsonl | mvp::config::AuditMode::Fanout
@@ -379,6 +385,74 @@ fn durable_audit_retention_doctor_check(
         name: "audit retention".to_owned(),
         level: DoctorCheckLevel::Pass,
         detail,
+    }
+}
+
+fn audit_integrity_doctor_check(audit: &mvp::config::AuditConfig) -> Option<DoctorCheck> {
+    if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        return None;
+    }
+
+    let journal_path = audit.resolved_path();
+
+    if !journal_path.exists() {
+        return Some(DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: format!(
+                "audit journal {} has not been created yet; integrity sidecar will appear after the first durable audit write",
+                journal_path.display()
+            ),
+        });
+    }
+
+    let verification = verify_jsonl_audit_journal_integrity(&journal_path);
+
+    match verification {
+        Ok(report) => match report.status {
+            AuditJournalIntegrityStatus::Verified => Some(DoctorCheck {
+                name: "audit integrity".to_owned(),
+                level: DoctorCheckLevel::Pass,
+                detail: format!(
+                    "verified tamper-evident audit sidecar for {} protected_entries={} last_event_id={}",
+                    journal_path.display(),
+                    report.protected_entries,
+                    report.last_event_id.as_deref().unwrap_or("-")
+                ),
+            }),
+            AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => Some(DoctorCheck {
+                name: "audit integrity".to_owned(),
+                level: DoctorCheckLevel::Warn,
+                detail: format!(
+                    "audit journal {} is missing integrity sidecar artifacts: {}",
+                    journal_path.display(),
+                    missing_paths.join(", ")
+                ),
+            }),
+            AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+                let line = line
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_owned());
+                Some(DoctorCheck {
+                    name: "audit integrity".to_owned(),
+                    level: DoctorCheckLevel::Fail,
+                    detail: format!(
+                        "audit integrity mismatch for {} at line {}: {}",
+                        journal_path.display(),
+                        line,
+                        reason
+                    ),
+                })
+            }
+        },
+        Err(error) => Some(DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: format!(
+                "audit integrity verification failed for {}: {error}",
+                journal_path.display()
+            ),
+        }),
     }
 }
 
@@ -1982,6 +2056,16 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
     let rerun_onboard_command =
         crate::cli_handoff::format_subcommand_with_config("onboard", &config_path_display);
+    let audit_integrity_missing_journal = checks.iter().any(|check| {
+        check.name == "audit integrity"
+            && check.level == DoctorCheckLevel::Warn
+            && check.detail.contains("has not been created yet")
+    });
+    let audit_integrity_missing_sidecar = checks.iter().any(|check| {
+        check.name == "audit integrity"
+            && check.level == DoctorCheckLevel::Warn
+            && !check.detail.contains("has not been created yet")
+    });
 
     if !fix_requested
         && checks.iter().any(|check| {
@@ -2122,6 +2206,44 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             &mut steps,
             format!(
                 "Point [audit].path at a writable journal file path, then re-run diagnostics: {rerun_command}"
+            ),
+        );
+    }
+
+    if audit_integrity_missing_journal {
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Allow the first durable audit write to create the journal and integrity sidecar, then re-run: {rerun_command}"
+            ),
+        );
+    }
+
+    if audit_integrity_missing_sidecar {
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Repair the audit integrity sidecar explicitly with `loong audit repair --config '{}'`, then re-run: {rerun_command}",
+                config_path_display
+            ),
+        );
+    }
+
+    if checks
+        .iter()
+        .any(|check| check.name == "audit integrity" && check.level == DoctorCheckLevel::Fail)
+    {
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Run `loong audit verify --config '{}'` and inspect the reported mismatch before trusting the retained journal.",
+                config_path_display
+            ),
+        );
+        push_unique_step(
+            &mut steps,
+            format!(
+                "If the journal is intentionally disposable, rotate or replace [audit].path and re-run diagnostics: {rerun_command}"
             ),
         );
     }
@@ -2668,6 +2790,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::ScopedEnv;
+    use kernel::AuditSink;
     use mvp::channel::{
         ChannelOperationHealth, ChannelOperationRuntime, ChannelOperationStatus,
         ChannelStatusSnapshot,
@@ -4074,6 +4197,142 @@ mod tests {
         assert_eq!(check.level, DoctorCheckLevel::Pass);
         assert!(!journal_path.exists());
         assert!(!journal_path.parent().expect("nested parent").exists());
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_passes_for_verified_journal() {
+        let temp_dir = browser_companion_temp_dir("audit-integrity-verified");
+        let journal_path = temp_dir.join("events.jsonl");
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+        sink.record(crate::kernel::AuditEvent {
+            event_id: "evt-verified".to_owned(),
+            timestamp_epoch_s: 1_700_010_500,
+            agent_id: Some("agent-verified".to_owned()),
+            kind: crate::kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-verified".to_owned(),
+            },
+        })
+        .expect("audit event should record");
+
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        })
+        .expect("doctor should emit integrity check");
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Pass);
+        assert!(
+            check
+                .detail
+                .contains("verified tamper-evident audit sidecar")
+        );
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_warns_for_legacy_journal_without_sidecar() {
+        let temp_dir = browser_companion_temp_dir("audit-integrity-missing-sidecar");
+        let journal_path = temp_dir.join("events.jsonl");
+        std::fs::write(&journal_path, "{}\n").expect("write legacy journal");
+
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Jsonl,
+            path: journal_path.display().to_string(),
+            retain_in_memory: false,
+        })
+        .expect("doctor should emit integrity check");
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Warn);
+        assert!(check.detail.contains("missing integrity sidecar artifacts"));
+    }
+
+    #[test]
+    fn audit_integrity_doctor_check_fails_for_mismatched_journal() {
+        let temp_dir = browser_companion_temp_dir("audit-integrity-mismatch");
+        let journal_path = temp_dir.join("events.jsonl");
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+        sink.record(crate::kernel::AuditEvent {
+            event_id: "evt-mismatch".to_owned(),
+            timestamp_epoch_s: 1_700_010_501,
+            agent_id: Some("agent-mismatch".to_owned()),
+            kind: crate::kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-mismatch".to_owned(),
+            },
+        })
+        .expect("audit event should record");
+
+        let tampered = r#"{"event_id":"evt-mismatch","timestamp_epoch_s":1700010501,"agent_id":"mallory","kind":{"TokenRevoked":{"token_id":"token-mismatch"}}}"#;
+        let tampered = format!("{tampered}\n");
+        std::fs::write(&journal_path, tampered).expect("tamper journal");
+
+        let check = audit_integrity_doctor_check(&mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        })
+        .expect("doctor should emit integrity check");
+
+        assert_eq!(check.name, "audit integrity");
+        assert_eq!(check.level, DoctorCheckLevel::Fail);
+        assert!(check.detail.contains("audit integrity mismatch"));
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_audit_integrity_recovery() {
+        let checks = vec![DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Fail,
+            detail: "audit integrity mismatch for /tmp/audit/events.jsonl at line 1: line hash does not match".to_owned(),
+        }];
+        let config_path = PathBuf::from("/tmp/loong.toml");
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            &config_path,
+            &mvp::config::LoongClawConfig::default(),
+            false,
+            None,
+        );
+
+        assert!(
+            next_steps
+                .iter()
+                .any(|step| step.contains("loong audit verify --config '/tmp/loong.toml'")),
+            "doctor should recommend the explicit audit verify command for integrity failures: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_first_durable_audit_write_for_fresh_journal() {
+        let checks = vec![DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "audit journal /tmp/audit/events.jsonl has not been created yet; integrity sidecar will appear after the first durable audit write".to_owned(),
+        }];
+        let config_path = PathBuf::from("/tmp/loong.toml");
+        let next_steps = build_doctor_next_steps_with_path_env(
+            &checks,
+            &config_path,
+            &mvp::config::LoongClawConfig::default(),
+            false,
+            None,
+        );
+
+        assert!(
+            next_steps
+                .iter()
+                .any(|step| step.contains("first durable audit write")),
+            "doctor should guide fresh installs toward creating the first journal entry: {next_steps:#?}"
+        );
+        assert!(
+            !next_steps
+                .iter()
+                .any(|step| step.contains("loong audit repair")),
+            "doctor should not recommend audit repair before the journal exists: {next_steps:#?}"
+        );
     }
 
     fn unique_temp_feishu_db(label: &str) -> String {

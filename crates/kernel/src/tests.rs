@@ -10,8 +10,10 @@ use proptest::prelude::*;
 use serde_json::json;
 
 use crate::audit::{
-    AuditEvent, AuditEventKind, AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
-    probe_jsonl_audit_journal_runtime_ready,
+    AuditEvent, AuditEventKind, AuditJournalIntegrityRepairAction, AuditJournalIntegrityStatus,
+    AuditSink, FanoutAuditSink, InMemoryAuditSink, JsonlAuditSink,
+    derive_jsonl_audit_integrity_paths, probe_jsonl_audit_journal_runtime_ready,
+    repair_jsonl_audit_journal_integrity, verify_jsonl_audit_journal_integrity,
 };
 use crate::clock::FixedClock;
 use crate::contracts::{Capability, HarnessOutcome, TaskIntent};
@@ -73,6 +75,275 @@ fn jsonl_audit_sink_appends_one_json_line_per_event() {
     assert_eq!(second.event_id, "evt-2");
 
     let _ = fs::remove_file(path);
+}
+
+#[test]
+fn jsonl_audit_sink_writes_integrity_sidecar_and_verifies() {
+    let path = fresh_audit_temp_path("jsonl-integrity");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-1", 100))
+        .expect("first event should record");
+    sink.record(sample_audit_event("evt-2", 101))
+        .expect("second event should record");
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+
+    assert!(paths.integrity_journal_path.exists());
+    assert!(paths.key_path.exists());
+    assert!(paths.seal_path.exists());
+
+    let report =
+        verify_jsonl_audit_journal_integrity(&path).expect("integrity verification should work");
+
+    assert_eq!(report.protected_entries, 2);
+    assert_eq!(report.last_event_id.as_deref(), Some("evt-2"));
+    assert!(matches!(
+        report.status,
+        AuditJournalIntegrityStatus::Verified
+    ));
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
+}
+
+#[test]
+fn verify_jsonl_audit_journal_integrity_reports_missing_sidecar_files() {
+    let path = fresh_audit_temp_path("jsonl-missing-integrity");
+    let event = sample_audit_event("evt-legacy", 100);
+    let encoded = serde_json::to_string(&event).expect("serialize audit event");
+    let contents = format!("{encoded}\n");
+    fs::write(&path, contents).expect("write audit journal");
+
+    let report =
+        verify_jsonl_audit_journal_integrity(&path).expect("verification should return a report");
+
+    assert!(matches!(
+        report.status,
+        AuditJournalIntegrityStatus::MissingArtifacts { .. }
+    ));
+
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn jsonl_audit_sink_bootstraps_integrity_sidecar_for_legacy_journal() {
+    let path = fresh_audit_temp_path("jsonl-bootstrap-integrity");
+    let first = sample_audit_event("evt-legacy-1", 100);
+    let second = sample_audit_event("evt-legacy-2", 101);
+    let encoded_first = serde_json::to_string(&first).expect("serialize first event");
+    let encoded_second = serde_json::to_string(&second).expect("serialize second event");
+    let journal = format!("{encoded_first}\n{encoded_second}\n");
+    fs::write(&path, journal).expect("write legacy audit journal");
+
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should bootstrap integrity");
+    sink.record(sample_audit_event("evt-new", 102))
+        .expect("new event should record");
+
+    let report = verify_jsonl_audit_journal_integrity(&path).expect("verification should succeed");
+
+    assert_eq!(report.protected_entries, 3);
+    assert_eq!(report.last_event_id.as_deref(), Some("evt-new"));
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
+}
+
+#[test]
+fn verify_jsonl_audit_journal_integrity_detects_tampered_event_line() {
+    let path = fresh_audit_temp_path("jsonl-tampered");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-1", 100))
+        .expect("event should record");
+
+    let tampered_contents = r#"{"event_id":"evt-1","timestamp_epoch_s":100,"agent_id":"mallory","kind":{"PlaneInvoked":{"pack_id":"sales-intel","plane":"Tool","tier":"Core","primary_adapter":"mvp-tools","delegated_core_adapter":null,"operation":"shell.exec","required_capabilities":["InvokeTool"]}}}"#;
+    let tampered_contents = format!("{tampered_contents}\n");
+    fs::write(&path, tampered_contents).expect("rewrite tampered audit journal");
+
+    let report =
+        verify_jsonl_audit_journal_integrity(&path).expect("tampered journal should report");
+
+    match report.status {
+        AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+            assert_eq!(line, Some(1));
+            assert!(
+                reason.contains("line hash does not match")
+                    || reason.contains("chain HMAC does not match")
+            );
+        }
+        other @ AuditJournalIntegrityStatus::Verified
+        | other @ AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+            panic!("tampered journal should report mismatch, got {other:?}")
+        }
+    }
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_integrity_repairs_missing_sidecar_files() {
+    let path = fresh_audit_temp_path("jsonl-repair-missing");
+    let event = sample_audit_event("evt-repair", 100);
+    let encoded = serde_json::to_string(&event).expect("serialize audit event");
+    let contents = format!("{encoded}\n");
+    fs::write(&path, contents).expect("write legacy audit journal");
+
+    let repair =
+        repair_jsonl_audit_journal_integrity(&path).expect("repair should return a report");
+
+    assert_eq!(
+        repair.action,
+        AuditJournalIntegrityRepairAction::RepairedMissingArtifacts
+    );
+    assert_eq!(repair.report.protected_entries, 1);
+    assert!(matches!(
+        repair.report.status,
+        AuditJournalIntegrityStatus::Verified
+    ));
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
+}
+
+#[test]
+fn verify_jsonl_audit_journal_integrity_reports_partially_missing_sidecar_as_mismatch() {
+    let path = fresh_audit_temp_path("jsonl-partial-missing-integrity");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-partial", 100))
+        .expect("event should record");
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    fs::remove_file(&paths.seal_path).expect("remove integrity seal");
+
+    let report =
+        verify_jsonl_audit_journal_integrity(&path).expect("verification should return a report");
+
+    match report.status {
+        AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+            assert_eq!(line, None);
+            assert!(reason.contains("partially missing"));
+            assert!(reason.contains(&paths.seal_path.display().to_string()));
+        }
+        other @ AuditJournalIntegrityStatus::Verified
+        | other @ AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+            panic!("partial sidecar loss should be treated as mismatch, got {other:?}")
+        }
+    }
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_integrity_is_noop_for_verified_journal() {
+    let path = fresh_audit_temp_path("jsonl-repair-verified");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-verified", 100))
+        .expect("event should record");
+
+    let repair =
+        repair_jsonl_audit_journal_integrity(&path).expect("repair should return a report");
+
+    assert_eq!(
+        repair.action,
+        AuditJournalIntegrityRepairAction::NoopVerified
+    );
+    assert!(matches!(
+        repair.report.status,
+        AuditJournalIntegrityStatus::Verified
+    ));
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_integrity_refuses_partially_missing_sidecar() {
+    let path = fresh_audit_temp_path("jsonl-repair-partial-missing");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-partial-repair", 100))
+        .expect("event should record");
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    fs::remove_file(&paths.seal_path).expect("remove integrity seal");
+
+    let repair =
+        repair_jsonl_audit_journal_integrity(&path).expect("repair should return a report");
+
+    assert_eq!(
+        repair.action,
+        AuditJournalIntegrityRepairAction::RefusedMismatch
+    );
+    match repair.report.status {
+        AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+            assert_eq!(line, None);
+            assert!(reason.contains("partially missing"));
+        }
+        other @ AuditJournalIntegrityStatus::Verified
+        | other @ AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+            panic!("partial sidecar loss should be refused, got {other:?}")
+        }
+    }
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+}
+
+#[test]
+fn repair_jsonl_audit_journal_integrity_refuses_mismatched_journal() {
+    let path = fresh_audit_temp_path("jsonl-repair-mismatch");
+    let sink = JsonlAuditSink::new(path.clone()).expect("jsonl sink should initialize");
+
+    sink.record(sample_audit_event("evt-mismatch", 100))
+        .expect("event should record");
+
+    let tampered_contents = r#"{"event_id":"evt-mismatch","timestamp_epoch_s":100,"agent_id":"mallory","kind":{"PlaneInvoked":{"pack_id":"sales-intel","plane":"Tool","tier":"Core","primary_adapter":"mvp-tools","delegated_core_adapter":null,"operation":"shell.exec","required_capabilities":["InvokeTool"]}}}"#;
+    let tampered_contents = format!("{tampered_contents}\n");
+    fs::write(&path, tampered_contents).expect("rewrite tampered audit journal");
+
+    let repair =
+        repair_jsonl_audit_journal_integrity(&path).expect("repair should return a report");
+
+    assert_eq!(
+        repair.action,
+        AuditJournalIntegrityRepairAction::RefusedMismatch
+    );
+    match repair.report.status {
+        AuditJournalIntegrityStatus::Mismatch { line, .. } => {
+            assert_eq!(line, Some(1));
+        }
+        other @ AuditJournalIntegrityStatus::Verified
+        | other @ AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+            panic!("expected mismatch report, got {other:?}")
+        }
+    }
+
+    let paths = derive_jsonl_audit_integrity_paths(&path);
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_file(paths.integrity_journal_path);
+    let _ = fs::remove_file(paths.key_path);
+    let _ = fs::remove_file(paths.seal_path);
 }
 
 #[test]

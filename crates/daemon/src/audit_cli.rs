@@ -5,7 +5,11 @@ use std::path::Path;
 
 use clap::Subcommand;
 
-use crate::kernel::{AuditEvent, AuditEventKind, PluginTrustTier};
+use crate::kernel::{
+    AuditEvent, AuditEventKind, AuditJournalIntegrityRepairAction,
+    AuditJournalIntegrityRepairReport, AuditJournalIntegrityReport, AuditJournalIntegrityStatus,
+    PluginTrustTier,
+};
 use loongclaw_spec::CliResult;
 use serde_json::{Map, Value, json};
 
@@ -101,6 +105,10 @@ pub enum AuditCommands {
         #[arg(long, value_parser = parse_audit_identity_filter)]
         agent_id: Option<String>,
     },
+    /// Verify the tamper-evident sidecar for the retained audit journal
+    Verify,
+    /// Rebuild missing audit integrity sidecars without silently resealing mismatches
+    Repair,
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +265,12 @@ pub enum AuditCommandResult {
         revoked_agent_id: Option<String>,
         timeline: Vec<AuditEvent>,
     },
+    Verify {
+        report: AuditJournalIntegrityReport,
+    },
+    Repair {
+        report: AuditJournalIntegrityRepairReport,
+    },
 }
 
 pub fn run_audit_cli(options: AuditCommandOptions) -> CliResult<()> {
@@ -280,20 +294,20 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
         command,
     } = options;
 
-    let (
-        limit,
-        since_epoch_s_filter,
-        until_epoch_s_filter,
-        pack_id_filter,
-        agent_id_filter,
-        event_id_filter,
-        token_id_filter,
-        kind_filter,
-        triage_label_filter,
-        query_contains_filter,
-        trust_tier_filter,
-        command_name,
-    ) = match &command {
+    let mut limit_filter = None;
+    let mut since_epoch_s_filter = None;
+    let mut until_epoch_s_filter = None;
+    let mut pack_id_filter = None;
+    let mut agent_id_filter = None;
+    let mut event_id_filter = None;
+    let mut token_id_filter = None;
+    let mut kind_filter = None;
+    let mut triage_label_filter = None;
+    let mut query_contains_filter = None;
+    let mut trust_tier_filter = None;
+    let mut command_name = None;
+
+    match &command {
         AuditCommands::Recent {
             limit,
             since_epoch_s,
@@ -306,20 +320,20 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             triage_label,
             query_contains,
             trust_tier,
-        } => (
-            *limit,
-            *since_epoch_s,
-            *until_epoch_s,
-            pack_id.clone(),
-            agent_id.clone(),
-            event_id.clone(),
-            token_id.clone(),
-            kind.clone(),
-            triage_label.clone(),
-            query_contains.clone(),
-            trust_tier.clone(),
-            "audit recent",
-        ),
+        } => {
+            limit_filter = Some(*limit);
+            since_epoch_s_filter = *since_epoch_s;
+            until_epoch_s_filter = *until_epoch_s;
+            pack_id_filter = pack_id.clone();
+            agent_id_filter = agent_id.clone();
+            event_id_filter = event_id.clone();
+            token_id_filter = token_id.clone();
+            kind_filter = kind.clone();
+            triage_label_filter = triage_label.clone();
+            query_contains_filter = query_contains.clone();
+            trust_tier_filter = trust_tier.clone();
+            command_name = Some("audit recent");
+        }
         AuditCommands::Summary {
             limit,
             since_epoch_s,
@@ -331,20 +345,18 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             kind,
             triage_label,
             group_by: _,
-        } => (
-            *limit,
-            *since_epoch_s,
-            *until_epoch_s,
-            pack_id.clone(),
-            agent_id.clone(),
-            event_id.clone(),
-            token_id.clone(),
-            kind.clone(),
-            triage_label.clone(),
-            None,
-            None,
-            "audit summary",
-        ),
+        } => {
+            limit_filter = Some(*limit);
+            since_epoch_s_filter = *since_epoch_s;
+            until_epoch_s_filter = *until_epoch_s;
+            pack_id_filter = pack_id.clone();
+            agent_id_filter = agent_id.clone();
+            event_id_filter = event_id.clone();
+            token_id_filter = token_id.clone();
+            kind_filter = kind.clone();
+            triage_label_filter = triage_label.clone();
+            command_name = Some("audit summary");
+        }
         AuditCommands::Discovery {
             limit,
             since_epoch_s,
@@ -357,20 +369,20 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             query_contains,
             trust_tier,
             group_by: _,
-        } => (
-            *limit,
-            *since_epoch_s,
-            *until_epoch_s,
-            pack_id.clone(),
-            agent_id.clone(),
-            event_id.clone(),
-            token_id.clone(),
-            Some("ToolSearchEvaluated".to_owned()),
-            triage_label.clone(),
-            query_contains.clone(),
-            trust_tier.clone(),
-            "audit discovery",
-        ),
+        } => {
+            limit_filter = Some(*limit);
+            since_epoch_s_filter = *since_epoch_s;
+            until_epoch_s_filter = *until_epoch_s;
+            pack_id_filter = pack_id.clone();
+            agent_id_filter = agent_id.clone();
+            event_id_filter = event_id.clone();
+            token_id_filter = token_id.clone();
+            kind_filter = Some("ToolSearchEvaluated".to_owned());
+            triage_label_filter = triage_label.clone();
+            query_contains_filter = query_contains.clone();
+            trust_tier_filter = trust_tier.clone();
+            command_name = Some("audit discovery");
+        }
         AuditCommands::TokenTrail {
             token_id,
             limit,
@@ -378,23 +390,25 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             until_epoch_s,
             pack_id,
             agent_id,
-        } => (
-            *limit,
-            *since_epoch_s,
-            *until_epoch_s,
-            pack_id.clone(),
-            agent_id.clone(),
-            None,
-            Some(token_id.clone()),
-            None,
-            None,
-            None,
-            None,
-            "audit token-trail",
-        ),
-    };
-    let limit = validate_audit_limit(limit, command_name)?;
-    validate_audit_time_range(since_epoch_s_filter, until_epoch_s_filter, command_name)?;
+        } => {
+            limit_filter = Some(*limit);
+            since_epoch_s_filter = *since_epoch_s;
+            until_epoch_s_filter = *until_epoch_s;
+            pack_id_filter = pack_id.clone();
+            agent_id_filter = agent_id.clone();
+            token_id_filter = Some(token_id.clone());
+            command_name = Some("audit token-trail");
+        }
+        AuditCommands::Verify => {}
+        AuditCommands::Repair => {}
+    }
+
+    if let Some(command_name) = command_name {
+        let limit = limit_filter.expect("audit filter commands should always set a limit");
+        let _ = validate_audit_limit(limit, command_name)?;
+        validate_audit_time_range(since_epoch_s_filter, until_epoch_s_filter, command_name)?;
+    }
+
     let filter = AuditEventFilter {
         since_epoch_s: since_epoch_s_filter,
         until_epoch_s: until_epoch_s_filter,
@@ -410,17 +424,27 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
 
     let (resolved_path, config) = crate::mvp::config::load(config.as_deref())?;
     let journal_path = config.audit.resolved_path();
-    let audit_window = load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
-    let total_matching_events = audit_window.total_matching_events;
-    let events = audit_window.events;
     let result = match command {
-        AuditCommands::Recent { limit, .. } => AuditCommandResult::Recent { limit, events },
+        AuditCommands::Recent { limit, .. } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
+            AuditCommandResult::Recent { limit, events }
+        }
         AuditCommands::Summary {
             limit, group_by, ..
-        } => summarize_audit_events(limit, group_by, &events),
+        } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
+            summarize_audit_events(limit, group_by, &events)
+        }
         AuditCommands::Discovery {
             limit, group_by, ..
         } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let events = audit_window.events;
             let correlated_summary_groups = if group_by.is_some() {
                 let broader_window = load_audit_event_window(
                     &config.audit,
@@ -442,7 +466,23 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
         }
         AuditCommands::TokenTrail {
             limit, token_id, ..
-        } => summarize_token_trail(limit, token_id, events, total_matching_events),
+        } => {
+            let audit_window =
+                load_audit_event_window(&config.audit, &journal_path, limit, &filter)?;
+            let total_matching_events = audit_window.total_matching_events;
+            let events = audit_window.events;
+            summarize_token_trail(limit, token_id, events, total_matching_events)
+        }
+        AuditCommands::Verify => {
+            let report = crate::kernel::verify_jsonl_audit_journal_integrity(&journal_path)
+                .map_err(|error| format!("audit integrity verification failed: {error}"))?;
+            AuditCommandResult::Verify { report }
+        }
+        AuditCommands::Repair => {
+            let report = crate::kernel::repair_jsonl_audit_journal_integrity(&journal_path)
+                .map_err(|error| format!("audit integrity repair failed: {error}"))?;
+            AuditCommandResult::Repair { report }
+        }
     };
 
     Ok(AuditCommandExecution {
@@ -762,6 +802,16 @@ pub fn audit_cli_json(execution: &AuditCommandExecution) -> Value {
             );
             payload.insert("revoked_agent_id".to_owned(), json!(revoked_agent_id));
             payload.insert("timeline".to_owned(), json!(timeline));
+            Value::Object(payload)
+        }
+        AuditCommandResult::Verify { report } => {
+            let mut payload = audit_cli_base_json(execution, "verify");
+            payload.insert("report".to_owned(), json!(report));
+            Value::Object(payload)
+        }
+        AuditCommandResult::Repair { report } => {
+            let mut payload = audit_cli_base_json(execution, "repair");
+            payload.insert("report".to_owned(), json!(report));
             Value::Object(payload)
         }
     }
@@ -1633,8 +1683,83 @@ pub fn render_audit_cli_text(execution: &AuditCommandExecution) -> CliResult<Str
                 ));
             }
         }
+        AuditCommandResult::Verify { report } => {
+            lines.push(format!(
+                "audit verify config={} journal={}",
+                execution.resolved_config_path, execution.journal_path
+            ));
+            lines.push(format!(
+                "integrity_journal={} key={} seal={}",
+                report.paths.integrity_journal_path.display(),
+                report.paths.key_path.display(),
+                report.paths.seal_path.display()
+            ));
+            match &report.status {
+                AuditJournalIntegrityStatus::Verified => {
+                    lines.push(format!(
+                        "status=verified protected_entries={} last_event_id={}",
+                        report.protected_entries,
+                        report.last_event_id.as_deref().unwrap_or("-")
+                    ));
+                }
+                AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => {
+                    lines.push(format!(
+                        "status=missing_artifacts protected_entries=0 missing_paths={}",
+                        missing_paths.join(",")
+                    ));
+                }
+                AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+                    let line = line
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned());
+                    lines.push(format!("status=mismatch line={} reason={}", line, reason));
+                }
+            }
+        }
+        AuditCommandResult::Repair { report } => {
+            lines.push(format!(
+                "audit repair config={} journal={}",
+                execution.resolved_config_path, execution.journal_path
+            ));
+            lines.push(format!(
+                "action={} integrity_journal={} key={} seal={}",
+                audit_repair_action_label(report.action),
+                report.report.paths.integrity_journal_path.display(),
+                report.report.paths.key_path.display(),
+                report.report.paths.seal_path.display()
+            ));
+            match &report.report.status {
+                AuditJournalIntegrityStatus::Verified => {
+                    lines.push(format!(
+                        "status=verified protected_entries={} last_event_id={}",
+                        report.report.protected_entries,
+                        report.report.last_event_id.as_deref().unwrap_or("-")
+                    ));
+                }
+                AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => {
+                    lines.push(format!(
+                        "status=missing_artifacts protected_entries=0 missing_paths={}",
+                        missing_paths.join(",")
+                    ));
+                }
+                AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+                    let line = line
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned());
+                    lines.push(format!("status=mismatch line={} reason={}", line, reason));
+                }
+            }
+        }
     }
     Ok(lines.join("\n"))
+}
+
+fn audit_repair_action_label(action: AuditJournalIntegrityRepairAction) -> &'static str {
+    match action {
+        AuditJournalIntegrityRepairAction::NoopVerified => "noop_verified",
+        AuditJournalIntegrityRepairAction::RepairedMissingArtifacts => "repaired_missing_artifacts",
+        AuditJournalIntegrityRepairAction::RefusedMismatch => "refused_mismatch",
+    }
 }
 
 fn validate_audit_limit(limit: usize, command_name: &str) -> CliResult<usize> {
@@ -2936,7 +3061,8 @@ mod tests {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use crate::kernel::{
-        AuditEvent, AuditEventKind, Capability, CapabilityToken, ExecutionPlane, PlaneTier,
+        AuditEvent, AuditEventKind, AuditJournalIntegrityStatus, AuditSink, Capability,
+        CapabilityToken, ExecutionPlane, PlaneTier,
     };
     use crate::test_support::ScopedEnv;
 
@@ -3118,6 +3244,211 @@ mod tests {
         assert_eq!(payload["token_id_filter"], "token-json");
         assert_eq!(payload["loaded_events"], 1);
         assert_eq!(payload["events"][0]["event_id"], "evt-json");
+    }
+
+    #[test]
+    fn audit_verify_reports_verified_sidecar_state() {
+        let root = unique_temp_dir("loong-audit-cli-verify");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let sink =
+            crate::kernel::JsonlAuditSink::new(journal_path).expect("jsonl sink should initialize");
+        sink.record(sample_audit_event(
+            "evt-verify",
+            1_700_010_400,
+            Some("agent-verify"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-verify".to_owned(),
+            },
+        ))
+        .expect("audit event should record");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Verify,
+        })
+        .expect("execute audit verify");
+
+        match execution.result {
+            AuditCommandResult::Verify { report } => {
+                assert_eq!(report.protected_entries, 1);
+                assert_eq!(report.last_event_id.as_deref(), Some("evt-verify"));
+                assert!(matches!(
+                    report.status,
+                    AuditJournalIntegrityStatus::Verified
+                ));
+            }
+            other => panic!("unexpected audit verify result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_repair_rebuilds_missing_sidecar_state() {
+        let root = unique_temp_dir("loong-audit-cli-repair-missing");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+        write_journal(
+            &journal_path,
+            &[sample_audit_event(
+                "evt-repair-missing",
+                1_700_010_404,
+                Some("agent-repair-missing"),
+                AuditEventKind::TokenRevoked {
+                    token_id: "token-repair-missing".to_owned(),
+                },
+            )],
+        );
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match execution.result {
+            AuditCommandResult::Repair { report } => {
+                assert_eq!(
+                    report.action,
+                    AuditJournalIntegrityRepairAction::RepairedMissingArtifacts
+                );
+                assert!(matches!(
+                    report.report.status,
+                    AuditJournalIntegrityStatus::Verified
+                ));
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_repair_reports_noop_for_verified_sidecar_state() {
+        let root = unique_temp_dir("loong-audit-cli-repair-noop");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let sink =
+            crate::kernel::JsonlAuditSink::new(journal_path).expect("jsonl sink should initialize");
+        sink.record(sample_audit_event(
+            "evt-repair-noop",
+            1_700_010_403,
+            Some("agent-repair-noop"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-noop".to_owned(),
+            },
+        ))
+        .expect("audit event should record");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match execution.result {
+            AuditCommandResult::Repair { report } => {
+                assert_eq!(
+                    report.action,
+                    AuditJournalIntegrityRepairAction::NoopVerified
+                );
+                assert!(matches!(
+                    report.report.status,
+                    AuditJournalIntegrityStatus::Verified
+                ));
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_repair_refuses_partially_missing_sidecar_state() {
+        let root = unique_temp_dir("loong-audit-cli-repair-partial-missing");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+        sink.record(sample_audit_event(
+            "evt-repair-partial-missing",
+            1_700_010_405,
+            Some("agent-repair-partial-missing"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-partial-missing".to_owned(),
+            },
+        ))
+        .expect("audit event should record");
+
+        let integrity_paths = crate::kernel::derive_jsonl_audit_integrity_paths(&journal_path);
+        fs::remove_file(&integrity_paths.seal_path).expect("remove integrity seal");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match execution.result {
+            AuditCommandResult::Repair { report } => {
+                assert_eq!(
+                    report.action,
+                    AuditJournalIntegrityRepairAction::RefusedMismatch
+                );
+                assert!(matches!(
+                    report.report.status,
+                    AuditJournalIntegrityStatus::Mismatch { .. }
+                ));
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_repair_refuses_to_reseal_mismatched_journal() {
+        let root = unique_temp_dir("loong-audit-cli-repair-mismatch");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let sink = crate::kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+        sink.record(sample_audit_event(
+            "evt-repair-mismatch",
+            1_700_010_406,
+            Some("agent-repair-mismatch"),
+            AuditEventKind::TokenRevoked {
+                token_id: "token-repair-mismatch".to_owned(),
+            },
+        ))
+        .expect("audit event should record");
+        fs::write(
+            &journal_path,
+            "{\"event_id\":\"evt-repair-mismatch\",\"timestamp_epoch_s\":1700010406,\"agent_id\":\"mallory\",\"kind\":{\"TokenRevoked\":{\"token_id\":\"token-repair-mismatch\"}}}\n",
+        )
+        .expect("tamper journal");
+
+        let execution = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect("execute audit repair");
+
+        match execution.result {
+            AuditCommandResult::Repair { report } => {
+                assert_eq!(
+                    report.action,
+                    AuditJournalIntegrityRepairAction::RefusedMismatch
+                );
+                assert!(matches!(
+                    report.report.status,
+                    AuditJournalIntegrityStatus::Mismatch { .. }
+                ));
+            }
+            other => panic!("unexpected audit repair result: {other:?}"),
+        }
     }
 
     #[test]

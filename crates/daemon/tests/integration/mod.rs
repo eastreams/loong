@@ -474,6 +474,50 @@ fn audit_cli_summary_parses_limit_without_json() {
 }
 
 #[test]
+fn audit_cli_verify_parses_without_filters() {
+    let cli = try_parse_cli(["loongclaw", "audit", "verify", "--json"])
+        .expect("audit verify CLI should parse");
+
+    match cli.command {
+        Some(Commands::Audit {
+            config,
+            json,
+            command,
+        }) => {
+            assert_eq!(config, None);
+            assert!(json);
+            match command {
+                loongclaw_daemon::audit_cli::AuditCommands::Verify => {}
+                other => panic!("unexpected audit subcommand parsed: {other:?}"),
+            }
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn audit_cli_repair_parses_without_filters() {
+    let cli = try_parse_cli(["loongclaw", "audit", "repair", "--json"])
+        .expect("audit repair CLI should parse");
+
+    match cli.command {
+        Some(Commands::Audit {
+            config,
+            json,
+            command,
+        }) => {
+            assert_eq!(config, None);
+            assert!(json);
+            match command {
+                loongclaw_daemon::audit_cli::AuditCommands::Repair => {}
+                other => panic!("unexpected audit subcommand parsed: {other:?}"),
+            }
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
 fn audit_cli_recent_parses_kind_and_triage_filters() {
     let cli = try_parse_cli([
         "loongclaw",

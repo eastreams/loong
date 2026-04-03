@@ -119,6 +119,14 @@ Current evidence surfaces that emit or expose this vocabulary:
 - WASM bridge runtime evidence now includes `execution_tier`
 - browser tool payloads and runtime snapshots now include `execution_tier`
 
+### Audit Integrity
+
+Durable audit retention keeps the primary `events.jsonl` stream backward-compatible while deriving
+a tamper-evident integrity sidecar next to the journal. Operators can inspect the current state
+with `loong audit verify`, and `loong audit repair` only rebuilds journals that are missing the
+entire sidecar. Partially missing or mismatched sidecars are treated as integrity failures, not as
+safe repair candidates.
+
 ### Compile-Time Constraints
 
 25 workspace clippy denies prevent common agent anti-patterns. See [Harness Engineering](design-docs/harness-engineering.md) for the full list.

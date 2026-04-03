@@ -6,6 +6,7 @@
 )]
 
 use super::*;
+use loongclaw_daemon::kernel::AuditSink;
 use serde_json::Value;
 use std::{
     ffi::OsString,
@@ -101,6 +102,11 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
     fs::create_dir_all(root).expect("create fixture root");
 
     let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = root
+        .join("audit")
+        .join("events.jsonl")
+        .display()
+        .to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.shell_allow = vec!["git".to_owned(), "cargo".to_owned()];
     config.tools.browser.enabled = true;
@@ -495,12 +501,123 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     let rendered = render_runtime_snapshot_text(&snapshot);
 
     assert!(rendered.contains("provider active_profile=deepseek-lab"));
+    assert!(rendered.contains("integrity_status="));
     assert!(rendered.contains("context_engine selected="));
     assert!(rendered.contains("memory selected="));
     assert!(rendered.contains("acp enabled=true"));
     assert!(rendered.contains("tools visible_count="));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_json_payload_reports_verified_audit_integrity() {
+    let root = unique_temp_dir("loong-runtime-snapshot-audit-verified");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, config) = write_runtime_snapshot_config(&root);
+    let journal_path = config.audit.resolved_path();
+    let sink = loongclaw_daemon::kernel::JsonlAuditSink::new(journal_path)
+        .expect("jsonl sink should initialize");
+    sink.record(loongclaw_daemon::kernel::AuditEvent {
+        event_id: "evt-snapshot-verified".to_owned(),
+        timestamp_epoch_s: 1_700_010_600,
+        agent_id: Some("agent-snapshot".to_owned()),
+        kind: loongclaw_daemon::kernel::AuditEventKind::TokenRevoked {
+            token_id: "token-snapshot-verified".to_owned(),
+        },
+    })
+    .expect("audit event should record");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+
+    assert_eq!(payload["audit"]["integrity_status"], "verified");
+    assert_eq!(payload["audit"]["protected_entries"], 1);
+    assert_eq!(payload["audit"]["last_event_id"], "evt-snapshot-verified");
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_json_payload_reports_missing_audit_sidecar_for_legacy_journal() {
+    let root = unique_temp_dir("loong-runtime-snapshot-audit-missing");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, config) = write_runtime_snapshot_config(&root);
+    let journal_path = config.audit.resolved_path();
+    fs::create_dir_all(journal_path.parent().expect("journal parent")).expect("create audit dir");
+    fs::write(&journal_path, "{}\n").expect("write legacy audit journal");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+
+    assert_eq!(payload["audit"]["integrity_status"], "missing_artifacts");
+    assert!(
+        payload["audit"]["integrity_detail"]
+            .as_str()
+            .is_some_and(|value| value.contains("missing integrity sidecar artifacts"))
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_json_payload_reports_audit_integrity_mismatch() {
+    let root = unique_temp_dir("loong-runtime-snapshot-audit-mismatch");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, config) = write_runtime_snapshot_config(&root);
+    let journal_path = config.audit.resolved_path();
+    let sink = loongclaw_daemon::kernel::JsonlAuditSink::new(journal_path.clone())
+        .expect("jsonl sink should initialize");
+    sink.record(loongclaw_daemon::kernel::AuditEvent {
+        event_id: "evt-snapshot-mismatch".to_owned(),
+        timestamp_epoch_s: 1_700_010_601,
+        agent_id: Some("agent-snapshot".to_owned()),
+        kind: loongclaw_daemon::kernel::AuditEventKind::TokenRevoked {
+            token_id: "token-snapshot-mismatch".to_owned(),
+        },
+    })
+    .expect("audit event should record");
+    fs::write(
+        &journal_path,
+        "{\"event_id\":\"evt-snapshot-mismatch\",\"timestamp_epoch_s\":1700010601,\"agent_id\":\"mallory\",\"kind\":{\"TokenRevoked\":{\"token_id\":\"token-snapshot-mismatch\"}}}\n",
+    )
+    .expect("tamper journal");
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+
+    assert_eq!(payload["audit"]["integrity_status"], "mismatch");
+    assert!(
+        payload["audit"]["integrity_detail"]
+            .as_str()
+            .is_some_and(|value| value.contains("audit integrity mismatch"))
+    );
 
     fs::remove_dir_all(&root).ok();
 }

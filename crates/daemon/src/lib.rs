@@ -114,6 +114,7 @@ mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+mod runtime_snapshot_audit;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
@@ -2335,6 +2336,7 @@ pub const RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone)]
 pub struct RuntimeSnapshotCliState {
     pub config: String,
+    pub audit: runtime_snapshot_audit::RuntimeSnapshotAuditState,
     pub provider: RuntimeSnapshotProviderState,
     pub context_engine: mvp::conversation::ContextEngineRuntimeSnapshot,
     pub memory_system: mvp::memory::MemorySystemRuntimeSnapshot,
@@ -2474,6 +2476,7 @@ pub struct RuntimeSnapshotArtifactDocument {
     pub config: String,
     pub schema: RuntimeSnapshotArtifactSchema,
     pub lineage: RuntimeSnapshotArtifactLineage,
+    pub audit: Value,
     pub provider: Value,
     pub context_engine: Value,
     pub memory_system: Value,
@@ -2537,6 +2540,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     config: &mvp::config::LoongClawConfig,
 ) -> CliResult<RuntimeSnapshotCliState> {
     let config_display = resolved_path.display().to_string();
+    let audit = runtime_snapshot_audit::collect_runtime_snapshot_audit_state(config)?;
     let provider = collect_runtime_snapshot_provider_state(config);
     let context_engine = mvp::conversation::collect_context_engine_runtime_snapshot(config)?;
     let memory_system = mvp::memory::collect_memory_system_runtime_snapshot(config)?;
@@ -2562,6 +2566,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
 
     Ok(RuntimeSnapshotCliState {
         config: config_display,
+        audit,
         provider,
         context_engine,
         memory_system,
@@ -3457,6 +3462,7 @@ pub fn build_runtime_snapshot_artifact_json_payload(
             purpose: "experiment_reproducibility".to_owned(),
         },
         lineage,
+        audit: base_payload.get("audit").cloned().unwrap_or(Value::Null),
         provider: base_payload.get("provider").cloned().unwrap_or(Value::Null),
         context_engine: base_payload
             .get("context_engine")
@@ -5432,6 +5438,15 @@ pub fn build_runtime_snapshot_cli_json_payload(
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
     let mut lines = vec![
         format!("config={}", snapshot.config),
+        format!(
+            "audit mode={} journal={} integrity_status={} protected_entries={} last_event_id={} detail={}",
+            snapshot.audit.mode.as_str(),
+            snapshot.audit.journal_path,
+            snapshot.audit.integrity_status,
+            snapshot.audit.protected_entries,
+            snapshot.audit.last_event_id.as_deref().unwrap_or("-"),
+            snapshot.audit.integrity_detail
+        ),
         format!(
             "provider active_profile={} active_label=\"{}\" last_provider={}",
             snapshot.provider.active_profile_id,

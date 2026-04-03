@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use loongclaw_contracts::CapabilityToken;
 use loongclaw_kernel::{
@@ -86,7 +88,7 @@ fn build_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, Stri
 }
 
 fn build_jsonl_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>, String> {
-    let path = config.audit.resolved_path();
+    let path = resolved_audit_sink_path(config);
     JsonlAuditSink::new(path.clone())
         .map(|sink| Arc::new(sink) as Arc<dyn AuditSink>)
         .map_err(|error| {
@@ -95,6 +97,31 @@ fn build_jsonl_audit_sink(config: &LoongClawConfig) -> Result<Arc<dyn AuditSink>
                 path.display()
             )
         })
+}
+
+#[cfg(not(test))]
+fn resolved_audit_sink_path(config: &LoongClawConfig) -> std::path::PathBuf {
+    config.audit.resolved_path()
+}
+
+#[cfg(test)]
+fn resolved_audit_sink_path(config: &LoongClawConfig) -> std::path::PathBuf {
+    let configured_path = config.audit.resolved_path();
+    let default_config = LoongClawConfig::default();
+    let default_path = default_config.audit.resolved_path();
+
+    if configured_path != default_path {
+        return configured_path;
+    }
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let process_id = std::process::id();
+
+    std::env::temp_dir().join(format!(
+        "loongclaw-app-test-audit-{process_id}-{nanos}/events.jsonl"
+    ))
 }
 
 fn bootstrap_kernel_context_with_audit_sink(

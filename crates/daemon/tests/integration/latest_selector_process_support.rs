@@ -85,6 +85,12 @@ impl LatestSelectorCliFixture {
         configure: impl FnOnce(&mut mvp::config::LoongClawConfig),
     ) -> mvp::config::LoongClawConfig {
         let mut config = mvp::config::LoongClawConfig::default();
+        config.audit.path = self
+            .root
+            .join("audit")
+            .join("events.jsonl")
+            .display()
+            .to_string();
         config.memory.sqlite_path = self.sqlite_path.display().to_string();
         config.memory.sliding_window = 8;
         config.tools.file_root = Some(self.root.display().to_string());

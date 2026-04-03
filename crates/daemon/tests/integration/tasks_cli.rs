@@ -157,6 +157,11 @@ pub(super) fn write_tasks_config_with(
     fs::create_dir_all(root).expect("create fixture root");
     let config_path = root.join("loongclaw.toml");
     let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = root
+        .join("audit")
+        .join("events.jsonl")
+        .display()
+        .to_string();
     config.memory.sqlite_path = root.join("memory.sqlite3").display().to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.sessions.allow_mutation = true;

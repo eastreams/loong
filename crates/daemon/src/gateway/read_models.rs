@@ -211,9 +211,23 @@ pub struct GatewayRuntimeSnapshotToolsReadModel {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct GatewayRuntimeSnapshotAuditReadModel {
+    pub mode: String,
+    pub journal_path: String,
+    pub integrity_journal_path: String,
+    pub integrity_key_path: String,
+    pub integrity_seal_path: String,
+    pub integrity_status: String,
+    pub protected_entries: usize,
+    pub last_event_id: Option<String>,
+    pub integrity_detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct GatewayRuntimeSnapshotReadModel {
     pub config: String,
     pub schema: GatewayRuntimeSnapshotSchema,
+    pub audit: GatewayRuntimeSnapshotAuditReadModel,
     pub provider: Value,
     pub context_engine: Value,
     pub memory_system: Value,
@@ -380,6 +394,17 @@ pub fn build_runtime_snapshot_read_model(
         surface: "runtime_snapshot",
         purpose: "experiment_reproducibility",
     };
+    let audit = GatewayRuntimeSnapshotAuditReadModel {
+        mode: snapshot.audit.mode.as_str().to_owned(),
+        journal_path: snapshot.audit.journal_path.clone(),
+        integrity_journal_path: snapshot.audit.integrity_journal_path.clone(),
+        integrity_key_path: snapshot.audit.integrity_key_path.clone(),
+        integrity_seal_path: snapshot.audit.integrity_seal_path.clone(),
+        integrity_status: snapshot.audit.integrity_status.clone(),
+        protected_entries: snapshot.audit.protected_entries,
+        last_event_id: snapshot.audit.last_event_id.clone(),
+        integrity_detail: snapshot.audit.integrity_detail.clone(),
+    };
     let provider = crate::runtime_snapshot_provider_json(&snapshot.provider);
     let context_engine = crate::runtime_snapshot_context_engine_json(&snapshot.context_engine);
     let memory_system = crate::runtime_snapshot_memory_system_json(&snapshot.memory_system);
@@ -408,6 +433,7 @@ pub fn build_runtime_snapshot_read_model(
     GatewayRuntimeSnapshotReadModel {
         config,
         schema,
+        audit,
         provider,
         context_engine,
         memory_system,

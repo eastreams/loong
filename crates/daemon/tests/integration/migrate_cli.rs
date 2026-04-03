@@ -344,6 +344,8 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
 
 #[test]
 fn migrate_cli_ux_apply_mode_reports_flag_level_output_requirement() {
+    let (_home_root, _env_guard) = isolated_home_guard("loong-migrate-cli-ux-apply");
+
     let error = loongclaw_daemon::migrate_cli::run_migrate_cli(
         loongclaw_daemon::migrate_cli::MigrateCommandOptions {
             input: Some(".".to_owned()),

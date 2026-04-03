@@ -2737,11 +2737,14 @@ version = "0.1.0-alpha.3"
 dependencies = [
  "async-trait",
  "futures-util",
+ "hmac 0.12.1",
  "loongclaw-contracts",
  "proptest",
+ "rand 0.10.0",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
 ]
