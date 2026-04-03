@@ -3,7 +3,10 @@ use std::pin::Pin;
 use std::time::Instant;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -153,6 +156,9 @@ impl ShellView for state::Shell {
             total: active_tool_inspector.total,
         })
     }
+    fn slash_command_selection(&self) -> usize {
+        self.slash_command_selection
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -168,7 +174,7 @@ impl TerminalGuard {
         enable_raw_mode().map_err(|error| format!("failed to enable raw mode: {error}"))?;
 
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
             let _ = disable_raw_mode();
             return Err(format!("failed to enter alternate screen: {error}"));
         }
@@ -178,14 +184,18 @@ impl TerminalGuard {
             Ok(terminal) => terminal,
             Err(error) => {
                 let _ = disable_raw_mode();
-                let _ = execute!(io::stdout(), LeaveAlternateScreen);
+                let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
                 return Err(format!("failed to initialize TUI terminal: {error}"));
             }
         };
 
         if let Err(error) = terminal.hide_cursor() {
             let _ = disable_raw_mode();
-            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+            let _ = execute!(
+                terminal.backend_mut(),
+                DisableMouseCapture,
+                LeaveAlternateScreen
+            );
             return Err(format!("failed to hide TUI cursor: {error}"));
         }
 
@@ -208,7 +218,11 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
         let _ = self.terminal.show_cursor();
     }
 }
@@ -436,6 +450,15 @@ fn history_half_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
     half_page_step.max(1)
 }
 
+fn terminal_shell_areas(textarea: &tui_textarea::TextArea<'_>) -> layout::ShellAreas {
+    let terminal_size = crossterm::terminal::size();
+    let (width, height) = terminal_size.unwrap_or((80, 24));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let input_height = textarea.lines().len() as u16 + 2;
+
+    layout::compute(area, input_height)
+}
+
 fn apply_history_navigation(
     shell: &mut state::Shell,
     textarea: &tui_textarea::TextArea<'_>,
@@ -479,6 +502,77 @@ fn apply_history_navigation(
             shell.pane.set_status("Jumped to latest output".to_owned());
         }
     }
+}
+
+fn point_in_rect(area: ratatui::layout::Rect, column: u16, row: u16) -> bool {
+    let within_x = column >= area.x && column < area.x.saturating_add(area.width);
+    let within_y = row >= area.y && row < area.y.saturating_add(area.height);
+
+    within_x && within_y
+}
+
+fn slash_command_matches(
+    textarea: &tui_textarea::TextArea<'_>,
+) -> Vec<(&'static str, &'static str)> {
+    let draft_text = textarea.lines().join("\n");
+    let draft_prefix = draft_text.trim();
+    if !draft_prefix.starts_with('/') {
+        return Vec::new();
+    }
+
+    commands::completions(draft_prefix)
+}
+
+fn apply_selected_slash_command(
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+) -> bool {
+    let matches = slash_command_matches(textarea);
+    if matches.is_empty() {
+        return false;
+    }
+
+    let selected_index = shell.slash_command_selection % matches.len();
+    let selected_command_name = matches
+        .get(selected_index)
+        .map(|(command_name, _)| *command_name);
+    let Some(selected_command_name) = selected_command_name else {
+        return false;
+    };
+    let parsed_command = commands::parse(selected_command_name);
+    let Some(parsed_command) = parsed_command else {
+        return false;
+    };
+
+    textarea.select_all();
+    textarea.delete_str(usize::MAX);
+    handle_slash_command(shell, parsed_command);
+
+    true
+}
+
+fn cycle_slash_command_selection(
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    direction: i8,
+) -> bool {
+    let matches = slash_command_matches(textarea);
+    if matches.is_empty() {
+        return false;
+    }
+
+    let selected_index = shell.slash_command_selection % matches.len();
+    let next_index = if direction >= 0 {
+        (selected_index + 1) % matches.len()
+    } else if selected_index == 0 {
+        matches.len().saturating_sub(1)
+    } else {
+        selected_index.saturating_sub(1)
+    };
+
+    shell.slash_command_selection = next_index;
+
+    true
 }
 
 fn transcript_plain_lines(shell: &state::Shell) -> Vec<String> {
@@ -652,6 +746,11 @@ fn apply_terminal_event(
     tx: &mpsc::UnboundedSender<UiEvent>,
     submit_text: &mut Option<String>,
 ) {
+    if let Event::Mouse(mouse_event) = event {
+        apply_mouse_event(shell, textarea, mouse_event);
+        return;
+    }
+
     let Event::Key(key) = event else {
         return;
     };
@@ -824,6 +923,26 @@ fn apply_terminal_event(
     }
 
     // --- Global shortcuts ---------------------------------------------
+    let composer_has_slash_matches = !slash_command_matches(textarea).is_empty();
+    if composer_has_slash_matches {
+        #[allow(clippy::wildcard_enum_match_arm)]
+        match key.code {
+            KeyCode::Down | KeyCode::Tab if key.modifiers.is_empty() => {
+                let moved = cycle_slash_command_selection(shell, textarea, 1);
+                if moved {
+                    return;
+                }
+            }
+            KeyCode::Up | KeyCode::BackTab if key.modifiers.is_empty() => {
+                let moved = cycle_slash_command_selection(shell, textarea, -1);
+                if moved {
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
+
     let composer_is_empty = textarea_is_empty(textarea);
     let navigation_action = history_navigation_action(key, composer_is_empty);
     if let Some(action) = navigation_action {
@@ -885,9 +1004,17 @@ fn apply_terminal_event(
 
         // Slash commands are handled immediately regardless of agent state.
         if let Some(cmd) = commands::parse(trimmed) {
+            if matches!(cmd, SlashCommand::Unknown(_)) {
+                let applied_selected_command = apply_selected_slash_command(shell, textarea);
+                if applied_selected_command {
+                    shell.slash_command_selection = 0;
+                    return;
+                }
+            }
             textarea.select_all();
             textarea.delete_str(usize::MAX);
             handle_slash_command(shell, cmd);
+            shell.slash_command_selection = 0;
             return;
         }
 
@@ -915,9 +1042,11 @@ fn apply_terminal_event(
     match key.code {
         KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL) => {
             textarea.insert_char(ch);
+            shell.slash_command_selection = 0;
         }
         KeyCode::Backspace => {
             textarea.delete_char();
+            shell.slash_command_selection = 0;
         }
         KeyCode::Left => {
             textarea.move_cursor(tui_textarea::CursorMove::Back);
@@ -938,6 +1067,112 @@ fn apply_terminal_event(
             textarea.move_cursor(tui_textarea::CursorMove::End);
         }
         _ => {}
+    }
+}
+
+fn apply_mouse_event(
+    shell: &mut state::Shell,
+    textarea: &mut tui_textarea::TextArea<'_>,
+    mouse_event: MouseEvent,
+) {
+    let shell_areas = terminal_shell_areas(textarea);
+    let column = mouse_event.column;
+    let row = mouse_event.row;
+
+    if shell.focus.top() == FocusLayer::ToolInspector {
+        match mouse_event.kind {
+            MouseEventKind::ScrollUp => {
+                shell.pane.scroll_tool_inspector_up(3);
+            }
+            MouseEventKind::ScrollDown => {
+                shell.pane.scroll_tool_inspector_down(3);
+            }
+            MouseEventKind::Down(_)
+            | MouseEventKind::Up(_)
+            | MouseEventKind::Drag(_)
+            | MouseEventKind::Moved
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {}
+        }
+        return;
+    }
+
+    let in_history = point_in_rect(shell_areas.history, column, row);
+    let in_input = point_in_rect(shell_areas.input, column, row);
+
+    match mouse_event.kind {
+        MouseEventKind::ScrollUp => {
+            if in_history {
+                shell.pane.scroll_offset = shell.pane.scroll_offset.saturating_add(3);
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if in_history {
+                shell.pane.scroll_offset = shell.pane.scroll_offset.saturating_sub(3);
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            if in_input {
+                shell.focus.focus_composer();
+                return;
+            }
+
+            if in_history {
+                let viewport_row = row.saturating_sub(shell_areas.history.y);
+                let line_index = history::viewport_plain_line_at(
+                    &shell.pane,
+                    shell_areas.history.width,
+                    shell_areas.history.height,
+                    viewport_row,
+                    shell.show_thinking,
+                );
+
+                let Some(line_index) = line_index else {
+                    return;
+                };
+
+                shell.focus.focus_transcript();
+                shell.pane.transcript_review.cursor_line = line_index;
+                shell.pane.transcript_review.anchor_line = Some(line_index);
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if !in_history {
+                return;
+            }
+
+            let viewport_row = row.saturating_sub(shell_areas.history.y);
+            let line_index = history::viewport_plain_line_at(
+                &shell.pane,
+                shell_areas.history.width,
+                shell_areas.history.height,
+                viewport_row,
+                shell.show_thinking,
+            );
+
+            let Some(line_index) = line_index else {
+                return;
+            };
+
+            shell.focus.focus_transcript();
+            if shell.pane.transcript_review.anchor_line.is_none() {
+                shell.pane.transcript_review.anchor_line = Some(line_index);
+            }
+            shell.pane.transcript_review.cursor_line = line_index;
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if shell.focus.top() == FocusLayer::Transcript
+                && shell.pane.transcript_review.anchor_line.is_some()
+            {
+                shell.pane.set_status("Mouse selection updated".to_owned());
+            }
+        }
+        MouseEventKind::Down(_)
+        | MouseEventKind::Up(_)
+        | MouseEventKind::Drag(_)
+        | MouseEventKind::Moved
+        | MouseEventKind::ScrollLeft
+        | MouseEventKind::ScrollRight => {}
     }
 }
 
@@ -1807,5 +2042,42 @@ mod tests {
         assert!(sequence.starts_with("\u{1b}]52;c;"));
         assert!(sequence.ends_with('\u{7}'));
         assert!(sequence.contains("aGVsbG8="));
+    }
+
+    #[test]
+    fn enter_with_partial_slash_command_executes_selected_completion() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let enter_event = Event::Key(plain_key(KeyCode::Enter));
+
+        textarea.insert_str("/re");
+        shell.slash_command_selection = 0;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            enter_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.focus.top(), FocusLayer::Transcript);
+    }
+
+    #[test]
+    fn tab_cycles_slash_command_palette_selection() {
+        let mut shell = state::Shell::new("test");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let tab_event = Event::Key(plain_key(KeyCode::Tab));
+
+        textarea.insert_str("/t");
+
+        apply_terminal_event(&mut shell, &mut textarea, tab_event, &tx, &mut submit_text);
+
+        assert_eq!(shell.slash_command_selection, 1);
     }
 }

@@ -677,6 +677,7 @@ pub(super) struct Shell {
     pub(super) show_thinking: bool,
     pub(super) focus: FocusStack,
     pub(super) dirty: bool,
+    pub(super) slash_command_selection: usize,
 }
 
 impl Shell {
@@ -687,6 +688,7 @@ impl Shell {
             show_thinking: true,
             focus: FocusStack::new(),
             dirty: true,
+            slash_command_selection: 0,
         }
     }
 }

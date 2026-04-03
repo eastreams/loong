@@ -48,6 +48,7 @@ pub(super) trait ShellView {
     fn focus(&self) -> &FocusStack;
     fn clarify_dialog(&self) -> Option<&ClarifyDialog>;
     fn tool_inspector(&self) -> Option<ToolInspectorView<'_>>;
+    fn slash_command_selection(&self) -> usize;
 }
 
 // ---------------------------------------------------------------------------
@@ -98,7 +99,14 @@ pub(super) fn draw(
         palette,
     );
 
-    render_command_palette(frame, areas.input, textarea, state.focus().top(), palette);
+    render_command_palette(
+        frame,
+        areas.input,
+        textarea,
+        state.focus().top(),
+        state.slash_command_selection(),
+        palette,
+    );
 
     // 6. Status bar
     status_bar::render_status_bar(
@@ -228,6 +236,7 @@ fn render_command_palette(
     input_area: Rect,
     textarea: &tui_textarea::TextArea<'_>,
     focus: FocusLayer,
+    slash_command_selection: usize,
     palette: &Palette,
 ) {
     if focus != FocusLayer::Composer {
@@ -250,6 +259,7 @@ fn render_command_palette(
         .into_iter()
         .take(max_visible_matches)
         .collect::<Vec<_>>();
+    let selected_index = slash_command_selection % visible_matches.len();
     let popup_height = visible_matches.len() as u16 + 2;
     let popup_width = input_area.width.clamp(28, 72);
     let popup_x = input_area.x;
@@ -271,15 +281,25 @@ fn render_command_palette(
     frame.render_widget(block, popup_area);
 
     let mut lines = Vec::new();
-    for (command_name, command_help) in visible_matches {
-        let command_span = Span::styled(
-            format!("{command_name:<12}"),
+    for (index, (command_name, command_help)) in visible_matches.into_iter().enumerate() {
+        let is_selected = index == selected_index;
+        let command_style = if is_selected {
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD)
+        } else {
             Style::default()
                 .fg(palette.text)
-                .add_modifier(Modifier::BOLD),
-        );
+                .add_modifier(Modifier::BOLD)
+        };
+        let help_style = if is_selected {
+            Style::default().fg(palette.info)
+        } else {
+            Style::default().fg(palette.dim)
+        };
+        let command_span = Span::styled(format!("{command_name:<12}"), command_style);
         let separator_span = Span::styled(" ", Style::default().fg(palette.separator));
-        let help_span = Span::styled(command_help.to_owned(), Style::default().fg(palette.dim));
+        let help_span = Span::styled(command_help.to_owned(), help_style);
         let line = Line::from(vec![command_span, separator_span, help_span]);
         lines.push(line);
     }
@@ -629,9 +649,8 @@ fn render_tool_inspector(
     ));
 
     for output_line in output_text.lines() {
-        let prefixed_line = format!(" {output_line}");
-        let line = Line::styled(prefixed_line, Style::default().fg(palette.text));
-        content_lines.push(line);
+        let styled_line = render_tool_output_line(output_line, palette);
+        content_lines.push(styled_line);
     }
 
     if output_text.is_empty() {
@@ -664,6 +683,44 @@ fn render_tool_inspector(
             &mut scrollbar_state,
         );
     }
+}
+
+fn render_tool_output_line(output_line: &str, palette: &Palette) -> Line<'static> {
+    let prefixed_line = format!(" {output_line}");
+    let style = if is_diff_hunk_line(output_line) {
+        Style::default()
+            .fg(palette.info)
+            .add_modifier(Modifier::BOLD)
+    } else if is_diff_addition_line(output_line) {
+        Style::default().fg(palette.success)
+    } else if is_diff_removal_line(output_line) {
+        Style::default().fg(palette.error)
+    } else if is_diff_file_header_line(output_line) {
+        Style::default().fg(palette.brand)
+    } else {
+        Style::default().fg(palette.text)
+    };
+
+    Line::styled(prefixed_line, style)
+}
+
+fn is_diff_hunk_line(output_line: &str) -> bool {
+    output_line.starts_with("@@")
+}
+
+fn is_diff_addition_line(output_line: &str) -> bool {
+    output_line.starts_with('+') && !output_line.starts_with("+++")
+}
+
+fn is_diff_removal_line(output_line: &str) -> bool {
+    output_line.starts_with('-') && !output_line.starts_with("---")
+}
+
+fn is_diff_file_header_line(output_line: &str) -> bool {
+    output_line.starts_with("diff --")
+        || output_line.starts_with("index ")
+        || output_line.starts_with("--- ")
+        || output_line.starts_with("+++ ")
 }
 
 fn render_tool_inspector_status(
@@ -835,6 +892,7 @@ mod tests {
         focus: FocusStack,
         clarify_dialog: Option<ClarifyDialog>,
         tool_inspector: Option<TestToolInspector>,
+        slash_command_selection: usize,
     }
 
     impl TestShell {
@@ -845,6 +903,7 @@ mod tests {
                 focus: FocusStack::new(),
                 clarify_dialog: None,
                 tool_inspector: None,
+                slash_command_selection: 0,
             }
         }
     }
@@ -876,6 +935,9 @@ mod tests {
                 position: inspector.position,
                 total: inspector.total,
             })
+        }
+        fn slash_command_selection(&self) -> usize {
+            self.slash_command_selection
         }
     }
 

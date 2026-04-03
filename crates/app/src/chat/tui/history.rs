@@ -119,6 +119,65 @@ pub(super) fn transcript_plain_lines(
     document.plain_lines
 }
 
+pub(super) fn viewport_plain_line_at(
+    pane: &impl PaneView,
+    width: u16,
+    height: u16,
+    viewport_row: u16,
+    show_thinking: bool,
+) -> Option<usize> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let plain_lines = transcript_plain_lines(pane, usize::from(width), show_thinking);
+    let wrapped_line_to_plain_line =
+        wrapped_line_to_plain_line_map(plain_lines.as_slice(), usize::from(width));
+    if wrapped_line_to_plain_line.is_empty() {
+        return None;
+    }
+
+    let total_wrapped_lines = wrapped_line_to_plain_line.len() as u16;
+    let max_scroll = total_wrapped_lines.saturating_sub(height);
+    let scroll = if pane.scroll_offset() == 0 {
+        max_scroll
+    } else {
+        max_scroll.saturating_sub(pane.scroll_offset())
+    };
+    let clamped_row = viewport_row.min(height.saturating_sub(1));
+    let absolute_row = usize::from(scroll.saturating_add(clamped_row));
+
+    wrapped_line_to_plain_line.get(absolute_row).copied()
+}
+
+fn wrapped_line_to_plain_line_map(plain_lines: &[String], width: usize) -> Vec<usize> {
+    let effective_width = width.max(1);
+    let mut wrapped_lines = Vec::new();
+
+    for (plain_line_index, plain_line) in plain_lines.iter().enumerate() {
+        let char_count = plain_line.chars().count();
+        let wrapped_line_count = wrapped_line_count(char_count, effective_width);
+
+        for _ in 0..wrapped_line_count {
+            wrapped_lines.push(plain_line_index);
+        }
+    }
+
+    wrapped_lines
+}
+
+fn wrapped_line_count(char_count: usize, width: usize) -> usize {
+    if char_count == 0 {
+        return 1;
+    }
+
+    let full_rows = char_count / width;
+    let has_partial_row = !char_count.is_multiple_of(width);
+    let partial_row_count = usize::from(has_partial_row);
+
+    full_rows + partial_row_count
+}
+
 fn render_jump_to_latest_hint(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     let hint_width = JUMP_TO_LATEST_HINT.chars().count() as u16;
     let required_width = hint_width.saturating_add(2);
@@ -795,6 +854,21 @@ mod tests {
             text.contains("\u{258c}"),
             "selected transcript lines should render a selection marker: {text:?}"
         );
+    }
+
+    #[test]
+    fn viewport_plain_line_at_maps_scrolled_rows_back_to_plain_lines() {
+        let pane = TestPane {
+            messages: vec![Message::user(
+                "first line\nsecond line that wraps a bit\nthird line",
+            )],
+            scroll_offset: 1,
+            streaming_active: false,
+        };
+
+        let mapped_line = viewport_plain_line_at(&pane, 18, 4, 1, false);
+
+        assert!(mapped_line.is_some());
     }
 
     #[test]
