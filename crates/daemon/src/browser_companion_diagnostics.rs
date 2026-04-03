@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::io::ErrorKind;
 use std::time::Duration;
 
@@ -213,8 +214,18 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 async fn probe_browser_companion_version(
     command: &str,
 ) -> Result<String, BrowserCompanionProbeError> {
+    retry_browser_companion_probe(|| probe_browser_companion_version_once(command)).await
+}
+
+async fn retry_browser_companion_probe<F, Fut>(
+    mut probe_once: F,
+) -> Result<String, BrowserCompanionProbeError>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<String, BrowserCompanionProbeError>>,
+{
     for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
-        let probe_result = probe_browser_companion_version_once(command).await;
+        let probe_result = probe_once().await;
         match probe_result {
             Err(BrowserCompanionProbeError::TimedOut) => {}
             result => {
@@ -407,34 +418,35 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "current_thread")]
     async fn collect_browser_companion_diagnostics_retries_transient_probe_timeouts() {
-        let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
-        let temp_dir = browser_companion_temp_dir("transient-timeout");
-        let script_path = temp_dir.join("browser-companion");
-        let state_path = temp_dir.join("probe-state");
-        let script_body = format!(
-            "#!/bin/sh\nstate_path='{}'\nif [ ! -f \"$state_path\" ]; then\n  touch \"$state_path\"\n  sleep 4\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
-            state_path.display()
-        );
-        write_browser_companion_script(&script_path, script_body.as_str());
+        let mut attempt_count = 0_usize;
+        let observed_version = retry_browser_companion_probe(|| {
+            let response = if attempt_count == 0 {
+                Err(BrowserCompanionProbeError::TimedOut)
+            } else {
+                Ok("loongclaw-browser-companion 1.5.0".to_owned())
+            };
+            attempt_count += 1;
+            std::future::ready(response)
+        })
+        .await
+        .expect("transient probe timeouts should retry successfully");
 
-        let mut config = mvp::config::LoongClawConfig::default();
-        config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(script_path.display().to_string());
-        config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
+        assert_eq!(attempt_count, 2);
+        assert_eq!(observed_version, "loongclaw-browser-companion 1.5.0");
+    }
 
-        let diagnostics = collect_browser_companion_diagnostics(&config)
-            .await
-            .expect("diagnostics should be collected");
+    #[tokio::test(flavor = "current_thread")]
+    async fn retry_browser_companion_probe_surfaces_timeout_after_all_attempts() {
+        let mut attempt_count = 0_usize;
+        let probe_error = retry_browser_companion_probe(|| {
+            attempt_count += 1;
+            std::future::ready(Err(BrowserCompanionProbeError::TimedOut))
+        })
+        .await
+        .expect_err("repeated timeouts should surface after retries");
 
-        assert_eq!(
-            diagnostics.install_status,
-            BrowserCompanionInstallStatus::Ready,
-            "transient probe timeouts should retry before surfacing an install warning: {diagnostics:#?}"
-        );
-        assert_eq!(
-            diagnostics.observed_version.as_deref(),
-            Some("loongclaw-browser-companion 1.5.0")
-        );
+        assert_eq!(attempt_count, BROWSER_COMPANION_PROBE_ATTEMPTS);
+        assert!(matches!(probe_error, BrowserCompanionProbeError::TimedOut));
     }
 
     #[test]
