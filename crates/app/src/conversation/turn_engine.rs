@@ -5039,7 +5039,6 @@ mod tests {
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config, tool_config);
         let kernel_ctx = test_kernel_context("turn-engine-browser-companion-click-exec");
-
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &browser_companion_click_turn(
@@ -5140,7 +5139,6 @@ mod tests {
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config, tool_config);
         let kernel_ctx = test_kernel_context("turn-engine-browser-companion-click-runtime-ready");
-
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &browser_companion_click_turn(
@@ -5243,7 +5241,6 @@ mod tests {
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config, ToolConfig::default());
         let kernel_ctx = test_kernel_context("turn-engine-browser-companion-click-runtime-policy");
-
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &browser_companion_click_turn(
