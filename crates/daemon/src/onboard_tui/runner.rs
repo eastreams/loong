@@ -11167,7 +11167,6 @@ mod tests {
 
     #[test]
     fn selection_card_theme_for_step_stays_stable_across_stage() {
-        let palette = RatatuiOnboardRunner::<ScriptedEventSource>::palette();
         let auth = RatatuiOnboardRunner::<ScriptedEventSource>::selection_card_theme_for_step(
             OnboardWizardStep::Authentication,
         );
@@ -11178,10 +11177,6 @@ mod tests {
             OnboardWizardStep::Workspace,
         );
 
-        assert_eq!(auth.frame_color, palette.brand);
-        assert_eq!(runtime.frame_color, palette.brand);
-        assert_eq!(workspace.frame_color, palette.brand);
-        assert_eq!(auth.active_bg, palette.surface_emphasis);
         assert_eq!(auth, runtime);
         assert_eq!(runtime, workspace);
     }

@@ -34,5 +34,10 @@ pub async fn run_tui_cli_with_system_message(
 
     let _ = session;
 
-    crate::onboard_cli::run_first_run_fullscreen_onboard(config_path.map(str::to_owned)).await
+    crate::onboard_cli::run_first_run_fullscreen_onboard(
+        config_path.map(str::to_owned),
+        session.map(str::to_owned),
+        system_message,
+    )
+    .await
 }

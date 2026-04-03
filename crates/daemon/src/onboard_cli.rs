@@ -779,10 +779,14 @@ pub type ChannelImportReadiness = crate::migration::ChannelImportReadiness;
 
 pub async fn run_onboard_cli(options: OnboardCommandOptions) -> CliResult<()> {
     let context = OnboardRuntimeContext::capture();
-    run_onboard_cli_inner(options, &context).await
+    run_onboard_cli_inner(options, &context, None, None).await
 }
 
-pub async fn run_first_run_fullscreen_onboard(output: Option<String>) -> CliResult<()> {
+pub async fn run_first_run_fullscreen_onboard(
+    output: Option<String>,
+    session: Option<String>,
+    system_message: Option<String>,
+) -> CliResult<()> {
     let options = OnboardCommandOptions {
         output,
         force: false,
@@ -799,7 +803,8 @@ pub async fn run_first_run_fullscreen_onboard(output: Option<String>) -> CliResu
         skip_model_probe: false,
     };
 
-    run_onboard_cli(options).await
+    let context = OnboardRuntimeContext::capture();
+    run_onboard_cli_inner(options, &context, session, system_message).await
 }
 
 /// Test-only entrypoint that accepts an explicit runtime context, bypassing
@@ -809,7 +814,7 @@ pub async fn run_onboard_cli_with_context(
     options: OnboardCommandOptions,
     context: &OnboardRuntimeContext,
 ) -> CliResult<()> {
-    run_onboard_cli_inner(options, context).await
+    run_onboard_cli_inner(options, context, None, None).await
 }
 
 /// Apply CLI flag overrides to the draft config for non-interactive mode.
@@ -937,6 +942,8 @@ fn apply_non_interactive_overrides(
 async fn run_onboard_cli_inner(
     options: OnboardCommandOptions,
     context: &OnboardRuntimeContext,
+    post_onboard_session: Option<String>,
+    post_onboard_system_message: Option<String>,
 ) -> CliResult<()> {
     validate_non_interactive_risk_gate(options.non_interactive, options.accept_risk)?;
 
@@ -1235,7 +1242,7 @@ async fn run_onboard_cli_inner(
                     if let Some(config_path) = blocked_chat_config_path.as_deref() {
                         crate::tui_cli::run_existing_config_tui_with_system_message(
                             Some(config_path),
-                            None,
+                            post_onboard_session.as_deref(),
                             None,
                         )
                         .await?;
@@ -1288,10 +1295,16 @@ async fn run_onboard_cli_inner(
     }
     let chat_config_path = launch_chat_config_path(&success_summary, launch_result);
     if let Some(config_path) = chat_config_path.as_deref() {
+        let system_message = post_onboard_system_message
+            .as_deref()
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(|message| format!("Setup complete. Entering chat.\n{message}"))
+            .unwrap_or_else(|| "Setup complete. Entering chat.".to_owned());
         crate::tui_cli::run_existing_config_tui_with_system_message(
             Some(config_path),
-            None,
-            Some("Setup complete. Entering chat.".to_owned()),
+            post_onboard_session.as_deref(),
+            Some(system_message),
         )
         .await?;
     }

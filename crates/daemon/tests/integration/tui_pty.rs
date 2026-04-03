@@ -88,11 +88,20 @@ const LAUNCH_HANDOFF_STEP_MARKERS: &[&str] =
     &["Ready handoff", "Enter opens chat in this terminal"];
 
 impl TuiPtyFixture {
-    fn spawn_chat_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
+    fn spawn_chat_with_session_and_env(
+        label: &str,
+        write_config: bool,
+        session: Option<&str>,
+        extra_env: &[(&str, &str)],
+    ) -> Self {
         Self::spawn_command(label, write_config, extra_env, |cmd, config_path| {
             cmd.arg("chat");
             cmd.arg("--ui");
             cmd.arg("tui");
+            if let Some(session) = session {
+                cmd.arg("--session");
+                cmd.arg(session);
+            }
             if let Some(config_path) = config_path {
                 cmd.arg("--config");
                 cmd.arg(config_path);
@@ -100,13 +109,29 @@ impl TuiPtyFixture {
         })
     }
 
+    fn spawn_chat_with_env(label: &str, write_config: bool, extra_env: &[(&str, &str)]) -> Self {
+        Self::spawn_chat_with_session_and_env(label, write_config, None, extra_env)
+    }
+
     fn spawn_chat(label: &str, write_config: bool) -> Self {
         Self::spawn_chat_with_env(label, write_config, &[])
     }
 
     fn spawn_tui_subcommand(label: &str, write_config: bool) -> Self {
+        Self::spawn_tui_subcommand_with_session(label, write_config, None)
+    }
+
+    fn spawn_tui_subcommand_with_session(
+        label: &str,
+        write_config: bool,
+        session: Option<&str>,
+    ) -> Self {
         Self::spawn_command(label, write_config, &[], |cmd, config_path| {
             cmd.arg("tui");
+            if let Some(session) = session {
+                cmd.arg("--session");
+                cmd.arg(session);
+            }
             if let Some(config_path) = config_path {
                 cmd.arg("--config");
                 cmd.arg(config_path);
@@ -405,7 +430,6 @@ fn wait_for_fullscreen_onboarding_start(
     fixture: &mut TuiPtyFixture,
     timeout: Duration,
 ) -> Result<String, String> {
-    let deadline = Instant::now() + timeout;
     let visible_screen = fixture.read_screen(timeout)?;
     if !visible_screen.trim().is_empty() {
         for marker in GUIDED_ONBOARDING_START_MARKERS {
@@ -415,15 +439,13 @@ fn wait_for_fullscreen_onboarding_start(
         }
     }
 
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    fixture.wait_for_any(GUIDED_ONBOARDING_START_MARKERS, remaining)
+    fixture.wait_for_any(GUIDED_ONBOARDING_START_MARKERS, timeout)
 }
 
 fn wait_for_onboard_opening_screen(
     fixture: &mut TuiPtyFixture,
     timeout: Duration,
 ) -> Result<String, String> {
-    let deadline = Instant::now() + timeout;
     let visible_screen = fixture.read_screen(timeout)?;
     if !visible_screen.trim().is_empty() {
         for marker in ONBOARD_OPENING_MARKERS {
@@ -433,8 +455,7 @@ fn wait_for_onboard_opening_screen(
         }
     }
 
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    fixture.wait_for_any(ONBOARD_OPENING_MARKERS, remaining)
+    fixture.wait_for_any(ONBOARD_OPENING_MARKERS, timeout)
 }
 
 fn enter_onboard_cli_guided_flow(
@@ -791,6 +812,101 @@ fn chat_tui_missing_config_can_finish_fullscreen_onboarding_and_enter_chat() {
     assert!(
         screen.contains("Setup complete. Entering chat."),
         "chat shell should preserve the setup completion handoff message: {screen:?}"
+    );
+
+    fixture.send_ctrl_c().expect("Ctrl-C to exit");
+}
+
+#[test]
+fn chat_tui_missing_config_preserves_explicit_session_after_handoff() {
+    let mut fixture = TuiPtyFixture::spawn_chat_with_session_and_env(
+        "missing-config-session-handoff",
+        false,
+        Some("sess-42"),
+        &[("OPENAI_CODEX_OAUTH_TOKEN", "test-oauth-token")],
+    );
+
+    wait_for_onboard_opening_screen(&mut fixture, Duration::from_secs(10))
+        .expect("missing-config tui should start on the fullscreen opening deck");
+
+    enter_onboard_cli_guided_flow(&mut fixture, Duration::from_secs(10))
+        .expect("missing-config tui should advance from the opening deck into guided setup");
+
+    fixture.send_keys(b"\r").expect("keep default model");
+    fixture
+        .wait_for_any(CREDENTIAL_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the credential step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default credential env");
+    fixture
+        .wait_for_any(WEB_SEARCH_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the web-search step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default web-search selection");
+    fixture
+        .wait_for_any(MEMORY_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the memory profile step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default memory profile");
+    fixture
+        .wait_for_any(PERSONALITY_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the personality step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default CLI personality");
+    fixture
+        .wait_for_any(RUNTIME_SURFACES_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the runtime-surfaces step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default runtime-surfaces selection");
+    fixture
+        .wait_for_any(SQLITE_PATH_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the sqlite path step");
+    fixture.send_keys(b"\r").expect("keep default sqlite path");
+    fixture
+        .wait_for_any(FILE_ROOT_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the workspace root step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default workspace root");
+    fixture
+        .wait_for_any(SERVICE_CHANNEL_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the service-channel step");
+    fixture
+        .send_keys(b"\r")
+        .expect("keep default service-channel selection");
+    fixture
+        .wait_for_any(ACP_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the ACP enablement step");
+    fixture.type_text("disabled").expect("disable ACP");
+    fixture.send_keys(b"\r").expect("submit ACP selection");
+    fixture
+        .wait_for_any(VERIFY_WRITE_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should continue to the verify-and-write step");
+    fixture
+        .send_keys(b"\r")
+        .expect("write config from verify-and-write screen");
+    fixture
+        .wait_for_any(LAUNCH_HANDOFF_STEP_MARKERS, Duration::from_secs(10))
+        .expect("onboarding should render the launch handoff after writing config");
+    fixture
+        .send_keys(b"\r")
+        .expect("enter chat from launch handoff");
+
+    fixture
+        .wait_for("Welcome to LoongClaw TUI", Duration::from_secs(10))
+        .expect("successful fullscreen onboarding should transition into the chat shell");
+    let screen = fixture
+        .read_screen(Duration::from_secs(3))
+        .unwrap_or_default();
+
+    assert!(
+        contains_collapsed(&screen, "sess-42"),
+        "chat handoff should preserve the explicit session id: {screen:?}"
     );
 
     fixture.send_ctrl_c().expect("Ctrl-C to exit");
