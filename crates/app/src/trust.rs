@@ -99,6 +99,24 @@ pub(crate) fn delegate_child_trust_event(
     }
 }
 
+pub(crate) fn runtime_binding_missing_trust_event(
+    session_id: &str,
+    source_surface: &str,
+    provenance_ref: &str,
+) -> TrustEventEnvelope {
+    TrustEventEnvelope {
+        event_kind: TrustEventKind::ProvenanceMismatch,
+        actor_id: session_id.to_owned(),
+        actor_kind: TrustActorKind::ConversationRuntime,
+        source_surface: source_surface.to_owned(),
+        trust_state_hint: TrustStateHint::Rejected,
+        provenance_kind: TrustProvenanceKind::RuntimeBinding,
+        provenance_ref: provenance_ref.to_owned(),
+        reason_code: "no_kernel_context".to_owned(),
+        evidence_ref: format!("session:{session_id}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

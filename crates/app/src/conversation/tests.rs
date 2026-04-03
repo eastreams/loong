@@ -10275,6 +10275,62 @@ async fn handle_turn_with_runtime_tool_failure_completion_error_uses_raw_reason_
     );
 }
 
+#[tokio::test]
+async fn handle_turn_with_runtime_direct_core_tool_persists_trust_binding_missing_event() {
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "Reading the file now.".to_owned(),
+            tool_intents: vec![provider_tool_intent(
+                "file.read",
+                json!({"path": "note.md"}),
+                "session-trust-binding",
+                "turn-trust-binding",
+                "call-trust-binding",
+            )],
+            raw_meta: Value::Null,
+        }),
+        Err("completion_unavailable".to_owned()),
+    );
+
+    let coordinator = ConversationTurnCoordinator::new();
+    let reply = coordinator
+        .handle_turn_with_runtime(
+            &test_config(),
+            "session-trust-binding",
+            "read note.md",
+            ProviderErrorMode::Propagate,
+            &runtime,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("direct binding fallback should still return assistant text");
+
+    assert!(
+        reply.contains("no_kernel_context"),
+        "expected direct binding denial, got: {reply}"
+    );
+
+    let persisted = runtime.persisted.lock().expect("persisted lock").clone();
+    let payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "trust_binding_missing");
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(payloads[0]["failure_code"], "no_kernel_context");
+    assert_eq!(
+        payloads[0]["trust_event"]["event_kind"],
+        "provenance_mismatch"
+    );
+    assert_eq!(
+        payloads[0]["trust_event"]["actor_kind"],
+        "conversation_runtime"
+    );
+    assert_eq!(
+        payloads[0]["trust_event"]["provenance_kind"],
+        "runtime_binding"
+    );
+    assert_eq!(payloads[0]["trust_event"]["provenance_ref"], "direct");
+}
+
 #[test]
 fn format_provider_error_reply_is_stable() {
     let output = format_provider_error_reply("timeout");
