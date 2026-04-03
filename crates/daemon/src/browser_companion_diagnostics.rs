@@ -1,15 +1,17 @@
 use std::io::ErrorKind;
+use std::process::Command;
+use std::process::Stdio;
+use std::thread::sleep;
 use std::time::Duration;
+use std::time::Instant;
 
 use loongclaw_app as mvp;
-use tokio::process::Command;
-use tokio::time::timeout;
 
 pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion install";
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
-const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,7 +151,7 @@ pub(crate) async fn collect_browser_companion_diagnostics(
         });
     };
 
-    match probe_browser_companion_version(&command).await {
+    match probe_browser_companion_version(&command) {
         Ok(observed_version) => {
             let install_status = match expected_version.as_deref() {
                 Some(expected_version)
@@ -209,34 +211,84 @@ pub(crate) async fn collect_browser_companion_diagnostics(
     }
 }
 
-async fn probe_browser_companion_version(
-    command: &str,
-) -> Result<String, BrowserCompanionProbeError> {
+#[allow(clippy::disallowed_methods)]
+fn probe_browser_companion_version(command: &str) -> Result<String, BrowserCompanionProbeError> {
     let mut probe = Command::new(command);
-    probe.arg(BROWSER_COMPANION_VERSION_ARG);
-    probe.kill_on_drop(true);
 
-    match timeout(BROWSER_COMPANION_PROBE_TIMEOUT, probe.output()).await {
-        Ok(Ok(output)) => {
-            let observed = observed_output(&output.stdout, &output.stderr);
-            if output.status.success() {
-                Ok(observed)
-            } else {
-                Err(BrowserCompanionProbeError::Exited {
-                    observed,
-                    exit_status: output.status.code(),
-                })
-            }
-        }
-        Ok(Err(error)) => {
+    probe.arg(BROWSER_COMPANION_VERSION_ARG);
+    probe.stdin(Stdio::null());
+    probe.stdout(Stdio::piped());
+    probe.stderr(Stdio::piped());
+
+    let spawned_child = probe.spawn();
+
+    let mut child = match spawned_child {
+        Ok(child) => child,
+        Err(error) => {
             if error.kind() == ErrorKind::NotFound {
-                Err(BrowserCompanionProbeError::MissingBinary)
-            } else {
-                Err(BrowserCompanionProbeError::SpawnFailed(error.to_string()))
+                return Err(BrowserCompanionProbeError::MissingBinary);
+            }
+
+            return Err(BrowserCompanionProbeError::SpawnFailed(error.to_string()));
+        }
+    };
+
+    let start = Instant::now();
+
+    loop {
+        let wait_result = child.try_wait();
+
+        match wait_result {
+            Ok(Some(_status)) => {
+                let output_result = child.wait_with_output();
+
+                return map_browser_companion_output(output_result);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                return Err(BrowserCompanionProbeError::SpawnFailed(error.to_string()));
             }
         }
-        Err(_) => Err(BrowserCompanionProbeError::TimedOut),
+
+        let elapsed = start.elapsed();
+
+        if elapsed >= BROWSER_COMPANION_PROBE_TIMEOUT {
+            let _kill_result = child.kill();
+            let _wait_result = child.wait();
+
+            return Err(BrowserCompanionProbeError::TimedOut);
+        }
+
+        let poll_interval = Duration::from_millis(10);
+
+        sleep(poll_interval);
     }
+}
+
+fn map_browser_companion_output(
+    output_result: std::io::Result<std::process::Output>,
+) -> Result<String, BrowserCompanionProbeError> {
+    let output = match output_result {
+        Ok(output) => output,
+        Err(error) => {
+            return Err(BrowserCompanionProbeError::SpawnFailed(error.to_string()));
+        }
+    };
+
+    let observed = observed_output(&output.stdout, &output.stderr);
+    let status = output.status;
+    let success = status.success();
+
+    if success {
+        return Ok(observed);
+    }
+
+    let exit_status = status.code();
+
+    Err(BrowserCompanionProbeError::Exited {
+        observed,
+        exit_status,
+    })
 }
 
 fn observed_output(stdout: &[u8], stderr: &[u8]) -> String {
