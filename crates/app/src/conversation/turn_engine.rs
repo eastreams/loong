@@ -41,6 +41,7 @@ use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
 
 use super::ingress::{ConversationIngressContext, inject_internal_tool_ingress};
+use super::turn_shared::effective_followup_tool_name;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderTurn {
@@ -2016,6 +2017,10 @@ pub(crate) fn effective_result_tool_name(intent: &ToolIntent) -> String {
         .to_owned()
 }
 
+fn effective_denied_tool_name(intent: &ToolIntent) -> String {
+    effective_followup_tool_name(intent)
+}
+
 fn build_tool_decision_trace_record(
     intent: &ToolIntent,
     decision: ToolDecisionTelemetry,
@@ -3514,7 +3519,7 @@ mod tests {
         let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call(
             "shell.exec",
             json!({
-                "command": "/bin/echo",
+                "command": "echo",
                 "args": ["hello"],
             }),
         );
@@ -3534,21 +3539,23 @@ mod tests {
             engine
                 .prepare_tool_intent(
                     &intent,
+                    0,
                     &session_context,
                     &DefaultAppToolDispatcher::runtime(),
                     ConversationRuntimeBinding::kernel(&harness.kernel_ctx),
+                    &AutonomyTurnBudgetState::default(),
                     None,
                 )
                 .await
                 .expect("tool.invoke shell request should prepare successfully")
         });
 
-        assert_eq!(prepared_intent.request.tool_name, "tool.invoke");
+        assert_eq!(prepared_intent.request.tool_name, "shell.exec");
         assert_eq!(prepared_intent.intent.tool_name, "shell.exec");
         assert_eq!(
             prepared_intent.intent.args_json,
             json!({
-                "command": "/bin/echo",
+                "command": "echo",
                 "args": ["hello"],
             })
         );

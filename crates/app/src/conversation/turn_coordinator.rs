@@ -109,12 +109,12 @@ use super::turn_observer::{
 use super::turn_shared::{ApprovalPromptActionId, parse_approval_prompt_action_input};
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
-    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
-    build_tool_loop_guard_tail, decide_provider_turn_request_action,
+    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
+    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
+    decide_provider_turn_request_action, effective_followup_tool_name,
     format_approval_required_reply, next_conversation_turn_id, reduce_followup_payload_for_model,
     request_completion_with_raw_fallback, summarize_single_tool_followup_request,
-    summarize_tool_followup_request, summarize_tool_followup_tool_names,
-    tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
+    summarize_tool_followup_request, tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
     tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
 #[cfg(test)]
@@ -614,6 +614,7 @@ struct ProviderTurnLaneExecution {
     lane: ExecutionLane,
     assistant_preface: String,
     had_tool_intents: bool,
+    tool_request_summary: Option<String>,
     requires_provider_turn_followup: bool,
     raw_tool_output_requested: bool,
     turn_result: TurnResult,
@@ -626,6 +627,7 @@ impl ProviderTurnLaneExecution {
         TurnLaneExecutionSnapshot {
             lane: self.lane,
             had_tool_intents: self.had_tool_intents,
+            tool_request_summary: self.tool_request_summary.clone(),
             raw_tool_output_requested: self.raw_tool_output_requested,
             result_kind: turn_checkpoint_result_kind(&self.turn_result),
             safe_lane_terminal_route: self.safe_lane_terminal_route,
@@ -2472,6 +2474,8 @@ fn build_provider_turn_tool_terminal_events(
 
     for intent in &turn.tool_intents {
         if let Some(event) = trace_events.remove(intent.tool_call_id.as_str()) {
+            let request_summary = summarize_tool_event_request(intent);
+            let event = event.with_request_summary(request_summary);
             events.push(event);
             continue;
         }
@@ -2536,6 +2540,8 @@ fn build_provider_turn_tool_terminal_events(
         };
 
         if let Some(fallback_event) = fallback_event {
+            let request_summary = summarize_tool_event_request(intent);
+            let fallback_event = fallback_event.with_request_summary(request_summary);
             events.push(fallback_event);
         }
     }
@@ -2871,6 +2877,10 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     followup.clone(),
                     user_input,
                     loop_warning_reason.as_deref(),
+                    current_continue_phase
+                        .lane_execution
+                        .tool_request_summary
+                        .as_deref(),
                 );
                 if current_continue_phase
                     .lane_execution
@@ -3089,6 +3099,7 @@ fn build_turn_reply_followup_messages(
         followup,
         user_input,
         None,
+        None,
     )
 }
 
@@ -3098,13 +3109,15 @@ fn build_turn_reply_followup_messages_with_warning(
     followup: ToolDrivenFollowupPayload,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
 ) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
-    messages.extend(build_tool_driven_followup_tail(
+    messages.extend(build_tool_driven_followup_tail_with_request_summary(
         assistant_preface,
         &followup,
         user_input,
         loop_warning_reason,
+        tool_request_summary,
         |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
     ));
     messages
@@ -5301,11 +5314,11 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         &turn_result,
         fast_lane_tool_batch_trace.as_ref(),
     );
-
     ProviderTurnLaneExecution {
         lane,
         assistant_preface,
         had_tool_intents,
+        tool_request_summary,
         requires_provider_turn_followup,
         raw_tool_output_requested: preparation.raw_tool_output_requested,
         turn_result,
@@ -5340,7 +5353,8 @@ fn summarize_failed_provider_lane_tool_request(
             .tool_intents
             .iter()
             .find(|intent| intent.tool_call_id == failed_tool_call_id)?;
-        return summarize_single_tool_followup_request(failed_intent);
+        let summary = summarize_single_tool_followup_request(failed_intent);
+        return summary;
     }
 
     match turn.tool_intents.as_slice() {
@@ -5356,7 +5370,8 @@ fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> O
             ToolBatchExecutionIntentStatus::Completed
         )
     })?;
-    Some(failed_outcome.tool_call_id.as_str())
+    let tool_call_id = failed_outcome.tool_call_id.as_str();
+    Some(tool_call_id)
 }
 
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
@@ -9440,6 +9455,7 @@ mod tests {
                 lane: ExecutionLane::Safe,
                 assistant_preface: "preface".to_owned(),
                 had_tool_intents: true,
+                tool_request_summary: None,
                 requires_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::ToolError(TurnFailure::retryable(
@@ -9659,6 +9675,7 @@ mod tests {
                 lane: ExecutionLane::Fast,
                 assistant_preface: "preface".to_owned(),
                 had_tool_intents: false,
+                tool_request_summary: None,
                 requires_provider_turn_followup: false,
                 raw_tool_output_requested: false,
                 turn_result: TurnResult::FinalText("hello there".to_owned()),
@@ -9735,6 +9752,7 @@ mod tests {
                 lane: Some(TurnLaneExecutionSnapshot {
                     lane: ExecutionLane::Safe,
                     had_tool_intents: true,
+                    tool_request_summary: None,
                     raw_tool_output_requested: false,
                     result_kind: TurnCheckpointResultKind::ToolError,
                     safe_lane_terminal_route: Some(SafeLaneFailureRoute {
@@ -9936,6 +9954,7 @@ mod tests {
                 lane: Some(TurnLaneExecutionSnapshot {
                     lane: ExecutionLane::Fast,
                     had_tool_intents: false,
+                    tool_request_summary: None,
                     raw_tool_output_requested: false,
                     result_kind: TurnCheckpointResultKind::FinalText,
                     safe_lane_terminal_route: None,

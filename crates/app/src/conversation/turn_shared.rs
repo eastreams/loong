@@ -19,7 +19,6 @@ use crate::CliResult;
 
 pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
 pub const DISCOVERY_RESULT_FOLLOWUP_PROMPT: &str = "The tool result above is a discovery result, not the final evidence. Choose the best matching discovered tool, reuse its lease when invoking it, continue with the next tool call needed to satisfy the original user request, and only answer directly if the discovery results already contain the final user-facing information.";
-pub const TOOL_FAILURE_FOLLOWUP_PROMPT: &str = "A tool call failed. Inspect the attempted tool request and failure above before answering. If the failure is repairable, correct the tool arguments and retry with a materially different call. If the failure is a policy denial or cannot be repaired safely, explain the constraint and continue with the best possible answer.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
@@ -184,14 +183,6 @@ pub(crate) fn summarize_tool_followup_request(intents: &[ToolIntent]) -> Option<
 pub(crate) fn summarize_single_tool_followup_request(intent: &ToolIntent) -> Option<String> {
     let entry = tool_followup_request_entry(intent);
     serde_json::to_string(&entry).ok()
-}
-
-pub(crate) fn summarize_tool_followup_tool_names(intents: &[ToolIntent]) -> String {
-    intents
-        .iter()
-        .map(effective_followup_tool_name)
-        .collect::<Vec<_>>()
-        .join("||")
 }
 
 fn tool_followup_request_entry(intent: &ToolIntent) -> Value {
@@ -1060,6 +1051,22 @@ pub fn build_tool_followup_user_prompt(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
 ) -> String {
+    build_tool_followup_user_prompt_with_context(
+        user_input,
+        loop_warning_reason,
+        tool_result_text,
+        rendered_tool_result_text,
+        None,
+    )
+}
+
+pub fn build_tool_followup_user_prompt_with_context(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+    extra_context: Option<&str>,
+) -> String {
     let prompt =
         if followup_prompt_uses_discovery_guidance(tool_result_text, rendered_tool_result_text) {
             DISCOVERY_RESULT_FOLLOWUP_PROMPT
@@ -1075,6 +1082,9 @@ pub fn build_tool_followup_user_prompt(
     }
     if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
         sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
+    }
+    if let Some(extra_context) = extra_context {
+        sections.push(extra_context.to_owned());
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
@@ -1452,11 +1462,34 @@ where
     messages
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_failure_followup_tail<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_failure_followup_tail_with_request_summary(
+        assistant_preface,
+        tool_failure_reason,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub fn build_tool_failure_followup_tail_with_request_summary<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1464,7 +1497,22 @@ where
 {
     let mut messages = Vec::new();
     append_followup_preface(&mut messages, assistant_preface);
+
+    if let Some(tool_request_summary) = tool_request_summary {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("[tool_request]\n{tool_request_summary}"),
+        }));
+    }
+
+    let repair_guidance =
+        render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary);
     let bounded_failure = payload_mapper("tool_failure", tool_failure_reason);
+    let bounded_failure = if repair_guidance.is_some() {
+        format!("tool input needs repair: {bounded_failure}")
+    } else {
+        bounded_failure
+    };
     messages.push(serde_json::json!({
         "role": "assistant",
         "content": format!("[tool_failure]\n{bounded_failure}"),
@@ -1472,16 +1520,45 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None, None),
+        "content": build_tool_followup_user_prompt_with_context(
+            user_input,
+            loop_warning_reason,
+            None,
+            None,
+            repair_guidance.as_deref(),
+        ),
     }));
     messages
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_driven_followup_tail<F>(
     assistant_preface: &str,
     payload: &ToolDrivenFollowupPayload,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_driven_followup_tail_with_request_summary(
+        assistant_preface,
+        payload,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub fn build_tool_driven_followup_tail_with_request_summary<F>(
+    assistant_preface: &str,
+    payload: &ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
     payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1495,14 +1572,49 @@ where
             loop_warning_reason,
             payload_mapper,
         ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => build_tool_failure_followup_tail(
-            assistant_preface,
-            reason.as_str(),
-            user_input,
-            loop_warning_reason,
-            payload_mapper,
-        ),
+        ToolDrivenFollowupPayload::ToolFailure { reason } => {
+            build_tool_failure_followup_tail_with_request_summary(
+                assistant_preface,
+                reason.as_str(),
+                user_input,
+                loop_warning_reason,
+                tool_request_summary,
+                payload_mapper,
+            )
+        }
     }
+}
+
+fn render_tool_failure_repair_guidance(
+    tool_failure_reason: &str,
+    tool_request_summary: Option<&str>,
+) -> Option<String> {
+    let tool_request_summary = tool_request_summary?;
+    let request_summary_json = serde_json::from_str::<Value>(tool_request_summary).ok()?;
+    let tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    if tool_name != "shell.exec" {
+        return None;
+    }
+
+    let request_object = request_summary_json.get("request")?.as_object()?;
+    let command = request_object.get("command").and_then(Value::as_str)?;
+    let has_path_separator = command.contains('/') || command.contains('\\');
+    let mentions_payload_command = tool_failure_reason.contains("payload.command");
+    let mentions_path_separator = tool_failure_reason.contains("path separators");
+
+    if !has_path_separator && !mentions_payload_command && !mentions_path_separator {
+        return None;
+    }
+
+    let bare_command = command
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+    let guidance = format!(
+        "Repair guidance for shell.exec:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
+    );
+    Some(guidance)
 }
 
 pub fn build_tool_loop_guard_tail<F>(

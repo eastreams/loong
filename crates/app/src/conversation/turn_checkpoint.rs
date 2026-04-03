@@ -378,6 +378,7 @@ pub(super) enum TurnCheckpointRequest {
 pub(super) struct TurnLaneExecutionSnapshot {
     pub(super) lane: ExecutionLane,
     pub(super) had_tool_intents: bool,
+    pub(super) tool_request_summary: Option<String>,
     pub(super) raw_tool_output_requested: bool,
     pub(super) result_kind: TurnCheckpointResultKind,
     pub(super) safe_lane_terminal_route: Option<SafeLaneFailureRoute>,

@@ -15,17 +15,15 @@ use super::runtime::{ConversationRuntime, DefaultConversationRuntime};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_budget::{TurnRoundBudget, TurnRoundBudgetDecision};
 use super::turn_engine::{
-    DefaultAppToolDispatcher, ProviderTurn, ToolBatchExecutionIntentStatus,
-    ToolBatchExecutionTrace, ToolIntent, TurnEngine, TurnResult, TurnValidation,
+    DefaultAppToolDispatcher, ProviderTurn, ToolIntent, TurnEngine, TurnResult, TurnValidation,
 };
 use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
-    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
-    build_tool_loop_guard_tail, decide_provider_turn_request_action,
-    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    summarize_single_tool_followup_request, summarize_tool_followup_request,
-    summarize_tool_followup_tool_names, tool_loop_circuit_breaker_reply,
+    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
+    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
+    decide_provider_turn_request_action, reduce_followup_payload_for_model,
+    request_completion_with_raw_fallback, tool_loop_circuit_breaker_reply,
     user_requested_raw_tool_output,
 };
 
@@ -80,6 +78,7 @@ enum RoundFollowup {
         assistant_preface: String,
         payload: ToolDrivenFollowupPayload,
         loop_warning_reason: Option<String>,
+        tool_request_summary: Option<String>,
     },
     Guard {
         assistant_preface: String,
@@ -398,7 +397,7 @@ async fn evaluate_round_kernel(
             .conversation
             .fast_lane_parallel_tool_execution_max_in_flight(),
     );
-    let (turn_result, turn_trace) = match engine.validate_turn_in_context(turn, session_context) {
+    let (turn_result, _turn_trace) = match engine.validate_turn_in_context(turn, session_context) {
         Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None),
         Err(failure) => (TurnResult::ToolDenied(failure), None),
         Ok(TurnValidation::ToolExecutionRequired) => {
@@ -433,56 +432,10 @@ async fn evaluate_round_kernel(
     RoundKernelEvaluation {
         assistant_preface: turn.assistant_text.clone(),
         had_tool_intents,
-        tool_request_summary: summarize_round_tool_request(turn, &turn_result, turn_trace.as_ref()),
+        tool_request_summary: None,
         turn_result,
         loop_verdict,
     }
-}
-
-fn summarize_round_tool_request(
-    turn: &ProviderTurn,
-    turn_result: &TurnResult,
-    turn_trace: Option<&ToolBatchExecutionTrace>,
-) -> Option<String> {
-    match turn_result {
-        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
-            summarize_tool_followup_request(&turn.tool_intents)
-        }
-        TurnResult::NeedsApproval(_)
-        | TurnResult::ToolDenied(_)
-        | TurnResult::ToolError(_)
-        | TurnResult::ProviderError(_) => summarize_failed_round_tool_request(turn, turn_trace),
-    }
-}
-
-fn summarize_failed_round_tool_request(
-    turn: &ProviderTurn,
-    turn_trace: Option<&ToolBatchExecutionTrace>,
-) -> Option<String> {
-    let failed_tool_call_id = first_failed_tool_call_id(turn_trace);
-    if let Some(failed_tool_call_id) = failed_tool_call_id {
-        let failed_intent = turn
-            .tool_intents
-            .iter()
-            .find(|intent| intent.tool_call_id == failed_tool_call_id)?;
-        return summarize_single_tool_followup_request(failed_intent);
-    }
-
-    match turn.tool_intents.as_slice() {
-        [intent] => summarize_single_tool_followup_request(intent),
-        _ => None,
-    }
-}
-
-fn first_failed_tool_call_id(turn_trace: Option<&ToolBatchExecutionTrace>) -> Option<&str> {
-    let turn_trace = turn_trace?;
-    let failed_outcome = turn_trace.intent_outcomes.iter().find(|intent_outcome| {
-        !matches!(
-            intent_outcome.status,
-            ToolBatchExecutionIntentStatus::Completed
-        )
-    })?;
-    Some(failed_outcome.tool_call_id.as_str())
 }
 
 impl RoundKernelEvaluation {
@@ -538,6 +491,7 @@ fn decide_round_kernel_action(
         assistant_preface: evaluation.assistant_preface,
         payload: tool_payload,
         loop_warning_reason,
+        tool_request_summary: evaluation.tool_request_summary,
     };
 
     match round_budget.followup_decision() {
@@ -563,6 +517,7 @@ fn append_round_followup_messages(
             assistant_preface,
             payload,
             loop_warning_reason,
+            tool_request_summary,
         } => append_tool_driven_followup_messages(
             &mut session.messages,
             assistant_preface.as_str(),
@@ -570,6 +525,7 @@ fn append_round_followup_messages(
             user_input,
             &mut session.followup_payload_budget,
             loop_warning_reason.as_deref(),
+            tool_request_summary.as_deref(),
         ),
         RoundFollowup::Guard {
             assistant_preface,
@@ -597,12 +553,14 @@ fn append_tool_driven_followup_messages(
     user_input: &str,
     followup_payload_budget: &mut FollowupPayloadBudget,
     loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
 ) {
-    messages.extend(build_tool_driven_followup_tail(
+    messages.extend(build_tool_driven_followup_tail_with_request_summary(
         assistant_preface,
         payload,
         user_input,
         loop_warning_reason,
+        tool_request_summary,
         |label, text| {
             let reduced = reduce_followup_payload_for_model(label, text);
             followup_payload_budget.truncate_payload(label, reduced.as_ref())
@@ -1078,6 +1036,7 @@ mod tests {
             "summarize note.md",
             &mut budget,
             None,
+            None,
         );
 
         let user_prompt = messages
@@ -1104,6 +1063,7 @@ mod tests {
             "summarize note.md",
             &mut budget,
             None,
+            None,
         );
 
         let user_prompt = messages
@@ -1129,6 +1089,7 @@ mod tests {
             },
             "summarize note.md",
             &mut budget,
+            None,
             None,
         );
 
@@ -1181,6 +1142,7 @@ mod tests {
             "apply the skill",
             &mut budget,
             None,
+            None,
         );
 
         let system_content = messages[0]["content"]
@@ -1204,6 +1166,7 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
             "summarize README.md",
             &mut budget,
+            None,
             None,
         );
 
@@ -1252,6 +1215,7 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
             "summarize the test run",
             &mut budget,
+            None,
             None,
         );
 
@@ -1340,6 +1304,7 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
             "find the right tool",
             &mut budget,
+            None,
             None,
         );
 
@@ -1539,6 +1504,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
                 reason: "warning".to_owned(),
@@ -1556,6 +1522,7 @@ mod tests {
             assistant_preface,
             payload: ToolDrivenFollowupPayload::ToolResult { text },
             loop_warning_reason,
+            ..
         }) = decision
         {
             assert_eq!(assistant_preface, "preface");
@@ -1571,6 +1538,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::HardStop {
                 reason: "stop".to_owned(),
@@ -1608,6 +1576,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::ToolError(TurnFailure::retryable(
                 "tool_failed",
                 "tool failure",
@@ -1651,6 +1620,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
                 reason: "warning".to_owned(),

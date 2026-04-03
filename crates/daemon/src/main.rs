@@ -33,32 +33,6 @@ impl Drop for StdinGuard {
     }
 }
 
-fn command_kind(command: &Commands) -> String {
-    let rendered = format!("{command:?}");
-    let mut segments = rendered.split(|character: char| !character.is_ascii_alphanumeric());
-    let variant_name = segments.next().unwrap_or("unknown");
-
-    camel_case_to_snake_case(variant_name)
-}
-
-fn camel_case_to_snake_case(value: &str) -> String {
-    let mut rendered = String::new();
-    let mut previous_was_lowercase = false;
-
-    for character in value.chars() {
-        let is_uppercase = character.is_ascii_uppercase();
-        if is_uppercase && previous_was_lowercase {
-            rendered.push('_');
-        }
-
-        let lowercased = character.to_ascii_lowercase();
-        rendered.push(lowercased);
-        previous_was_lowercase = character.is_ascii_lowercase();
-    }
-
-    rendered
-}
-
 fn error_code(error: &str) -> String {
     let trimmed = error.trim();
     let mut segments = trimmed.split(':');
@@ -1055,7 +1029,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_kind, error_code};
+    use super::error_code;
     use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount};
 
     #[test]
@@ -1076,8 +1050,14 @@ mod tests {
             }],
         };
 
-        assert_eq!(command_kind(&validate_config), "validate_config");
-        assert_eq!(command_kind(&multi_channel_serve), "multi_channel_serve");
+        assert_eq!(
+            validate_config.command_kind_for_logging(),
+            "validate_config"
+        );
+        assert_eq!(
+            multi_channel_serve.command_kind_for_logging(),
+            "multi_channel_serve"
+        );
     }
 
     #[test]

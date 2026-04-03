@@ -810,6 +810,7 @@ pub fn execute_tool_core_with_config(
             tool_name: canonical_name.clone(),
             payload,
         };
+        let request = normalize_shell_request_for_execution(request);
         let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?;
         let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
         let config = effective_config.as_ref().unwrap_or(config);

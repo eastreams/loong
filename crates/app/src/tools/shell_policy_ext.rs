@@ -6,6 +6,7 @@ use loongclaw_kernel::{PolicyExtension, PolicyExtensionContext};
 pub(crate) const SHELL_EXEC_APPROVAL_RULE_ID: &str = "shell_exec_requires_approval";
 const SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: &str = "shell_approval";
 const SHELL_INTERNAL_APPROVAL_KEY_FIELD: &str = "approval_key";
+const REPAIRABLE_TOOL_INPUT_PREFIX: &str = "repairable_tool_input: ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellPolicyDefault {
@@ -52,9 +53,36 @@ impl ToolPolicyExtension {
     }
 }
 
+fn repairable_tool_input_reason(reason: String) -> String {
+    let prefixed_reason = format!("{REPAIRABLE_TOOL_INPUT_PREFIX}{reason}");
+    prefixed_reason
+}
+
+#[cfg(test)]
+fn is_repairable_tool_input_reason(reason: &str) -> bool {
+    reason.starts_with(REPAIRABLE_TOOL_INPUT_PREFIX)
+}
+
+#[cfg(test)]
+fn strip_repairable_tool_input_prefix(reason: &str) -> &str {
+    if let Some(stripped_reason) = reason.strip_prefix(REPAIRABLE_TOOL_INPUT_PREFIX) {
+        return stripped_reason;
+    }
+
+    reason
+}
+
 pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, String> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
+        let reason = repairable_tool_input_reason(
+            "shell.exec requires payload.command. Provide a bare executable in payload.command and move arguments into payload.args.".to_owned(),
+        );
+        return Err(reason);
+    }
+
+    let contains_newline = trimmed.chars().any(|ch| matches!(ch, '\n' | '\r'));
+    if contains_newline {
         let reason = repairable_tool_input_reason(
             "shell.exec requires payload.command. Provide a bare executable in payload.command and move arguments into payload.args.".to_owned(),
         );

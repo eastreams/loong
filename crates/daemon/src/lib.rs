@@ -1307,7 +1307,7 @@ pub enum Commands {
 }
 
 impl Commands {
-    pub(crate) fn command_kind_for_logging(&self) -> &'static str {
+    pub fn command_kind_for_logging(&self) -> &'static str {
         match self {
             Self::Welcome => "welcome",
             Self::Demo => "demo",
@@ -1324,11 +1324,15 @@ impl Commands {
             Self::BenchmarkMemoryContext { .. } => "benchmark_memory_context",
             Self::ValidateConfig { .. } => "validate_config",
             Self::Onboard { .. } => "onboard",
+            Self::Personalize { .. } => "personalize",
             Self::Import { .. } => "import",
             Self::Migrate { .. } => "migrate",
             Self::Doctor { .. } => "doctor",
             Self::Audit { .. } => "audit",
             Self::Skills { .. } => "skills",
+            Self::Tasks { .. } => "tasks",
+            Self::Sessions { .. } => "sessions",
+            Self::Plugins { .. } => "plugins",
             Self::Channels { .. } => "channels",
             Self::ListModels { .. } => "list_models",
             Self::RuntimeSnapshot { .. } => "runtime_snapshot",
@@ -1355,6 +1359,7 @@ impl Commands {
             Self::MatrixServe { .. } => "matrix_serve",
             Self::WecomSend { .. } => "wecom_send",
             Self::WecomServe { .. } => "wecom_serve",
+            Self::WhatsappServe { .. } => "whatsapp_serve",
             Self::DiscordSend { .. } => "discord_send",
             Self::DingtalkSend { .. } => "dingtalk_send",
             Self::SlackSend { .. } => "slack_send",
@@ -1364,12 +1369,17 @@ impl Commands {
             Self::WebhookSend { .. } => "webhook_send",
             Self::GoogleChatSend { .. } => "google_chat_send",
             Self::TeamsSend { .. } => "teams_send",
+            Self::TlonSend { .. } => "tlon_send",
             Self::SignalSend { .. } => "signal_send",
+            Self::TwitchSend { .. } => "twitch_send",
             Self::MattermostSend { .. } => "mattermost_send",
             Self::NextcloudTalkSend { .. } => "nextcloud_talk_send",
             Self::SynologyChatSend { .. } => "synology_chat_send",
+            Self::IrcSend { .. } => "irc_send",
             Self::ImessageSend { .. } => "imessage_send",
+            Self::NostrSend { .. } => "nostr_send",
             Self::MultiChannelServe { .. } => "multi_channel_serve",
+            Self::Gateway { .. } => "gateway",
             Self::Feishu { .. } => "feishu",
             Self::Completions { .. } => "completions",
         }
