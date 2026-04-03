@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-03T12:07:16Z
+- Generated at: 2026-04-03T12:31:07Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -17,7 +17,7 @@
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 375 | 1000 | 625 | 10 | 20 | 10 | 50.0% | HEALTHY | 375 | 0.0% | PASS | 10 |
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 343 | 650 | 307 | 14 | 16 | 2 | 87.5% | WATCH | 356 | -3.7% | PASS | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3391 | 3600 | 209 | 8 | 12 | 4 | 94.2% | WATCH | 3383 | 0.2% | PASS | 8 |
-| acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2716 | 2800 | 84 | 56 | 65 | 9 | 97.0% | TIGHT | 2698 | 0.7% | PASS | 56 |
+| acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2741 | 2800 | 59 | 56 | 65 | 9 | 97.9% | TIGHT | 2698 | 1.6% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10464 | 10500 | 36 | 88 | 90 | 2 | 99.7% | TIGHT | 9922 | 5.5% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9713 | 9800 | 87 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | -0.8% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6976 | 7300 | 324 | 147 | 160 | 13 | 95.6% | TIGHT | 6936 | 0.6% | PASS | 146 |
@@ -29,7 +29,7 @@
 
 ## Prioritization Signals
 - BREACH hotspots (>100% of any tracked budget): none
-- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.4%), acpx_runtime (97.0%), channel_registry (99.7%), channel_config (100.0%), chat_runtime (95.6%), turn_coordinator (99.8%), tools_mod (99.9%), daemon_lib (100.0%), onboard_cli (97.1%)
+- TIGHT hotspots (>=95% of any tracked budget): spec_runtime (100.0%), spec_execution (96.4%), acpx_runtime (97.9%), channel_registry (99.7%), channel_config (100.0%), chat_runtime (95.6%), turn_coordinator (99.8%), tools_mod (99.9%), daemon_lib (100.0%), onboard_cli (97.1%)
 - WATCH hotspots (>=85% and <95% of any tracked budget): memory_mod (87.5%), acp_manager (94.2%)
 - Mixed-class hotspots (size plus operational density): chat_runtime, channel_mod, turn_coordinator
 
@@ -62,7 +62,7 @@
 <!-- arch-hotspot key=provider_mod lines=375 functions=10 -->
 <!-- arch-hotspot key=memory_mod lines=343 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3391 functions=8 -->
-<!-- arch-hotspot key=acpx_runtime lines=2716 functions=56 -->
+<!-- arch-hotspot key=acpx_runtime lines=2741 functions=56 -->
 <!-- arch-hotspot key=channel_registry lines=10464 functions=88 -->
 <!-- arch-hotspot key=channel_config lines=9713 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6976 functions=147 -->
