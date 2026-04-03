@@ -17,6 +17,7 @@ pub enum TrustActorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TrustEventKind {
+    ApprovalRequired,
     IdentityBound,
     IdentityMismatch,
     DelegationCreated,
@@ -126,6 +127,35 @@ pub(crate) fn runtime_binding_missing_trust_event(
     }
 }
 
+pub(crate) fn approval_required_trust_event(
+    session_id: &str,
+    source_surface: &str,
+    provenance_ref: &str,
+    rule_id: &str,
+    approval_request_id: Option<&str>,
+    tool_name: Option<&str>,
+) -> TrustEventEnvelope {
+    let evidence_ref = match approval_request_id {
+        Some(approval_request_id) => format!("approval_request:{approval_request_id}"),
+        None => match tool_name {
+            Some(tool_name) => format!("tool:{tool_name}"),
+            None => format!("session:{session_id}"),
+        },
+    };
+
+    TrustEventEnvelope {
+        event_kind: TrustEventKind::ApprovalRequired,
+        actor_id: session_id.to_owned(),
+        actor_kind: TrustActorKind::ConversationRuntime,
+        source_surface: source_surface.to_owned(),
+        trust_state_hint: TrustStateHint::Unknown,
+        provenance_kind: TrustProvenanceKind::RuntimeBinding,
+        provenance_ref: provenance_ref.to_owned(),
+        reason_code: rule_id.to_owned(),
+        evidence_ref,
+    }
+}
+
 pub(crate) fn provider_failover_trust_event(
     provider_id: &str,
     source_surface: &str,
@@ -168,8 +198,9 @@ fn provider_failover_trust_state_hint(reason_code: &str) -> TrustStateHint {
 mod tests {
     use super::{
         TRUST_EVENT_PAYLOAD_KEY, TrustActorKind, TrustEventEnvelope, TrustEventKind,
-        TrustProvenanceKind, TrustStateHint, delegate_child_trust_event, embed_trust_event_payload,
-        extract_trust_event_payload, provider_failover_trust_event,
+        TrustProvenanceKind, TrustStateHint, approval_required_trust_event,
+        delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
+        provider_failover_trust_event,
     };
     use serde_json::json;
 
@@ -267,6 +298,25 @@ mod tests {
         );
 
         assert_eq!(envelope.trust_state_hint, TrustStateHint::Rejected);
+    }
+
+    #[test]
+    fn approval_required_trust_event_uses_approval_request_evidence_when_present() {
+        let envelope = approval_required_trust_event(
+            "root-session",
+            "conversation.approval",
+            "kernel",
+            "governed_tool_requires_approval",
+            Some("apr-123"),
+            Some("delegate"),
+        );
+
+        assert_eq!(envelope.event_kind, TrustEventKind::ApprovalRequired);
+        assert_eq!(envelope.actor_kind, TrustActorKind::ConversationRuntime);
+        assert_eq!(envelope.trust_state_hint, TrustStateHint::Unknown);
+        assert_eq!(envelope.provenance_ref, "kernel");
+        assert_eq!(envelope.reason_code, "governed_tool_requires_approval");
+        assert_eq!(envelope.evidence_ref, "approval_request:apr-123");
     }
 
     #[test]

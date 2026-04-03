@@ -12752,6 +12752,7 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_ca
         .expect("load approval request")
         .expect("approval request should exist");
     let governance_snapshot = stored_request.governance_snapshot_json;
+    let trust_event = &stored_request.request_payload_json["trust_event"];
     assert_eq!(stored_request.tool_name, "external_skills.install");
     assert_eq!(stored_request.approval_key, "tool:external_skills.install");
     assert_eq!(governance_snapshot["policy_source"], "autonomy_policy");
@@ -12770,6 +12771,14 @@ async fn autonomy_policy_turn_engine_guided_acquisition_requires_approval_for_ca
     assert_eq!(
         governance_snapshot["reason_code"],
         "autonomy_policy_capability_acquisition_requires_approval"
+    );
+    assert_eq!(trust_event["event_kind"], "approval_required");
+    assert_eq!(trust_event["actor_kind"], "conversation_runtime");
+    assert_eq!(trust_event["trust_state_hint"], "unknown");
+    assert_eq!(trust_event["provenance_ref"], "kernel");
+    assert_eq!(
+        trust_event["evidence_ref"],
+        format!("approval_request:{approval_request_id}")
     );
 
     let installed_skill_path = workspace_root
@@ -18000,6 +18009,23 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
         reply.contains(requests[0].approval_request_id.as_str()),
         "reply should surface approval request id, got: {reply}"
     );
+    let stored = repo
+        .load_approval_request(&requests[0].approval_request_id)
+        .expect("load approval request")
+        .expect("approval request row");
+    let payload = &stored.request_payload_json;
+    assert_eq!(
+        payload["approval_request_id"],
+        requests[0].approval_request_id
+    );
+    assert_eq!(payload["approval_key"], "tool:delegate");
+    assert_eq!(payload["tool_name"], "delegate");
+    assert_eq!(payload["trust_event"]["event_kind"], "approval_required");
+    assert_eq!(payload["trust_event"]["provenance_ref"], "kernel");
+    assert_eq!(
+        payload["trust_event"]["reason_code"],
+        "autonomy_policy_topology_mutation_requires_approval"
+    );
     assert!(
         repo.list_visible_sessions("root-session")
             .expect("list sessions")
@@ -18972,7 +18998,6 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
         reply.contains(requests[0].approval_request_id.as_str()),
         "reply should surface approval request id, got: {reply}"
     );
-
     let stored = repo
         .load_approval_request(&requests[0].approval_request_id)
         .expect("load approval request")
@@ -18983,9 +19008,14 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
     let payload_command = stored.request_payload_json["args_json"]["command"]
         .as_str()
         .expect("request payload command");
+    let trust_event = &stored.request_payload_json["trust_event"];
 
     assert_eq!(payload_tool_name, "shell.exec");
     assert_eq!(payload_command, command);
+    assert_eq!(trust_event["event_kind"], "approval_required");
+    assert_eq!(trust_event["provenance_ref"], "kernel");
+    assert_eq!(trust_event["reason_code"], "shell_exec_requires_approval");
+    assert_eq!(trust_event["provenance_ref"], "kernel");
 }
 
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]

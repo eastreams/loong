@@ -15,6 +15,8 @@ use crate::session::repository::{
     ApprovalGrantRecord, ApprovalRequestRecord, NewApprovalRequestRecord, NewSessionRecord,
     SessionKind, SessionRepository, SessionState,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::trust::{approval_required_trust_event, embed_trust_event_payload};
 
 #[cfg(feature = "memory-sqlite")]
 pub(crate) struct GovernedToolApprovalRequest<'a> {
@@ -30,6 +32,7 @@ pub(crate) struct GovernedToolApprovalRequest<'a> {
     pub approval_mode: &'a str,
     pub reason: &'a str,
     pub rule_id: &'a str,
+    pub provenance_ref: &'a str,
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -95,10 +98,21 @@ impl<'a> OperatorApprovalRuntime<'a> {
             "turn_id": request.turn_id,
             "tool_call_id": request.tool_call_id,
             "tool_name": request.tool_name,
+            "approval_key": approval_key,
+            "approval_request_id": approval_request_id,
             "args_json": request.args_json,
             "source": request.source,
             "execution_kind": "app",
         });
+        let trust_event = approval_required_trust_event(
+            request.session_id,
+            "conversation.approval",
+            request.provenance_ref,
+            request.rule_id,
+            Some(approval_request_id.as_str()),
+            Some(request.tool_name),
+        );
+        let request_payload_json = embed_trust_event_payload(request_payload_json, trust_event);
         let governance_snapshot_json = json!({
             "governance_scope": request.governance_scope,
             "risk_class": request.risk_class,
@@ -368,6 +382,7 @@ mod tests {
             approval_mode: "policy_driven",
             reason: "operator approval required before running `delegate`",
             rule_id: "governed_tool_requires_approval",
+            provenance_ref: "kernel",
         };
 
         let stored = approval_runtime
@@ -434,6 +449,7 @@ mod tests {
             approval_mode: "policy_driven",
             reason: "operator approval required before running `delegate`",
             rule_id: "governed_tool_requires_approval",
+            provenance_ref: "kernel",
         };
 
         let stored = approval_runtime
@@ -510,6 +526,7 @@ mod tests {
             approval_mode: "policy_driven",
             reason: "operator approval required before running `delegate`",
             rule_id: "governed_tool_requires_approval",
+            provenance_ref: "kernel",
         };
         let stored = approval_runtime
             .ensure_governed_tool_approval_request(request)
@@ -558,6 +575,7 @@ mod tests {
             approval_mode: "policy_driven",
             reason: "operator approval required before running `delegate`",
             rule_id: "governed_tool_requires_approval",
+            provenance_ref: "kernel",
         };
         let stored = approval_runtime
             .ensure_governed_tool_approval_request(request)
