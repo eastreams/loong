@@ -4697,10 +4697,12 @@ mod tests {
 
     #[test]
     fn tool_search_hides_tools_exceeding_granted_capabilities() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-cap-filter-{}",
-            std::process::id()
-        ));
+        let created_at = std::time::SystemTime::now();
+        let duration = created_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after epoch");
+        let nanos = duration.as_nanos();
+        let root = std::env::temp_dir().join(format!("loongclaw-tool-search-cap-filter-{nanos}"));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -4734,10 +4736,13 @@ mod tests {
     #[cfg(feature = "tool-shell")]
     #[test]
     fn tool_search_hides_bash_exec_without_side_effect_capabilities() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-bash-cap-filter-{}",
-            std::process::id()
-        ));
+        let created_at = std::time::SystemTime::now();
+        let duration = created_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after epoch");
+        let nanos = duration.as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("loongclaw-tool-search-bash-cap-filter-{nanos}"));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let mut config = test_tool_runtime_config(root.clone());
