@@ -428,22 +428,6 @@ fn denied_tool_decision(tool_name: &str, failure: &TurnFailure) -> ToolDecisionT
     ToolDecisionTelemetry::deny(tool_name, reason, rule_id)
 }
 
-fn governed_runtime_binding_denied_outcome(
-    descriptor: &crate::tools::ToolDescriptor,
-) -> ToolPreflightOutcome {
-    let tool_name = descriptor.name;
-    let reason_code = "governed_runtime_binding_required";
-    let failure = TurnFailure::policy_denied(reason_code, reason_code);
-    let action_class = descriptor.capability_action_class();
-    let decision = denied_tool_decision(tool_name, &failure)
-        .with_capability_action_class(action_class.as_str());
-    ToolPreflightOutcome::Denied { failure, decision }
-}
-
-fn requires_kernel_bound_runtime_for_preflight(descriptor: &crate::tools::ToolDescriptor) -> bool {
-    descriptor.name == "delegate_async"
-}
-
 #[async_trait]
 pub trait AppToolDispatcher: Send + Sync {
     async fn preflight_tool_intent_with_binding(
@@ -454,13 +438,6 @@ pub trait AppToolDispatcher: Send + Sync {
         binding: ConversationRuntimeBinding<'_>,
         _budget_state: &AutonomyTurnBudgetState,
     ) -> Result<ToolPreflightOutcome, String> {
-        let requires_mutating_binding = requires_mutating_runtime_binding(descriptor);
-        let allows_mutation = binding.allows_mutation();
-        if requires_mutating_binding && !allows_mutation {
-            let denied = governed_runtime_binding_denied_outcome(descriptor);
-            return Ok(denied);
-        }
-
         match self
             .maybe_require_approval_with_binding(session_context, intent, descriptor, binding)
             .await
@@ -487,18 +464,7 @@ pub trait AppToolDispatcher: Send + Sync {
         descriptor: &crate::tools::ToolDescriptor,
         binding: ConversationRuntimeBinding<'_>,
     ) -> Result<Option<ApprovalRequirement>, String> {
-        let kernel_ctx = binding.kernel_context();
-        self.maybe_require_approval(session_context, intent, descriptor, kernel_ctx)
-            .await
-    }
-
-    async fn maybe_require_approval(
-        &self,
-        _session_context: &SessionContext,
-        _intent: &ToolIntent,
-        _descriptor: &crate::tools::ToolDescriptor,
-        _kernel_ctx: Option<&KernelContext>,
-    ) -> Result<Option<ApprovalRequirement>, String> {
+        let _ = (session_context, intent, descriptor, binding);
         Ok(None)
     }
 
@@ -1278,12 +1244,6 @@ fn tool_is_auto_eligible(
             && governance.approval_mode == ToolApprovalMode::Never)
 }
 
-fn requires_mutating_runtime_binding(descriptor: &crate::tools::ToolDescriptor) -> bool {
-    let governance = governance_profile_for_descriptor(descriptor);
-    descriptor.execution_kind == ToolExecutionKind::App
-        && governance.approval_mode == ToolApprovalMode::PolicyDriven
-}
-
 enum GovernedToolPreflight {
     Allowed,
     AllowedWithTrustedInternalContext(Value),
@@ -1465,13 +1425,6 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
                 })
             }
             Ok(None) => {
-                let requires_mutating_binding = requires_mutating_runtime_binding(descriptor);
-                let allows_mutation = binding.allows_mutation();
-                if requires_mutating_binding && !allows_mutation {
-                    let denied = governed_runtime_binding_denied_outcome(descriptor);
-                    return Ok(denied);
-                }
-
                 let decision = autonomy_allow_decision
                     .unwrap_or_else(|| generic_allow_tool_decision(descriptor.name));
                 Ok(ToolPreflightOutcome::Allow(decision))
@@ -1640,16 +1593,27 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
         &self,
         session_context: &SessionContext,
         request: ToolCoreRequest,
-        _binding: ConversationRuntimeBinding<'_>,
+        binding: ConversationRuntimeBinding<'_>,
     ) -> Result<ToolCoreOutcome, String> {
         let canonical_tool_name = crate::tools::canonical_tool_name(request.tool_name.as_str());
         let effective_tool_view = self.effective_tool_view_for_session(session_context)?;
-        if let Some(descriptor) = tool_catalog().descriptor(canonical_tool_name)
+        let descriptor = tool_catalog().descriptor(canonical_tool_name);
+        let has_kernel_context = binding.kernel_context().is_some();
+
+        if let Some(descriptor) = descriptor
             && descriptor.execution_kind == ToolExecutionKind::App
             && (!session_context.tool_view.contains(descriptor.name)
                 || !effective_tool_view.contains(descriptor.name))
         {
             return Err(format!("tool_not_visible: {}", descriptor.name));
+        }
+
+        let requires_kernel_binding = descriptor
+            .map(crate::tools::ToolDescriptor::requires_kernel_binding)
+            .unwrap_or(false);
+
+        if requires_kernel_binding && !has_kernel_context {
+            return Err("app_tool_denied: no_kernel_context".to_owned());
         }
 
         let effective_tool_config = self.effective_tool_config_for_session(session_context);
