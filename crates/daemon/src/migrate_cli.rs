@@ -71,7 +71,7 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     )?;
     let outcome = mvp::tools::execute_tool(
         ToolCoreRequest {
-            tool_name: "claw.migrate".to_owned(),
+            tool_name: "config.import".to_owned(),
             payload: build_migrate_tool_payload(&options),
         },
         &kernel_ctx,
@@ -261,7 +261,13 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
     let leaf = error
         .strip_prefix("tool execution failed: ")
         .unwrap_or(&error);
-    if leaf == "claw.migrate requires payload.input_path" {
+    if let Some((_, reason)) = leaf.split_once(" denied request: ")
+        && leaf.starts_with("policy extension ")
+    {
+        return format!("policy_denied: {reason}");
+    }
+
+    if leaf == "config.import requires payload.input_path" {
         return format!(
             "`--input` is required for `{} migrate --mode {}`",
             mvp::config::active_cli_command_name(),
@@ -271,7 +277,7 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
 
     if leaf
         == format!(
-            "claw.migrate {} mode requires payload.output_path",
+            "config.import {} mode requires payload.output_path",
             options.mode.as_id()
         )
     {

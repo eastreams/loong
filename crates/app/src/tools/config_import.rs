@@ -13,22 +13,44 @@ use crate::{
 };
 
 const DEFAULT_MODE: &str = "plan";
+pub(super) const CONFIG_IMPORT_TOOL_NAME: &str = "config.import";
 const SUPPORTED_SOURCES: &str = "auto, nanobot, openclaw, picoclaw, zeroclaw, nanoclaw";
 
-pub(super) fn execute_claw_migrate_tool_with_config(
+pub(super) fn config_import_mode(payload: &serde_json::Map<String, Value>) -> &str {
+    let raw_mode = payload.get("mode");
+    let raw_mode = raw_mode.and_then(Value::as_str);
+    let trimmed_mode = raw_mode.map(str::trim);
+    let mode = trimmed_mode.filter(|value| !value.is_empty());
+
+    mode.unwrap_or(DEFAULT_MODE)
+}
+
+pub(super) fn config_import_mode_requires_write_object(
+    payload: &serde_json::Map<String, Value>,
+) -> bool {
+    let mode = config_import_mode(payload);
+
+    matches!(mode, "apply" | "apply_selected" | "rollback_last_apply")
+}
+
+pub(super) fn config_import_mode_requires_write_value(payload: &Value) -> bool {
+    let payload = payload.as_object();
+    let Some(payload) = payload else {
+        return false;
+    };
+
+    config_import_mode_requires_write_object(payload)
+}
+
+pub(super) fn execute_config_import_tool_with_config(
     request: ToolCoreRequest,
     config: &super::runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let payload = request
         .payload
         .as_object()
-        .ok_or_else(|| "claw.migrate payload must be an object".to_owned())?;
-    let mode = payload
-        .get("mode")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_MODE);
+        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} payload must be an object"))?;
+    let mode = config_import_mode(payload);
     if !matches!(
         mode,
         "plan"
@@ -42,7 +64,7 @@ pub(super) fn execute_claw_migrate_tool_with_config(
             | "rollback_last_apply"
     ) {
         return Err(format!(
-            "claw.migrate payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_external_skills`, or `rollback_last_apply`, got `{mode}`"
+            "{CONFIG_IMPORT_TOOL_NAME} payload.mode must be `plan`, `apply`, `apply_selected`, `discover`, `plan_many`, `recommend_primary`, `merge_profiles`, `map_external_skills`, or `rollback_last_apply`, got `{mode}`"
         ));
     }
 
@@ -54,9 +76,10 @@ pub(super) fn execute_claw_migrate_tool_with_config(
         .map(|value| resolve_safe_path_with_config(value, config))
         .transpose()?;
 
-    if matches!(mode, "apply" | "apply_selected" | "rollback_last_apply") && output_path.is_none() {
+    let mode_requires_write = config_import_mode_requires_write_object(payload);
+    if mode_requires_write && output_path.is_none() {
         return Err(format!(
-            "claw.migrate {mode} mode requires payload.output_path"
+            "{CONFIG_IMPORT_TOOL_NAME} {mode} mode requires payload.output_path"
         ));
     }
 
@@ -69,7 +92,7 @@ pub(super) fn execute_claw_migrate_tool_with_config(
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .ok_or_else(|| "claw.migrate requires payload.input_path".to_owned())
+                .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} requires payload.input_path"))
                 .and_then(|value| resolve_safe_path_with_config(value, config))?,
         )
     };
@@ -88,7 +111,9 @@ pub(super) fn execute_claw_migrate_tool_with_config(
 
     if mode == "rollback_last_apply" {
         let output_path = output_path.ok_or_else(|| {
-            "claw.migrate rollback_last_apply mode requires payload.output_path".to_owned()
+            format!(
+                "{CONFIG_IMPORT_TOOL_NAME} rollback_last_apply mode requires payload.output_path"
+            )
         })?;
         let restored_path = migration::rollback_last_migration(&output_path)?;
         return Ok(ToolCoreOutcome {
@@ -103,8 +128,8 @@ pub(super) fn execute_claw_migrate_tool_with_config(
         });
     }
 
-    let input_path =
-        input_path.ok_or_else(|| "claw.migrate requires payload.input_path".to_owned())?;
+    let input_path = input_path
+        .ok_or_else(|| format!("{CONFIG_IMPORT_TOOL_NAME} requires payload.input_path"))?;
 
     if mode == "discover" {
         let report = migration::discover_import_sources(
@@ -193,7 +218,7 @@ pub(super) fn execute_claw_migrate_tool_with_config(
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let selected_output_path = output_path.ok_or_else(|| {
-            "claw.migrate apply_selected mode requires payload.output_path".to_owned()
+            format!("{CONFIG_IMPORT_TOOL_NAME} apply_selected mode requires payload.output_path")
         })?;
         let result = migration::apply_import_selection(&migration::ApplyImportSelection {
             discovery: report,
@@ -227,9 +252,9 @@ pub(super) fn execute_claw_migrate_tool_with_config(
     let config_toml = config::render(&merged_config)?;
 
     let written_output_path = if mode == "apply" {
-        let output_path = output_path
-            .clone()
-            .ok_or_else(|| "claw.migrate apply mode requires payload.output_path".to_owned())?;
+        let output_path = output_path.clone().ok_or_else(|| {
+            format!("{CONFIG_IMPORT_TOOL_NAME} apply mode requires payload.output_path")
+        })?;
         let output_string = output_path.display().to_string();
         Some(config::write(Some(&output_string), &merged_config, force)?)
     } else {
@@ -395,7 +420,9 @@ fn apply_selection_result_payload(result: &migration::ApplyImportSelectionResult
 
 fn parse_source_hint(raw: &str) -> Result<Option<LegacyClawSource>, String> {
     let parsed = LegacyClawSource::from_id(raw).ok_or_else(|| {
-        format!("unsupported claw.migrate payload.source `{raw}`. supported: {SUPPORTED_SOURCES}")
+        format!(
+            "unsupported {CONFIG_IMPORT_TOOL_NAME} payload.source `{raw}`. supported: {SUPPORTED_SOURCES}"
+        )
     })?;
     if matches!(parsed, LegacyClawSource::Unknown) {
         Ok(None)
@@ -608,7 +635,7 @@ mod tests {
 
     #[test]
     fn resolve_safe_path_rejects_root_escape_with_policy_prefix() {
-        let base = unique_temp_dir("loongclaw-claw-import");
+        let base = unique_temp_dir("loongclaw-config-import");
         let root = base.join("root");
         fs::create_dir_all(&root).expect("create root");
 

@@ -180,7 +180,7 @@ fn render_import_long_about(command_name: &str) -> String {
 
 fn render_migrate_long_about(command_name: &str) -> String {
     format!(
-        "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `{command_name} onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+        "Power-user config import flow for discovering, previewing, or applying external workspace state explicitly.\n\nUse this when you want exact CLI control over import mode selection and output handling for compatibility sources and older workspace roots. If you want the guided path, use `{command_name} onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
     )
 }
 
@@ -218,7 +218,7 @@ pub use control_plane_server::{build_control_plane_router, run_control_plane_ser
 pub fn native_spec_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.migrate" {
+    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "config.import" {
         return None;
     }
     Some(mvp::tools::execute_tool_core(request))
@@ -567,17 +567,17 @@ pub enum Commands {
         exclude: Vec<String>,
     },
     #[command(
-        about = "Preview or apply legacy claw migration explicitly",
-        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loong onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+        about = "Preview or apply legacy agent workspace migration explicitly",
+        long_about = "Power-user migration flow for discovering, previewing, or applying legacy agent workspace nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older workspace roots and compatibility imports. If you want the guided path, use `loong onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
     )]
     Migrate {
-        /// Path to the legacy claw workspace or root to inspect
+        /// Path to the legacy agent workspace or root to inspect
         #[arg(long)]
         input: Option<String>,
         /// Target LoongClaw config path to preview, write, or roll back
         #[arg(long)]
         output: Option<String>,
-        /// Hint the legacy source kind for single-source plan/apply modes
+        /// Hint the legacy claw-family source kind for single-source plan/apply modes
         #[arg(long)]
         source: Option<String>,
         /// Migration mode to run

@@ -1073,10 +1073,10 @@ fn wasm_artifact_file_identity_distinguishes_different_files() {
 }
 
 #[tokio::test]
-async fn core_tool_runtime_claw_migrate_without_native_executor_fails_closed() {
+async fn core_tool_runtime_config_import_without_native_executor_fails_closed() {
     let error = CoreToolRuntime::default()
         .execute_core_tool(ToolCoreRequest {
-            tool_name: "claw.migrate".to_owned(),
+            tool_name: "config.import".to_owned(),
             payload: json!({"mode": "plan"}),
         })
         .await
@@ -1086,7 +1086,7 @@ async fn core_tool_runtime_claw_migrate_without_native_executor_fails_closed() {
 }
 
 fn test_native_tool_executor(request: ToolCoreRequest) -> Option<Result<ToolCoreOutcome, String>> {
-    if request.tool_name != "claw.migrate" {
+    if request.tool_name != "config.import" {
         return None;
     }
     Some(Ok(ToolCoreOutcome {
@@ -1102,7 +1102,7 @@ fn test_native_tool_executor(request: ToolCoreRequest) -> Option<Result<ToolCore
 async fn core_tool_runtime_uses_explicit_native_executor_when_present() {
     let outcome = CoreToolRuntime::new(Some(test_native_tool_executor))
         .execute_core_tool(ToolCoreRequest {
-            tool_name: "claw.migrate".to_owned(),
+            tool_name: "config.import".to_owned(),
             payload: json!({"mode": "plan"}),
         })
         .await
@@ -1110,13 +1110,13 @@ async fn core_tool_runtime_uses_explicit_native_executor_when_present() {
 
     assert_eq!(outcome.status, "ok");
     assert_eq!(outcome.payload["adapter"], "native-tools");
-    assert_eq!(outcome.payload["tool"], "claw.migrate");
+    assert_eq!(outcome.payload["tool"], "config.import");
 }
 
 fn declining_native_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if request.tool_name == "claw.migrate" {
+    if request.tool_name == "config.import" {
         return None;
     }
     Some(Ok(ToolCoreOutcome {
@@ -1129,10 +1129,10 @@ fn declining_native_tool_executor(
 }
 
 #[tokio::test]
-async fn core_tool_runtime_claw_migrate_fails_closed_when_executor_declines_request() {
+async fn core_tool_runtime_config_import_fails_closed_when_executor_declines_request() {
     let error = CoreToolRuntime::new(Some(declining_native_tool_executor))
         .execute_core_tool(ToolCoreRequest {
-            tool_name: "claw.migrate".to_owned(),
+            tool_name: "config.import".to_owned(),
             payload: json!({"mode": "plan"}),
         })
         .await

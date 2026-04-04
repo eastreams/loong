@@ -13,6 +13,12 @@ fn spec_requires_native_tool_executor_detects_aliases_and_extension() {
         payload: json!({"mode": "plan"}),
         core: None,
     });
+    let canonical_spec = make_runner_spec(OperationSpec::ToolCore {
+        tool_name: "config.import".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+        payload: json!({"mode": "plan"}),
+        core: None,
+    });
     let extension_spec = make_runner_spec(OperationSpec::ToolExtension {
         extension_action: "plan".to_owned(),
         required_capabilities: BTreeSet::from([Capability::InvokeTool]),
@@ -28,6 +34,7 @@ fn spec_requires_native_tool_executor_detects_aliases_and_extension() {
     });
 
     assert!(spec_requires_native_tool_executor(&alias_spec));
+    assert!(spec_requires_native_tool_executor(&canonical_spec));
     assert!(spec_requires_native_tool_executor(&extension_spec));
     assert!(!spec_requires_native_tool_executor(&unrelated_spec));
 }
@@ -35,7 +42,7 @@ fn spec_requires_native_tool_executor_detects_aliases_and_extension() {
 #[tokio::test]
 async fn execute_spec_blocks_native_tool_without_executor() {
     let spec = make_runner_spec(OperationSpec::ToolCore {
-        tool_name: "claw.migrate".to_owned(),
+        tool_name: "config.import".to_owned(),
         required_capabilities: BTreeSet::from([Capability::InvokeTool]),
         payload: json!({"mode": "plan"}),
         core: None,

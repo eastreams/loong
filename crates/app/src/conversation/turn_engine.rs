@@ -4172,16 +4172,16 @@ mod tests {
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-        let kernel_ctx = kernel_context("turn-engine-claw-migrate-auto");
+        let kernel_ctx = kernel_context("turn-engine-config-import-auto");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &provider_tool_turn(
-                    "claw.migrate",
+                    "config.import",
                     json!({}),
                     "root-session",
-                    "turn-claw-migrate-auto",
-                    "call-claw-migrate-auto",
+                    "turn-config-import-auto",
+                    "call-config-import-auto",
                 ),
                 &session_context,
                 &dispatcher,
@@ -4193,10 +4193,10 @@ mod tests {
         let TurnResult::NeedsApproval(requirement) = result else {
             panic!("expected NeedsApproval, got {result:?}");
         };
-        assert_eq!(requirement.tool_name.as_deref(), Some("claw.migrate"));
+        assert_eq!(requirement.tool_name.as_deref(), Some("config.import"));
         assert_eq!(
             requirement.approval_key.as_deref(),
-            Some("tool:claw.migrate")
+            Some("tool:config.import")
         );
         assert_eq!(
             requirement.rule_id.as_str(),
@@ -4211,7 +4211,7 @@ mod tests {
             .expect("load approval request")
             .expect("approval request row");
         assert_eq!(stored.status, ApprovalRequestStatus::Pending);
-        assert_eq!(stored.tool_name, "claw.migrate");
+        assert_eq!(stored.tool_name, "config.import");
         assert_eq!(stored.request_payload_json["execution_kind"], "core");
     }
 
@@ -4238,16 +4238,16 @@ mod tests {
         let tool_view = runtime_tool_view_for_config(&tool_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
         let dispatcher = DefaultAppToolDispatcher::new(memory_config.clone(), tool_config);
-        let kernel_ctx = kernel_context("turn-engine-claw-migrate-full");
+        let kernel_ctx = kernel_context("turn-engine-config-import-full");
 
         let result = TurnEngine::new(4)
             .execute_turn_in_context(
                 &provider_tool_turn(
-                    "claw.migrate",
+                    "config.import",
                     json!({}),
                     "root-session",
-                    "turn-claw-migrate-full",
-                    "call-claw-migrate-full",
+                    "turn-config-import-full",
+                    "call-config-import-full",
                 ),
                 &session_context,
                 &dispatcher,
@@ -4262,7 +4262,7 @@ mod tests {
         assert!(
             failure
                 .reason
-                .contains("claw.migrate requires payload.input_path"),
+                .contains("config.import requires payload.input_path"),
             "expected execution to reach the core tool, got: {failure:?}"
         );
     }

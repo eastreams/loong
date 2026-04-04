@@ -467,17 +467,17 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
-            name: "claw.migrate",
-            provider_name: "claw_migrate",
-            aliases: &[],
-            description: "Migrate legacy Claw configs into native LoongClaw settings",
+            name: "config.import",
+            provider_name: "config_import",
+            aliases: &["claw.migrate", "claw_migrate"],
+            description: "Import legacy agent workspace config, profile, and external-skills mapping state into native LoongClaw settings",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
-            provider_definition_builder: claw_migrate_definition,
+            provider_definition_builder: config_import_definition,
         },
         ToolDescriptor {
             name: "external_skills.fetch",
@@ -2107,18 +2107,18 @@ fn tool_invoke_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
+fn config_import_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Import, discover, plan, merge, apply, and rollback legacy Claw workspace migration into native LoongClaw config.",
+            "description": "Import, discover, plan, merge, apply, and roll back legacy agent workspace config and related external-skills state into native LoongClaw config.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "input_path": {
                         "type": "string",
-                        "description": "Path to the legacy Claw workspace, config root, or portable migration file. Required for all modes except rollback_last_apply."
+                        "description": "Path to the legacy agent workspace, config root, or portable import file. Required for all modes except rollback_last_apply."
                     },
                     "mode": {
                         "type": "string",
@@ -2138,7 +2138,7 @@ fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
                     "source": {
                         "type": "string",
                         "enum": ["auto", "nanobot", "openclaw", "picoclaw", "zeroclaw", "nanoclaw"],
-                        "description": "Optional source hint for plan/apply modes. Defaults to automatic detection."
+                        "description": "Optional claw-family source hint for plan/apply modes. Defaults to automatic detection."
                     },
                     "source_id": {
                         "type": "string",
@@ -3613,7 +3613,9 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "feishu.whoami" => "account_id?:string,open_id?:string",
         "tool.search" => "query?:string,exact_tool_id?:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
-        "claw.migrate" => "input_path?:string,mode?:string,source?:string",
+        "config.import" => {
+            "input_path?:string,output_path?:string,mode?:string,source?:string,source_id?:string,primary_source_id?:string,safe_profile_merge?:boolean,apply_external_skills_plan?:boolean,force?:boolean"
+        }
         "external_skills.fetch" => {
             "reference?:string,url?:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
         }
@@ -3984,10 +3986,16 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("lease", "string"),
             ("arguments", "object"),
         ],
-        "claw.migrate" => &[
+        "config.import" => &[
             ("input_path", "string"),
+            ("output_path", "string"),
             ("mode", "string"),
             ("source", "string"),
+            ("source_id", "string"),
+            ("primary_source_id", "string"),
+            ("safe_profile_merge", "boolean"),
+            ("apply_external_skills_plan", "boolean"),
+            ("force", "boolean"),
         ],
         "external_skills.fetch" => &[
             ("reference", "string"),
@@ -4217,7 +4225,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "feishu.whoami" => &["feishu", "identity", "read"],
         "tool.search" => &["core", "discover", "search"],
         "tool.invoke" => &["core", "dispatch", "invoke"],
-        "claw.migrate" => &["migration", "migrate", "config", "legacy"],
+        "config.import" => &["config", "import", "migration", "workspace", "legacy"],
         "external_skills.fetch" => &["skills", "download", "external", "fetch"],
         "external_skills.resolve" => &["skills", "resolve", "normalize", "external"],
         "external_skills.search" => &["skills", "search", "inventory", "discover"],
@@ -4789,11 +4797,25 @@ mod tests {
     }
 
     #[test]
+    fn config_import_alias_resolves_descriptor_governance() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("config.import")
+            .expect("config.import descriptor");
+        let expected_policy = governance_profile_for_descriptor(descriptor);
+        let legacy_alias_policy = governance_profile_for_tool_name("claw.migrate");
+
+        assert!(descriptor.aliases.contains(&"claw.migrate"));
+        assert!(descriptor.aliases.contains(&"claw_migrate"));
+        assert_eq!(legacy_alias_policy, expected_policy);
+    }
+
+    #[test]
     fn autonomy_capability_action_is_independent_from_governance_profile() {
         let catalog = tool_catalog();
         let migrate = catalog
-            .descriptor("claw.migrate")
-            .expect("claw.migrate descriptor");
+            .descriptor("config.import")
+            .expect("config.import descriptor");
         let provider_switch = catalog
             .descriptor("provider.switch")
             .expect("provider.switch descriptor");
@@ -4825,7 +4847,7 @@ mod tests {
             ("tool.search", CapabilityActionClass::Discover),
             ("tool_search", CapabilityActionClass::Discover),
             ("tool.invoke", CapabilityActionClass::ExecuteExisting),
-            ("claw.migrate", CapabilityActionClass::ExecuteExisting),
+            ("config.import", CapabilityActionClass::ExecuteExisting),
             (
                 "external_skills.fetch",
                 CapabilityActionClass::CapabilityFetch,
