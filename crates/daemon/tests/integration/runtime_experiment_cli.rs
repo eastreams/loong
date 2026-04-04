@@ -25,6 +25,11 @@ fn write_runtime_experiment_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
     let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = root
+        .join("audit")
+        .join("events.jsonl")
+        .display()
+        .to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.browser.enabled = true;
     config.tools.web.enabled = true;

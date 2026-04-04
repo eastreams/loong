@@ -75,6 +75,11 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
     fs::create_dir_all(root).expect("create fixture root");
 
     let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = root
+        .join("audit")
+        .join("events.jsonl")
+        .display()
+        .to_string();
     config.tools.file_root = Some(root.display().to_string());
     config.tools.shell_allow = vec!["git".to_owned(), "cargo".to_owned()];
     config.tools.shell_deny = vec!["rm".to_owned()];

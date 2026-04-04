@@ -57,15 +57,32 @@ fn unique_runtime_dir(label: &str) -> PathBuf {
     runtime_dir
 }
 
+fn unique_gateway_owner_audit_path(label: &str) -> String {
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before unix epoch")
+        .as_nanos();
+    std::env::temp_dir()
+        .join(format!(
+            "loongclaw-daemon-gateway-owner-audit-{label}-{suffix}"
+        ))
+        .join("events.jsonl")
+        .display()
+        .to_string()
+}
+
 fn headless_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = unique_gateway_owner_audit_path("headless");
     LoadedSupervisorConfig {
         resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
-        config: mvp::config::LoongClawConfig::default(),
+        config,
     }
 }
 
 fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
     let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = unique_gateway_owner_audit_path("telegram");
     config.telegram.enabled = true;
     LoadedSupervisorConfig {
         resolved_path: PathBuf::from("/tmp/loongclaw.toml"),

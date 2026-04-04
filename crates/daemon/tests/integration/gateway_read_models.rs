@@ -14,7 +14,12 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn write_gateway_test_config(root: &std::path::Path) -> PathBuf {
     fs::create_dir_all(root).expect("create gateway test root");
 
-    let config = mvp::config::LoongClawConfig::default();
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.audit.path = root
+        .join("audit")
+        .join("events.jsonl")
+        .display()
+        .to_string();
     let config_path = root.join("loongclaw.toml");
     let config_path_text = config_path
         .to_str()
