@@ -3134,7 +3134,6 @@ fn build_turn_reply_followup_messages(
         None,
         user_input,
         None,
-        None,
     )
 }
 
@@ -8716,22 +8715,23 @@ mod tests {
             &fallback,
             ConversationRuntimeBinding::direct(),
         );
-        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
-            &approval_runtime,
-            crate::tools::approval::ApprovalResolutionRequest {
-                current_session_id: "root-session".to_owned(),
-                approval_request_id: "apr-auto-success".to_owned(),
-                decision: ApprovalDecision::ApproveOnce,
-                session_consent_mode: Some(ToolConsentMode::Auto),
-                visibility: crate::config::SessionVisibility::Children,
+        let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "approval_request_resolve".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-auto-success",
+                    "decision": "approve_once",
+                    "session_consent_mode": "auto",
+                }),
             },
+            "root-session",
+            &memory_config,
+            &ToolConfig::default(),
+            Some(&approval_runtime),
         )
         .await
         .expect("approval request resolve should succeed");
-        assert_eq!(
-            outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
-        );
+        assert_eq!(outcome.payload["approval_request"]["status"], "approved");
 
         let stored = repo
             .load_session_tool_consent("root-session")
@@ -8804,23 +8804,24 @@ mod tests {
             &fallback,
             ConversationRuntimeBinding::direct(),
         );
-        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
-            &approval_runtime,
-            crate::tools::approval::ApprovalResolutionRequest {
-                current_session_id: "root-session".to_owned(),
-                approval_request_id: "apr-auto-retry".to_owned(),
-                decision: ApprovalDecision::ApproveOnce,
-                session_consent_mode: Some(ToolConsentMode::Auto),
-                visibility: crate::config::SessionVisibility::Children,
+        let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "approval_request_resolve".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-auto-retry",
+                    "decision": "approve_once",
+                    "session_consent_mode": "auto",
+                }),
             },
+            "root-session",
+            &memory_config,
+            &ToolConfig::default(),
+            Some(&approval_runtime),
         )
         .await
         .expect("approval request retry should succeed");
 
-        assert_eq!(
-            outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
-        );
+        assert_eq!(outcome.payload["approval_request"]["status"], "approved");
 
         let stored = repo
             .load_session_tool_consent("root-session")

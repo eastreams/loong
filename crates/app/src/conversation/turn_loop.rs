@@ -522,7 +522,6 @@ fn append_round_followup_messages(
             &mut session.messages,
             assistant_preface.as_str(),
             &payload,
-            tool_request_summary.as_deref(),
             user_input,
             &mut session.followup_payload_budget,
             loop_warning_reason.as_deref(),
@@ -551,10 +550,10 @@ fn append_tool_driven_followup_messages(
     messages: &mut Vec<Value>,
     assistant_preface: &str,
     payload: &ToolDrivenFollowupPayload,
-    tool_request_summary: Option<&str>,
     user_input: &str,
     followup_payload_budget: &mut FollowupPayloadBudget,
     loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
 ) {
     messages.extend(build_tool_driven_followup_tail_with_request_summary(
         assistant_preface,
@@ -1034,7 +1033,6 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult {
                 text: r#"[ok] {"payload_truncated":true,"payload_summary":"..."}"#.to_owned(),
             },
-            None,
             "summarize note.md",
             &mut budget,
             None,
@@ -1062,7 +1060,6 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_timeout ...(truncated 200 chars)".to_owned(),
             },
-            None,
             "summarize note.md",
             &mut budget,
             None,
@@ -1097,10 +1094,10 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolFailure {
                 reason: "tool_preflight_denied: tool input needs repair".to_owned(),
             },
-            Some(tool_request_summary.as_str()),
             "retry the command",
             &mut budget,
             None,
+            Some(tool_request_summary.as_str()),
         );
 
         let user_prompt = messages
@@ -1125,7 +1122,6 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult {
                 text: r#"[ok] {"status":"ok","tool":"external_skills.invoke","tool_call_id":"call-1","payload_summary":"{\"skill_id\":\"demo-skill\",\"display_name\":\"Demo Skill\",\"instructions\":\"Follow the managed skill instruction before answering.\"}","payload_chars":180,"payload_truncated":false}"#.to_owned(),
             },
-            None,
             "summarize note.md",
             &mut budget,
             None,
@@ -1178,7 +1174,6 @@ mod tests {
             &mut messages,
             "",
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            None,
             "apply the skill",
             &mut budget,
             None,
@@ -1204,7 +1199,6 @@ mod tests {
             &mut messages,
             "preface",
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            None,
             "summarize README.md",
             &mut budget,
             None,
@@ -1254,7 +1248,6 @@ mod tests {
             &mut messages,
             "preface",
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            None,
             "summarize the test run",
             &mut budget,
             None,
@@ -1344,7 +1337,6 @@ mod tests {
             &mut messages,
             "preface",
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
-            None,
             "find the right tool",
             &mut budget,
             None,
