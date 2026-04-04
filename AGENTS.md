@@ -30,13 +30,17 @@ Current tracked deviations: none.
 
 ## 3. Commands
 
+`Taskfile.yml` provides optional convenience wrappers through the `task` CLI.
+If `task` is unavailable, run the underlying `cargo` and `scripts/*` commands
+directly.
+
 - Format check: `cargo fmt --all -- --check`
 - Strict lint: `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- Architecture check: `task check:architecture`
-- Convention check: `task check:conventions`
+- Architecture check: `./scripts/check_architecture_boundaries.sh` or `task check:architecture`
+- Convention check: `task check:conventions` (optional wrapper; requires Go + convention-engineering skill)
 - Test all features: `cargo test --workspace --all-features`
-- Canonical verify: `task verify`
-- Extended verify: `task verify:full`
+- Canonical verify: `task verify` (optional wrapper around repo verification steps)
+- Extended verify: `task verify:full` (optional wrapper around the extended local gate)
 
 ## 4. Non-Negotiable Rules
 
@@ -64,7 +68,8 @@ cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 ```
 
 Runs CI-parity cargo checks before each commit.
-Use `task verify` for the stricter local superset (architecture, conventions, docs, deny).
+Use `task verify` when the `task` CLI is installed. Otherwise run the
+underlying `cargo` and `scripts/*` verification commands directly.
 
 ## 7. Where to Look Next
 
