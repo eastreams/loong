@@ -163,10 +163,14 @@ impl AuditFileLock {
         })
     }
 
-    fn into_file(mut self) -> File {
-        self.file
-            .take()
-            .expect("audit file lock should still hold a file")
+    fn into_file(mut self) -> Result<File, AuditError> {
+        let Some(file) = self.file.take() else {
+            return Err(AuditError::Sink(
+                "audit file lock should still hold a file".to_owned(),
+            ));
+        };
+
+        Ok(file)
     }
 }
 
@@ -270,20 +274,20 @@ impl JsonlAuditSink {
         let integrity_paths = derive_jsonl_audit_integrity_paths(&path);
         let journal_lock = AuditFileLock::new(open_jsonl_audit_journal(&path)?, &path)?;
         let integrity_key = ensure_audit_integrity_key(&integrity_paths)?;
+
+        initialize_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
         let integrity_journal_lock = AuditFileLock::new(
-            open_jsonl_audit_journal(&integrity_paths.integrity_journal_path)?,
+            open_existing_read_append_file(&integrity_paths.integrity_journal_path)?,
             &integrity_paths.integrity_journal_path,
         )?;
         let integrity_seal_lock = AuditFileLock::new(
-            open_read_write_file(&integrity_paths.seal_path)?,
+            open_existing_read_write_file(&integrity_paths.seal_path, "audit integrity seal")?,
             &integrity_paths.seal_path,
         )?;
-
-        initialize_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
         let integrity_state = load_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
-        let journal = journal_lock.into_file();
-        let integrity_journal = integrity_journal_lock.into_file();
-        let integrity_seal = integrity_seal_lock.into_file();
+        let journal = journal_lock.into_file()?;
+        let integrity_journal = integrity_journal_lock.into_file()?;
+        let integrity_seal = integrity_seal_lock.into_file()?;
 
         Ok(Self {
             path,
