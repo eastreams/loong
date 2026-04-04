@@ -16,6 +16,7 @@
     "runtimeTitle": "运行健康",
     "runtimeDetailLabel": "运行态",
     "configDetailLabel": "本地配置",
+    "connectivityDetailLabel": "连接诊断",
     "connectivityEyebrow": "连接诊断",
     "connectivityTitle": "Provider 路由",
     "configEyebrow": "配置快照",
@@ -97,8 +98,8 @@
     "enabled": "已启用",
     "disabled": "已禁用",
     "approvalOff": "已关闭",
-    "approvalManual": "手动审批",
-    "approvalAuto": "自动通过",
+    "approvalMediumBalanced": "中等平衡",
+    "approvalStrict": "严格模式",
     "denyByDefault": "默认拒绝",
     "allowByDefault": "默认允许"
   },

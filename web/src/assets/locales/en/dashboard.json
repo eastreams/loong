@@ -16,6 +16,7 @@
     "runtimeTitle": "Runtime health",
     "runtimeDetailLabel": "Runtime",
     "configDetailLabel": "Local config",
+    "connectivityDetailLabel": "Connection",
     "connectivityEyebrow": "Connection",
     "connectivityTitle": "Provider route",
     "configEyebrow": "Config snapshot",
@@ -97,8 +98,8 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "approvalOff": "Off",
-    "approvalManual": "Manual review",
-    "approvalAuto": "Auto approve",
+    "approvalMediumBalanced": "Medium balanced",
+    "approvalStrict": "Strict",
     "denyByDefault": "Deny by default",
     "allowByDefault": "Allow by default"
   },

@@ -98,7 +98,6 @@ export function useDashboardData({
     authMode,
     tokenPath,
     tokenEnv,
-    onboardingStatus,
   } = connection;
 
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -119,11 +118,8 @@ export function useDashboardData({
   const dashboardLoadGenerationRef = useRef(0);
 
   function buildProviderFormSource(snapshot: DashboardSnapshot) {
-    const activeProvider =
-      snapshot.providers.find((provider) => provider.enabled) ?? snapshot.providers[0] ?? null;
-
     return {
-      kind: activeProvider?.id ?? "",
+      kind: snapshot.config.activeProvider ?? snapshot.config.lastProvider ?? "",
       model: snapshot.config.model ?? "",
       baseUrlOrEndpoint: snapshot.config.endpoint ?? "",
       apiKeyConfigured: snapshot.config.apiKeyConfigured ?? false,
@@ -135,15 +131,10 @@ export function useDashboardData({
     options?: DashboardPreferencesSourceOverride,
   ) {
     return {
-      personality:
-        snapshot.config.personality ||
-        onboardingStatus?.personality ||
-        "calm_engineering",
-      memoryProfile:
-        snapshot.config.memoryProfile ||
-        onboardingStatus?.memoryProfile ||
-        "window_only",
-      promptAddendum: options?.promptAddendum ?? onboardingStatus?.promptAddendum ?? "",
+      personality: snapshot.config.personality || "calm_engineering",
+      memoryProfile: snapshot.config.memoryProfile || "window_only",
+      promptAddendum:
+        options?.promptAddendum ?? snapshot.config.promptAddendum ?? "",
     };
   }
 

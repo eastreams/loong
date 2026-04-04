@@ -11,11 +11,7 @@ import {
   usePreferencesForm,
   useProviderConfigForm,
 } from "../providerConfig";
-
-interface ChoiceFieldOption {
-  value: string;
-  label: string;
-}
+import { ChoiceField } from "../../../components/inputs/ChoiceField";
 
 function readStageCopy(
   stage: string,
@@ -68,90 +64,6 @@ function readStageCopy(
         body: t("onboarding.loadingBody"),
       };
   }
-}
-
-function ChoiceField(props: {
-  id: string;
-  label: string;
-  value: string;
-  placeholder?: string;
-  options: ChoiceFieldOption[];
-  onSelect: (value: string) => void;
-}) {
-  const { id, label, value, placeholder, options, onSelect } = props;
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
-  const activeOption =
-    options.find((option) => option.value === value) ??
-    (value ? { value, label: value } : null);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    function handlePointerDown(event: MouseEvent) {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
-      }
-    }
-
-    window.addEventListener("mousedown", handlePointerDown);
-    window.addEventListener("keydown", handleEscape);
-
-    return () => {
-      window.removeEventListener("mousedown", handlePointerDown);
-      window.removeEventListener("keydown", handleEscape);
-    };
-  }, [open]);
-
-  return (
-    <div className="settings-field">
-      <label className="settings-label" htmlFor={id}>
-        {label}
-      </label>
-      <div className="settings-choice-shell" ref={menuRef}>
-        <button
-          id={id}
-          type="button"
-          className={`settings-input settings-choice-button${open ? " is-open" : ""}`}
-          aria-haspopup="listbox"
-          aria-expanded={open}
-          onClick={() => setOpen((current) => !current)}
-        >
-          <span>{activeOption?.label ?? placeholder ?? ""}</span>
-          <ChevronDown size={16} className="settings-choice-icon" />
-        </button>
-        {open ? (
-          <div className="settings-choice-menu" role="listbox">
-            {options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={value === option.value}
-                className={`settings-choice-option${
-                  value === option.value ? " is-selected" : ""
-                }`}
-                onClick={() => {
-                  onSelect(option.value);
-                  setOpen(false);
-                }}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
 }
 
 export function OnboardingStatusPanel() {
@@ -239,21 +151,21 @@ export function OnboardingStatusPanel() {
     providerForm.kind as (typeof PROVIDER_KIND_SUGGESTIONS)[number],
   )
     ? PROVIDER_KIND_SUGGESTIONS.map((item) => ({
-        value: item,
-        label: item,
-      }))
+      value: item,
+      label: item,
+    }))
     : providerForm.kind
       ? [
-          { value: providerForm.kind, label: providerForm.kind },
-          ...PROVIDER_KIND_SUGGESTIONS.map((item) => ({
-            value: item,
-            label: item,
-          })),
-        ]
-      : PROVIDER_KIND_SUGGESTIONS.map((item) => ({
+        { value: providerForm.kind, label: providerForm.kind },
+        ...PROVIDER_KIND_SUGGESTIONS.map((item) => ({
           value: item,
           label: item,
-        }));
+        })),
+      ]
+      : PROVIDER_KIND_SUGGESTIONS.map((item) => ({
+        value: item,
+        label: item,
+      }));
   const personalityOptions = PERSONALITY_OPTIONS.map((item) => ({
     value: item,
     label:
@@ -363,13 +275,13 @@ export function OnboardingStatusPanel() {
               <p className="settings-helper">
                 {status === "unauthorized"
                   ? t("auth.invalidBody", {
-                      tokenPath: tokenPath ?? "",
-                      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-                    })
+                    tokenPath: tokenPath ?? "",
+                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                  })
                   : t("auth.bannerBody", {
-                      tokenPath: tokenPath ?? "",
-                      tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
-                    })}
+                    tokenPath: tokenPath ?? "",
+                    tokenEnv: tokenEnv ?? "LOONGCLAW_WEB_TOKEN",
+                  })}
               </p>
             </div>
 
@@ -472,51 +384,50 @@ export function OnboardingStatusPanel() {
                     </strong>
                     <ChevronDown
                       size={16}
-                      className={`onboarding-optional-toggle-icon${
-                        showOptionalSettings ? " is-open" : ""
-                      }`}
+                      className={`onboarding-optional-toggle-icon${showOptionalSettings ? " is-open" : ""
+                        }`}
                     />
                   </button>
 
                   {showOptionalSettings ? (
                     <div className="settings-form onboarding-form onboarding-optional-form">
-                    <ChoiceField
-                      id="onboarding-preferences-personality"
-                      label={t("onboarding.preferences.personality")}
-                      value={preferencesForm.personality}
-                      options={personalityOptions}
-                      onSelect={preferencesForm.setPersonality}
-                    />
-
-                    <ChoiceField
-                      id="onboarding-preferences-memory-profile"
-                      label={t("onboarding.preferences.memoryProfile")}
-                      value={preferencesForm.memoryProfile}
-                      options={memoryProfileOptions}
-                      onSelect={preferencesForm.setMemoryProfile}
-                    />
-
-                    <label className="settings-field">
-                      <span className="settings-label">
-                        {t("onboarding.preferences.promptAddendum")}
-                      </span>
-                      <textarea
-                        className="settings-input settings-textarea"
-                        value={preferencesForm.promptAddendum}
-                        onChange={(event) => preferencesForm.setPromptAddendum(event.target.value)}
-                        placeholder={t("onboarding.preferences.promptAddendumPlaceholder")}
+                      <ChoiceField
+                        id="onboarding-preferences-personality"
+                        label={t("onboarding.preferences.personality")}
+                        value={preferencesForm.personality}
+                        options={personalityOptions}
+                        onSelect={preferencesForm.setPersonality}
                       />
-                      <span className="settings-helper">
-                        {t("onboarding.preferences.helper")}
-                      </span>
-                    </label>
 
-                    {preferencesError ? (
-                      <p className="settings-note dashboard-error">{preferencesError}</p>
-                    ) : null}
-                    {preferencesNotice ? (
-                      <p className="settings-note">{preferencesNotice}</p>
-                    ) : null}
+                      <ChoiceField
+                        id="onboarding-preferences-memory-profile"
+                        label={t("onboarding.preferences.memoryProfile")}
+                        value={preferencesForm.memoryProfile}
+                        options={memoryProfileOptions}
+                        onSelect={preferencesForm.setMemoryProfile}
+                      />
+
+                      <label className="settings-field">
+                        <span className="settings-label">
+                          {t("onboarding.preferences.promptAddendum")}
+                        </span>
+                        <textarea
+                          className="settings-input settings-textarea"
+                          value={preferencesForm.promptAddendum}
+                          onChange={(event) => preferencesForm.setPromptAddendum(event.target.value)}
+                          placeholder={t("onboarding.preferences.promptAddendumPlaceholder")}
+                        />
+                        <span className="settings-helper">
+                          {t("onboarding.preferences.helper")}
+                        </span>
+                      </label>
+
+                      {preferencesError ? (
+                        <p className="settings-note dashboard-error">{preferencesError}</p>
+                      ) : null}
+                      {preferencesNotice ? (
+                        <p className="settings-note">{preferencesNotice}</p>
+                      ) : null}
 
                       <div className="settings-actions onboarding-actions">
                         <button

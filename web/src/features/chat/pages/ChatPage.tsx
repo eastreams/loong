@@ -1,308 +1,20 @@
-import { Plus, SendHorizontal, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Copy, Plus, SendHorizontal, ThumbsDown, ThumbsUp, Trash2 } from "lucide-react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ReactNode } from "react";
+import TextareaAutosize from "react-textarea-autosize";
+import "../../../styles/chat.css";
 import { Panel } from "../../../components/surfaces/Panel";
 import { useWebConnection } from "../../../hooks/useWebConnection";
 import { ApiRequestError } from "../../../lib/api/client";
 import { dashboardApi } from "../../dashboard/api";
 import { useChatSessions } from "../hooks/useChatSessions";
 import { useChatStream } from "../hooks/useChatStream";
+import { CopyButton } from "../../../components/feedback/CopyButton";
 
-function renderInlineBreaks(text: string): ReactNode[] {
-  return text.split("\n").flatMap((line, index, lines) => {
-    const nodes: ReactNode[] = [line];
-    if (index < lines.length - 1) {
-      nodes.push(<br key={`br-${index}`} />);
-    }
-    return nodes;
-  });
-}
-
-function renderInlineContent(text: string): ReactNode[] {
-  const parts = text.split(/(`[^`]+`)/g);
-  return parts.flatMap((part, index) => {
-    if (!part) {
-      return [];
-    }
-
-    if (part.startsWith("`") && part.endsWith("`") && part.length >= 2) {
-      return [<code key={`inline-code-${index}`}>{part.slice(1, -1)}</code>];
-    }
-
-    return renderInlineBreaks(part).map((node, nodeIndex) => (
-      <span key={`inline-text-${index}-${nodeIndex}`}>{node}</span>
-    ));
-  });
-}
-
-type MessageBlock =
-  | { type: "heading"; level: 1 | 2 | 3; text: string }
-  | { type: "paragraph"; text: string }
-  | { type: "unordered-list"; items: string[] }
-  | { type: "ordered-list"; items: string[] }
-  | { type: "blockquote"; text: string }
-  | { type: "code"; language: string | null; text: string }
-  | { type: "table"; headers: string[]; rows: string[][] };
-
-function isTableDivider(line: string): boolean {
-  const normalized = line.trim();
-  if (!normalized.includes("|")) {
-    return false;
-  }
-
-  const cells = normalized
-    .split("|")
-    .map((cell) => cell.trim())
-    .filter(Boolean);
-
-  return (
-    cells.length > 0 &&
-    cells.every((cell) => /^:?-{3,}:?$/.test(cell))
-  );
-}
-
-function parseTableRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
-}
-
-function renderMessageContent(content: string): ReactNode[] {
-  const normalized = content.replace(/\r\n/g, "\n");
-  const rawLines = normalized.split("\n");
-  let start = 0;
-  let end = rawLines.length;
-
-  while (start < end && rawLines[start].trim() === "") {
-    start += 1;
-  }
-  while (end > start && rawLines[end - 1].trim() === "") {
-    end -= 1;
-  }
-
-  const lines = rawLines.slice(start, end);
-  if (lines.length === 0) {
-    return [];
-  }
-
-  const parsedBlocks: MessageBlock[] = [];
-  let paragraphLines: string[] = [];
-  let listItems: string[] = [];
-  let listType: "unordered-list" | "ordered-list" | null = null;
-  let quoteLines: string[] = [];
-
-  function flushParagraph() {
-    if (paragraphLines.length === 0) {
-      return;
-    }
-    const text = paragraphLines.join("\n").trim();
-    if (text) {
-      parsedBlocks.push({ type: "paragraph", text });
-    }
-    paragraphLines = [];
-  }
-
-  function flushList() {
-    if (listItems.length === 0) {
-      return;
-    }
-    parsedBlocks.push({
-      type: listType ?? "unordered-list",
-      items: [...listItems],
-    });
-    listItems = [];
-    listType = null;
-  }
-
-  function flushQuote() {
-    if (quoteLines.length === 0) {
-      return;
-    }
-    const text = quoteLines.join("\n").trim();
-    if (text) {
-      parsedBlocks.push({ type: "blockquote", text });
-    }
-    quoteLines = [];
-  }
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const rawLine = lines[index];
-    const trimmedLine = rawLine.trim();
-
-    if (!trimmedLine) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      continue;
-    }
-
-    const fenceMatch = rawLine.match(/^\s*```([^`]*)$/);
-    if (fenceMatch) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const codeLines: string[] = [];
-      const language = fenceMatch[1].trim() || null;
-      index += 1;
-      while (index < lines.length && !lines[index].match(/^\s*```/)) {
-        codeLines.push(lines[index]);
-        index += 1;
-      }
-      parsedBlocks.push({
-        type: "code",
-        language,
-        text: codeLines.join("\n"),
-      });
-      continue;
-    }
-
-    if (
-      index + 1 < lines.length &&
-      trimmedLine.includes("|") &&
-      isTableDivider(lines[index + 1])
-    ) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const headers = parseTableRow(trimmedLine);
-      const rows: string[][] = [];
-      index += 2;
-      while (index < lines.length && lines[index].trim().includes("|")) {
-        rows.push(parseTableRow(lines[index]));
-        index += 1;
-      }
-      index -= 1;
-      parsedBlocks.push({ type: "table", headers, rows });
-      continue;
-    }
-
-    const headingMatch = trimmedLine.match(/^(#{1,3})\s+(.+)$/);
-    if (headingMatch) {
-      flushParagraph();
-      flushList();
-      flushQuote();
-      const level = headingMatch[1].length;
-      const title = headingMatch[2];
-      parsedBlocks.push({ type: "heading", level: level as 1 | 2 | 3, text: title });
-      continue;
-    }
-
-    const unorderedListMatch = trimmedLine.match(/^[-*]\s+(.+)$/);
-    if (unorderedListMatch) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== "unordered-list") {
-        flushList();
-      }
-      listType = "unordered-list";
-      listItems.push(unorderedListMatch[1]);
-      continue;
-    }
-
-    const orderedListMatch = trimmedLine.match(/^\d+\.\s+(.+)$/);
-    if (orderedListMatch) {
-      flushParagraph();
-      flushQuote();
-      if (listType && listType !== "ordered-list") {
-        flushList();
-      }
-      listType = "ordered-list";
-      listItems.push(orderedListMatch[1]);
-      continue;
-    }
-
-    const quoteMatch = rawLine.match(/^\s*>\s?(.*)$/);
-    if (quoteMatch) {
-      flushParagraph();
-      flushList();
-      quoteLines.push(quoteMatch[1]);
-      continue;
-    }
-
-    flushList();
-    flushQuote();
-    paragraphLines.push(rawLine.trimEnd());
-  }
-
-  flushParagraph();
-  flushList();
-  flushQuote();
-
-  return parsedBlocks.map((block, blockIndex) => {
-    switch (block.type) {
-      case "heading":
-        if (block.level === 1) {
-          return <h1 key={`block-${blockIndex}`}>{block.text}</h1>;
-        }
-        if (block.level === 2) {
-          return <h2 key={`block-${blockIndex}`}>{block.text}</h2>;
-        }
-        return <h3 key={`block-${blockIndex}`}>{block.text}</h3>;
-      case "paragraph":
-        return <p key={`block-${blockIndex}`}>{renderInlineContent(block.text)}</p>;
-      case "unordered-list":
-        return (
-          <ul key={`block-${blockIndex}`}>
-            {block.items.map((item, itemIndex) => (
-              <li key={`item-${itemIndex}`}>{renderInlineContent(item)}</li>
-            ))}
-          </ul>
-        );
-      case "ordered-list":
-        return (
-          <ol key={`block-${blockIndex}`}>
-            {block.items.map((item, itemIndex) => (
-              <li key={`item-${itemIndex}`}>{renderInlineContent(item)}</li>
-            ))}
-          </ol>
-        );
-      case "blockquote":
-        return (
-          <blockquote key={`block-${blockIndex}`}>
-            {renderInlineContent(block.text)}
-          </blockquote>
-        );
-      case "code":
-        return (
-          <pre key={`block-${blockIndex}`}>
-            {block.language ? <span className="message-code-language">{block.language}</span> : null}
-            <code>{block.text}</code>
-          </pre>
-        );
-      case "table":
-        return (
-          <div key={`block-${blockIndex}`} className="message-table-wrap">
-            <table className="message-table">
-              <thead>
-                <tr>
-                  {block.headers.map((header, headerIndex) => (
-                    <th key={`header-${headerIndex}`}>{renderInlineContent(header)}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {block.rows.map((row, rowIndex) => (
-                  <tr key={`row-${rowIndex}`}>
-                    {row.map((cell, cellIndex) => (
-                      <td key={`cell-${rowIndex}-${cellIndex}`}>{renderInlineContent(cell)}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      default:
-        return null;
-    }
-  });
-}
-
-
+const MarkdownBlock = lazy(async () => {
+  const module = await import("../components/MarkdownBlock");
+  return { default: module.MarkdownBlock };
+});
 
 export default function ChatPage() {
   const { t } = useTranslation();
@@ -315,6 +27,7 @@ export default function ChatPage() {
   const [currentProvider, setCurrentProvider] = useState<string | null>(null);
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
 
   const sessionsState = useChatSessions(t);
@@ -429,8 +142,9 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!messageListRef.current || !shouldAutoScrollRef.current) return;
-    const container = messageListRef.current;
-    container.scrollTop = container.scrollHeight;
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
   }, [messages, isLoadingHistory, selectedSessionId]);
 
   async function handleSubmit() {
@@ -445,6 +159,14 @@ export default function ChatPage() {
 
   const selectedSession =
     sessions.find((session) => session.id === selectedSessionId) ?? null;
+
+  function renderMessageFallback(content: string) {
+    return (
+      <div className="message-content">
+        <pre className="message-markdown-fallback">{content}</pre>
+      </div>
+    );
+  }
 
   return (
     <div className="page page-chat">
@@ -565,11 +287,37 @@ export default function ChatPage() {
                     ) : null}
                     {message.content ? (
                       <div className="message-content">
-                        {renderMessageContent(message.content)}
+                        <Suspense fallback={renderMessageFallback(message.content)}>
+                          <MarkdownBlock content={message.content} />
+                        </Suspense>
+                        {message.role === "assistant" && (
+                          <div className="message-actions">
+                            <CopyButton
+                              className="message-action-btn"
+                              title={t("chat.actions.copy")}
+                              text={message.content}
+                            />
+                            <button
+                              type="button"
+                              className="message-action-btn"
+                              title={t("chat.actions.good")}
+                            >
+                              <ThumbsUp size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="message-action-btn"
+                              title={t("chat.actions.bad")}
+                            >
+                              <ThumbsDown size={14} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                     ) : null}
                   </article>
                 ))}
+              <div ref={messagesEndRef} style={{ height: 1 }} />
             </div>
 
             {activeTools.length > 0 ? (
@@ -590,10 +338,11 @@ export default function ChatPage() {
                 void handleSubmit();
               }}
             >
-              <div className="composer-shell">
-                <textarea
+              <div className="composer-shell" style={{ alignItems: 'flex-end' }}>
+                <TextareaAutosize
                   className="composer-input"
-                  rows={3}
+                  minRows={1}
+                  maxRows={8}
                   placeholder={t("chat.inputPlaceholder")}
                   value={composerText}
                   onChange={(event) => {
@@ -610,6 +359,7 @@ export default function ChatPage() {
                     }
                   }}
                   disabled={isSubmitting || !canAccessProtectedApi}
+                  style={{ resize: "none" }}
                 />
                 {deletingSessionId ? (
                   <div className="composer-hint">{t("chat.deleting")}</div>

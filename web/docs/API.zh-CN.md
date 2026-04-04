@@ -276,8 +276,6 @@
 创建 turn。当前请求体至少支持：
 
 - `input`
-- `toolAssistHint`（可选，当前仅作为 Web 侧临时工具发现辅助）
-
 返回：
 
 - `sessionId`

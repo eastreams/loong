@@ -29,10 +29,10 @@
 
 后端承接：
 
-- `crates/daemon/src/web_cli.rs`
-- `crates/daemon/src/web_cli/onboarding.rs`
-- `crates/daemon/src/web_cli/auth.rs`
-- `crates/daemon/src/web_cli/debug_console.rs`
+- `crates/daemon/src/web/mod.rs`
+- `crates/daemon/src/web/onboarding.rs`
+- `crates/daemon/src/web/auth.rs`
+- `crates/daemon/src/web/debug_console.rs`
 - Axum 本地 API
 
 ## 3. 运行模式
@@ -214,13 +214,13 @@ web/
 - Windows
   - `scripts/web/start-dev.ps1`
   - `scripts/web/stop-dev.ps1`
-  - `web/start-same-origin.ps1`
-  - `web/stop-same-origin.ps1`
+  - `scripts/web/start-same-origin.ps1`
+  - `scripts/web/stop-same-origin.ps1`
 - macOS / Linux
   - `scripts/web/start-dev.sh`
   - `scripts/web/stop-dev.sh`
-  - `web/start-same-origin.sh`
-  - `web/stop-same-origin.sh`
+  - `scripts/web/start-same-origin.sh`
+  - `scripts/web/stop-same-origin.sh`
 
 ## 8. 日志位置
 

@@ -115,6 +115,7 @@ pub mod source_presentation;
 pub mod supervisor;
 pub mod tasks_cli;
 mod tlon_cli;
+#[path = "web/mod.rs"]
 pub mod web_cli;
 
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};

@@ -47,6 +47,7 @@ export interface DashboardConfigSnapshot {
   personality: string;
   promptMode: string;
   promptAddendumConfigured: boolean;
+  promptAddendum: string;
   memoryProfile: string;
   memorySystem: string;
   sqlitePath: string;
