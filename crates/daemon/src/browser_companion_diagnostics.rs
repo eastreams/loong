@@ -509,10 +509,12 @@ mod tests {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
         let temp_dir = browser_companion_temp_dir("double-transient-timeout");
         let script_path = temp_dir.join("browser-companion");
-        let state_path = temp_dir.join("probe-state");
+        let first_timeout_path = temp_dir.join("probe-timeout-1");
+        let second_timeout_path = temp_dir.join("probe-timeout-2");
         let script_body = format!(
-            "#!/bin/sh\nstate_path='{}'\nattempt=0\nif [ -f \"$state_path\" ]; then\n  attempt=$(cat \"$state_path\")\nfi\nnext_attempt=$((attempt + 1))\nprintf '%s' \"$next_attempt\" > \"$state_path\"\nif [ \"$next_attempt\" -le 2 ]; then\n  /bin/sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
-            state_path.display()
+            "#!/bin/sh\nfirst_timeout_path='{}'\nsecond_timeout_path='{}'\nif [ ! -f \"$first_timeout_path\" ]; then\n  touch \"$first_timeout_path\"\n  /bin/sleep 6\nfi\nif [ ! -f \"$second_timeout_path\" ]; then\n  touch \"$second_timeout_path\"\n  /bin/sleep 6\nfi\necho 'loongclaw-browser-companion 1.5.0'\n",
+            first_timeout_path.display(),
+            second_timeout_path.display()
         );
         write_browser_companion_script(&script_path, script_body.as_str());
 
