@@ -65,6 +65,66 @@ impl ToolPolicyExtension {
             default_mode: rt.shell_default_mode,
         }
     }
+
+    fn authorize_shell_payload(
+        &self,
+        tool_name: &str,
+        payload: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), PolicyError> {
+        let command = payload.get("command").and_then(serde_json::Value::as_str);
+        let Some(command) = command else {
+            return Ok(());
+        };
+        let trimmed_command = command.trim();
+        if trimmed_command.is_empty() {
+            return Ok(());
+        }
+
+        let basename = validate_shell_command_name(trimmed_command).map_err(|reason| {
+            PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason,
+            }
+        })?;
+
+        if self.hard_deny.contains(basename.as_str()) {
+            return Err(PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason: format!("command `{basename}` is blocked by shell policy"),
+            });
+        }
+
+        if self.allow.contains(basename.as_str()) {
+            return Ok(());
+        }
+
+        let approval_key = shell_exec_approval_key_for_normalized_command(basename.as_str());
+        let approved_by_internal_context =
+            shell_exec_matches_trusted_internal_approval(payload, approval_key.as_str());
+        if approved_by_internal_context {
+            return Ok(());
+        }
+
+        match self.default_mode {
+            ShellPolicyDefault::Allow => Ok(()),
+            ShellPolicyDefault::Deny => Err(PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason: format!(
+                    "command `{basename}` is not in the allow list (default-deny policy)"
+                ),
+            }),
+        }
+    }
+}
+
+pub(crate) fn authorize_direct_shell_payload(
+    payload: &serde_json::Map<String, serde_json::Value>,
+    rt: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<(), String> {
+    let extension = ToolPolicyExtension::from_config(rt);
+    extension
+        .authorize_shell_payload("shell.exec", payload)
+        .map_err(|error| format!("policy_denied: {error}"))
 }
 
 pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, String> {
@@ -162,49 +222,8 @@ impl PolicyExtension for ToolPolicyExtension {
         let Some(payload) = payload.and_then(serde_json::Value::as_object) else {
             return Ok(());
         };
-        let command = payload.get("command").and_then(serde_json::Value::as_str);
-        let Some(command) = command else {
-            return Ok(());
-        };
-        let trimmed_command = command.trim();
-        if trimmed_command.is_empty() {
-            return Ok(());
-        }
-        let basename = validate_shell_command_name(trimmed_command).map_err(|reason| {
-            PolicyError::ToolCallDenied {
-                tool_name: tool_name.to_owned(),
-                reason,
-            }
-        })?;
 
-        if self.hard_deny.contains(basename.as_str()) {
-            return Err(PolicyError::ToolCallDenied {
-                tool_name: tool_name.to_owned(),
-                reason: format!("command `{basename}` is blocked by shell policy"),
-            });
-        }
-
-        if self.allow.contains(basename.as_str()) {
-            return Ok(());
-        }
-
-        let approval_key = shell_exec_approval_key_for_normalized_command(basename.as_str());
-        let approved_by_internal_context =
-            shell_exec_matches_trusted_internal_approval(payload, approval_key.as_str());
-        if approved_by_internal_context {
-            return Ok(());
-        }
-
-        // Default mode for unknown commands
-        match self.default_mode {
-            ShellPolicyDefault::Allow => Ok(()),
-            ShellPolicyDefault::Deny => Err(PolicyError::ToolCallDenied {
-                tool_name: tool_name.to_owned(),
-                reason: format!(
-                    "command `{basename}` is not in the allow list (default-deny policy)"
-                ),
-            }),
-        }
+        self.authorize_shell_payload(tool_name, payload)
     }
 }
 
