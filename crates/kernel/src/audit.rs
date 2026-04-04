@@ -1,5 +1,5 @@
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -149,6 +149,36 @@ struct AuditIntegritySealUnsigned<'a> {
     last_chain_hmac_hex: &'a str,
 }
 
+struct AuditFileLock {
+    file: Option<File>,
+    path: PathBuf,
+}
+
+impl AuditFileLock {
+    fn new(file: File, path: &Path) -> Result<Self, AuditError> {
+        lock_audit_file(&file, path)?;
+        Ok(Self {
+            file: Some(file),
+            path: path.to_path_buf(),
+        })
+    }
+
+    fn into_file(mut self) -> File {
+        self.file
+            .take()
+            .expect("audit file lock should still hold a file")
+    }
+}
+
+impl Drop for AuditFileLock {
+    fn drop(&mut self) {
+        let Some(file) = &self.file else {
+            return;
+        };
+        let _ = unlock_audit_file(file, &self.path);
+    }
+}
+
 fn prepare_audit_journal_parent(path: &Path) -> Result<(), AuditError> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -197,6 +227,19 @@ fn open_read_write_file(path: &Path) -> Result<File, AuditError> {
         })
 }
 
+fn open_existing_read_append_file(path: &Path) -> Result<File, AuditError> {
+    OpenOptions::new()
+        .read(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to open existing audit file `{}`: {error}",
+                path.display()
+            ))
+        })
+}
+
 fn lock_audit_file(file: &File, path: &Path) -> Result<(), AuditError> {
     file.lock().map_err(|error| {
         AuditError::Sink(format!(
@@ -224,15 +267,23 @@ pub fn probe_jsonl_audit_journal_runtime_ready(path: &Path) -> Result<(), AuditE
 
 impl JsonlAuditSink {
     pub fn new(path: PathBuf) -> Result<Self, AuditError> {
-        let journal = open_jsonl_audit_journal(&path)?;
         let integrity_paths = derive_jsonl_audit_integrity_paths(&path);
+        let journal_lock = AuditFileLock::new(open_jsonl_audit_journal(&path)?, &path)?;
         let integrity_key = ensure_audit_integrity_key(&integrity_paths)?;
+        let integrity_journal_lock = AuditFileLock::new(
+            open_jsonl_audit_journal(&integrity_paths.integrity_journal_path)?,
+            &integrity_paths.integrity_journal_path,
+        )?;
+        let integrity_seal_lock = AuditFileLock::new(
+            open_read_write_file(&integrity_paths.seal_path)?,
+            &integrity_paths.seal_path,
+        )?;
 
         initialize_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
-
-        let integrity_journal = open_jsonl_audit_journal(&integrity_paths.integrity_journal_path)?;
-        let integrity_seal = open_read_write_file(&integrity_paths.seal_path)?;
         let integrity_state = load_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
+        let journal = journal_lock.into_file();
+        let integrity_journal = integrity_journal_lock.into_file();
+        let integrity_seal = integrity_seal_lock.into_file();
 
         Ok(Self {
             path,
@@ -271,101 +322,78 @@ pub fn derive_jsonl_audit_integrity_paths(journal_path: &Path) -> AuditIntegrity
 pub fn verify_jsonl_audit_journal_integrity(
     journal_path: &Path,
 ) -> Result<AuditJournalIntegrityReport, AuditError> {
+    validate_existing_audit_journal(journal_path)?;
+
+    let journal = open_existing_read_write_file(journal_path, "audit journal")?;
+    lock_audit_file(&journal, journal_path)?;
+
     let integrity_paths = derive_jsonl_audit_integrity_paths(journal_path);
-    let missing_paths = collect_missing_integrity_paths(&integrity_paths);
-    let all_integrity_artifacts_missing = missing_paths.len() == 3;
+    let report_result = verify_jsonl_audit_journal_integrity_locked(journal_path, integrity_paths);
+    let unlock_result = unlock_audit_file(&journal, journal_path);
 
-    if !missing_paths.is_empty() {
-        if !all_integrity_artifacts_missing {
-            let reason = format!(
-                "audit integrity sidecar is partially missing: {}",
-                missing_paths.join(", ")
-            );
-            return Ok(AuditJournalIntegrityReport {
-                journal_path: journal_path.to_path_buf(),
-                paths: integrity_paths,
-                protected_entries: 0,
-                last_event_id: None,
-                status: AuditJournalIntegrityStatus::Mismatch { line: None, reason },
-            });
-        }
-
-        return Ok(AuditJournalIntegrityReport {
-            journal_path: journal_path.to_path_buf(),
-            paths: integrity_paths,
-            protected_entries: 0,
-            last_event_id: None,
-            status: AuditJournalIntegrityStatus::MissingArtifacts { missing_paths },
-        });
+    match (report_result, unlock_result) {
+        (Err(error), _) => Err(error),
+        (Ok(_report), Err(error)) => Err(error),
+        (Ok(report), Ok(())) => Ok(report),
     }
-
-    let integrity_key = read_audit_integrity_key(&integrity_paths.key_path)?;
-    let verification =
-        verify_audit_integrity_state(journal_path, &integrity_paths, &integrity_key)?;
-
-    let report = match verification {
-        AuditIntegrityVerificationOutcome::Verified(state) => AuditJournalIntegrityReport {
-            journal_path: journal_path.to_path_buf(),
-            paths: integrity_paths,
-            protected_entries: state.entry_count,
-            last_event_id: state.last_event_id,
-            status: AuditJournalIntegrityStatus::Verified,
-        },
-        AuditIntegrityVerificationOutcome::Mismatch {
-            protected_entries,
-            last_event_id,
-            line,
-            reason,
-        } => AuditJournalIntegrityReport {
-            journal_path: journal_path.to_path_buf(),
-            paths: integrity_paths,
-            protected_entries,
-            last_event_id,
-            status: AuditJournalIntegrityStatus::Mismatch { line, reason },
-        },
-    };
-
-    Ok(report)
 }
 
 pub fn repair_jsonl_audit_journal_integrity(
     journal_path: &Path,
 ) -> Result<AuditJournalIntegrityRepairReport, AuditError> {
-    if !journal_path.exists() {
-        return Err(AuditError::Sink(format!(
-            "audit journal {} does not exist",
-            journal_path.display()
-        )));
-    }
+    validate_existing_audit_journal(journal_path)?;
 
-    if !journal_path.is_file() {
-        return Err(AuditError::Sink(format!(
-            "audit journal {} exists but is not a regular file",
-            journal_path.display()
-        )));
-    }
+    let journal = open_existing_read_write_file(journal_path, "audit journal")?;
+    lock_audit_file(&journal, journal_path)?;
 
-    let report_before = verify_jsonl_audit_journal_integrity(journal_path)?;
+    let integrity_paths = derive_jsonl_audit_integrity_paths(journal_path);
+    let report_before =
+        verify_jsonl_audit_journal_integrity_locked(journal_path, integrity_paths.clone())?;
 
     let action = match &report_before.status {
         AuditJournalIntegrityStatus::Verified => AuditJournalIntegrityRepairAction::NoopVerified,
         AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
-            let integrity_paths = derive_jsonl_audit_integrity_paths(journal_path);
             let integrity_key = ensure_audit_integrity_key(&integrity_paths)?;
-            rebuild_audit_integrity_state(journal_path, &integrity_paths, &integrity_key)?;
-            AuditJournalIntegrityRepairAction::RepairedMissingArtifacts
+            let integrity_journal =
+                open_jsonl_audit_journal(&integrity_paths.integrity_journal_path)?;
+            lock_audit_file(&integrity_journal, &integrity_paths.integrity_journal_path)?;
+            let seal = open_read_write_file(&integrity_paths.seal_path)?;
+            lock_audit_file(&seal, &integrity_paths.seal_path)?;
+
+            let rebuild_result =
+                rebuild_audit_integrity_state(journal_path, &integrity_paths, &integrity_key);
+            let unlock_seal_result = unlock_audit_file(&seal, &integrity_paths.seal_path);
+            let unlock_integrity_result =
+                unlock_audit_file(&integrity_journal, &integrity_paths.integrity_journal_path);
+
+            match (rebuild_result, unlock_seal_result, unlock_integrity_result) {
+                (Err(error), _, _) => return Err(error),
+                (Ok(()), Err(error), _) => return Err(error),
+                (Ok(()), Ok(()), Err(error)) => return Err(error),
+                (Ok(()), Ok(()), Ok(())) => {
+                    AuditJournalIntegrityRepairAction::RepairedMissingArtifacts
+                }
+            }
         }
         AuditJournalIntegrityStatus::Mismatch { .. } => {
             AuditJournalIntegrityRepairAction::RefusedMismatch
         }
     };
 
-    let report_after = verify_jsonl_audit_journal_integrity(journal_path)?;
+    let report_result = match action {
+        AuditJournalIntegrityRepairAction::NoopVerified => Ok(report_before),
+        AuditJournalIntegrityRepairAction::RepairedMissingArtifacts => {
+            verify_jsonl_audit_journal_integrity_locked(journal_path, integrity_paths)
+        }
+        AuditJournalIntegrityRepairAction::RefusedMismatch => Ok(report_before),
+    };
+    let unlock_result = unlock_audit_file(&journal, journal_path);
 
-    Ok(AuditJournalIntegrityRepairReport {
-        action,
-        report: report_after,
-    })
+    match (report_result, unlock_result) {
+        (Err(error), _) => Err(error),
+        (Ok(_report), Err(error)) => Err(error),
+        (Ok(report), Ok(())) => Ok(AuditJournalIntegrityRepairReport { action, report }),
+    }
 }
 
 fn serialize_audit_event_line(
@@ -416,8 +444,7 @@ fn ensure_audit_integrity_key(paths: &AuditIntegrityPaths) -> Result<Vec<u8>, Au
     }
 
     let key_bytes = random::<[u8; 32]>().to_vec();
-    write_new_audit_integrity_key(&paths.key_path, &key_bytes)?;
-    Ok(key_bytes)
+    write_new_audit_integrity_key(&paths.key_path, &key_bytes)
 }
 
 fn read_audit_integrity_key(path: &Path) -> Result<Vec<u8>, AuditError> {
@@ -439,7 +466,7 @@ fn read_audit_integrity_key(path: &Path) -> Result<Vec<u8>, AuditError> {
     Ok(key_bytes)
 }
 
-fn write_new_audit_integrity_key(path: &Path, key_bytes: &[u8]) -> Result<(), AuditError> {
+fn write_new_audit_integrity_key(path: &Path, key_bytes: &[u8]) -> Result<Vec<u8>, AuditError> {
     prepare_audit_journal_parent(path)?;
 
     let open_result = OpenOptions::new().create_new(true).write(true).open(path);
@@ -447,6 +474,9 @@ fn write_new_audit_integrity_key(path: &Path, key_bytes: &[u8]) -> Result<(), Au
     let mut file = match open_result {
         Ok(file) => file,
         Err(error) => {
+            if error.kind() == ErrorKind::AlreadyExists {
+                return read_audit_integrity_key(path);
+            }
             return Err(AuditError::Sink(format!(
                 "failed to create audit integrity key `{}`: {error}",
                 path.display()
@@ -479,7 +509,127 @@ fn write_new_audit_integrity_key(path: &Path, key_bytes: &[u8]) -> Result<(), Au
             path.display()
         ))
     })?;
+    Ok(key_bytes.to_vec())
+}
+
+fn verify_jsonl_audit_journal_integrity_locked(
+    journal_path: &Path,
+    integrity_paths: AuditIntegrityPaths,
+) -> Result<AuditJournalIntegrityReport, AuditError> {
+    let missing_paths = collect_missing_integrity_paths(&integrity_paths);
+    let all_integrity_artifacts_missing = missing_paths.len() == 3;
+
+    if !missing_paths.is_empty() {
+        if !all_integrity_artifacts_missing {
+            let reason = format!(
+                "audit integrity sidecar is partially missing: {}",
+                missing_paths.join(", ")
+            );
+            let report = AuditJournalIntegrityReport {
+                journal_path: journal_path.to_path_buf(),
+                paths: integrity_paths,
+                protected_entries: 0,
+                last_event_id: None,
+                status: AuditJournalIntegrityStatus::Mismatch { line: None, reason },
+            };
+            return Ok(report);
+        }
+
+        let report = AuditJournalIntegrityReport {
+            journal_path: journal_path.to_path_buf(),
+            paths: integrity_paths,
+            protected_entries: 0,
+            last_event_id: None,
+            status: AuditJournalIntegrityStatus::MissingArtifacts { missing_paths },
+        };
+        return Ok(report);
+    }
+
+    let integrity_journal =
+        open_existing_read_append_file(&integrity_paths.integrity_journal_path)?;
+    lock_audit_file(&integrity_journal, &integrity_paths.integrity_journal_path)?;
+    let seal = open_existing_read_write_file(&integrity_paths.seal_path, "audit integrity seal")?;
+    lock_audit_file(&seal, &integrity_paths.seal_path)?;
+
+    let integrity_key = read_audit_integrity_key(&integrity_paths.key_path)?;
+    let verification_result =
+        verify_audit_integrity_state(journal_path, &integrity_paths, &integrity_key);
+    let report_result = verification_result.map(|verification| {
+        report_from_audit_integrity_verification(
+            journal_path,
+            integrity_paths.clone(),
+            verification,
+        )
+    });
+    let unlock_seal_result = unlock_audit_file(&seal, &integrity_paths.seal_path);
+    let unlock_integrity_result =
+        unlock_audit_file(&integrity_journal, &integrity_paths.integrity_journal_path);
+
+    match (report_result, unlock_seal_result, unlock_integrity_result) {
+        (Err(error), _, _) => Err(error),
+        (Ok(_report), Err(error), _) => Err(error),
+        (Ok(_report), Ok(()), Err(error)) => Err(error),
+        (Ok(report), Ok(()), Ok(())) => Ok(report),
+    }
+}
+
+fn report_from_audit_integrity_verification(
+    journal_path: &Path,
+    integrity_paths: AuditIntegrityPaths,
+    verification: AuditIntegrityVerificationOutcome,
+) -> AuditJournalIntegrityReport {
+    match verification {
+        AuditIntegrityVerificationOutcome::Verified(state) => AuditJournalIntegrityReport {
+            journal_path: journal_path.to_path_buf(),
+            paths: integrity_paths,
+            protected_entries: state.entry_count,
+            last_event_id: state.last_event_id,
+            status: AuditJournalIntegrityStatus::Verified,
+        },
+        AuditIntegrityVerificationOutcome::Mismatch {
+            protected_entries,
+            last_event_id,
+            line,
+            reason,
+        } => AuditJournalIntegrityReport {
+            journal_path: journal_path.to_path_buf(),
+            paths: integrity_paths,
+            protected_entries,
+            last_event_id,
+            status: AuditJournalIntegrityStatus::Mismatch { line, reason },
+        },
+    }
+}
+
+fn validate_existing_audit_journal(journal_path: &Path) -> Result<(), AuditError> {
+    if !journal_path.exists() {
+        return Err(AuditError::Sink(format!(
+            "audit journal {} does not exist",
+            journal_path.display()
+        )));
+    }
+
+    if !journal_path.is_file() {
+        return Err(AuditError::Sink(format!(
+            "audit journal {} exists but is not a regular file",
+            journal_path.display()
+        )));
+    }
+
     Ok(())
+}
+
+fn open_existing_read_write_file(path: &Path, label: &str) -> Result<File, AuditError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to open {label} `{}`: {error}",
+                path.display()
+            ))
+        })
 }
 
 fn collect_missing_integrity_paths(paths: &AuditIntegrityPaths) -> Vec<String> {
@@ -637,21 +787,8 @@ fn verify_audit_integrity_state(
 ) -> Result<AuditIntegrityVerificationOutcome, AuditError> {
     let event_lines = read_raw_jsonl_lines(journal_path)?;
     let integrity_lines = read_raw_jsonl_lines(&paths.integrity_journal_path)?;
-
-    if event_lines.len() != integrity_lines.len() {
-        let reason = format!(
-            "journal lines={} integrity lines={}",
-            event_lines.len(),
-            integrity_lines.len()
-        );
-        let outcome = AuditIntegrityVerificationOutcome::Mismatch {
-            protected_entries: 0,
-            last_event_id: None,
-            line: None,
-            reason,
-        };
-        return Ok(outcome);
-    }
+    let event_line_count = event_lines.len();
+    let integrity_line_count = integrity_lines.len();
 
     let seal_bytes = fs::read(&paths.seal_path).map_err(|error| {
         AuditError::Sink(format!(
@@ -726,6 +863,20 @@ fn verify_audit_integrity_state(
         state.last_chain_hmac = expected_chain_hmac;
         journal_bytes += event_line.len() as u64;
         integrity_bytes += integrity_line.len() as u64;
+    }
+
+    if event_line_count != integrity_line_count {
+        let reason = format!(
+            "journal lines={} integrity lines={}",
+            event_line_count, integrity_line_count
+        );
+        let outcome = AuditIntegrityVerificationOutcome::Mismatch {
+            protected_entries: state.entry_count,
+            last_event_id: state.last_event_id,
+            line: Some(state.entry_count + 1),
+            reason,
+        };
+        return Ok(outcome);
     }
 
     let expected_last_chain_hmac_hex = hex_string(&state.last_chain_hmac);

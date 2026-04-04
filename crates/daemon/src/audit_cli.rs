@@ -474,11 +474,13 @@ pub fn execute_audit_command(options: AuditCommandOptions) -> CliResult<AuditCom
             summarize_token_trail(limit, token_id, events, total_matching_events)
         }
         AuditCommands::Verify => {
+            ensure_audit_journal_preflight(&config.audit, &journal_path)?;
             let report = crate::kernel::verify_jsonl_audit_journal_integrity(&journal_path)
                 .map_err(|error| format!("audit integrity verification failed: {error}"))?;
             AuditCommandResult::Verify { report }
         }
         AuditCommands::Repair => {
+            ensure_audit_journal_preflight(&config.audit, &journal_path)?;
             let report = crate::kernel::repair_jsonl_audit_journal_integrity(&journal_path)
                 .map_err(|error| format!("audit integrity repair failed: {error}"))?;
             AuditCommandResult::Repair { report }
@@ -1808,12 +1810,10 @@ struct AuditEventWindow {
     total_matching_events: usize,
 }
 
-fn load_audit_event_window(
+fn ensure_audit_journal_preflight(
     audit: &crate::mvp::config::AuditConfig,
     journal_path: &Path,
-    limit: usize,
-    filter: &AuditEventFilter,
-) -> CliResult<AuditEventWindow> {
+) -> CliResult<()> {
     if !journal_path.exists() {
         let hint = if audit.mode == crate::mvp::config::AuditMode::InMemory {
             "durable audit retention is disabled because [audit].mode = \"in_memory\""
@@ -1825,12 +1825,24 @@ fn load_audit_event_window(
             journal_path.display()
         ));
     }
+
     if !journal_path.is_file() {
         return Err(format!(
             "audit journal path {} exists but is not a file",
             journal_path.display()
         ));
     }
+
+    Ok(())
+}
+
+fn load_audit_event_window(
+    audit: &crate::mvp::config::AuditConfig,
+    journal_path: &Path,
+    limit: usize,
+    filter: &AuditEventFilter,
+) -> CliResult<AuditEventWindow> {
+    ensure_audit_journal_preflight(audit, journal_path)?;
 
     let file = File::open(journal_path).map_err(|error| {
         format!(
@@ -5761,6 +5773,84 @@ mod tests {
                 query_contains: None,
                 trust_tier: None,
             },
+        })
+        .expect_err("missing in-memory journal should fail");
+
+        assert!(error.contains("audit journal not found"));
+        assert!(error.contains("durable audit retention is disabled"));
+        assert!(error.contains("[audit].mode = \"in_memory\""));
+    }
+
+    #[test]
+    fn audit_verify_reports_missing_journal_with_first_write_hint() {
+        let root = unique_temp_dir("loongclaw-audit-cli-verify-missing");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let error = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Verify,
+        })
+        .expect_err("missing verify journal should fail");
+
+        assert!(error.contains("audit journal not found"));
+        assert!(error.contains("first audit write"));
+    }
+
+    #[test]
+    fn audit_verify_reports_in_memory_mode_when_journal_is_missing() {
+        let root = unique_temp_dir("loongclaw-audit-cli-verify-in-memory");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config_with_mode(
+            &root,
+            &journal_path,
+            crate::mvp::config::AuditMode::InMemory,
+        );
+
+        let error = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Verify,
+        })
+        .expect_err("missing in-memory verify journal should fail");
+
+        assert!(error.contains("audit journal not found"));
+        assert!(error.contains("durable audit retention is disabled"));
+        assert!(error.contains("[audit].mode = \"in_memory\""));
+    }
+
+    #[test]
+    fn audit_repair_reports_missing_journal_with_first_write_hint() {
+        let root = unique_temp_dir("loongclaw-audit-cli-repair-missing");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config(&root, &journal_path);
+
+        let error = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
+        })
+        .expect_err("missing journal should fail");
+
+        assert!(error.contains("audit journal not found"));
+        assert!(error.contains("first audit write"));
+    }
+
+    #[test]
+    fn audit_repair_reports_in_memory_mode_when_journal_is_missing() {
+        let root = unique_temp_dir("loongclaw-audit-cli-repair-in-memory");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let config_path = write_audit_config_with_mode(
+            &root,
+            &journal_path,
+            crate::mvp::config::AuditMode::InMemory,
+        );
+
+        let error = execute_audit_command(AuditCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: AuditCommands::Repair,
         })
         .expect_err("missing in-memory journal should fail");
 

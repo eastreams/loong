@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use kernel::{
-    AuditJournalIntegrityStatus, probe_jsonl_audit_journal_runtime_ready,
-    verify_jsonl_audit_journal_integrity,
+    AuditJournalIntegrityReport, AuditJournalIntegrityStatus,
+    probe_jsonl_audit_journal_runtime_ready, verify_jsonl_audit_journal_integrity,
 };
 use loongclaw_app as mvp;
 use loongclaw_contracts::SecretRef;
@@ -52,6 +52,15 @@ struct DoctorSummary {
     pass: usize,
     warn: usize,
     fail: usize,
+}
+
+#[derive(Debug, Clone)]
+enum AuditIntegrityDoctorState {
+    MissingJournal,
+    Verified(AuditJournalIntegrityReport),
+    MissingArtifacts(AuditJournalIntegrityReport),
+    Mismatch(AuditJournalIntegrityReport),
+    VerificationFailed(String),
 }
 
 pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
@@ -389,38 +398,34 @@ fn durable_audit_retention_doctor_check(
 }
 
 fn audit_integrity_doctor_check(audit: &mvp::config::AuditConfig) -> Option<DoctorCheck> {
-    if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
-        return None;
-    }
+    let (journal_path, state) = audit_integrity_doctor_state(audit)?;
 
-    let journal_path = audit.resolved_path();
-
-    if !journal_path.exists() {
-        return Some(DoctorCheck {
+    match state {
+        AuditIntegrityDoctorState::MissingJournal => Some(DoctorCheck {
             name: "audit integrity".to_owned(),
             level: DoctorCheckLevel::Warn,
             detail: format!(
                 "audit journal {} has not been created yet; integrity sidecar will appear after the first durable audit write",
                 journal_path.display()
             ),
-        });
-    }
-
-    let verification = verify_jsonl_audit_journal_integrity(&journal_path);
-
-    match verification {
-        Ok(report) => match report.status {
-            AuditJournalIntegrityStatus::Verified => Some(DoctorCheck {
-                name: "audit integrity".to_owned(),
-                level: DoctorCheckLevel::Pass,
-                detail: format!(
-                    "verified tamper-evident audit sidecar for {} protected_entries={} last_event_id={}",
-                    journal_path.display(),
-                    report.protected_entries,
-                    report.last_event_id.as_deref().unwrap_or("-")
-                ),
-            }),
-            AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => Some(DoctorCheck {
+        }),
+        AuditIntegrityDoctorState::Verified(report) => Some(DoctorCheck {
+            name: "audit integrity".to_owned(),
+            level: DoctorCheckLevel::Pass,
+            detail: format!(
+                "verified tamper-evident audit sidecar for {} protected_entries={} last_event_id={}",
+                journal_path.display(),
+                report.protected_entries,
+                report.last_event_id.as_deref().unwrap_or("-")
+            ),
+        }),
+        AuditIntegrityDoctorState::MissingArtifacts(report) => {
+            let missing_paths = match report.status {
+                AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => missing_paths,
+                AuditJournalIntegrityStatus::Verified
+                | AuditJournalIntegrityStatus::Mismatch { .. } => Vec::new(),
+            };
+            Some(DoctorCheck {
                 name: "audit integrity".to_owned(),
                 level: DoctorCheckLevel::Warn,
                 detail: format!(
@@ -428,24 +433,29 @@ fn audit_integrity_doctor_check(audit: &mvp::config::AuditConfig) -> Option<Doct
                     journal_path.display(),
                     missing_paths.join(", ")
                 ),
-            }),
-            AuditJournalIntegrityStatus::Mismatch { line, reason } => {
-                let line = line
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_owned());
-                Some(DoctorCheck {
-                    name: "audit integrity".to_owned(),
-                    level: DoctorCheckLevel::Fail,
-                    detail: format!(
-                        "audit integrity mismatch for {} at line {}: {}",
-                        journal_path.display(),
-                        line,
-                        reason
-                    ),
-                })
-            }
-        },
-        Err(error) => Some(DoctorCheck {
+            })
+        }
+        AuditIntegrityDoctorState::Mismatch(report) => {
+            let (line, reason) = match report.status {
+                AuditJournalIntegrityStatus::Mismatch { line, reason } => (line, reason),
+                AuditJournalIntegrityStatus::Verified
+                | AuditJournalIntegrityStatus::MissingArtifacts { .. } => (None, "-".to_owned()),
+            };
+            let line = line
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_owned());
+            Some(DoctorCheck {
+                name: "audit integrity".to_owned(),
+                level: DoctorCheckLevel::Fail,
+                detail: format!(
+                    "audit integrity mismatch for {} at line {}: {}",
+                    journal_path.display(),
+                    line,
+                    reason
+                ),
+            })
+        }
+        AuditIntegrityDoctorState::VerificationFailed(error) => Some(DoctorCheck {
             name: "audit integrity".to_owned(),
             level: DoctorCheckLevel::Fail,
             detail: format!(
@@ -454,6 +464,37 @@ fn audit_integrity_doctor_check(audit: &mvp::config::AuditConfig) -> Option<Doct
             ),
         }),
     }
+}
+
+fn audit_integrity_doctor_state(
+    audit: &mvp::config::AuditConfig,
+) -> Option<(PathBuf, AuditIntegrityDoctorState)> {
+    if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        return None;
+    }
+
+    let journal_path = audit.resolved_path();
+
+    if !journal_path.exists() {
+        return Some((journal_path, AuditIntegrityDoctorState::MissingJournal));
+    }
+
+    let verification = verify_jsonl_audit_journal_integrity(&journal_path);
+
+    let state = match verification {
+        Ok(report) => match report.status {
+            AuditJournalIntegrityStatus::Verified => AuditIntegrityDoctorState::Verified(report),
+            AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+                AuditIntegrityDoctorState::MissingArtifacts(report)
+            }
+            AuditJournalIntegrityStatus::Mismatch { .. } => {
+                AuditIntegrityDoctorState::Mismatch(report)
+            }
+        },
+        Err(error) => AuditIntegrityDoctorState::VerificationFailed(error.to_string()),
+    };
+
+    Some((journal_path, state))
 }
 
 pub(crate) fn durable_audit_target_issue(path: &Path) -> Option<String> {
@@ -2056,16 +2097,25 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
         crate::cli_handoff::format_subcommand_with_config("doctor", &config_path_display);
     let rerun_onboard_command =
         crate::cli_handoff::format_subcommand_with_config("onboard", &config_path_display);
-    let audit_integrity_missing_journal = checks.iter().any(|check| {
-        check.name == "audit integrity"
-            && check.level == DoctorCheckLevel::Warn
-            && check.detail.contains("has not been created yet")
-    });
-    let audit_integrity_missing_sidecar = checks.iter().any(|check| {
-        check.name == "audit integrity"
-            && check.level == DoctorCheckLevel::Warn
-            && !check.detail.contains("has not been created yet")
-    });
+    let audit_verify_command =
+        crate::cli_handoff::format_subcommand_with_config("audit verify", &config_path_display);
+    let audit_repair_command =
+        crate::cli_handoff::format_subcommand_with_config("audit repair", &config_path_display);
+    let audit_integrity_state =
+        audit_integrity_doctor_state(&config.audit).map(|(_path, state)| state);
+    let audit_integrity_missing_journal = matches!(
+        audit_integrity_state,
+        Some(AuditIntegrityDoctorState::MissingJournal)
+    );
+    let audit_integrity_missing_sidecar = matches!(
+        audit_integrity_state,
+        Some(AuditIntegrityDoctorState::MissingArtifacts(_))
+    );
+    let audit_integrity_failed = matches!(
+        audit_integrity_state,
+        Some(AuditIntegrityDoctorState::Mismatch(_))
+            | Some(AuditIntegrityDoctorState::VerificationFailed(_))
+    );
 
     if !fix_requested
         && checks.iter().any(|check| {
@@ -2223,21 +2273,16 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
         push_unique_step(
             &mut steps,
             format!(
-                "Repair the audit integrity sidecar explicitly with `loong audit repair --config '{}'`, then re-run: {rerun_command}",
-                config_path_display
+                "Repair the audit integrity sidecar explicitly with `{audit_repair_command}`, then re-run: {rerun_command}"
             ),
         );
     }
 
-    if checks
-        .iter()
-        .any(|check| check.name == "audit integrity" && check.level == DoctorCheckLevel::Fail)
-    {
+    if audit_integrity_failed {
         push_unique_step(
             &mut steps,
             format!(
-                "Run `loong audit verify --config '{}'` and inspect the reported mismatch before trusting the retained journal.",
-                config_path_display
+                "Run `{audit_verify_command}` and inspect the reported mismatch before trusting the retained journal."
             ),
         );
         push_unique_step(
@@ -4283,43 +4328,106 @@ mod tests {
 
     #[test]
     fn build_doctor_next_steps_guides_audit_integrity_recovery() {
-        let checks = vec![DoctorCheck {
-            name: "audit integrity".to_owned(),
-            level: DoctorCheckLevel::Fail,
-            detail: "audit integrity mismatch for /tmp/audit/events.jsonl at line 1: line hash does not match".to_owned(),
-        }];
-        let config_path = PathBuf::from("/tmp/loong.toml");
-        let next_steps = build_doctor_next_steps_with_path_env(
-            &checks,
-            &config_path,
-            &mvp::config::LoongClawConfig::default(),
-            false,
-            None,
+        let root = unique_temp_dir("loongclaw-doctor-audit-integrity-recovery");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let sink = kernel::JsonlAuditSink::new(journal_path.clone())
+            .expect("jsonl sink should initialize");
+        sink.record(kernel::AuditEvent {
+            event_id: "evt-doctor-recovery".to_owned(),
+            timestamp_epoch_s: 1_700_010_700,
+            agent_id: Some("agent-doctor".to_owned()),
+            kind: kernel::AuditEventKind::TokenRevoked {
+                token_id: "token-doctor".to_owned(),
+            },
+        })
+        .expect("audit event should record");
+        fs::write(
+            &journal_path,
+            "{\"event_id\":\"evt-doctor-recovery\",\"timestamp_epoch_s\":1700010700,\"agent_id\":\"mallory\",\"kind\":{\"TokenRevoked\":{\"token_id\":\"token-doctor\"}}}\n",
+        )
+        .expect("tamper audit journal");
+
+        let config_path = PathBuf::from("/tmp/loong's config.toml");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.audit = mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        };
+        let checks = vec![
+            audit_integrity_doctor_check(&config.audit)
+                .expect("doctor should emit integrity check"),
+        ];
+        let next_steps =
+            build_doctor_next_steps_with_path_env(&checks, &config_path, &config, false, None);
+        let expected_verify_command = crate::cli_handoff::format_subcommand_with_config(
+            "audit verify",
+            config_path.to_str().expect("config path should be utf-8"),
         );
 
         assert!(
             next_steps
                 .iter()
-                .any(|step| step.contains("loong audit verify --config '/tmp/loong.toml'")),
+                .any(|step| step.contains(&expected_verify_command)),
             "doctor should recommend the explicit audit verify command for integrity failures: {next_steps:#?}"
         );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_doctor_next_steps_quotes_audit_repair_commands_safely() {
+        let root = unique_temp_dir("loongclaw-doctor-audit-integrity-repair-command");
+        let journal_path = root.join("audit").join("events.jsonl");
+        fs::create_dir_all(journal_path.parent().expect("journal parent"))
+            .expect("create audit directory");
+        fs::write(&journal_path, "{}\n").expect("write legacy journal");
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.audit = mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        };
+        let checks = vec![
+            audit_integrity_doctor_check(&config.audit)
+                .expect("doctor should emit integrity check"),
+        ];
+        let config_path = PathBuf::from("/tmp/loong's config.toml");
+        let next_steps =
+            build_doctor_next_steps_with_path_env(&checks, &config_path, &config, false, None);
+        let expected_repair_command = crate::cli_handoff::format_subcommand_with_config(
+            "audit repair",
+            config_path.to_str().expect("config path should be utf-8"),
+        );
+
+        assert!(
+            next_steps
+                .iter()
+                .any(|step| step.contains(&expected_repair_command)),
+            "doctor should shell-quote audit repair commands safely: {next_steps:#?}"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn build_doctor_next_steps_guides_first_durable_audit_write_for_fresh_journal() {
-        let checks = vec![DoctorCheck {
-            name: "audit integrity".to_owned(),
-            level: DoctorCheckLevel::Warn,
-            detail: "audit journal /tmp/audit/events.jsonl has not been created yet; integrity sidecar will appear after the first durable audit write".to_owned(),
-        }];
+        let root = unique_temp_dir("loongclaw-doctor-audit-integrity-fresh");
+        let journal_path = root.join("audit").join("events.jsonl");
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.audit = mvp::config::AuditConfig {
+            mode: mvp::config::AuditMode::Fanout,
+            path: journal_path.display().to_string(),
+            retain_in_memory: true,
+        };
+        let checks = vec![
+            audit_integrity_doctor_check(&config.audit)
+                .expect("doctor should emit integrity check"),
+        ];
         let config_path = PathBuf::from("/tmp/loong.toml");
-        let next_steps = build_doctor_next_steps_with_path_env(
-            &checks,
-            &config_path,
-            &mvp::config::LoongClawConfig::default(),
-            false,
-            None,
-        );
+        let next_steps =
+            build_doctor_next_steps_with_path_env(&checks, &config_path, &config, false, None);
 
         assert!(
             next_steps

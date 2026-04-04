@@ -22,8 +22,11 @@ pub fn collect_runtime_snapshot_audit_state(
     let audit = &config.audit;
     let journal_path = audit.resolved_path();
     let integrity_paths = kernel::derive_jsonl_audit_integrity_paths(&journal_path);
+    let journal_missing = !journal_path.exists();
 
     let verification = if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        None
+    } else if journal_missing {
         None
     } else {
         let report = kernel::verify_jsonl_audit_journal_integrity(&journal_path)
@@ -31,15 +34,21 @@ pub fn collect_runtime_snapshot_audit_state(
         Some(report)
     };
 
-    let integrity_status = match &verification {
-        None => "disabled".to_owned(),
-        Some(report) => match &report.status {
-            kernel::AuditJournalIntegrityStatus::Verified => "verified".to_owned(),
-            kernel::AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
-                "missing_artifacts".to_owned()
-            }
-            kernel::AuditJournalIntegrityStatus::Mismatch { .. } => "mismatch".to_owned(),
-        },
+    let integrity_status = if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        "disabled".to_owned()
+    } else if journal_missing {
+        "missing_artifacts".to_owned()
+    } else {
+        match &verification {
+            None => "missing_artifacts".to_owned(),
+            Some(report) => match &report.status {
+                kernel::AuditJournalIntegrityStatus::Verified => "verified".to_owned(),
+                kernel::AuditJournalIntegrityStatus::MissingArtifacts { .. } => {
+                    "missing_artifacts".to_owned()
+                }
+                kernel::AuditJournalIntegrityStatus::Mismatch { .. } => "mismatch".to_owned(),
+            },
+        }
     };
 
     let protected_entries = verification
@@ -49,25 +58,34 @@ pub fn collect_runtime_snapshot_audit_state(
     let last_event_id = verification
         .as_ref()
         .and_then(|report| report.last_event_id.clone());
-    let integrity_detail = match &verification {
-        None => "audit integrity disabled because [audit].mode = \"in_memory\"".to_owned(),
-        Some(report) => match &report.status {
-            kernel::AuditJournalIntegrityStatus::Verified => format!(
-                "verified tamper-evident audit sidecar protected_entries={} last_event_id={}",
-                report.protected_entries,
-                report.last_event_id.as_deref().unwrap_or("-")
-            ),
-            kernel::AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => format!(
-                "missing integrity sidecar artifacts: {}",
-                missing_paths.join(", ")
-            ),
-            kernel::AuditJournalIntegrityStatus::Mismatch { line, reason } => {
-                let line = line
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_owned());
-                format!("audit integrity mismatch at line {}: {}", line, reason)
-            }
-        },
+    let integrity_detail = if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
+        "audit integrity disabled because [audit].mode = \"in_memory\"".to_owned()
+    } else if journal_missing {
+        format!(
+            "audit journal {} has not been created yet; integrity sidecar will appear after the first durable audit write",
+            journal_path.display()
+        )
+    } else {
+        match &verification {
+            Some(report) => match &report.status {
+                kernel::AuditJournalIntegrityStatus::Verified => format!(
+                    "verified tamper-evident audit sidecar protected_entries={} last_event_id={}",
+                    report.protected_entries,
+                    report.last_event_id.as_deref().unwrap_or("-")
+                ),
+                kernel::AuditJournalIntegrityStatus::MissingArtifacts { missing_paths } => format!(
+                    "missing integrity sidecar artifacts: {}",
+                    missing_paths.join(", ")
+                ),
+                kernel::AuditJournalIntegrityStatus::Mismatch { line, reason } => {
+                    let line = line
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "-".to_owned());
+                    format!("audit integrity mismatch at line {}: {}", line, reason)
+                }
+            },
+            None => "missing integrity sidecar artifacts".to_owned(),
+        }
     };
 
     Ok(RuntimeSnapshotAuditState {

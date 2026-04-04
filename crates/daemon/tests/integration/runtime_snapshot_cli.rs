@@ -549,6 +549,33 @@ fn runtime_snapshot_json_payload_reports_verified_audit_integrity() {
 }
 
 #[test]
+fn runtime_snapshot_json_payload_reports_fresh_audit_journal_as_missing_artifacts() {
+    let root = unique_temp_dir("loong-runtime-snapshot-audit-fresh");
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("DEEPSEEK_API_KEY", None),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload =
+        build_runtime_snapshot_cli_json_payload(&snapshot).expect("build runtime snapshot payload");
+
+    assert_eq!(payload["audit"]["integrity_status"], "missing_artifacts");
+    assert!(
+        payload["audit"]["integrity_detail"]
+            .as_str()
+            .is_some_and(|value| value.contains("first durable audit write"))
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn runtime_snapshot_json_payload_reports_missing_audit_sidecar_for_legacy_journal() {
     let root = unique_temp_dir("loong-runtime-snapshot-audit-missing");
     let _env = RuntimeSnapshotEnvGuard::set(&[
@@ -559,7 +586,16 @@ fn runtime_snapshot_json_payload_reports_missing_audit_sidecar_for_legacy_journa
     let (config_path, config) = write_runtime_snapshot_config(&root);
     let journal_path = config.audit.resolved_path();
     fs::create_dir_all(journal_path.parent().expect("journal parent")).expect("create audit dir");
-    fs::write(&journal_path, "{}\n").expect("write legacy audit journal");
+    let legacy_event = loongclaw_daemon::kernel::AuditEvent {
+        event_id: "evt-snapshot-legacy".to_owned(),
+        timestamp_epoch_s: 1_700_010_602,
+        agent_id: Some("agent-snapshot".to_owned()),
+        kind: loongclaw_daemon::kernel::AuditEventKind::TokenRevoked {
+            token_id: "token-snapshot-legacy".to_owned(),
+        },
+    };
+    let encoded = serde_json::to_string(&legacy_event).expect("serialize legacy audit event");
+    fs::write(&journal_path, format!("{encoded}\n")).expect("write legacy audit journal");
 
     let snapshot = collect_runtime_snapshot_cli_state(Some(
         config_path.to_str().expect("config path should be utf-8"),
