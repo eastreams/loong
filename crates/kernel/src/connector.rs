@@ -91,10 +91,10 @@ impl ConnectorPlane {
 
     pub fn register_core_adapter<A: CoreConnectorAdapter + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
-        self.core_adapters.insert(name.clone(), Arc::new(adapter));
         if self.default_core_adapter.is_none() {
-            self.default_core_adapter = Some(name);
+            self.default_core_adapter = Some(name.clone());
         }
+        self.core_adapters.insert(name, Arc::new(adapter));
     }
 
     pub fn register_extension_adapter<A: ConnectorExtensionAdapter + 'static>(
@@ -124,21 +124,21 @@ impl ConnectorPlane {
         command: ConnectorCommand,
     ) -> Result<ConnectorOutcome, ConnectorError> {
         let resolved_name = if let Some(name) = core_name {
-            name.to_owned()
+            name
         } else {
             self.default_core_adapter
-                .clone()
+                .as_deref()
                 .ok_or(ConnectorError::NoDefaultCoreAdapter)?
         };
 
         let core = self
             .core_adapters
-            .get(&resolved_name)
-            .ok_or_else(|| ConnectorError::CoreAdapterNotFound(resolved_name.clone()))?
+            .get(resolved_name)
+            .ok_or_else(|| ConnectorError::CoreAdapterNotFound(resolved_name.to_owned()))?
             .clone();
 
         let invocation = core.invoke_core(command);
-        return execute_connector_invocation(&resolved_name, ConnectorTier::Core, invocation).await;
+        return execute_connector_invocation(resolved_name, ConnectorTier::Core, invocation).await;
     }
 
     pub async fn invoke_extension(
@@ -154,20 +154,20 @@ impl ConnectorPlane {
             .clone();
 
         let resolved_core_name = if let Some(name) = core_name {
-            name.to_owned()
+            name
         } else {
             self.default_core_adapter
-                .clone()
+                .as_deref()
                 .ok_or(ConnectorError::NoDefaultCoreAdapter)?
         };
 
         let core = self
             .core_adapters
-            .get(&resolved_core_name)
-            .ok_or_else(|| ConnectorError::CoreAdapterNotFound(resolved_core_name.clone()))?
+            .get(resolved_core_name)
+            .ok_or_else(|| ConnectorError::CoreAdapterNotFound(resolved_core_name.to_owned()))?
             .clone();
 
-        let guarded_core = PanicIsolatedCoreConnector::new(resolved_core_name, core);
+        let guarded_core = PanicIsolatedCoreConnector::new(resolved_core_name.to_owned(), core);
         let invocation = extension.invoke_extension(command, &guarded_core);
         return execute_connector_invocation(extension_name, ConnectorTier::Extension, invocation)
             .await;
