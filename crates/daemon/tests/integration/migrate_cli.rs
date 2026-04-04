@@ -10,7 +10,9 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    canonical_temp_dir.join(format!("{prefix}-{nanos}"))
 }
 
 fn isolated_home_guard(prefix: &str) -> (PathBuf, MigrationEnvironmentGuard) {

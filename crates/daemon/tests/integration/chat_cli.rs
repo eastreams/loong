@@ -107,11 +107,13 @@ impl ChatCliFixture {
         stdin_bytes: Option<&[u8]>,
         fake_onboard_exit_code: Option<i32>,
     ) -> Output {
+        let loongclaw_home = self.home_dir.join(".loongclaw");
         let mut command = Command::new(env!("CARGO_BIN_EXE_loongclaw"));
         command
             .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
+            .env("LOONGCLAW_HOME", &loongclaw_home)
             .env_remove("LOONGCLAW_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())

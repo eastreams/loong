@@ -15,6 +15,7 @@ pub const LEGACY_CLI_COMMAND_NAME: &str = "loongclaw";
 pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
 static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
+pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONGCLAW_HOME";
 
 fn normalize_cli_command_name(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case(LEGACY_CLI_COMMAND_NAME) {
@@ -491,6 +492,14 @@ fn get_user_home() -> PathBuf {
     )
 }
 
+fn get_loongclaw_home() -> PathBuf {
+    resolve_loongclaw_home(
+        env::var_os(LOONGCLAW_HOME_ENV).as_deref(),
+        env::var_os("HOME").as_deref(),
+        env::var_os("USERPROFILE").as_deref(),
+    )
+}
+
 fn resolve_user_home(
     home: Option<&std::ffi::OsStr>,
     userprofile: Option<&std::ffi::OsStr>,
@@ -500,8 +509,18 @@ fn resolve_user_home(
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn resolve_loongclaw_home(
+    loongclaw_home: Option<&std::ffi::OsStr>,
+    home: Option<&std::ffi::OsStr>,
+    userprofile: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    loongclaw_home
+        .map(PathBuf::from)
+        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loongclaw"))
+}
+
 pub(super) fn default_loongclaw_home() -> PathBuf {
-    get_user_home().join(".loongclaw")
+    get_loongclaw_home()
 }
 
 pub fn expand_path(raw: &str) -> PathBuf {
@@ -769,6 +788,7 @@ fn normalize_dollar_prefixed_env_name(raw: &str, fallback: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn message_template_interpolation_replaces_known_placeholders() {
@@ -871,5 +891,36 @@ mod tests {
             PathBuf::from("."),
             "get_user_home() should return \".\" when both HOME and USERPROFILE are absent"
         );
+    }
+
+    #[test]
+    fn resolve_loongclaw_home_prefers_explicit_override_over_user_home() {
+        let override_home = if cfg!(windows) {
+            PathBuf::from(r"C:\tmp\loongclaw-home-override")
+        } else {
+            PathBuf::from("/tmp/loongclaw-home-override")
+        };
+        let home = if cfg!(windows) {
+            PathBuf::from(r"C:\Users\loongclaw-test-home")
+        } else {
+            PathBuf::from("/tmp/loongclaw-test-home")
+        };
+
+        let resolved = resolve_loongclaw_home(
+            Some(override_home.as_os_str()),
+            Some(home.as_os_str()),
+            None,
+        );
+
+        assert_eq!(resolved, override_home);
+    }
+
+    #[test]
+    fn default_loongclaw_home_uses_override_env_when_present() {
+        let mut env = ScopedEnv::new();
+        let override_home = std::env::temp_dir().join("loongclaw-home-env-override");
+        env.set(LOONGCLAW_HOME_ENV, &override_home);
+
+        assert_eq!(default_loongclaw_home(), override_home);
     }
 }
