@@ -163,13 +163,14 @@ impl AuditFileLock {
         })
     }
 
-    fn into_file(mut self) -> Result<File, AuditError> {
+    fn into_unlocked_file(mut self) -> Result<File, AuditError> {
         let Some(file) = self.file.take() else {
             return Err(AuditError::Sink(
                 "audit file lock should still hold a file".to_owned(),
             ));
         };
 
+        unlock_audit_file(&file, &self.path)?;
         Ok(file)
     }
 }
@@ -285,9 +286,9 @@ impl JsonlAuditSink {
             &integrity_paths.seal_path,
         )?;
         let integrity_state = load_audit_integrity_state(&path, &integrity_paths, &integrity_key)?;
-        let journal = journal_lock.into_file()?;
-        let integrity_journal = integrity_journal_lock.into_file()?;
-        let integrity_seal = integrity_seal_lock.into_file()?;
+        let journal = journal_lock.into_unlocked_file()?;
+        let integrity_journal = integrity_journal_lock.into_unlocked_file()?;
+        let integrity_seal = integrity_seal_lock.into_unlocked_file()?;
 
         Ok(Self {
             path,
