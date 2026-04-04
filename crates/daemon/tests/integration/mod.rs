@@ -40,6 +40,10 @@ fn cli_command_name() -> String {
     })
 }
 
+fn active_cli_command_name() -> &'static str {
+    mvp::config::active_cli_command_name()
+}
+
 fn render_cli_help<const N: usize>(subcommand_path: [&str; N]) -> String {
     let owned_path = subcommand_path
         .into_iter()
@@ -82,8 +86,120 @@ fn validation_diagnostic_with_severity(
     }
 }
 
+fn managed_bridge_manifest(
+    channel_id: &str,
+    setup_surface: Option<&str>,
+    metadata: BTreeMap<String, String>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    let setup = setup_surface.map(|surface| loongclaw_daemon::kernel::PluginSetup {
+        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(surface.to_owned()),
+        required_env_vars: Vec::new(),
+        recommended_env_vars: Vec::new(),
+        required_config_keys: Vec::new(),
+        default_env_var: None,
+        docs_urls: Vec::new(),
+        remediation: None,
+    });
+
+    managed_bridge_manifest_with_setup(channel_id, metadata, setup)
+}
+
+fn managed_bridge_manifest_with_setup(
+    channel_id: &str,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    let plugin_id = format!("{channel_id}-managed-bridge");
+
+    managed_bridge_manifest_with_plugin_id(plugin_id.as_str(), channel_id, metadata, setup)
+}
+
+fn managed_bridge_manifest_with_plugin_id(
+    plugin_id: &str,
+    channel_id: &str,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_daemon::kernel::PluginSetup>,
+) -> loongclaw_daemon::kernel::PluginManifest {
+    loongclaw_daemon::kernel::PluginManifest {
+        api_version: Some("v1alpha1".to_owned()),
+        version: Some("1.0.0".to_owned()),
+        plugin_id: plugin_id.to_owned(),
+        provider_id: format!("{channel_id}-provider"),
+        connector_name: format!("{channel_id}-connector"),
+        channel_id: Some(channel_id.to_owned()),
+        endpoint: Some("http://127.0.0.1:9999/invoke".to_owned()),
+        capabilities: BTreeSet::new(),
+        trust_tier: loongclaw_daemon::kernel::PluginTrustTier::Unverified,
+        metadata,
+        summary: None,
+        tags: Vec::new(),
+        input_examples: Vec::new(),
+        output_examples: Vec::new(),
+        defer_loading: false,
+        setup,
+        slot_claims: Vec::new(),
+        compatibility: None,
+    }
+}
+
+fn managed_bridge_setup_with_guidance(
+    surface: &str,
+    required_env_vars: Vec<&str>,
+    required_config_keys: Vec<&str>,
+    docs_urls: Vec<&str>,
+    remediation: Option<&str>,
+) -> loongclaw_daemon::kernel::PluginSetup {
+    let normalized_required_env_vars = required_env_vars.into_iter().map(str::to_owned).collect();
+    let normalized_required_config_keys = required_config_keys
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    let normalized_docs_urls = docs_urls.into_iter().map(str::to_owned).collect();
+    let normalized_remediation = remediation.map(str::to_owned);
+
+    loongclaw_daemon::kernel::PluginSetup {
+        mode: loongclaw_daemon::kernel::PluginSetupMode::MetadataOnly,
+        surface: Some(surface.to_owned()),
+        required_env_vars: normalized_required_env_vars,
+        recommended_env_vars: Vec::new(),
+        required_config_keys: normalized_required_config_keys,
+        default_env_var: None,
+        docs_urls: normalized_docs_urls,
+        remediation: normalized_remediation,
+    }
+}
+
+fn compatible_managed_bridge_metadata(
+    transport_family: &str,
+    target_contract: &str,
+) -> BTreeMap<String, String> {
+    let mut metadata = BTreeMap::new();
+
+    metadata.insert("adapter_family".to_owned(), "channel-bridge".to_owned());
+    metadata.insert("transport_family".to_owned(), transport_family.to_owned());
+    metadata.insert("target_contract".to_owned(), target_contract.to_owned());
+
+    metadata
+}
+
+fn write_managed_bridge_manifest(
+    install_root: &Path,
+    directory_name: &str,
+    manifest: &loongclaw_daemon::kernel::PluginManifest,
+) {
+    let plugin_directory = install_root.join(directory_name);
+    let manifest_path = plugin_directory.join("loongclaw.plugin.json");
+    let encoded_manifest =
+        serde_json::to_string_pretty(manifest).expect("serialize managed bridge manifest");
+
+    std::fs::create_dir_all(&plugin_directory).expect("create managed bridge plugin directory");
+    std::fs::write(&manifest_path, encoded_manifest).expect("write managed bridge plugin manifest");
+}
+
 mod acp;
 mod architecture;
+mod ask_cli;
 mod chat_cli;
 mod cli_tests;
 mod doctor_feishu;
@@ -94,17 +210,21 @@ mod gateway_api_turn;
 mod gateway_owner_state;
 mod gateway_read_models;
 mod import_cli;
+mod latest_selector_process_support;
+mod logging;
 mod memory_context_benchmark_cli;
 mod migrate_cli;
 mod migration;
 mod multi_channel_serve_cli;
 mod onboard_cli;
+mod personalize_cli;
 mod plugins_cli;
 mod programmatic;
 mod runtime_capability_cli;
 mod runtime_experiment_cli;
 mod runtime_restore_cli;
 mod runtime_snapshot_cli;
+mod sessions_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
@@ -257,6 +377,29 @@ fn ask_cli_accepts_message_session_and_acp_flags() {
             assert!(acp_event_stream);
             assert_eq!(acp_bootstrap_mcp_server, vec!["filesystem".to_owned()]);
             assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn ask_cli_accepts_latest_session_selector() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "ask",
+        "--message",
+        "Summarize this repository",
+        "--session",
+        "latest",
+    ])
+    .expect("ask CLI should accept the latest session selector");
+
+    match cli.command {
+        Some(Commands::Ask {
+            message, session, ..
+        }) => {
+            assert_eq!(message, "Summarize this repository");
+            assert_eq!(session.as_deref(), Some("latest"));
         }
         other => panic!("unexpected command parse result: {other:?}"),
     }
@@ -1118,6 +1261,188 @@ fn render_channel_surfaces_text_reports_catalog_only_channels() {
 }
 
 #[test]
+fn render_channel_surfaces_text_reports_managed_plugin_bridge_discovery() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains("Weixin [weixin]"),
+        "rendered channel surfaces should include the weixin surface: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "managed_plugin_bridge_discovery status=not_configured managed_install_root=- scan_issue=- compatible=0 compatible_plugin_ids=- ambiguity_status=- incomplete=0 incompatible=0"
+        ),
+        "rendered channel surfaces should include managed discovery summaries: {rendered}"
+    );
+}
+
+#[test]
+fn render_channel_surfaces_text_reports_plugin_backed_stable_targets() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains(
+            "stable_targets=\"weixin:<account>:contact:<id>[conversation]:direct contact conversation,weixin:<account>:room:<id>[conversation]:group room conversation\""
+        ),
+        "rendered channel surfaces should expose weixin stable target templates: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "stable_targets=\"qqbot:<account>:c2c:<openid>[conversation]:direct message openid,qqbot:<account>:group:<openid>[conversation]:group openid,qqbot:<account>:channel:<id>[conversation]:guild channel id\""
+        ),
+        "rendered channel surfaces should expose qqbot stable target templates: {rendered}"
+    );
+    assert!(
+        rendered
+            .contains("account_scope_note=\"openids are scoped to the selected qq bot account\""),
+        "rendered channel surfaces should expose qqbot account scope guidance: {rendered}"
+    );
+}
+
+#[test]
+fn render_channel_surfaces_text_reports_managed_plugin_bridge_ambiguity_and_setup_guidance() {
+    let config = mvp::config::LoongClawConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin_surface = inventory
+        .channel_surfaces
+        .iter_mut()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin_surface
+        .plugin_bridge_discovery
+        .as_mut()
+        .expect("weixin managed discovery");
+
+    discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound;
+    discovery.ambiguity_status =
+        Some(mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins);
+    discovery.compatible_plugins = 2;
+    discovery.compatible_plugin_ids =
+        vec!["weixin-bridge-a".to_owned(), "weixin-bridge-b".to_owned()];
+    discovery.incomplete_plugins = 1;
+    discovery.incompatible_plugins = 0;
+    discovery.plugins = vec![mvp::channel::ChannelDiscoveredPluginBridge {
+        plugin_id: "weixin-bridge-a".to_owned(),
+        source_path: "/tmp/weixin-bridge-a/loongclaw.plugin.json".to_owned(),
+        package_root: "/tmp/weixin-bridge-a".to_owned(),
+        package_manifest_path: Some("/tmp/weixin-bridge-a/loongclaw.plugin.json".to_owned()),
+        bridge_kind: "managed_connector".to_owned(),
+        adapter_family: "channel-bridge".to_owned(),
+        transport_family: Some("wechat_clawbot_ilink_bridge".to_owned()),
+        target_contract: Some("weixin_reply_loop".to_owned()),
+        account_scope: Some("shared".to_owned()),
+        status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
+        issues: vec!["example issue".to_owned()],
+        missing_fields: vec!["metadata.transport_family".to_owned()],
+        required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+        recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+        required_config_keys: vec!["weixin.bridge_url".to_owned()],
+        default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+        setup_docs_urls: vec!["https://example.test/docs/weixin-bridge".to_owned()],
+        setup_remediation: Some(
+            "Run the ClawBot setup flow before enabling this bridge.\nThen verify only one managed bridge remains.".to_owned(),
+        ),
+    }];
+
+    let rendered = render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains("ambiguity_status=multiple_compatible_plugins"),
+        "rendered channel surfaces should expose managed bridge ambiguity status: {rendered}"
+    );
+    assert!(
+        rendered.contains("compatible_plugin_ids=weixin-bridge-a,weixin-bridge-b"),
+        "rendered channel surfaces should expose managed bridge compatible plugin ids: {rendered}"
+    );
+    assert!(
+        rendered.contains("required_env_vars=WEIXIN_BRIDGE_URL"),
+        "rendered channel surfaces should expose managed bridge setup env requirements: {rendered}"
+    );
+    assert!(
+        rendered.contains("setup_docs_urls=https://example.test/docs/weixin-bridge"),
+        "rendered channel surfaces should expose managed bridge setup docs links: {rendered}"
+    );
+    assert!(
+        rendered.contains(
+            "setup_remediation=\"Run the ClawBot setup flow before enabling this bridge.\\nThen verify only one managed bridge remains.\""
+        ),
+        "rendered channel surfaces should expose managed bridge setup remediation text: {rendered}"
+    );
+}
+
+#[test]
+fn render_channel_surfaces_text_escapes_untrusted_managed_bridge_values() {
+    let config = mvp::config::LoongClawConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin_surface = inventory
+        .channel_surfaces
+        .iter_mut()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin_surface
+        .plugin_bridge_discovery
+        .as_mut()
+        .expect("weixin managed discovery");
+
+    discovery.managed_install_root = Some("/tmp/managed bridge".to_owned());
+    discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::ScanFailed;
+    discovery.scan_issue = Some("scan failed\nplease inspect".to_owned());
+    discovery.compatible_plugin_ids = vec!["bridge\none".to_owned()];
+    discovery.plugins = vec![mvp::channel::ChannelDiscoveredPluginBridge {
+        plugin_id: "weixin bridge".to_owned(),
+        source_path: "/tmp/plugin root/bridge\nplugin.json".to_owned(),
+        package_root: "/tmp/plugin root".to_owned(),
+        package_manifest_path: Some("/tmp/plugin root/manifest\tbridge.json".to_owned()),
+        bridge_kind: "managed connector".to_owned(),
+        adapter_family: "channel bridge".to_owned(),
+        transport_family: Some("wechat clawbot".to_owned()),
+        target_contract: Some("weixin\nreply".to_owned()),
+        account_scope: Some("shared scope".to_owned()),
+        status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract,
+        issues: vec!["missing\nfield".to_owned()],
+        missing_fields: vec!["metadata.transport family".to_owned()],
+        required_env_vars: vec!["WEIXIN BRIDGE URL".to_owned()],
+        recommended_env_vars: vec!["WEIXIN BRIDGE TOKEN".to_owned()],
+        required_config_keys: vec!["weixin.bridge url".to_owned()],
+        default_env_var: Some("WEIXIN DEFAULT ENV".to_owned()),
+        setup_docs_urls: vec!["https://example.test/docs bridge".to_owned()],
+        setup_remediation: Some("fix bridge\nthen retry".to_owned()),
+    }];
+
+    let rendered =
+        loongclaw_daemon::render_channel_surfaces_text("/tmp/loongclaw.toml", &inventory);
+
+    assert!(
+        rendered.contains("managed_install_root=\"/tmp/managed bridge\""),
+        "managed install root should be escaped when it contains spaces: {rendered}"
+    );
+    assert!(
+        rendered.contains("scan_issue=\"scan failed\\nplease inspect\""),
+        "scan issue should escape newlines: {rendered}"
+    );
+    assert!(
+        rendered.contains("id=\"weixin bridge\""),
+        "plugin id should be escaped when it contains spaces: {rendered}"
+    );
+    assert!(
+        rendered.contains("target_contract=\"weixin\\nreply\""),
+        "target contract should escape newlines: {rendered}"
+    );
+    assert!(
+        rendered.contains("setup_docs_urls=\"https://example.test/docs bridge\""),
+        "setup docs urls should be escaped when needed: {rendered}"
+    );
+    assert!(
+        rendered.contains("setup_remediation=\"fix bridge\\nthen retry\""),
+        "setup remediation should escape newlines: {rendered}"
+    );
+}
+
+#[test]
 fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
     use mvp::memory::MemorySystem as _;
 
@@ -1333,6 +1658,260 @@ fn build_channels_cli_json_payload_includes_onboarding_metadata() {
                         .and_then(serde_json::Value::as_str)
                         == Some("loong doctor --fix")
             })
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_plugin_bridge_contracts() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("manifest_channel_id"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("required_setup_surface"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("channel")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("runtime_owner"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("external_plugin")
+            })
+    );
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("qqbot")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("supported_operations"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|operations| {
+                            operations
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec!["send", "serve"])
+            })
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_plugin_bridge_stable_targets() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_catalog"]
+            .as_array()
+            .expect("channel catalog array")
+            .iter()
+            .any(|entry| {
+                entry.get("id").and_then(serde_json::Value::as_str) == Some("weixin")
+                    && entry
+                        .get("plugin_bridge_contract")
+                        .and_then(|contract| contract.get("stable_targets"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|targets| {
+                            targets
+                                .iter()
+                                .map(|target| {
+                                    let template =
+                                        target.get("template").and_then(serde_json::Value::as_str);
+                                    let target_kind = target
+                                        .get("target_kind")
+                                        .and_then(serde_json::Value::as_str);
+                                    let description = target
+                                        .get("description")
+                                        .and_then(serde_json::Value::as_str);
+                                    (template, target_kind, description)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        == Some(vec![
+                            (
+                                Some("weixin:<account>:contact:<id>"),
+                                Some("conversation"),
+                                Some("direct contact conversation"),
+                            ),
+                            (
+                                Some("weixin:<account>:room:<id>"),
+                                Some("conversation"),
+                                Some("group room conversation"),
+                            ),
+                        ])
+            })
+    );
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("qqbot")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("account_scope_note"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("openids are scoped to the selected qq bot account")
+                    && surface
+                        .get("catalog")
+                        .and_then(|catalog| catalog.get("plugin_bridge_contract"))
+                        .and_then(|contract| contract.get("stable_targets"))
+                        .and_then(serde_json::Value::as_array)
+                        .map(|targets| targets.len())
+                        == Some(3)
+            })
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_managed_plugin_bridge_discovery() {
+    let config = mvp::config::LoongClawConfig::default();
+    let inventory = mvp::channel::channel_inventory(&config);
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+
+    assert!(
+        encoded["channel_surfaces"]
+            .as_array()
+            .expect("channel surfaces array")
+            .iter()
+            .any(|surface| {
+                surface
+                    .get("catalog")
+                    .and_then(|catalog| catalog.get("id"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("weixin")
+                    && surface
+                        .get("plugin_bridge_discovery")
+                        .and_then(|discovery| discovery.get("status"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("not_configured")
+                    && surface
+                        .get("plugin_bridge_discovery")
+                        .and_then(|discovery| discovery.get("compatible_plugins"))
+                        .and_then(serde_json::Value::as_u64)
+                        == Some(0)
+            })
+    );
+}
+
+#[test]
+fn build_channels_cli_json_payload_includes_managed_plugin_bridge_guidance_fields() {
+    let config = mvp::config::LoongClawConfig::default();
+    let mut inventory = mvp::channel::channel_inventory(&config);
+    let weixin_surface = inventory
+        .channel_surfaces
+        .iter_mut()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin_surface
+        .plugin_bridge_discovery
+        .as_mut()
+        .expect("weixin managed discovery");
+
+    discovery.status = mvp::channel::ChannelPluginBridgeDiscoveryStatus::MatchesFound;
+    discovery.ambiguity_status =
+        Some(mvp::channel::ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins);
+    discovery.compatible_plugins = 2;
+    discovery.compatible_plugin_ids =
+        vec!["weixin-bridge-a".to_owned(), "weixin-bridge-b".to_owned()];
+    discovery.plugins = vec![mvp::channel::ChannelDiscoveredPluginBridge {
+        plugin_id: "weixin-bridge-a".to_owned(),
+        source_path: "/tmp/weixin-bridge-a/loongclaw.plugin.json".to_owned(),
+        package_root: "/tmp/weixin-bridge-a".to_owned(),
+        package_manifest_path: Some("/tmp/weixin-bridge-a/loongclaw.plugin.json".to_owned()),
+        bridge_kind: "managed_connector".to_owned(),
+        adapter_family: "channel-bridge".to_owned(),
+        transport_family: Some("wechat_clawbot_ilink_bridge".to_owned()),
+        target_contract: Some("weixin_reply_loop".to_owned()),
+        account_scope: Some("shared".to_owned()),
+        status: mvp::channel::ChannelDiscoveredPluginBridgeStatus::CompatibleReady,
+        issues: Vec::new(),
+        missing_fields: Vec::new(),
+        required_env_vars: vec!["WEIXIN_BRIDGE_URL".to_owned()],
+        recommended_env_vars: vec!["WEIXIN_BRIDGE_ACCESS_TOKEN".to_owned()],
+        required_config_keys: vec!["weixin.bridge_url".to_owned()],
+        default_env_var: Some("WEIXIN_BRIDGE_URL".to_owned()),
+        setup_docs_urls: vec!["https://example.test/docs/weixin-bridge".to_owned()],
+        setup_remediation: Some(
+            "Run the ClawBot setup flow before enabling this bridge.".to_owned(),
+        ),
+    }];
+
+    let payload = build_channels_cli_json_payload("/tmp/loongclaw.toml", &inventory);
+    let encoded = serde_json::to_value(&payload).expect("serialize payload");
+    let surfaces = encoded["channel_surfaces"]
+        .as_array()
+        .expect("channel surfaces array");
+    let weixin = surfaces
+        .iter()
+        .find(|surface| {
+            surface
+                .get("catalog")
+                .and_then(|catalog| catalog.get("id"))
+                .and_then(serde_json::Value::as_str)
+                == Some("weixin")
+        })
+        .expect("weixin surface entry");
+
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["ambiguity_status"]
+            .as_str()
+            .expect("ambiguity_status should be string"),
+        "multiple_compatible_plugins"
+    );
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["compatible_plugin_ids"]
+            .as_array()
+            .expect("compatible_plugin_ids should be array")
+            .len(),
+        2
+    );
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["plugins"][0]["setup_docs_urls"][0]
+            .as_str()
+            .expect("setup docs url should be string"),
+        "https://example.test/docs/weixin-bridge"
+    );
+    assert_eq!(
+        weixin["plugin_bridge_discovery"]["plugins"][0]["setup_remediation"]
+            .as_str()
+            .expect("setup remediation should be string"),
+        "Run the ClawBot setup flow before enabling this bridge."
     );
 }
 

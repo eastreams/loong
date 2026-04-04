@@ -131,7 +131,71 @@ function formatMemoryProfile(
   }
 }
 
+function formatToolSource(
+  source: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (source) {
+    case "native":
+      return t("dashboard.toolMeta.native");
+    case "companion":
+      return t("dashboard.toolMeta.companion");
+    case "provider":
+      return t("dashboard.toolMeta.provider");
+    case "local":
+      return t("dashboard.toolMeta.local");
+    case "catalog":
+      return t("dashboard.toolMeta.catalog");
+    default:
+      return source;
+  }
+}
 
+function formatToolCapabilityState(
+  state: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (state) {
+    case "discoverable":
+      return t("dashboard.toolMeta.discoverable");
+    case "executable":
+      return t("dashboard.toolMeta.executable");
+    case "policy_limited":
+      return t("dashboard.toolMeta.policyLimited");
+    case "runtime_unavailable":
+      return t("dashboard.toolMeta.runtimeUnavailable");
+    default:
+      return state;
+  }
+}
+
+function formatToolLabel(
+  id: string,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  switch (id) {
+    case "shell_policy":
+    case "bash_exec":
+      return t("dashboard.toolItems.bash_exec", { defaultValue: "Bash execution" });
+    default:
+      return t(`dashboard.toolItems.${id}`, {
+        defaultValue: id.replace(/_/g, " "),
+      });
+  }
+}
+
+function buildToolMeta(
+  item: DashboardToolItem,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  return [
+    formatToolSource(item.source, t),
+    formatToolCapabilityState(item.capabilityState, t),
+    item.detail,
+  ]
+    .filter((part) => part && part.trim().length > 0)
+    .join(" ? ");
+}
 
 function buildConnectivityCopy(
   connectivity: DashboardConnectivity | null,
@@ -255,7 +319,6 @@ export default function DashboardPage() {
       <div className="dashboard-shell">
         <div className="dashboard-sidebar">
           <Panel
-            eyebrow={t("dashboard.sections.providerEyebrow")}
             title={t("dashboard.sections.providerTitle")}
           >
             <div className="dashboard-sidebar-provider-head">
@@ -444,7 +507,7 @@ export default function DashboardPage() {
                   onClick={() => setShowDebugConsole((value) => !value)}
                 >
                   {showDebugConsole
-                    ? t("dashboard.debug.back", { defaultValue: "返回 Dashboard" })
+                    ? t("dashboard.debug.back", { defaultValue: "返回状态" })
                     : t("dashboard.debug.open", { defaultValue: "Debug Console" })}
                 </button>
               </div>
@@ -616,9 +679,11 @@ export default function DashboardPage() {
         </div>
         <div className="dashboard-sidebar">
           <Panel
-            eyebrow={t("dashboard.sections.toolsEyebrow")}
             title={t("dashboard.sections.toolsTitle")}
           >
+            <div className="dashboard-section-heading">
+              {t("dashboard.sections.toolsGovernanceLabel")}
+            </div>
             <div className="dashboard-tool-stats">
               <div className="dashboard-tool-stat">
                 <span className="dashboard-tool-stat-label">{t("dashboard.fields.approval")}</span>
@@ -641,16 +706,19 @@ export default function DashboardPage() {
             <div className="dashboard-tool-list">
               {toolItems.map((item) => (
                 <div key={item.id} className="dashboard-tool-row" title={item.detail}>
-                  <div className="dashboard-tool-row-name">
-                    {t(`dashboard.toolItems.${item.id}`)}
+                  <div className="dashboard-tool-row-head">
+                    <div className="dashboard-tool-row-name">
+                      {formatToolLabel(item.id, t)}
+                    </div>
+                    <span
+                      className={`dashboard-pill dashboard-pill-${item.enabled ? "good" : "muted"} dashboard-pill-compact`}
+                    >
+                      {item.enabled ? t("dashboard.values.enabled") : t("dashboard.values.disabled")}
+                    </span>
                   </div>
-                  <span
-                    className={`dashboard-pill dashboard-pill-${item.enabled ? "good" : "muted"} dashboard-pill-compact`}
-                  >
-                    {item.enabled ? t("dashboard.values.enabled") : t("dashboard.values.disabled")}
-                  </span>
+
                   <div className="dashboard-tool-row-meta">
-                    {item.detail}
+                    {buildToolMeta(item, t)}
                   </div>
                 </div>
               ))}

@@ -281,10 +281,14 @@ print_missing_release_guidance() {
   cat >&2 <<EOF
 error: no GitHub release is published for ${release_repo} yet.
 
-Install from a local checkout instead:
-  git clone https://github.com/${release_repo}.git
-  cd $(basename "${release_repo}")
-  bash scripts/install.sh --source --onboard
+Install from source instead:
+  1. Install Rust (if not already installed):
+     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+     source "\$HOME/.cargo/env"
+  2. Clone and build:
+     git clone https://github.com/${release_repo}.git
+     cd $(basename "${release_repo}")
+     bash scripts/install.sh --source --onboard
 EOF
 }
 
@@ -772,7 +776,7 @@ install_from_source() {
   (
     cd "${repo_root}"
     LOONGCLAW_RELEASE_BUILD=1 \
-      cargo build -p loongclaw-daemon --bin "${bin_name}" --release --locked
+      cargo build -p loongclaw --bin "${bin_name}" --release --locked
   )
 
   source_binary="${repo_root}/target/release/${primary_binary_name}"

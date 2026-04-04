@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Internal support crate for LoongClaw: specification execution surfaces"
+repository.workspace = true
+homepage.workspace = true
 
 [features]
 test-hooks = []
@@ -11,9 +14,9 @@ test-support = ["test-hooks"]
 
 [dependencies]
 async-trait.workspace = true
-kernel = { package = "loongclaw-kernel", path = "../kernel" }
-loongclaw-contracts = { path = "../contracts" }
-loongclaw-protocol = { path = "../protocol" }
+kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../kernel" }
+loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
 serde.workspace = true
 serde_json.workspace = true
 reqwest.workspace = true

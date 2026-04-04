@@ -1070,6 +1070,13 @@
   border-bottom: none;
 }
 
+.dashboard-tool-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
 .dashboard-tool-row-name {
   font-size: 0.82rem;
   font-weight: 600;

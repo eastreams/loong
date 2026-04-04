@@ -843,6 +843,100 @@ fn channel_registry_collects_ready_channel_candidates() {
 }
 
 #[test]
+fn channel_registry_collects_managed_bridge_preview_when_enabled_bridge_needs_review() {
+    let mut config = mvp::config::LoongClawConfig::default();
+    config.weixin.enabled = true;
+    config.weixin.bridge_url = Some("https://bridge.example.test".to_owned());
+    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "bridge-token".to_owned(),
+    ));
+    config.weixin.allowed_contact_ids = vec!["wx-contact".to_owned()];
+
+    let readiness =
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config(
+            &config,
+        );
+    let previews = loongclaw_daemon::migration::channels::collect_channel_previews(
+        &config,
+        &readiness,
+        "test source",
+    );
+    let weixin_preview = previews
+        .iter()
+        .find(|preview| preview.candidate.id == "weixin")
+        .expect("weixin preview");
+
+    assert_eq!(
+        weixin_preview.candidate.status,
+        loongclaw_daemon::migration::types::PreviewStatus::NeedsReview
+    );
+    assert_eq!(
+        weixin_preview.surface.level,
+        loongclaw_daemon::migration::types::ImportSurfaceLevel::Review
+    );
+    assert!(
+        weixin_preview
+            .candidate
+            .summary
+            .contains("external_skills.install_root is not configured"),
+        "enabled managed bridge channels should surface discovery guidance during migration preview: {weixin_preview:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_collects_ready_managed_bridge_preview_when_compatible_plugin_exists() {
+    let install_root = unique_temp_dir("managed-bridge-preview-ready");
+    let mut config = mvp::config::LoongClawConfig::default();
+    let manifest = managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+    );
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+
+    write_managed_bridge_manifest(install_root.as_path(), "weixin-ready-bridge", &manifest);
+
+    config.weixin.enabled = true;
+    config.weixin.bridge_url = Some("https://bridge.example.test".to_owned());
+    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "bridge-token".to_owned(),
+    ));
+    config.weixin.allowed_contact_ids = vec!["wx-contact".to_owned()];
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let readiness =
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config(
+            &config,
+        );
+    let previews = loongclaw_daemon::migration::channels::collect_channel_previews(
+        &config,
+        &readiness,
+        "test source",
+    );
+    let weixin_preview = previews
+        .iter()
+        .find(|preview| preview.candidate.id == "weixin")
+        .expect("weixin preview");
+
+    assert_eq!(
+        weixin_preview.candidate.status,
+        loongclaw_daemon::migration::types::PreviewStatus::Ready
+    );
+    assert_eq!(
+        weixin_preview.surface.level,
+        loongclaw_daemon::migration::types::ImportSurfaceLevel::Ready
+    );
+    assert!(
+        weixin_preview
+            .candidate
+            .summary
+            .contains("weixin-managed-bridge"),
+        "ready managed bridge previews should surface the compatible plugin identity: {weixin_preview:#?}"
+    );
+}
+
+#[test]
 fn channel_preview_order_follows_shared_service_channel_catalog_order() {
     let mut config = mvp::config::LoongClawConfig::default();
     config.telegram.enabled = true;
@@ -883,6 +977,33 @@ fn channel_preview_order_follows_shared_service_channel_catalog_order() {
         .collect::<Vec<_>>();
 
     assert_eq!(preview_ids, ordered_subset);
+}
+
+#[test]
+fn migration_classify_current_setup_treats_enabled_managed_bridge_without_ready_plugin_as_repairable()
+ {
+    let path = unique_temp_dir("managed-bridge-repairable").join("config.toml");
+    let mut config = mvp::config::LoongClawConfig::default();
+
+    config.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "provider-secret".to_owned(),
+    ));
+    config.provider.model = "openai/gpt-5.1-codex".to_owned();
+    config.weixin.enabled = true;
+    config.weixin.bridge_url = Some("https://bridge.example.test".to_owned());
+    config.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "bridge-token".to_owned(),
+    ));
+    config.weixin.allowed_contact_ids = vec!["wx-contact".to_owned()];
+
+    mvp::config::write(Some(path.to_string_lossy().as_ref()), &config, true)
+        .expect("write managed bridge config");
+
+    assert_eq!(
+        loongclaw_daemon::migration::discovery::classify_current_setup(&path),
+        loongclaw_daemon::migration::types::CurrentSetupState::Repairable,
+        "enabled managed bridge channels without a discovered compatible plugin should keep the current setup in the repairable bucket"
+    );
 }
 
 #[test]
@@ -1008,6 +1129,222 @@ fn channel_registry_collects_preflight_checks_for_enabled_channels() {
                 && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
         }),
         "registry preflight should include wecom long-connection readiness: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_warns_when_managed_bridge_install_root_is_missing_for_enabled_plugin_backed_channel()
+ {
+    let config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Warn
+                && check.detail.contains("external_skills.install_root")
+        }),
+        "registry preflight should surface managed bridge discovery guidance when install_root is missing: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_passes_when_single_compatible_managed_bridge_is_available_for_enabled_plugin_backed_channel()
+ {
+    let install_root = unique_temp_dir("managed-bridge-preflight-ready");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Pass
+                && check.detail.contains("weixin-managed-bridge")
+        }),
+        "registry preflight should pass when exactly one compatible managed bridge is ready: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_warns_when_managed_bridge_setup_is_incomplete_for_enabled_plugin_backed_channel()
+ {
+    let install_root = unique_temp_dir("managed-bridge-preflight-incomplete");
+    let mut metadata = super::compatible_managed_bridge_metadata(
+        "qq_official_bot_gateway_or_plugin_bridge",
+        "qqbot_reply_loop",
+    );
+    let removed_transport_family = metadata.remove("transport_family");
+    let setup = super::managed_bridge_setup_with_guidance(
+        "channel",
+        vec!["QQBOT_BRIDGE_URL"],
+        vec!["qqbot.bridge_url"],
+        vec!["https://example.test/docs/qqbot-bridge"],
+        Some("Run the QQ bridge setup flow before enabling this bridge."),
+    );
+    let manifest = super::managed_bridge_manifest_with_setup("qqbot", metadata, Some(setup));
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        }
+    }))
+    .expect("deserialize qqbot config");
+
+    assert_eq!(
+        removed_transport_family.as_deref(),
+        Some("qq_official_bot_gateway_or_plugin_bridge")
+    );
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(install_root.as_path(), "qqbot-bridge-guided", &manifest);
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "qq bot channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Warn
+                && check.detail.contains("QQBOT_BRIDGE_URL")
+                && check.detail.contains("qqbot.bridge_url")
+        }),
+        "registry preflight should preserve managed bridge setup guidance when discovery finds only incomplete plugins: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_warns_when_managed_bridge_discovery_is_ambiguous_for_enabled_plugin_backed_channel()
+ {
+    let install_root = unique_temp_dir("managed-bridge-preflight-ambiguous");
+    let first_manifest = super::managed_bridge_manifest_with_plugin_id(
+        "weixin-bridge-a",
+        "weixin",
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+        Some(super::managed_bridge_setup_with_guidance(
+            "channel",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = super::managed_bridge_manifest_with_plugin_id(
+        "weixin-bridge-b",
+        "weixin",
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+        Some(super::managed_bridge_setup_with_guidance(
+            "channel",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-bridge-a",
+        &first_manifest,
+    );
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-bridge-b",
+        &second_manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::migration::channels::ChannelCheckLevel::Warn
+                && check.detail.contains("weixin-bridge-a")
+                && check.detail.contains("weixin-bridge-b")
+        }),
+        "registry preflight should warn when multiple compatible managed bridges are discovered: {checks:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_ignores_unconfigured_plugin_backed_channels_even_when_managed_bridge_is_installed()
+ {
+    let install_root = unique_temp_dir("managed-bridge-preflight-unconfigured");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config = mvp::config::LoongClawConfig::default();
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::migration::channels::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().all(|check| check.name != "weixin channel"),
+        "registry preflight should not surface unmanaged plugin-backed channels that still match the default placeholder snapshot: {checks:#?}"
     );
 }
 
@@ -1630,6 +1967,391 @@ fn migration_compose_recommended_candidate_supplements_channels_without_overwrit
         channels_domain.decision,
         Some(loongclaw_daemon::migration::types::PreviewDecision::Supplement),
         "composed channels preview should explicitly say that channels were supplemented from detected sources"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_keeps_ready_plugin_backed_bridge_channels() {
+    let install_root = unique_temp_dir("managed-bridge-compose-ready");
+    let manifest = managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+    );
+    let mut existing = mvp::config::LoongClawConfig::default();
+    let mut codex = mvp::config::LoongClawConfig::default();
+
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openai-secret".to_owned(),
+    ));
+    existing.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    write_managed_bridge_manifest(install_root.as_path(), "weixin-ready-bridge", &manifest);
+
+    codex.provider.kind = mvp::config::ProviderKind::Deepseek;
+    codex.provider.base_url = codex.provider.kind.profile().base_url.to_owned();
+    codex.provider.chat_completions_path = codex
+        .provider
+        .kind
+        .profile()
+        .chat_completions_path
+        .to_owned();
+    codex.weixin.enabled = true;
+    codex.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    codex.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    codex.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+    codex.external_skills.install_root = Some(install_root.display().to_string());
+
+    let existing_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+    let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = loongclaw_daemon::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+
+    assert!(
+        composed.config.weixin.enabled,
+        "recommended import should keep plugin-backed bridge enablement when the detected source is selected"
+    );
+    assert_eq!(
+        composed.config.weixin.bridge_url.as_deref(),
+        Some("https://bridge.example.test/weixin")
+    );
+    assert!(
+        composed
+            .channel_candidates
+            .iter()
+            .any(|channel| channel.id == "weixin"
+                && channel.status == loongclaw_daemon::migration::types::PreviewStatus::Ready),
+        "recommended import should preserve the ready plugin-backed bridge candidate: {composed:#?}"
+    );
+    assert!(
+        composed
+            .channel_candidates
+            .iter()
+            .any(|channel| channel.id == "weixin"
+                && channel.source == "Codex config at ~/.codex/config.toml"),
+        "recommended import should preserve source attribution for plugin-backed bridge channels: {composed:#?}"
+    );
+}
+
+#[test]
+fn channel_registry_apply_selected_channels_copies_plugin_bridge_install_root() {
+    let install_root = unique_temp_dir("managed-bridge-apply-install-root");
+    let mut target = mvp::config::LoongClawConfig::default();
+    let source: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        },
+        "external_skills": {
+            "install_root": install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize source config");
+
+    let changed = loongclaw_daemon::migration::channels::apply_selected_channels(
+        &mut target,
+        &source,
+        &["weixin"],
+    );
+
+    assert!(
+        changed,
+        "plugin-backed channel selection should mutate the target config"
+    );
+    assert_eq!(
+        target.external_skills.install_root.as_deref(),
+        Some(install_root.to_string_lossy().as_ref()),
+        "plugin-backed channel selection should carry the managed bridge install root alongside the channel config"
+    );
+}
+
+#[test]
+fn channel_registry_apply_selected_channels_skips_conflicting_plugin_bridge_install_root() {
+    let target_install_root = unique_temp_dir("managed-bridge-target-install-root");
+    let source_install_root = unique_temp_dir("managed-bridge-source-install-root");
+    let mut target: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "external_skills": {
+            "install_root": target_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize target config");
+    let source: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_url": "https://bridge.example.test/weixin",
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        },
+        "external_skills": {
+            "install_root": source_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize source config");
+
+    let changed = loongclaw_daemon::migration::channels::apply_selected_channels(
+        &mut target,
+        &source,
+        &["weixin"],
+    );
+
+    assert!(
+        !changed,
+        "plugin-backed channel selection should not silently merge a channel that needs a different managed bridge install root"
+    );
+    assert!(
+        !target.weixin.enabled,
+        "conflicting managed bridge install roots should leave the target channel unchanged"
+    );
+    assert_eq!(
+        target.external_skills.install_root.as_deref(),
+        Some(target_install_root.to_string_lossy().as_ref()),
+        "conflicting managed bridge install roots should preserve the existing managed bridge root"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_marks_plugin_bridge_install_root_conflicts_for_review() {
+    let current_install_root = unique_temp_dir("managed-bridge-current-install-root");
+    let detected_install_root = unique_temp_dir("managed-bridge-detected-install-root");
+    let current_manifest = managed_bridge_manifest(
+        "qqbot",
+        Some("channel"),
+        compatible_managed_bridge_metadata(
+            "qq_official_bot_gateway_or_plugin_bridge",
+            "qqbot_reply_loop",
+        ),
+    );
+    let detected_manifest = managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        compatible_managed_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+    );
+    let mut codex = mvp::config::LoongClawConfig::default();
+    let existing: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "provider": {
+            "api_key": "openai-secret",
+            "model": "openai/gpt-5.1-codex"
+        },
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        },
+        "external_skills": {
+            "install_root": current_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize existing config");
+
+    std::fs::create_dir_all(&current_install_root).expect("create current install root");
+    std::fs::create_dir_all(&detected_install_root).expect("create detected install root");
+    write_managed_bridge_manifest(
+        current_install_root.as_path(),
+        "qqbot-current-bridge",
+        &current_manifest,
+    );
+    write_managed_bridge_manifest(
+        detected_install_root.as_path(),
+        "weixin-detected-bridge",
+        &detected_manifest,
+    );
+
+    codex.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "openai-secret".to_owned(),
+    ));
+    codex.provider.model = "openai/gpt-5.1-codex".to_owned();
+    codex.weixin.enabled = true;
+    codex.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    codex.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    codex.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+    codex.external_skills.install_root = Some(detected_install_root.display().to_string());
+
+    let existing_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        existing,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("existing candidate");
+    let codex_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        codex,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("codex candidate");
+
+    let composed = loongclaw_daemon::migration::planner::compose_recommended_import_candidate(&[
+        existing_candidate,
+        codex_candidate,
+    ])
+    .expect("recommended candidate");
+    let weixin_candidate = composed
+        .channel_candidates
+        .iter()
+        .find(|channel| channel.id == "weixin")
+        .expect("weixin candidate");
+
+    assert!(
+        composed.config.qqbot.enabled,
+        "recommended import should preserve the currently configured plugin-backed channel"
+    );
+    assert!(
+        !composed.config.weixin.enabled,
+        "recommended import should not silently merge a plugin-backed channel that depends on a conflicting managed bridge install root"
+    );
+    assert_eq!(
+        composed.config.external_skills.install_root.as_deref(),
+        Some(current_install_root.to_string_lossy().as_ref()),
+        "recommended import should preserve the active managed bridge install root when another source conflicts"
+    );
+    assert_eq!(
+        weixin_candidate.status,
+        loongclaw_daemon::migration::types::PreviewStatus::NeedsReview,
+        "conflicting managed bridge install roots should downgrade the affected channel to review"
+    );
+    assert!(
+        weixin_candidate
+            .summary
+            .contains("managed bridge install_root conflict"),
+        "recommended import should explain why the plugin-backed channel was not merged automatically: {weixin_candidate:#?}"
+    );
+}
+
+#[test]
+fn migration_compose_recommended_candidate_preserves_selected_channel_conflict_over_later_supplement()
+ {
+    let current_install_root = unique_temp_dir("managed-bridge-selected-conflict-current");
+    let conflicting_install_root = unique_temp_dir("managed-bridge-selected-conflict-detected");
+    let current_manifest = managed_bridge_manifest(
+        "qqbot",
+        Some("channel"),
+        compatible_managed_bridge_metadata(
+            "qq_official_bot_gateway_or_plugin_bridge",
+            "qqbot_reply_loop",
+        ),
+    );
+    let mut current: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "qqbot": {
+            "enabled": true,
+            "app_id": "10001",
+            "client_secret": "qqbot-secret",
+            "allowed_peer_ids": ["openid-alice"]
+        },
+        "external_skills": {
+            "install_root": current_install_root.display().to_string()
+        }
+    }))
+    .expect("deserialize current config");
+    let mut conflicting = mvp::config::LoongClawConfig::default();
+    let mut supplemental = mvp::config::LoongClawConfig::default();
+
+    std::fs::create_dir_all(&current_install_root).expect("create current install root");
+    std::fs::create_dir_all(&conflicting_install_root).expect("create conflicting install root");
+    write_managed_bridge_manifest(
+        current_install_root.as_path(),
+        "qqbot-current-bridge",
+        &current_manifest,
+    );
+
+    current.provider.model = "openai/gpt-5.1-codex".to_owned();
+
+    conflicting.provider.model = "openai/gpt-5.1-codex".to_owned();
+    conflicting.weixin.enabled = true;
+    conflicting.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    conflicting.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    conflicting.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+    conflicting.external_skills.install_root = Some(conflicting_install_root.display().to_string());
+
+    supplemental.provider.model = "openai/gpt-5.1-codex".to_owned();
+    supplemental.weixin.enabled = true;
+    supplemental.weixin.bridge_url = Some("https://bridge.example.test/weixin".to_owned());
+    supplemental.weixin.bridge_access_token = Some(loongclaw_contracts::SecretRef::Inline(
+        "weixin-token".to_owned(),
+    ));
+    supplemental.weixin.allowed_contact_ids = vec!["wxid_alice".to_owned()];
+
+    let current_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::ExistingLoongClawConfig,
+        "existing config at ~/.config/loongclaw/config.toml".to_owned(),
+        current,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("current candidate");
+    let conflicting_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::CodexConfig,
+        "Codex config at ~/.codex/config.toml".to_owned(),
+        conflicting,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("conflicting candidate");
+    let supplemental_candidate = loongclaw_daemon::migration::discovery::build_import_candidate(
+        loongclaw_daemon::migration::types::ImportSourceKind::Environment,
+        "your current environment".to_owned(),
+        supplemental,
+        loongclaw_daemon::migration::discovery::resolve_channel_import_readiness_from_config,
+        Vec::new(),
+    )
+    .expect("supplemental candidate");
+
+    let composed = loongclaw_daemon::migration::planner::compose_recommended_import_candidate(&[
+        current_candidate,
+        conflicting_candidate,
+        supplemental_candidate,
+    ])
+    .expect("recommended candidate");
+    let weixin_candidate = composed
+        .channel_candidates
+        .iter()
+        .find(|channel| channel.id == "weixin")
+        .expect("weixin candidate");
+
+    assert_eq!(
+        weixin_candidate.status,
+        loongclaw_daemon::migration::types::PreviewStatus::NeedsReview,
+        "a conflicting selected channel should stay in review even if a later source could supplement the config"
+    );
+    assert!(
+        weixin_candidate
+            .summary
+            .contains("managed bridge install_root conflict"),
+        "selected channel conflicts must remain visible in the composed preview: {weixin_candidate:#?}"
+    );
+    assert!(
+        !composed.config.weixin.enabled,
+        "the composed config should not silently enable the conflicting plugin-backed channel"
     );
 }
 

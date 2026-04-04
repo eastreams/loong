@@ -23,6 +23,8 @@ use super::shared::{
 };
 use crate::secrets::resolve_secret_with_legacy_env;
 
+#[path = "channels_bridge.rs"]
+pub(crate) mod bridge;
 #[path = "channels_irc_impl.rs"]
 mod irc_impl;
 #[path = "channels_nostr_impl.rs"]
@@ -31,7 +33,14 @@ mod nostr_impl;
 mod signal_impl;
 mod twitch;
 
+#[allow(unused_imports)]
 pub use self::twitch::{ResolvedTwitchChannelConfig, TwitchAccountConfig, TwitchChannelConfig};
+#[allow(unused_imports)]
+pub use bridge::{
+    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
+    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
+    WeixinAccountConfig, WeixinChannelConfig,
+};
 pub use nostr_impl::{NostrAccountConfig, NostrChannelConfig, ResolvedNostrChannelConfig};
 pub(crate) use nostr_impl::{parse_nostr_private_key_hex, parse_nostr_public_key_hex};
 use signal_impl::{
@@ -75,6 +84,12 @@ pub(crate) const NOSTR_PRIVATE_KEY_ENV: &str = "NOSTR_PRIVATE_KEY";
 pub(crate) const TLON_SHIP_ENV: &str = "TLON_SHIP";
 pub(crate) const TLON_URL_ENV: &str = "TLON_URL";
 pub(crate) const TLON_CODE_ENV: &str = "TLON_CODE";
+pub(crate) const WEIXIN_BRIDGE_URL_ENV: &str = "WEIXIN_BRIDGE_URL";
+pub(crate) const WEIXIN_BRIDGE_ACCESS_TOKEN_ENV: &str = "WEIXIN_BRIDGE_ACCESS_TOKEN";
+pub(crate) const QQBOT_APP_ID_ENV: &str = "QQBOT_APP_ID";
+pub(crate) const QQBOT_CLIENT_SECRET_ENV: &str = "QQBOT_CLIENT_SECRET";
+pub(crate) const ONEBOT_WEBSOCKET_URL_ENV: &str = "ONEBOT_WEBSOCKET_URL";
+pub(crate) const ONEBOT_ACCESS_TOKEN_ENV: &str = "ONEBOT_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_ACCESS_TOKEN_ENV: &str = "WHATSAPP_ACCESS_TOKEN";
 pub(crate) const WHATSAPP_PHONE_NUMBER_ID_ENV: &str = "WHATSAPP_PHONE_NUMBER_ID";
 pub(crate) const WHATSAPP_VERIFY_TOKEN_ENV: &str = "WHATSAPP_VERIFY_TOKEN";
@@ -375,6 +390,8 @@ pub struct FeishuAccountConfig {
     #[serde(default)]
     pub allowed_chat_ids: Option<Vec<String>>,
     #[serde(default)]
+    pub ack_reactions: Option<bool>,
+    #[serde(default)]
     pub ignore_bot_messages: Option<bool>,
     #[serde(default)]
     pub acp: Option<ChannelAcpConfig>,
@@ -418,6 +435,7 @@ pub struct ResolvedFeishuChannelConfig {
     pub encrypt_key: Option<SecretRef>,
     pub encrypt_key_env: Option<String>,
     pub allowed_chat_ids: Vec<String>,
+    pub ack_reactions: bool,
     pub ignore_bot_messages: bool,
     pub acp: ChannelAcpConfig,
 }
@@ -606,6 +624,8 @@ pub struct FeishuChannelConfig {
     pub encrypt_key_env: Option<String>,
     #[serde(default)]
     pub allowed_chat_ids: Vec<String>,
+    #[serde(default = "default_true")]
+    pub ack_reactions: bool,
     #[serde(default = "default_true")]
     pub ignore_bot_messages: bool,
     #[serde(default)]
@@ -2185,6 +2205,7 @@ impl Default for FeishuChannelConfig {
             encrypt_key: None,
             encrypt_key_env: Some(FEISHU_ENCRYPT_KEY_ENV.to_owned()),
             allowed_chat_ids: Vec::new(),
+            ack_reactions: true,
             ignore_bot_messages: true,
             acp: ChannelAcpConfig::default(),
             accounts: BTreeMap::new(),
@@ -2226,6 +2247,54 @@ impl Default for WecomChannelConfig {
             reconnect_interval_s: default_wecom_reconnect_interval_seconds(),
             allowed_conversation_ids: Vec::new(),
             acp: ChannelAcpConfig::default(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for WeixinChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            bridge_url: None,
+            bridge_url_env: Some(WEIXIN_BRIDGE_URL_ENV.to_owned()),
+            bridge_access_token: None,
+            bridge_access_token_env: Some(WEIXIN_BRIDGE_ACCESS_TOKEN_ENV.to_owned()),
+            allowed_contact_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for QqbotChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            app_id: None,
+            app_id_env: Some(QQBOT_APP_ID_ENV.to_owned()),
+            client_secret: None,
+            client_secret_env: Some(QQBOT_CLIENT_SECRET_ENV.to_owned()),
+            allowed_peer_ids: Vec::new(),
+            accounts: BTreeMap::new(),
+        }
+    }
+}
+
+impl Default for OnebotChannelConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            account_id: None,
+            default_account: None,
+            websocket_url: None,
+            websocket_url_env: Some(ONEBOT_WEBSOCKET_URL_ENV.to_owned()),
+            access_token: None,
+            access_token_env: Some(ONEBOT_ACCESS_TOKEN_ENV.to_owned()),
+            allowed_group_ids: Vec::new(),
             accounts: BTreeMap::new(),
         }
     }
@@ -2704,6 +2773,9 @@ impl FeishuChannelConfig {
             allowed_chat_ids: account_override
                 .and_then(|account| account.allowed_chat_ids.clone())
                 .unwrap_or_else(|| self.allowed_chat_ids.clone()),
+            ack_reactions: account_override
+                .and_then(|account| account.ack_reactions)
+                .unwrap_or(self.ack_reactions),
             ignore_bot_messages: account_override
                 .and_then(|account| account.ignore_bot_messages)
                 .unwrap_or(self.ignore_bot_messages),
@@ -2735,6 +2807,7 @@ impl FeishuChannelConfig {
             encrypt_key: merged.encrypt_key,
             encrypt_key_env: merged.encrypt_key_env,
             allowed_chat_ids: merged.allowed_chat_ids,
+            ack_reactions: merged.ack_reactions,
             ignore_bot_messages: merged.ignore_bot_messages,
             acp: merged.acp,
         })
@@ -7841,7 +7914,13 @@ where
 mod tlon_support;
 
 #[cfg(test)]
+mod feishu_tests;
+
+#[cfg(test)]
 mod hotspot_tests;
+
+#[cfg(test)]
+mod partial_env_tests;
 
 #[cfg(test)]
 mod tests {
@@ -8160,104 +8239,6 @@ mod tests {
         assert_eq!(route.requested_account_id.as_deref(), Some("work"));
         assert_eq!(route.selected_configured_account_id, "work");
         assert!(!route.uses_implicit_fallback_default());
-    }
-
-    #[test]
-    fn feishu_multi_account_resolution_merges_base_and_account_overrides() {
-        let config: FeishuChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "mode": "webhook",
-            "app_id_env": "BASE_FEISHU_APP_ID",
-            "app_secret_env": "BASE_FEISHU_APP_SECRET",
-            "verification_token_env": "BASE_FEISHU_VERIFY",
-            "encrypt_key_env": "BASE_FEISHU_ENCRYPT",
-            "receive_id_type": "chat_id",
-            "webhook_bind": "127.0.0.1:8080",
-            "webhook_path": "/feishu/events",
-            "allowed_chat_ids": ["oc_base"],
-            "acp": {
-                "bootstrap_mcp_servers": ["filesystem"],
-                "working_directory": " /workspace/base "
-            },
-            "default_account": "Lark Prod",
-            "accounts": {
-                "Lark Prod": {
-                    "domain": "lark",
-                    "app_id": "cli_lark_123",
-                    "app_secret": "secret",
-                    "verification_token": "verify",
-                    "encrypt_key": "encrypt",
-                    "allowed_chat_ids": ["oc_lark"],
-                    "acp": {
-                        "bootstrap_mcp_servers": ["search"],
-                        "working_directory": "/workspace/lark-prod"
-                    }
-                },
-                "Feishu Backup": {
-                    "enabled": false,
-                    "app_id": "cli_backup_456",
-                    "app_secret": "secret"
-                }
-            }
-        }))
-        .expect("deserialize feishu multi-account config");
-
-        assert_eq!(
-            config.configured_account_ids(),
-            vec!["feishu-backup", "lark-prod"]
-        );
-        assert_eq!(config.default_configured_account_id(), "lark-prod");
-
-        let resolved = config
-            .resolve_account(None)
-            .expect("resolve default feishu account");
-        assert_eq!(resolved.configured_account_id, "lark-prod");
-        assert_eq!(resolved.domain, FeishuDomain::Lark);
-        assert_eq!(resolved.account.id, "lark_cli_lark_123");
-        assert_eq!(resolved.account.label, "lark:cli_lark_123");
-        assert_eq!(resolved.allowed_chat_ids, vec!["oc_lark".to_owned()]);
-        assert_eq!(
-            resolved.acp.bootstrap_mcp_servers,
-            vec!["search".to_owned()]
-        );
-        assert_eq!(
-            resolved.acp.resolved_working_directory(),
-            Some(std::path::PathBuf::from("/workspace/lark-prod"))
-        );
-        assert_eq!(resolved.receive_id_type, "chat_id");
-        assert_eq!(resolved.mode, FeishuChannelServeMode::Webhook);
-        assert_eq!(resolved.resolved_base_url(), "https://open.larksuite.com");
-
-        let disabled = config
-            .resolve_account(Some("Feishu Backup"))
-            .expect("resolve explicit feishu account");
-        assert_eq!(disabled.configured_account_id, "feishu-backup");
-        assert!(!disabled.enabled);
-        assert_eq!(disabled.allowed_chat_ids, vec!["oc_base".to_owned()]);
-        assert_eq!(
-            disabled.acp.bootstrap_mcp_servers,
-            vec!["filesystem".to_owned()]
-        );
-        assert_eq!(
-            disabled.acp.resolved_working_directory(),
-            Some(std::path::PathBuf::from("/workspace/base"))
-        );
-    }
-
-    #[test]
-    fn feishu_mode_defaults_to_websocket_when_not_configured() {
-        let config: FeishuChannelConfig = serde_json::from_value(json!({
-            "enabled": true,
-            "app_id": "cli_a1b2c3",
-            "app_secret": "secret"
-        }))
-        .expect("deserialize feishu config");
-
-        let resolved = config
-            .resolve_account(None)
-            .expect("resolve default feishu account");
-
-        assert_eq!(resolved.mode, FeishuChannelServeMode::Websocket);
     }
 
     #[test]
@@ -9465,70 +9446,6 @@ mod tests {
             service_url.as_deref(),
             Some("http://signal.example.test:8080")
         );
-    }
-
-    #[test]
-    fn discord_partial_deserialization_keeps_default_env_pointer() {
-        let config: DiscordChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize discord config");
-
-        assert_eq!(config.bot_token_env.as_deref(), Some(DISCORD_BOT_TOKEN_ENV));
-    }
-
-    #[test]
-    fn slack_partial_deserialization_keeps_default_env_pointer() {
-        let config: SlackChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize slack config");
-
-        assert_eq!(config.bot_token_env.as_deref(), Some(SLACK_BOT_TOKEN_ENV));
-    }
-
-    #[test]
-    fn webhook_partial_deserialization_keeps_default_env_pointers() {
-        let config: WebhookChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize webhook config");
-
-        assert_eq!(
-            config.endpoint_url_env.as_deref(),
-            Some(WEBHOOK_ENDPOINT_URL_ENV)
-        );
-        assert_eq!(
-            config.auth_token_env.as_deref(),
-            Some(WEBHOOK_AUTH_TOKEN_ENV)
-        );
-        assert_eq!(
-            config.signing_secret_env.as_deref(),
-            Some(WEBHOOK_SIGNING_SECRET_ENV)
-        );
-        assert_eq!(config.auth_header_name, "Authorization");
-        assert_eq!(config.auth_token_prefix, "Bearer ");
-        assert_eq!(config.payload_format, WebhookPayloadFormat::JsonText);
-        assert_eq!(config.payload_text_field, "text");
-    }
-
-    #[test]
-    fn teams_partial_deserialization_keeps_default_env_pointers() {
-        let config: TeamsChannelConfig = serde_json::from_value(json!({
-            "enabled": true
-        }))
-        .expect("deserialize teams config");
-
-        assert_eq!(
-            config.webhook_url_env.as_deref(),
-            Some(TEAMS_WEBHOOK_URL_ENV)
-        );
-        assert_eq!(config.app_id_env.as_deref(), Some(TEAMS_APP_ID_ENV));
-        assert_eq!(
-            config.app_password_env.as_deref(),
-            Some(TEAMS_APP_PASSWORD_ENV)
-        );
-        assert_eq!(config.tenant_id_env.as_deref(), Some(TEAMS_TENANT_ID_ENV));
     }
 
     #[test]

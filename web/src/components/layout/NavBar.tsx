@@ -37,6 +37,12 @@ export default function NavBar() {
         >
           {t("nav.dashboard")}
         </NavLink>
+        <NavLink
+          to="/abilities"
+          className={({ isActive }) => `nav-link${isActive ? " is-active" : ""}`}
+        >
+          {t("nav.abilities")}
+        </NavLink>
       </nav>
       <div className="nav-actions">
         <ConnectionBadge />

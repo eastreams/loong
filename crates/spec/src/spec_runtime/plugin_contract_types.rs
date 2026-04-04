@@ -379,97 +379,6 @@ pub fn default_marketplace_submission_preflight_rule_profile() -> PluginPrefligh
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BootstrapSpec {
-    pub enabled: bool,
-    #[serde(default)]
-    pub allow_http_json_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_process_stdio_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_native_ffi_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_wasm_component_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_mcp_server_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_acp_bridge_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub allow_acp_runtime_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub block_unverified_high_risk_auto_apply: Option<bool>,
-    #[serde(default)]
-    pub enforce_ready_execution: Option<bool>,
-    #[serde(default)]
-    pub max_tasks: Option<usize>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AutoProvisionSpec {
-    pub enabled: bool,
-    pub provider_id: String,
-    pub channel_id: String,
-    pub connector_name: Option<String>,
-    pub endpoint: Option<String>,
-    pub required_capabilities: BTreeSet<Capability>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum HotfixSpec {
-    ProviderVersion {
-        provider_id: String,
-        new_version: String,
-    },
-    ProviderConnector {
-        provider_id: String,
-        new_connector_name: String,
-    },
-    ChannelEndpoint {
-        channel_id: String,
-        new_endpoint: String,
-    },
-    ChannelEnabled {
-        channel_id: String,
-        enabled: bool,
-    },
-}
-
-impl HotfixSpec {
-    pub fn to_kernel_hotfix(&self) -> IntegrationHotfix {
-        match self {
-            Self::ProviderVersion {
-                provider_id,
-                new_version,
-            } => IntegrationHotfix::ProviderVersion {
-                provider_id: provider_id.clone(),
-                new_version: new_version.clone(),
-            },
-            Self::ProviderConnector {
-                provider_id,
-                new_connector_name,
-            } => IntegrationHotfix::ProviderConnector {
-                provider_id: provider_id.clone(),
-                new_connector_name: new_connector_name.clone(),
-            },
-            Self::ChannelEndpoint {
-                channel_id,
-                new_endpoint,
-            } => IntegrationHotfix::ChannelEndpoint {
-                channel_id: channel_id.clone(),
-                new_endpoint: new_endpoint.clone(),
-            },
-            Self::ChannelEnabled {
-                channel_id,
-                enabled,
-            } => IntegrationHotfix::ChannelEnabled {
-                channel_id: channel_id.clone(),
-                enabled: *enabled,
-            },
-        }
-    }
-}
-
 impl RunnerSpec {
     pub fn template() -> Self {
         Self {
@@ -512,7 +421,7 @@ impl RunnerSpec {
             }),
             bridge_support: None,
             bootstrap: None,
-            auto_provision: Some(AutoProvisionSpec {
+            auto_provision: Some(super::AutoProvisionSpec {
                 enabled: true,
                 provider_id: "openrouter".to_owned(),
                 channel_id: "primary".to_owned(),
@@ -585,7 +494,7 @@ impl RunnerSpec {
                 enforce_execution_success: false,
                 security_scan: None,
             }),
-            bootstrap: Some(BootstrapSpec {
+            bootstrap: Some(super::BootstrapSpec {
                 enabled: true,
                 allow_http_json_auto_apply: Some(false),
                 allow_process_stdio_auto_apply: Some(true),
@@ -700,6 +609,7 @@ pub struct ToolSearchEntry {
     pub compatibility_shim_support_mismatch_reasons: Vec<String>,
     pub connector_name: String,
     pub provider_id: String,
+    pub channel_id: Option<String>,
     pub source_path: Option<String>,
     pub source_kind: Option<String>,
     pub package_root: Option<String>,
@@ -718,6 +628,11 @@ pub struct ToolSearchEntry {
     pub setup_default_env_var: Option<String>,
     pub setup_docs_urls: Vec<String>,
     pub setup_remediation: Option<String>,
+    pub channel_bridge_transport_family: Option<String>,
+    pub channel_bridge_target_contract: Option<String>,
+    pub channel_bridge_account_scope: Option<String>,
+    pub channel_bridge_ready: Option<bool>,
+    pub channel_bridge_missing_fields: Vec<String>,
     pub setup_ready: bool,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,
@@ -749,6 +664,7 @@ pub struct ToolSearchResult {
     pub compatibility_shim_support_mismatch_reasons: Vec<String>,
     pub connector_name: String,
     pub provider_id: String,
+    pub channel_id: Option<String>,
     pub source_path: Option<String>,
     pub source_kind: Option<String>,
     pub package_root: Option<String>,
@@ -767,6 +683,11 @@ pub struct ToolSearchResult {
     pub setup_default_env_var: Option<String>,
     pub setup_docs_urls: Vec<String>,
     pub setup_remediation: Option<String>,
+    pub channel_bridge_transport_family: Option<String>,
+    pub channel_bridge_target_contract: Option<String>,
+    pub channel_bridge_account_scope: Option<String>,
+    pub channel_bridge_ready: Option<bool>,
+    pub channel_bridge_missing_fields: Vec<String>,
     pub setup_ready: bool,
     pub missing_required_env_vars: Vec<String>,
     pub missing_required_config_keys: Vec<String>,

@@ -37,8 +37,12 @@ Scope:
 Rules:
 
 - Every external action must pass L1.
-- Tool plane core/extension execution must call `PolicyEngine::check_tool_call` before dispatch
-  (Rule of Two: model intent plus deterministic policy decision).
+- Tool plane core/extension execution must route deterministic request-policy approval through the
+  kernel authorization stack before dispatch: token/capability validation in `PolicyEngine::authorize`
+  plus tool-specific tightening in `PolicyExtensionChain` (Rule of Two: model intent plus
+  deterministic policy decision).
+- The deprecated `PolicyEngine::check_tool_call` hook remains compatibility-only and must not be
+  treated as the live request-policy seam.
 - Policy extensions can only tighten behavior, never weaken core policy.
 - Denials are auditable and deterministic.
 - Human approval gate should default to medium-balanced mode:
@@ -231,9 +235,12 @@ Rules:
   (`acp_bridge`) and a session-aware ACP runtime backend (`acp_runtime`), so runtime backends such
   as ACPX do not collapse into the same abstraction bucket as bridge/gateway entrypoints.
 - WASM runtime execution is policy-driven through `security_scan.runtime` with fail-closed
-  guards (`execute_wasm_component`, `allowed_path_prefixes`, `max_component_bytes`,
-  `max_output_bytes`, `fuel_limit`) so enabling execution never requires hardcoded kernel
-  branches.
+  guards (`execute_wasm_component`, `allowed_path_prefixes`, `guest_readable_config_keys`,
+  `max_component_bytes`, `max_output_bytes`, `fuel_limit`) so enabling execution never requires
+  hardcoded kernel branches.
+- Guest-readable WASM config is an explicit host view, not raw metadata passthrough:
+  `guest_readable_config_keys` must use namespaced `provider.<metadata_key>` or
+  `channel.<metadata_key>` entries, and missing or non-allowlisted keys fail closed.
 
 ### L8. Self-Awareness and Architecture Guard Plane
 

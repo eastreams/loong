@@ -14,7 +14,20 @@ export default function MarkdownCodeBlock({
   language,
 }: MarkdownCodeBlockProps) {
   const { theme } = useTheme();
-  const syntaxTheme = theme === THEMES.DARK ? vscDarkPlus : oneLight;
+  const baseTheme = theme === THEMES.DARK ? vscDarkPlus : oneLight;
+  const syntaxTheme = {
+    ...baseTheme,
+    'pre[class*="language-"]': {
+      ...baseTheme['pre[class*="language-"]'],
+      background: "transparent",
+      backgroundColor: "transparent",
+    },
+    'code[class*="language-"]': {
+      ...baseTheme['code[class*="language-"]'],
+      background: "transparent",
+      backgroundColor: "transparent",
+    },
+  };
 
   return (
     <div style={{ position: "relative" }}>

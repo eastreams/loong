@@ -13,8 +13,10 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 authors = ["chumyin"]
+repository = "https://github.com/loongclaw-ai/loongclaw"
+homepage = "https://github.com/loongclaw-ai/loongclaw"
 
 [workspace.dependencies]
 async-trait = "0.1"
@@ -48,6 +50,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 which = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

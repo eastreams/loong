@@ -157,7 +157,7 @@ pub fn build_system_message(
     request_message_runtime::build_system_message(config, include_system_prompt)
 }
 
-pub(crate) use request_message_runtime::build_projected_context_for_session;
+pub(crate) use request_message_runtime::build_projected_context_for_session_with_binding;
 pub(crate) use request_message_runtime::project_hydrated_memory_context_for_view_with_binding;
 
 pub fn build_messages_for_session(

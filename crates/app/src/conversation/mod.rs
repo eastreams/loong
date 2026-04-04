@@ -1,4 +1,5 @@
 pub mod analytics;
+mod approval_resolution;
 mod autonomy_policy;
 mod compaction;
 mod context_engine;
@@ -9,12 +10,16 @@ mod persistence;
 pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
+mod prompt_fragments;
+mod prompt_orchestrator;
 mod runtime;
 mod runtime_binding;
 mod safe_lane_failure;
 mod session_address;
 mod session_history;
 mod subagent;
+mod tool_discovery_state;
+mod tool_result_compaction;
 mod turn_budget;
 mod turn_checkpoint;
 mod turn_coordinator;
@@ -53,6 +58,8 @@ pub use ingress::{
     ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
+pub use prompt_fragments::{PromptFragment, PromptLane, PromptRenderPolicy};
+pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 #[allow(unused_imports)]
 pub use runtime::{
     AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ContextCompactionPolicySnapshot,
@@ -62,7 +69,7 @@ pub use runtime::{
     collect_context_engine_runtime_snapshot, resolve_context_engine_selection,
     resolve_turn_middleware_selection,
 };
-pub use runtime_binding::ConversationRuntimeBinding;
+pub use runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 pub use safe_lane_failure::{
     SafeLaneFailureCode, SafeLaneFailureRouteDecision, SafeLaneFailureRouteSource,
     SafeLaneTerminalRouteSnapshot, classify_safe_lane_plan_failure,
@@ -73,7 +80,9 @@ pub use session_address::{
     ConversationSessionAddress, decode_route_session_segment, encode_route_session_segment,
     parse_route_session_id,
 };
-pub use session_history::load_discovery_first_event_summary;
+pub use session_history::{
+    load_discovery_first_event_summary, load_discovery_first_event_summary_with_kernel_context,
+};
 pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
     load_turn_checkpoint_event_summary,
@@ -81,6 +90,7 @@ pub use session_history::{
 pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
+pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
 pub use turn_checkpoint::{

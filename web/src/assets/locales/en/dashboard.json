@@ -1,5 +1,5 @@
 {
-  "eyebrow": "Web Dashboard",
+  "eyebrow": "Status",
   "title": "Runtime console",
   "subtitle": "Check provider, runtime, tools, and local config in one place.",
   "cards": {
@@ -22,7 +22,8 @@
     "configEyebrow": "Config snapshot",
     "configTitle": "Local config",
     "toolsEyebrow": "Tool surface",
-    "toolsTitle": "Tool policy"
+    "toolsTitle": "Tool policy",
+    "toolsGovernanceLabel": "Tool governance"
   },
   "fields": {
     "source": "Source",
@@ -56,7 +57,7 @@
     "fileRoot": "File root",
     "lastProvider": "Last provider",
     "approval": "Approval",
-    "shellPolicy": "Default policy",
+    "shellPolicy": "Policy",
     "allowed": "Allowed",
     "denied": "Denied",
     "providerHost": "Provider host",
@@ -117,7 +118,7 @@
     "probeTransportFailure": "Transport failure"
   },
   "toolItems": {
-    "shell_policy": "Shell access",
+    "bash_exec": "Bash execution",
     "sessions": "Session tools",
     "messages": "Message tools",
     "delegate": "Delegation",
@@ -128,6 +129,17 @@
     "file_tools": "File tools",
     "external_skills": "External skills"
   },
+  "toolMeta": {
+    "native": "Native",
+    "companion": "Companion",
+    "provider": "Provider",
+    "local": "Local",
+    "catalog": "Catalog",
+    "discoverable": "Discoverable",
+    "executable": "Executable",
+    "policyLimited": "Policy limited",
+    "runtimeUnavailable": "Runtime unavailable"
+  },
   "actions": {
     "reload": "Reload runtime",
     "helper": "These actions are still a UI shell. The controlled write path will be wired in a later phase."
@@ -136,7 +148,7 @@
     "title": "Debug Console",
     "subtitle": "Inspect recent runtime operations in a read-only console view.",
     "open": "Debug Console",
-    "back": "Back to Dashboard",
+    "back": "Back to Status",
     "eyebrow": "Runtime / Debug Console",
     "panelTitle": "Read-only debug view",
     "loading": "Loading runtime and log output...",

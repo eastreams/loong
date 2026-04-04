@@ -45,6 +45,10 @@ fn welcome_subcommand_help_advertises_first_run_shortcuts() {
         "welcome help should mention chat with an explicit config placeholder: {help}"
     );
     assert!(
+        help.contains("loong personalize --config <path>"),
+        "welcome help should mention personalize with an explicit config placeholder: {help}"
+    );
+    assert!(
         help.contains("loong doctor --config <path>"),
         "welcome help should mention doctor with an explicit config placeholder: {help}"
     );
@@ -1416,6 +1420,19 @@ fn chat_cli_accepts_acp_runtime_option_flags() {
                 vec!["filesystem".to_owned(), "search".to_owned()]
             );
             assert_eq!(acp_cwd.as_deref(), Some("/workspace/project"));
+        }
+        other => panic!("unexpected command parse result: {other:?}"),
+    }
+}
+
+#[test]
+fn chat_cli_accepts_latest_session_selector() {
+    let cli = try_parse_cli(["loongclaw", "chat", "--session", "latest"])
+        .expect("chat CLI should accept the latest session selector");
+
+    match cli.command {
+        Some(Commands::Chat { session, .. }) => {
+            assert_eq!(session.as_deref(), Some("latest"));
         }
         other => panic!("unexpected command parse result: {other:?}"),
     }

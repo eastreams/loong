@@ -33,6 +33,24 @@ impl Drop for StdinGuard {
     }
 }
 
+fn error_code(error: &str) -> String {
+    let trimmed = error.trim();
+    let mut segments = trimmed.split(':');
+    let raw_candidate = segments.next().unwrap_or_default();
+    let candidate = raw_candidate.trim();
+    let is_empty = candidate.is_empty();
+    let is_stable_code = !is_empty
+        && candidate.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        });
+
+    if is_stable_code {
+        return candidate.to_owned();
+    }
+
+    "unclassified".to_owned()
+}
+
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
@@ -40,10 +58,10 @@ async fn main() {
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
     let cli = parse_cli();
     let command = cli.command.unwrap_or_else(resolve_default_entry_command);
-    let command_name = debug_variant_name(&command);
+    let command_kind = command.command_kind_for_logging();
     tracing::debug!(
         target: "loongclaw.daemon",
-        command = %command_name,
+        command_kind,
         "parsed CLI command"
     );
     let result = match command {
@@ -180,6 +198,7 @@ async fn main() {
             })
             .await
         }
+        Commands::Personalize { config } => personalize_cli::run_personalize_cli(config.as_deref()),
         Commands::Import {
             output,
             force,
@@ -270,6 +289,20 @@ async fn main() {
             command,
         } => {
             tasks_cli::run_tasks_cli(tasks_cli::TasksCommandOptions {
+                config,
+                json,
+                session,
+                command,
+            })
+            .await
+        }
+        Commands::Sessions {
+            config,
+            json,
+            session,
+            command,
+        } => {
+            sessions_cli::run_sessions_cli(sessions_cli::SessionsCommandOptions {
                 config,
                 json,
                 session,
@@ -979,9 +1012,11 @@ async fn main() {
         }
     };
     if let Err(error) = result {
+        let error_code = error_code(error.as_str());
         tracing::error!(
             target: "loongclaw.daemon",
-            error = %error,
+            command_kind = %command_kind,
+            error_code = %error_code,
             "CLI command failed"
         );
         #[allow(clippy::print_stderr)]
@@ -990,5 +1025,48 @@ async fn main() {
         }
         flush_stdin();
         std::process::exit(2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error_code;
+    use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount};
+
+    #[test]
+    fn command_kind_uses_stable_snake_case_labels() {
+        let validate_config = Commands::ValidateConfig {
+            config: None,
+            json: false,
+            output: None,
+            locale: "en".to_owned(),
+            fail_on_diagnostics: false,
+        };
+        let multi_channel_serve = Commands::MultiChannelServe {
+            config: None,
+            session: "session-1".to_owned(),
+            channel_account: vec![MultiChannelServeChannelAccount {
+                channel_id: "telegram".to_owned(),
+                account_id: "ops".to_owned(),
+            }],
+        };
+
+        assert_eq!(
+            validate_config.command_kind_for_logging(),
+            "validate_config"
+        );
+        assert_eq!(
+            multi_channel_serve.command_kind_for_logging(),
+            "multi_channel_serve"
+        );
+    }
+
+    #[test]
+    fn error_code_extracts_stable_prefixes_only() {
+        let stable_error = "config_file_missing: could not read `/tmp/private.toml`";
+        let unstable_error = "Failed to read `/tmp/private.toml`";
+
+        assert_eq!(error_code(stable_error), "config_file_missing");
+        assert_eq!(error_code(unstable_error), "unclassified");
     }
 }

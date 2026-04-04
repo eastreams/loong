@@ -48,6 +48,7 @@ use crate::spec_execution::{normalize_path_for_policy, resolve_plugin_relative_p
 #[cfg(test)]
 mod bridge_kind_tests;
 mod dynamic_catalog;
+mod embedded_pi_harness;
 mod http_json_bridge;
 mod plugin_contract_types;
 mod process_stdio_bridge;
@@ -61,6 +62,7 @@ pub(crate) use dynamic_catalog::{
     default_runtime_adapter_family, normalize_runtime_source_language,
     provider_activation_runtime_contract_state, provider_is_plugin_backed,
 };
+pub use embedded_pi_harness::EmbeddedPiHarness;
 pub use http_json_bridge::execute_http_json_bridge;
 pub use plugin_contract_types::*;
 pub use process_stdio_bridge::{
@@ -73,8 +75,12 @@ use wasm_cache::{
     insert_cached_wasm_module, lookup_cached_wasm_module, modified_unix_nanos,
     wasm_artifact_file_identity, wasm_module_cache_capacity, wasm_module_cache_max_bytes,
 };
+pub(crate) use wasm_host_abi::{
+    WASM_GUEST_CONFIG_CHANNEL_PREFIX, WASM_GUEST_CONFIG_PROVIDER_PREFIX,
+    wasm_guest_config_key_is_supported,
+};
 use wasm_host_abi::{
-    WasmHostAbiSnapshot, WasmHostAbiStoreData, link_wasm_host_abi,
+    WasmHostAbiSnapshot, WasmHostAbiStoreData, build_wasm_guest_config, link_wasm_host_abi,
     module_requires_wasm_host_abi_memory, module_uses_wasm_host_abi,
 };
 use wasm_runtime_policy::wasm_signals_based_traps_enabled_from_env;
@@ -1003,6 +1009,7 @@ pub struct BridgeRuntimePolicy {
     pub allowed_process_commands: BTreeSet<String>,
     pub bridge_circuit_breaker: ConnectorCircuitBreakerPolicy,
     pub wasm_allowed_path_prefixes: Vec<PathBuf>,
+    pub wasm_guest_readable_config_keys: BTreeSet<String>,
     pub wasm_max_component_bytes: Option<usize>,
     pub wasm_max_output_bytes: Option<usize>,
     pub wasm_fuel_limit: Option<u64>,
@@ -1541,6 +1548,8 @@ pub struct SecurityRuntimeExecutionSpec {
     #[serde(default)]
     pub allowed_path_prefixes: Vec<String>,
     #[serde(default)]
+    pub guest_readable_config_keys: Vec<String>,
+    #[serde(default)]
     pub max_component_bytes: Option<usize>,
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
@@ -1645,38 +1654,94 @@ pub fn default_true() -> bool {
     true
 }
 
-pub struct EmbeddedPiHarness {
-    pub seen: Mutex<Vec<String>>,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BootstrapSpec {
+    pub enabled: bool,
+    #[serde(default)]
+    pub allow_http_json_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_process_stdio_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_native_ffi_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_wasm_component_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_mcp_server_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_acp_bridge_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub allow_acp_runtime_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub block_unverified_high_risk_auto_apply: Option<bool>,
+    #[serde(default)]
+    pub enforce_ready_execution: Option<bool>,
+    #[serde(default)]
+    pub max_tasks: Option<usize>,
 }
 
-#[async_trait]
-impl HarnessAdapter for EmbeddedPiHarness {
-    fn name(&self) -> &str {
-        "pi-local"
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoProvisionSpec {
+    pub enabled: bool,
+    pub provider_id: String,
+    pub channel_id: String,
+    pub connector_name: Option<String>,
+    pub endpoint: Option<String>,
+    pub required_capabilities: BTreeSet<Capability>,
+}
 
-    fn kind(&self) -> HarnessKind {
-        HarnessKind::EmbeddedPi
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum HotfixSpec {
+    ProviderVersion {
+        provider_id: String,
+        new_version: String,
+    },
+    ProviderConnector {
+        provider_id: String,
+        new_connector_name: String,
+    },
+    ChannelEndpoint {
+        channel_id: String,
+        new_endpoint: String,
+    },
+    ChannelEnabled {
+        channel_id: String,
+        enabled: bool,
+    },
+}
 
-    async fn execute(&self, request: HarnessRequest) -> Result<HarnessOutcome, HarnessError> {
-        match self.seen.lock() {
-            Ok(mut guard) => guard.push(request.task_id.clone()),
-            Err(_) => {
-                return Err(HarnessError::Execution(
-                    "EmbeddedPiHarness mutex poisoned".to_owned(),
-                ));
-            }
+impl HotfixSpec {
+    pub fn to_kernel_hotfix(&self) -> IntegrationHotfix {
+        match self {
+            Self::ProviderVersion {
+                provider_id,
+                new_version,
+            } => IntegrationHotfix::ProviderVersion {
+                provider_id: provider_id.clone(),
+                new_version: new_version.clone(),
+            },
+            Self::ProviderConnector {
+                provider_id,
+                new_connector_name,
+            } => IntegrationHotfix::ProviderConnector {
+                provider_id: provider_id.clone(),
+                new_connector_name: new_connector_name.clone(),
+            },
+            Self::ChannelEndpoint {
+                channel_id,
+                new_endpoint,
+            } => IntegrationHotfix::ChannelEndpoint {
+                channel_id: channel_id.clone(),
+                new_endpoint: new_endpoint.clone(),
+            },
+            Self::ChannelEnabled {
+                channel_id,
+                enabled,
+            } => IntegrationHotfix::ChannelEnabled {
+                channel_id: channel_id.clone(),
+                enabled: *enabled,
+            },
         }
-
-        Ok(HarnessOutcome {
-            status: "ok".to_owned(),
-            output: json!({
-                "adapter": "pi-local",
-                "task": request.task_id,
-                "objective": request.objective,
-            }),
-        })
     }
 }
 
@@ -2698,11 +2763,19 @@ pub fn execute_wasm_component_bridge(
                 WasmRunEvidence::default(),
             )
         })?;
-        let store_data =
-            WasmHostAbiStoreData::try_new(input_bytes, runtime_policy.wasm_max_output_bytes)
-                .map_err(|reason| {
-                    boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
-                })?;
+        let guest_config = build_wasm_guest_config(
+            provider,
+            channel,
+            &runtime_policy.wasm_guest_readable_config_keys,
+        );
+        let store_data = WasmHostAbiStoreData::try_new(
+            input_bytes,
+            guest_config,
+            runtime_policy.wasm_max_output_bytes,
+        )
+        .map_err(|reason| {
+            boxed_wasm_run_failure(reason, false, None, WasmRunEvidence::default())
+        })?;
         let mut store = WasmtimeStore::new(&cached_module.engine, store_data);
         if let Some(limit) = runtime_policy.wasm_fuel_limit {
             store.set_fuel(limit).map_err(|error| {

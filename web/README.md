@@ -7,7 +7,8 @@ LoongClaw 的本地优先 Web Console。
 当前已提供：
 
 - `Chat`
-- `Dashboard`
+- `Status`
+- `Abilities`
 - `Onboarding`
 - `Debug Console`
 - 中英文切换

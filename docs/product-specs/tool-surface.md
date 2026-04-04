@@ -24,3 +24,9 @@ and I do not get routed into disabled or still-planned capabilities.
 - Tool ranking or prompt tuning strategy
 - Per-provider formatting differences that do not change the visible tool set
 - Long-term expansion of the tool catalog beyond the current MVP
+
+## Current Tool Surface Notes
+
+- `shell.exec` remains the existing shell-execution surface.
+- `bash.exec` is a shipped experimental parallel tool. It may be advertised only when the runtime can actually execute it, but it does not replace `shell.exec`.
+- User-facing docs must describe `bash.exec` with its canonical tool name and must not imply that shell governance has already converged on a single execution surface.

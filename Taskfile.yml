@@ -34,9 +34,9 @@ tasks:
   smoke:
     desc: Run representative spec-runner smoke scenarios
     cmds:
-      - cargo run -p loongclaw-daemon --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
-      - cargo run -p loongclaw-daemon --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
-      - cargo run -p loongclaw-daemon --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
+      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/runtime-extension.json --print-audit
+      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/tool-search.json --print-audit
+      - cargo run -p loongclaw --bin loong -- run-spec --spec examples/spec/programmatic-tool-call.json --print-audit
 
   benchmark:pressure:
     desc: Run programmatic pressure benchmark with gate enforcement

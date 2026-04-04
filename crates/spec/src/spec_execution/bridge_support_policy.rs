@@ -916,6 +916,8 @@ fn canonical_security_scan_siem_export_value(export: Option<&SecuritySiemExportS
 fn canonical_security_scan_runtime_value(runtime: &SecurityRuntimeExecutionSpec) -> Value {
     let mut allowed_path_prefixes = runtime.allowed_path_prefixes.clone();
     allowed_path_prefixes.sort();
+    let mut guest_readable_config_keys = runtime.guest_readable_config_keys.clone();
+    guest_readable_config_keys.sort();
     let bridge_circuit_breaker = json!({
         "enabled": runtime.bridge_circuit_breaker.enabled,
         "failure_threshold": runtime.bridge_circuit_breaker.failure_threshold,
@@ -927,6 +929,7 @@ fn canonical_security_scan_runtime_value(runtime: &SecurityRuntimeExecutionSpec)
     json!({
         "execute_wasm_component": runtime.execute_wasm_component,
         "allowed_path_prefixes": allowed_path_prefixes,
+        "guest_readable_config_keys": guest_readable_config_keys,
         "max_component_bytes": runtime.max_component_bytes,
         "max_output_bytes": runtime.max_output_bytes,
         "fuel_limit": runtime.fuel_limit,

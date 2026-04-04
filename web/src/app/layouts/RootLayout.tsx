@@ -4,7 +4,7 @@ import NavBar from "../../components/layout/NavBar";
 import { OnboardingStatusPanel } from "../../features/onboarding/components/OnboardingStatusPanel";
 import { useWebConnection } from "../../hooks/useWebConnection";
 
-const KEEP_ALIVE_ROUTE_PATHS = new Set(["/chat", "/dashboard"]);
+const KEEP_ALIVE_ROUTE_PATHS = new Set(["/chat", "/dashboard", "/abilities"]);
 
 export default function RootLayout() {
   const { onboardingBlocked } = useWebConnection();

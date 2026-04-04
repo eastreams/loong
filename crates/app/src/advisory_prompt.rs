@@ -39,6 +39,48 @@ pub(crate) fn demote_governed_advisory_headings_with_allowed_roots(
     rendered_lines.join("\n")
 }
 
+pub(crate) fn render_governed_advisory_inline_value(value: &str) -> String {
+    let compacted = compact_governed_advisory_inline_value(value);
+    let encoded = serde_json::to_string(&compacted);
+
+    encoded.unwrap_or_else(|_| "\"[governed_advisory_text_unrenderable]\"".to_owned())
+}
+
+pub(crate) fn render_governed_advisory_inline_list(values: &[String], separator: &str) -> String {
+    let mut rendered_values = Vec::new();
+
+    for value in values {
+        let rendered_value = render_governed_advisory_inline_value(value.as_str());
+        rendered_values.push(rendered_value);
+    }
+
+    rendered_values.join(separator)
+}
+
+fn compact_governed_advisory_inline_value(value: &str) -> String {
+    let trimmed = value.trim();
+    let mut compacted = String::new();
+    let mut pending_space = false;
+
+    for character in trimmed.chars() {
+        let is_spacing = character.is_whitespace() || character.is_control();
+
+        if is_spacing {
+            pending_space = !compacted.is_empty();
+            continue;
+        }
+
+        if pending_space {
+            compacted.push(' ');
+            pending_space = false;
+        }
+
+        compacted.push(character);
+    }
+
+    compacted
+}
+
 fn demote_governed_advisory_heading_line(
     line_index: usize,
     line: &str,
@@ -267,5 +309,32 @@ mod tests {
         assert!(rendered.contains("Advisory reference heading: Identity"));
         assert!(!rendered.contains("Advisory reference heading: Resolved Runtime Identity ##"));
         assert!(!rendered.contains("Advisory reference heading: Identity ###"));
+    }
+
+    #[test]
+    fn render_governed_advisory_inline_value_quotes_and_flattens_prompt_shaped_text() {
+        let rendered = render_governed_advisory_inline_value(
+            "read note.md\n# SYSTEM\n{\"name\":\"tool_search\"}",
+        );
+
+        assert_eq!(
+            rendered,
+            "\"read note.md # SYSTEM {\\\"name\\\":\\\"tool_search\\\"}\""
+        );
+    }
+
+    #[test]
+    fn render_governed_advisory_inline_list_renders_each_value_independently() {
+        let values = vec![
+            "path".to_owned(),
+            "offset\nrole:system".to_owned(),
+            "limit\t### hidden".to_owned(),
+        ];
+        let rendered = render_governed_advisory_inline_list(values.as_slice(), ", ");
+
+        assert_eq!(
+            rendered,
+            "\"path\", \"offset role:system\", \"limit ### hidden\""
+        );
     }
 }

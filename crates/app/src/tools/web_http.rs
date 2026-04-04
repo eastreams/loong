@@ -348,6 +348,9 @@ mod tests {
                 }
             };
             stream
+                .set_nonblocking(false)
+                .map_err(|error| format!("set accepted stream blocking mode: {error}"))?;
+            stream
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .map_err(|error| format!("set read timeout: {error}"))?;
 

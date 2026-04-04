@@ -174,6 +174,7 @@ pub struct ConversationTurnToolEvent {
     pub tool_name: String,
     pub state: ConversationTurnToolState,
     pub detail: Option<String>,
+    pub request_summary: Option<String>,
 }
 
 impl ConversationTurnToolEvent {
@@ -183,6 +184,7 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::Running,
             detail: None,
+            request_summary: None,
         }
     }
 
@@ -196,6 +198,7 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::Completed,
             detail,
+            request_summary: None,
         }
     }
 
@@ -209,6 +212,7 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::NeedsApproval,
             detail: Some(detail.into()),
+            request_summary: None,
         }
     }
 
@@ -222,6 +226,7 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::Denied,
             detail: Some(detail.into()),
+            request_summary: None,
         }
     }
 
@@ -235,6 +240,7 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::Failed,
             detail: Some(detail.into()),
+            request_summary: None,
         }
     }
 
@@ -248,7 +254,13 @@ impl ConversationTurnToolEvent {
             tool_name: tool_name.into(),
             state: ConversationTurnToolState::Interrupted,
             detail: Some(detail.into()),
+            request_summary: None,
         }
+    }
+
+    pub fn with_request_summary(mut self, request_summary: Option<String>) -> Self {
+        self.request_summary = request_summary;
+        self
     }
 }
 

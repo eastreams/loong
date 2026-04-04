@@ -27,6 +27,10 @@ use crate::crypto::timing_safe_eq;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 
 pub(crate) mod approval;
+mod bash;
+mod bash_ast;
+mod bash_governance;
+mod bash_rules;
 #[cfg(feature = "tool-browser")]
 mod browser;
 #[cfg(feature = "tool-browser")]
@@ -35,7 +39,10 @@ mod bundled_skills;
 mod catalog;
 mod claw_migrate;
 pub(crate) mod delegate;
+mod direct_policy_preflight;
 mod external_skills;
+mod external_skills_scan;
+mod external_skills_sources;
 #[cfg(feature = "feishu-integration")]
 mod feishu;
 mod file;
@@ -45,11 +52,13 @@ mod kernel_adapter;
 mod memory_tools;
 pub(crate) mod messaging;
 mod payload;
+mod process_exec;
 mod provider_switch;
 pub mod runtime_config;
 mod session;
 mod shell;
 pub mod shell_policy_ext;
+mod shell_request_prep;
 mod tool_search;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
@@ -63,7 +72,8 @@ pub use catalog::{
     ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
     ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
     capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, governance_profile_for_descriptor,
+    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_with_delegate, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
     runtime_tool_view, runtime_tool_view_for_config,
     runtime_tool_view_for_config_with_external_skills, runtime_tool_view_for_runtime_config,
@@ -72,6 +82,12 @@ pub use catalog::{
 #[cfg(feature = "feishu-integration")]
 pub(crate) use feishu::{DeferredFeishuCardUpdate, drain_deferred_feishu_card_updates};
 pub use kernel_adapter::MvpToolAdapter;
+pub(crate) use shell_request_prep::{
+    TOOL_LEASE_SESSION_ID_FIELD, TOOL_LEASE_TOKEN_ID_FIELD, TOOL_LEASE_TURN_ID_FIELD,
+    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD, inject_tool_lease_binding,
+    normalize_shell_payload_for_request, normalize_shell_request_for_execution,
+    prepare_kernel_tool_request,
+};
 #[cfg(any(feature = "tool-webfetch", feature = "tool-websearch"))]
 pub use web_http::build_ssrf_safe_client;
 
@@ -84,6 +100,7 @@ const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
 const DELEGATE_TOOL_NAME: &str = "delegate";
 pub(crate) const SHELL_EXEC_TOOL_NAME: &str = "shell.exec";
+const BASH_EXEC_TOOL_NAME: &str = "bash.exec";
 const WEB_FETCH_TOOL_NAME: &str = "web.fetch";
 const WEB_SEARCH_TOOL_NAME: &str = "web.search";
 
@@ -419,62 +436,6 @@ pub(super) fn normalize_without_fs(path: &Path) -> PathBuf {
     }
 }
 
-const TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: &str = "_granted_capabilities";
-const TOOL_LEASE_TOKEN_ID_FIELD: &str = "_lease_token_id";
-const TOOL_LEASE_SESSION_ID_FIELD: &str = "_lease_session_id";
-const TOOL_LEASE_TURN_ID_FIELD: &str = "_lease_turn_id";
-
-pub(crate) fn prepare_kernel_tool_request(
-    mut request: ToolCoreRequest,
-    granted_capabilities: &BTreeSet<Capability>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) -> ToolCoreRequest {
-    let canonical_tool_name = canonical_tool_name(request.tool_name.as_str());
-    if !matches!(canonical_tool_name, "tool.search" | "tool.invoke") {
-        return request;
-    }
-
-    if let Value::Object(payload) = &mut request.payload {
-        if canonical_tool_name == "tool.search" {
-            let granted =
-                serde_json::to_value(granted_capabilities.iter().copied().collect::<Vec<_>>())
-                    .unwrap_or_else(|_| Value::Array(Vec::new()));
-            payload.insert(TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD.to_owned(), granted);
-        }
-        inject_tool_lease_binding(payload, token_id, session_id, turn_id);
-    }
-
-    request
-}
-
-fn inject_tool_lease_binding(
-    payload: &mut serde_json::Map<String, Value>,
-    token_id: Option<&str>,
-    session_id: Option<&str>,
-    turn_id: Option<&str>,
-) {
-    if let Some(token_id) = token_id {
-        payload.insert(
-            TOOL_LEASE_TOKEN_ID_FIELD.to_owned(),
-            Value::String(token_id.to_owned()),
-        );
-    }
-    if let Some(session_id) = session_id {
-        payload.insert(
-            TOOL_LEASE_SESSION_ID_FIELD.to_owned(),
-            Value::String(session_id.to_owned()),
-        );
-    }
-    if let Some(turn_id) = turn_id {
-        payload.insert(
-            TOOL_LEASE_TURN_ID_FIELD.to_owned(),
-            Value::String(turn_id.to_owned()),
-        );
-    }
-}
-
 pub fn canonical_tool_name(raw: &str) -> &str {
     let catalog = tool_catalog();
     if let Some(descriptor) = catalog.resolve(raw) {
@@ -523,6 +484,11 @@ fn required_capabilities_for_tool_name_and_payload(
         "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
+        BASH_EXEC_TOOL_NAME => {
+            caps.insert(Capability::FilesystemRead);
+            caps.insert(Capability::FilesystemWrite);
+            caps.insert(Capability::NetworkEgress);
+        }
         "claw.migrate" => {
             caps.insert(Capability::FilesystemRead);
             if claw_migrate_mode_requires_write(payload) {
@@ -567,7 +533,12 @@ fn claw_migrate_mode_requires_write(payload: &Value) -> bool {
 fn tool_requires_network_egress(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "web.fetch" | "web.search" | "browser.open" | "browser.click"
+        "web.fetch"
+            | "web.search"
+            | "browser.open"
+            | "browser.click"
+            | "external_skills.fetch"
+            | "external_skills.source_search"
     )
 }
 
@@ -663,28 +634,31 @@ pub fn execute_tool_core_with_config(
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
-    if !trusted_internal_tool_payload_enabled()
-        && payload_uses_reserved_internal_tool_context(&request.payload)
-    {
-        return Err(format!(
-            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
-            request.tool_name
-        ));
-    }
-    let canonical_name = canonical_tool_name(request.tool_name.as_str());
-    let request = ToolCoreRequest {
-        tool_name: canonical_name.to_owned(),
-        payload: request.payload,
-    };
-    let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?
-        .map(|narrowing| config.narrowed(&narrowing));
-    let config = effective_config.as_ref().unwrap_or(config);
+    let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
+    let payload = request.payload;
     let started_at = std::time::Instant::now();
-    let result = match canonical_name {
-        "tool.search" => execute_tool_search_tool_with_config(request, config),
-        "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
-        _ => execute_discoverable_tool_core_with_config(request, config),
-    };
+    let result = (|| {
+        ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
+            requested_tool_name.as_str(),
+            &payload,
+            "payload",
+        )?;
+
+        let request = ToolCoreRequest {
+            tool_name: canonical_name.clone(),
+            payload,
+        };
+        let request = normalize_shell_request_for_execution(request);
+        let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?;
+        let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
+        let config = effective_config.as_ref().unwrap_or(config);
+
+        match canonical_name.as_str() {
+            "tool.search" => execute_tool_search_tool_with_config(request, config),
+            "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
+            _ => execute_discoverable_tool_core_with_config(request, config),
+        }
+    })();
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(outcome) => {
@@ -735,7 +709,7 @@ fn trusted_runtime_narrowing_from_payload(
         .map_err(|error| format!("invalid_internal_runtime_narrowing: {error}"))
 }
 
-fn merge_trusted_internal_tool_context_into_arguments(
+pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     arguments: &mut serde_json::Map<String, Value>,
     internal_context: &Value,
 ) -> Result<(), String> {
@@ -766,6 +740,7 @@ fn execute_discoverable_tool_core_with_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     let tool_name = request.tool_name.clone();
+    direct_policy_preflight::run(&request, config)?;
     let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
 
     let inner = {
@@ -783,6 +758,9 @@ fn execute_discoverable_tool_core_with_config(
 
 fn tool_uses_dedicated_timeout(tool_name: &str) -> bool {
     if tool_name == SHELL_EXEC_TOOL_NAME {
+        return true;
+    }
+    if tool_name == BASH_EXEC_TOOL_NAME {
         return true;
     }
     if tool_name == WEB_FETCH_TOOL_NAME {
@@ -806,11 +784,17 @@ fn dispatch_tool_request(
 ) -> Result<ToolCoreOutcome, String> {
     match request.tool_name.as_str() {
         "claw.migrate" => claw_migrate::execute_claw_migrate_tool_with_config(request, config),
+        "external_skills.resolve" => {
+            external_skills::execute_external_skills_resolve_tool_with_config(request, config)
+        }
         "external_skills.search" => {
             external_skills::execute_external_skills_search_tool_with_config(request, config)
         }
         "external_skills.recommend" => {
             external_skills::execute_external_skills_recommend_tool_with_config(request, config)
+        }
+        "external_skills.source_search" => {
+            external_skills::execute_external_skills_source_search_tool_with_config(request, config)
         }
         "external_skills.inspect" => {
             external_skills::execute_external_skills_inspect_tool_with_config(request, config)
@@ -850,6 +834,7 @@ fn dispatch_tool_request(
             feishu::execute_feishu_tool_with_config(request, config)
         }
         "shell.exec" => shell::execute_shell_tool_with_config(request, config),
+        "bash.exec" => bash::execute_bash_tool_with_config(request, config),
         "file.read" => file::execute_file_read_tool_with_config(request, config),
         #[cfg(feature = "tool-file")]
         "memory_search" => memory_tools::execute_memory_search_tool_with_config(request, config),
@@ -1030,12 +1015,14 @@ fn feishu_searchable_entries() -> Vec<SearchableToolEntry> {
                 .to_owned();
             let tags = vec!["feishu".to_owned()];
             let canonical_name = canonical_tool_name(provider_name).to_owned();
+            let search_hint = canonical_name.clone();
             let preferred_parameter_order: &[(&str, &str)] = &[];
             Some(searchable_entry_from_provider_definition(
                 canonical_name.as_str(),
                 provider_name,
                 &[],
                 summary,
+                search_hint,
                 &parameters,
                 preferred_parameter_order,
                 tags,
@@ -1091,7 +1078,10 @@ fn runtime_discoverable_tool_entries(
         .iter()
         .filter(|descriptor| descriptor.is_discoverable())
         .filter(|descriptor| visible_tool_view.contains(descriptor.name))
-        .filter(|descriptor| tool_search_entry_is_runtime_usable(descriptor.name, config))
+        .filter(|descriptor| {
+            descriptor.name == SHELL_EXEC_TOOL_NAME
+                || tool_search_entry_is_runtime_usable(descriptor.name, config)
+        })
         .map(searchable_entry_from_descriptor)
         .collect::<Vec<_>>()
 }
@@ -1135,7 +1125,24 @@ fn execute_tool_search_tool_with_config(
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "tool.search requires payload.query".to_owned())?;
+        .map(str::to_owned);
+    let requested_exact_tool_id = payload
+        .get("exact_tool_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let exact_tool_id = requested_exact_tool_id
+        .as_deref()
+        .map(canonical_tool_name)
+        .map(str::to_owned);
+    let has_query = query.is_some();
+    let has_exact_tool_id = requested_exact_tool_id.is_some();
+
+    if !has_query && !has_exact_tool_id {
+        return Err("tool.search requires payload.query or payload.exact_tool_id".to_owned());
+    }
+
     let limit = payload
         .get("limit")
         .and_then(Value::as_u64)
@@ -1156,25 +1163,44 @@ fn execute_tool_search_tool_with_config(
             )
         })
         .collect::<Vec<_>>();
-    let ranking = rank_searchable_entries(searchable_entries, query, limit);
+    let exact_match_entry = exact_tool_id.as_ref().and_then(|exact_tool_id| {
+        searchable_entries
+            .iter()
+            .find(|entry| entry.canonical_name == *exact_tool_id)
+            .cloned()
+    });
+    let exact_match_found = exact_match_entry.is_some();
+    let mut diagnostics_reason = None;
+    let results: Vec<Value> = if let Some(entry) = exact_match_entry {
+        let why = Vec::new();
+        vec![tool_search_result_entry_json(&entry, why, payload)]
+    } else if let Some(query) = query.as_deref() {
+        let ranking = rank_searchable_entries(searchable_entries, query, limit);
+        diagnostics_reason = ranking.diagnostics_reason;
 
-    let results: Vec<Value> = ranking
-        .results
-        .into_iter()
-        .map(|ranked_entry| {
-            let RankedSearchableToolEntry { entry, why } = ranked_entry;
-            json!({
-                "tool_id": entry.canonical_name,
-                "summary": entry.summary,
-                "argument_hint": entry.argument_hint,
-                "required_fields": entry.required_fields,
-                "required_field_groups": entry.required_field_groups,
-                "tags": entry.tags,
-                "why": why,
-                "lease": issue_tool_lease(entry.canonical_name.as_str(), payload),
+        ranking
+            .results
+            .into_iter()
+            .map(|ranked_entry| {
+                let RankedSearchableToolEntry { entry, why } = ranked_entry;
+
+                tool_search_result_entry_json(&entry, why, payload)
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let diagnostics = tool_search_diagnostics_json(
+        requested_exact_tool_id.as_deref(),
+        exact_match_found,
+        query.as_deref(),
+        diagnostics_reason,
+    );
+    let response_exact_tool_id = if exact_match_found {
+        exact_tool_id
+    } else {
+        requested_exact_tool_id
+    };
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -1182,10 +1208,60 @@ fn execute_tool_search_tool_with_config(
             "adapter": "core-tools",
             "tool_name": request.tool_name,
             "query": query,
+            "exact_tool_id": response_exact_tool_id,
             "returned": results.len(),
             "results": results,
+            "diagnostics": diagnostics,
         }),
     })
+}
+
+fn tool_search_result_entry_json(
+    entry: &SearchableToolEntry,
+    why: Vec<String>,
+    payload: &serde_json::Map<String, Value>,
+) -> Value {
+    json!({
+        "tool_id": entry.canonical_name,
+        "summary": entry.summary,
+        "search_hint": entry.search_hint,
+        "argument_hint": entry.argument_hint,
+        "required_fields": entry.required_fields,
+        "required_field_groups": entry.required_field_groups,
+        "schema_preview": entry.schema_preview,
+        "tags": entry.tags,
+        "why": why,
+        "lease": issue_tool_lease(entry.canonical_name.as_str(), payload),
+    })
+}
+
+fn tool_search_diagnostics_json(
+    requested_exact_tool_id: Option<&str>,
+    exact_match_found: bool,
+    query: Option<&str>,
+    diagnostics_reason: Option<&str>,
+) -> Value {
+    if let Some(requested_exact_tool_id) = requested_exact_tool_id {
+        if exact_match_found {
+            return Value::Null;
+        }
+
+        return json!({
+            "reason": "exact_tool_id_not_visible",
+            "requested_tool_id": requested_exact_tool_id,
+        });
+    }
+
+    if let Some(reason) = diagnostics_reason {
+        let diagnostics_query = query.unwrap_or_default();
+
+        return json!({
+            "reason": reason,
+            "query": diagnostics_query,
+        });
+    }
+
+    Value::Null
 }
 
 fn tool_search_entry_is_runtime_usable(
@@ -1200,6 +1276,7 @@ fn tool_search_entry_is_runtime_usable(
                     crate::tools::shell_policy_ext::ShellPolicyDefault::Allow
                 )
         }
+        "bash.exec" => config.bash_exec.is_discoverable(),
         "external_skills.fetch"
         | "external_skills.install"
         | "external_skills.inspect"
@@ -1564,6 +1641,7 @@ mod tests {
     use super::*;
     use crate::test_support::{ScopedEnv, unique_temp_dir};
     use std::path::{Path, PathBuf};
+    use std::sync::{MutexGuard, OnceLock};
 
     fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig {
         runtime_config::ToolRuntimeConfig {
@@ -1580,6 +1658,80 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    fn ready_bash_exec_runtime_policy() -> runtime_config::BashExecRuntimePolicy {
+        runtime_config::BashExecRuntimePolicy {
+            available: true,
+            command: Some(PathBuf::from("bash")),
+            ..runtime_config::BashExecRuntimePolicy::default()
+        }
+    }
+
+    struct ScopedCurrentDir {
+        original: PathBuf,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    fn current_dir_test_lock() -> &'static std::sync::Mutex<()> {
+        static CURRENT_DIR_TEST_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+        CURRENT_DIR_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    impl ScopedCurrentDir {
+        fn new(path: &Path) -> Self {
+            let lock = current_dir_test_lock()
+                .lock()
+                .expect("lock current dir test");
+            let original = std::env::current_dir().expect("read current dir");
+            std::env::set_current_dir(path).expect("set current dir");
+            Self {
+                original,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for ScopedCurrentDir {
+        fn drop(&mut self) {
+            std::env::set_current_dir(&self.original).expect("restore current dir");
+        }
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    fn configured_test_bash_runtime_with_rules(
+        root: &Path,
+    ) -> (runtime_config::BashExecRuntimePolicy, PathBuf) {
+        let log_path = root.join("bash-args.log");
+        let runtime_path = write_fake_bash_runtime(root, "fake-bash", &log_path);
+        let rules_dir = root.join(".loongclaw").join("rules");
+        let rules = bash_rules::load_rules_from_dir(&rules_dir).expect("load rules");
+
+        (
+            runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(runtime_path),
+                governance: runtime_config::BashGovernanceRuntimePolicy {
+                    rules_dir,
+                    rules,
+                    load_error: None,
+                },
+                ..runtime_config::BashExecRuntimePolicy::default()
+            },
+            log_path,
+        )
+    }
+
+    #[cfg(all(feature = "tool-shell", unix))]
+    fn write_fake_bash_runtime(root: &Path, name: &str, log_path: &Path) -> PathBuf {
+        let path = root.join(name);
+        let script = format!(
+            "#!/bin/sh\nLOG_PATH=\"{}\"\n: > \"$LOG_PATH\"\nfor arg in \"$@\"; do\n  printf '%s\\n' \"$arg\" >> \"$LOG_PATH\"\ndone\nMODE=\"${{1:-}}\"\nCOMMAND=\"${{2:-}}\"\ncase \"$MODE\" in\n  -c|-lc)\n    exec /bin/sh -c \"$COMMAND\"\n    ;;\n  *)\n    printf 'unexpected bash args: %s' \"$*\" >&2\n    exit 97\n    ;;\nesac\n",
+            log_path.display()
+        );
+        crate::test_support::write_executable_script_atomically(&path, &script)
+            .expect("write fake bash runtime");
+        path
     }
 
     fn execute_tool_core_with_test_context(
@@ -1599,6 +1751,8 @@ mod tests {
         unique_temp_dir(prefix)
     }
 
+    const TEST_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 120;
+
     fn browser_companion_runtime_config(
         root: &Path,
         command: String,
@@ -1607,8 +1761,12 @@ mod tests {
         config.browser_companion.enabled = true;
         config.browser_companion.ready = true;
         config.browser_companion.command = Some(command);
+        config.browser_companion.timeout_seconds = TEST_BROWSER_COMPANION_TIMEOUT_SECONDS;
         config
     }
+
+    #[path = "bash_exec_tests.rs"]
+    mod bash_exec_tests;
 
     #[cfg(unix)]
     fn write_browser_companion_script(
@@ -1619,7 +1777,7 @@ mod tests {
     ) -> PathBuf {
         let path = root.join(name);
         let script = format!(
-            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=\"$(cat)\"\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nBODY=''\nIFS= read -r BODY || true\nprintf '%s' \"$BODY\" > \"{}\"\nprintf '%s' '{}'\n",
             log_path.display(),
             stdout_body.replace('\'', "'\"'\"'")
         );
@@ -2138,11 +2296,22 @@ mod tests {
                     == Some("tool_search")
             })
             .expect("tool_search definition should exist");
-        assert!(
-            tool_search["function"]["parameters"]["required"]
-                .as_array()
-                .expect("required should be an array")
-                .contains(&Value::String("query".to_owned()))
+        let tool_search_properties = tool_search["function"]["parameters"]["properties"]
+            .as_object()
+            .expect("tool_search properties should be an object");
+        let tool_search_required = tool_search["function"]["parameters"]["required"]
+            .as_array()
+            .expect("required should be an array");
+
+        assert!(tool_search_properties.contains_key("query"));
+        assert!(tool_search_properties.contains_key("exact_tool_id"));
+        assert!(!tool_search_required.contains(&Value::String("query".to_owned())));
+        assert_eq!(
+            tool_search["function"]["parameters"]["anyOf"],
+            json!([
+                { "required": ["query"] },
+                { "required": ["exact_tool_id"] }
+            ])
         );
     }
 
@@ -2395,6 +2564,20 @@ mod tests {
             BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
         );
 
+        let direct_bash_exec = ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({"command": "printf ok"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_bash_exec),
+            BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+                Capability::NetworkEgress,
+            ])
+        );
+
         let invoked_file_read = ToolCoreRequest {
             tool_name: "tool.invoke".to_owned(),
             payload: json!({
@@ -2432,6 +2615,24 @@ mod tests {
         assert_eq!(
             required_capabilities_for_request(&invoked_web_fetch),
             BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
+        );
+
+        let invoked_bash_exec = ToolCoreRequest {
+            tool_name: "tool.invoke".to_owned(),
+            payload: json!({
+                "tool_id": "bash.exec",
+                "lease": "unused",
+                "arguments": {"command": "printf ok"}
+            }),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&invoked_bash_exec),
+            BTreeSet::from([
+                Capability::InvokeTool,
+                Capability::FilesystemRead,
+                Capability::FilesystemWrite,
+                Capability::NetworkEgress,
+            ])
         );
 
         let invoked_claw_plan = ToolCoreRequest {
@@ -2897,7 +3098,7 @@ mod tests {
 
     #[cfg(feature = "tool-shell")]
     #[test]
-    fn tool_search_hides_shell_exec_when_runtime_allowlist_is_empty() {
+    fn tool_search_includes_shell_exec_when_runtime_allowlist_is_empty() {
         let root = std::env::temp_dir().join(format!(
             "loongclaw-tool-search-shell-filter-{}",
             std::process::id()
@@ -2906,21 +3107,29 @@ mod tests {
 
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::new(),
+            shell_default_mode: shell_policy_ext::ShellPolicyDefault::Deny,
             file_root: Some(root.clone()),
             messages_enabled: true,
             ..Default::default()
         };
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "shell command"}),
-            },
-            &config,
-        )
-        .expect("tool search should succeed");
+
+        let request = ToolCoreRequest {
+            tool_name: "tool.search".to_owned(),
+            payload: json!({"exact_tool_id": "shell.exec"}),
+        };
+        let outcome =
+            execute_tool_core_with_config(request, &config).expect("tool search should succeed");
 
         let results = outcome.payload["results"].as_array().expect("results");
-        assert!(results.iter().all(|entry| entry["tool_id"] != "shell.exec"));
+        let shell_entry = results
+            .iter()
+            .find(|entry| entry["tool_id"] == "shell.exec")
+            .expect("shell.exec should remain discoverable");
+        let lease = shell_entry["lease"]
+            .as_str()
+            .expect("shell.exec should include a lease");
+
+        assert!(!lease.is_empty(), "lease should not be empty");
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -3073,19 +3282,97 @@ mod tests {
 
     #[cfg(feature = "tool-shell")]
     #[test]
-    fn shell_exec_rejects_embedded_whitespace_in_command() {
+    fn shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
+        #[cfg(unix)]
+        let config = test_tool_runtime_config(std::env::temp_dir());
+        #[cfg(windows)]
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        #[cfg(windows)]
+        config.shell_allow.insert("cmd".to_owned());
+        #[cfg(unix)]
+        let command = "echo hello world";
+        #[cfg(windows)]
+        let command = "cmd /C echo hello world";
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "shell.exec".to_owned(),
+                payload: json!({"command": command}),
+            },
+            &config,
+        )
+        .expect("embedded whitespace should be normalized into args");
+        assert_eq!(outcome.status, "ok");
+        #[cfg(unix)]
+        assert_eq!(outcome.payload["command"], "echo");
+        #[cfg(unix)]
+        assert_eq!(outcome.payload["args"], json!(["hello", "world"]));
+        #[cfg(windows)]
+        assert_eq!(outcome.payload["command"], "cmd");
+        #[cfg(windows)]
+        assert_eq!(
+            outcome.payload["args"],
+            json!(["/C", "echo", "hello", "world"])
+        );
+        assert_eq!(outcome.payload["stdout"], json!("hello world"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn tool_invoke_shell_exec_normalizes_embedded_whitespace_into_args_when_args_missing() {
+        #[cfg(unix)]
+        let config = test_tool_runtime_config(std::env::temp_dir());
+        #[cfg(windows)]
+        let mut config = test_tool_runtime_config(std::env::temp_dir());
+        #[cfg(windows)]
+        config.shell_allow.insert("cmd".to_owned());
+        #[cfg(unix)]
+        let command = "echo hello from invoke";
+        #[cfg(windows)]
+        let command = "cmd /C echo hello from invoke";
+        let lease = issue_tool_lease("shell.exec", &serde_json::Map::new());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.invoke".to_owned(),
+                payload: json!({
+                    "tool_id": "shell.exec",
+                    "lease": lease,
+                    "arguments": {"command": command}
+                }),
+            },
+            &config,
+        )
+        .expect("tool.invoke shell payload should be normalized into args");
+        assert_eq!(outcome.status, "ok");
+        #[cfg(unix)]
+        assert_eq!(outcome.payload["command"], "echo");
+        #[cfg(unix)]
+        assert_eq!(outcome.payload["args"], json!(["hello", "from", "invoke"]));
+        #[cfg(windows)]
+        assert_eq!(outcome.payload["command"], "cmd");
+        #[cfg(windows)]
+        assert_eq!(
+            outcome.payload["args"],
+            json!(["/C", "echo", "hello", "from", "invoke"])
+        );
+        assert_eq!(outcome.payload["stdout"], json!("hello from invoke"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn shell_exec_does_not_normalize_multiline_command_into_args() {
         let config = test_tool_runtime_config(std::env::temp_dir());
         let error = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "shell.exec".to_owned(),
-                payload: json!({"command": "ls -la"}),
+                payload: json!({"command": "echo hello\nworld"}),
             },
             &config,
         )
-        .expect_err("embedded whitespace should be denied");
+        .expect_err("multiline commands should stay repairable instead of executing");
+
         assert!(
-            error.contains("embedded whitespace"),
-            "expected whitespace rejection, got: {error}"
+            error.contains("payload.command"),
+            "expected payload.command validation failure, got: {error}"
         );
     }
 
@@ -3303,6 +3590,102 @@ mod tests {
                 && entry["argument_hint"].as_str()
                     == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
         }));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_search_exact_tool_id_refresh_returns_one_current_card_with_lease() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "exact_tool_id": "file.read"
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let first = results.first().expect("one result should be returned");
+
+        assert_eq!(outcome.payload["returned"], 1);
+        assert_eq!(first["tool_id"], "file.read");
+        assert!(first["lease"].as_str().is_some());
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_exact_tool_id_not_visible_preserves_raw_request_and_diagnostics_with_fallback_results()
+     {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-exact-refresh-fallback");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "exact_tool_id": "file_read",
+                    "query": "run shell command",
+                    "_loongclaw": {
+                        "tool_search": {
+                            "visible_tool_ids": ["tool.search", "tool.invoke", "shell.exec"],
+                        }
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let diagnostics = &outcome.payload["diagnostics"];
+
+        assert!(!results.is_empty());
+        assert_eq!(results[0]["tool_id"], "shell.exec");
+        assert_eq!(outcome.payload["exact_tool_id"], "file_read");
+        assert_eq!(diagnostics["reason"], "exact_tool_id_not_visible");
+        assert_eq!(diagnostics["requested_tool_id"], "file_read");
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
+    #[test]
+    fn tool_search_result_includes_search_hint_and_schema_preview() {
+        let root = unique_tool_temp_dir("loongclaw-tool-search-card-metadata");
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let config = test_tool_runtime_config(root.clone());
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "run shell command",
+                    "limit": 3
+                }),
+            },
+            &config,
+        )
+        .expect("tool search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        let shell_entry = results
+            .iter()
+            .find(|entry| entry["tool_id"] == "shell.exec")
+            .expect("shell.exec should be discoverable");
+
+        assert!(shell_entry["search_hint"].as_str().is_some());
+        assert!(shell_entry["schema_preview"].is_object());
 
         std::fs::remove_dir_all(&root).ok();
     }
@@ -4314,10 +4697,12 @@ mod tests {
 
     #[test]
     fn tool_search_hides_tools_exceeding_granted_capabilities() {
-        let root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-search-cap-filter-{}",
-            std::process::id()
-        ));
+        let created_at = std::time::SystemTime::now();
+        let duration = created_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after epoch");
+        let nanos = duration.as_nanos();
+        let root = std::env::temp_dir().join(format!("loongclaw-tool-search-cap-filter-{nanos}"));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
@@ -4343,6 +4728,44 @@ mod tests {
         assert!(
             !tool_ids.contains(&"file.read"),
             "file.read requires FilesystemRead, should be hidden when only InvokeTool is granted; got: {tool_ids:?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn tool_search_hides_bash_exec_without_side_effect_capabilities() {
+        let created_at = std::time::SystemTime::now();
+        let duration = created_at
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after epoch");
+        let nanos = duration.as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("loongclaw-tool-search-bash-cap-filter-{nanos}"));
+        std::fs::create_dir_all(&root).expect("create fixture root");
+
+        let mut config = test_tool_runtime_config(root.clone());
+        config.bash_exec = ready_bash_exec_runtime_policy();
+
+        let result = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "tool.search".to_owned(),
+                payload: json!({
+                    "query": "bash.exec",
+                    TOOL_SEARCH_GRANTED_CAPABILITIES_FIELD: [
+                        "InvokeTool"
+                    ]
+                }),
+            },
+            &config,
+        )
+        .expect("search should succeed");
+
+        let results = result.payload["results"].as_array().expect("results array");
+        assert!(
+            results.iter().all(|entry| entry["tool_id"] != "bash.exec"),
+            "bash.exec should be hidden when the granted capabilities only include InvokeTool; got: {results:?}"
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -4950,6 +5373,139 @@ mod tests {
         assert_eq!(
             search["function"]["parameters"]["properties"]["sort"]["items"]["type"],
             "object"
+        );
+        assert_eq!(
+            search["function"]["parameters"]["properties"]["automatic_fields"]["type"],
+            "boolean"
+        );
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[test]
+    fn feishu_bitable_batch_record_tools_reject_more_than_500_items_before_network() {
+        let temp_dir = unique_feishu_tool_temp_dir("bitable-batch-limit");
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-batch-limit",
+            &["offline_access", "base:record:write"],
+        );
+        let config =
+            build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
+
+        let create_records = (0..501)
+            .map(|index| json!({ "fields": { "Name": format!("row-{index}") } }))
+            .collect::<Vec<_>>();
+        let create_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.record.batch_create".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "records": create_records,
+                }),
+            },
+            &config,
+        )
+        .expect_err("tool should reject >500 batch create items");
+        assert!(
+            create_error.contains("batch size must be <= 500"),
+            "error={create_error}"
+        );
+
+        let update_records = (0..501)
+            .map(|index| {
+                json!({ "record_id": format!("rec_{index}"), "fields": { "Name": format!("row-{index}") } })
+            })
+            .collect::<Vec<_>>();
+        let update_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.record.batch_update".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "records": update_records,
+                }),
+            },
+            &config,
+        )
+        .expect_err("tool should reject >500 batch update items");
+        assert!(
+            update_error.contains("batch size must be <= 500"),
+            "error={update_error}"
+        );
+
+        let delete_records = (0..501)
+            .map(|index| format!("rec_{index}"))
+            .collect::<Vec<_>>();
+        let delete_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.record.batch_delete".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "records": delete_records,
+                }),
+            },
+            &config,
+        )
+        .expect_err("tool should reject >500 batch delete items");
+        assert!(
+            delete_error.contains("batch size must be <= 500"),
+            "error={delete_error}"
+        );
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[test]
+    fn feishu_bitable_field_tools_require_positive_type() {
+        let temp_dir = unique_feishu_tool_temp_dir("bitable-field-type");
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-field-type",
+            &["offline_access", "bitable:app"],
+        );
+        let config =
+            build_feishu_tool_runtime_config("http://127.0.0.1:9".to_owned(), &sqlite_path);
+
+        let create_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.field.create".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "field_name": "Amount",
+                    "type": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("field create should reject non-positive type");
+        assert!(
+            create_error.contains("feishu.bitable.field.create invalid payload.type"),
+            "error={create_error}"
+        );
+
+        let update_error = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "feishu.bitable.field.update".to_owned(),
+                payload: json!({
+                    "app_token": "app_demo",
+                    "table_id": "tbl_demo",
+                    "field_id": "fld_demo",
+                    "field_name": "Amount",
+                    "type": 0
+                }),
+            },
+            &config,
+        )
+        .expect_err("field update should reject non-positive type");
+        assert!(
+            update_error.contains("feishu.bitable.field.update invalid payload.type"),
+            "error={update_error}"
         );
     }
 
@@ -7408,7 +7964,7 @@ mod tests {
         let _store = seed_feishu_tool_grant(
             &sqlite_path,
             "u-token-detail",
-            &["offline_access", "im:message.group_msg:readonly"],
+            &["offline_access", "im:message.group_msg"],
         );
         let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
 
@@ -7506,7 +8062,7 @@ mod tests {
             "feishu_shared",
             "ou_shared",
             "u-token-detail-ingress",
-            &["offline_access", "im:message.group_msg:readonly"],
+            &["offline_access", "im:message.group_msg"],
         );
         let config = runtime_config::ToolRuntimeConfig {
             feishu: Some(runtime_config::FeishuToolRuntimeConfig {
@@ -7593,6 +8149,101 @@ mod tests {
             requests[1].path,
             "/open-apis/im/v1/messages/om_ingress_detail"
         );
+
+        server.abort();
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feishu_messages_get_tool_accepts_legacy_group_message_read_scope() {
+        use std::fs;
+
+        use axum::{
+            Json, Router,
+            extract::{Request, State},
+            routing::{get, post},
+        };
+
+        let temp_dir = unique_feishu_tool_temp_dir("messages-get-legacy-group-scope");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let requests =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<FeishuToolMockRequest>::new()));
+        let state = FeishuToolMockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new()
+            .route(
+                "/open-apis/auth/v3/tenant_access_token/internal",
+                post({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "tenant_access_token": "t-token-detail-legacy"
+                            }))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/open-apis/im/v1/messages/om_legacy",
+                get({
+                    let state = state.clone();
+                    move |request: Request| {
+                        let state = state.clone();
+                        async move {
+                            record_feishu_tool_request(State(state), request).await;
+                            Json(serde_json::json!({
+                                "code": 0,
+                                "data": {
+                                    "items": [{
+                                        "message_id": "om_legacy",
+                                        "chat_id": "oc_demo",
+                                        "msg_type": "text",
+                                        "sender": {
+                                            "id": "ou_123",
+                                            "sender_type": "user"
+                                        }
+                                    }]
+                                }
+                            }))
+                        }
+                    }
+                }),
+            );
+        let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-detail-legacy",
+            &["offline_access", "im:message.group_msg:readonly"],
+        );
+        let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
+
+        let outcome = execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "feishu.messages.get".to_owned(),
+                payload: serde_json::json!({
+                    "message_id": "om_legacy"
+                }),
+            },
+            &config,
+        )
+        .expect("legacy group scope should remain accepted");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["message"]["message_id"], "om_legacy");
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer t-token-detail-legacy")
+        );
+        assert_eq!(requests[1].path, "/open-apis/im/v1/messages/om_legacy");
 
         server.abort();
     }
@@ -9498,6 +10149,89 @@ mod tests {
         }));
         assert!(requests[0].body.contains("\"query\":\"incident\""));
         assert!(requests[0].body.contains("\"chat_ids\":[\"oc_demo\"]"));
+
+        server.abort();
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "channel-feishu"))]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn feishu_bitable_list_tool_returns_top_level_tables_page() {
+        use std::fs;
+
+        use axum::{
+            Json, Router,
+            extract::{Request, State},
+            routing::get,
+        };
+
+        let temp_dir = unique_feishu_tool_temp_dir("bitable-list-tables");
+        fs::create_dir_all(&temp_dir).expect("create temp dir");
+        let sqlite_path = temp_dir.join("feishu.sqlite3");
+        let requests =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<FeishuToolMockRequest>::new()));
+        let state = FeishuToolMockServerState {
+            requests: requests.clone(),
+        };
+        let router = Router::new().route(
+            "/open-apis/bitable/v1/apps/app_demo/tables",
+            get({
+                let state = state.clone();
+                move |request: Request| {
+                    let state = state.clone();
+                    async move {
+                        record_feishu_tool_request(State(state), request).await;
+                        Json(serde_json::json!({
+                            "code": 0,
+                            "data": {
+                                "items": [{
+                                    "table_id": "tbl_1",
+                                    "name": "Tasks",
+                                    "revision": 3
+                                }],
+                                "page_token": "page_next",
+                                "has_more": true
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+        let (base_url, server) = spawn_feishu_tool_mock_server(router).await;
+        let _store = seed_feishu_tool_grant(
+            &sqlite_path,
+            "u-token-bitable-list",
+            &["offline_access", "base:table:read"],
+        );
+        let config = build_feishu_tool_runtime_config(base_url, &sqlite_path);
+
+        let outcome = execute_tool_core_with_config(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "feishu.bitable.list".to_owned(),
+                payload: serde_json::json!({
+                    "app_token": "app_demo",
+                    "page_size": 20,
+                    "page_token": "page_current"
+                }),
+            },
+            &config,
+        )
+        .expect("feishu bitable list tool should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["tables"][0]["table_id"], "tbl_1");
+        assert_eq!(outcome.payload["has_more"], true);
+        assert_eq!(outcome.payload["page_token"], "page_next");
+        assert!(outcome.payload.get("result").is_none());
+
+        let requests = requests.lock().await.clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].path,
+            "/open-apis/bitable/v1/apps/app_demo/tables"
+        );
+        assert!(requests[0].query.as_deref().is_some_and(|query| {
+            query.contains("page_size=20") && query.contains("page_token=page_current")
+        }));
 
         server.abort();
     }

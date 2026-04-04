@@ -7,10 +7,10 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 | Domain | Grade | Last Reviewed | Gaps |
 |--------|-------|---------------|------|
 | Contracts (L0) | A | 2026-03-13 | `#[non_exhaustive]` applied; membrane field not yet enforced at runtime |
-| Kernel Security (L1) | B+ | 2026-03-13 | Policy only gates `shell.exec`; `file.read`/`file.write` bypass policy check |
+| Kernel Security (L1) | B+ | 2026-04-03 | Core tool paths now route through policy extensions; remaining gaps are non-uniform L1 coverage for connector/ACP/runtime-only analytics and explicit `Direct` compatibility lanes |
 | Execution Planes (L2) | B | 2026-03-13 | Core/extension pattern solid; no WASM fuel metering yet |
 | Orchestration (L3) | B | 2026-03-13 | HarnessBroker routes correctly; context-engine selection is pluggable, but richer engine implementations and broader runtime coverage are still limited |
-| Observability (L4) | C+ | 2026-03-13 | Audit events in-memory only; no HMAC chain; no persistent sink |
+| Observability (L4) | C+ | 2026-04-03 | Durable JSONL/fanout audit exists; remaining gaps are tamper-evident verification, query baseline, and richer export lanes |
 | Vertical Packs (L5) | B | 2026-03-13 | Pack validation works; namespace struct exists but not enforced |
 | Protocol (L5.5) | B+ | 2026-03-13 | Transport contracts and typed routing operational |
 | Integration (L6) | B | 2026-03-13 | Plugin scanning works; hotplug lifecycle incomplete |

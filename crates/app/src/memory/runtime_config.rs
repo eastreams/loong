@@ -3,6 +3,7 @@ use std::sync::OnceLock;
 
 use crate::config::{
     MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+    PersonalizationConfig,
 };
 
 /// Typed runtime configuration for the memory (SQLite) subsystem.
@@ -23,6 +24,7 @@ pub struct MemoryRuntimeConfig {
     pub sliding_window: usize,
     pub summary_max_chars: usize,
     pub profile_note: Option<String>,
+    pub personalization: Option<PersonalizationConfig>,
 }
 
 impl Default for MemoryRuntimeConfig {
@@ -40,6 +42,7 @@ impl Default for MemoryRuntimeConfig {
             sliding_window: defaults.sliding_window,
             summary_max_chars: defaults.summary_char_budget(),
             profile_note: defaults.trimmed_profile_note(),
+            personalization: defaults.trimmed_personalization(),
         }
     }
 }
@@ -58,6 +61,7 @@ impl MemoryRuntimeConfig {
             sliding_window: config.sliding_window,
             summary_max_chars: config.summary_char_budget(),
             profile_note: config.trimmed_profile_note(),
+            personalization: config.trimmed_personalization(),
         }
     }
 
@@ -271,6 +275,7 @@ mod tests {
             sliding_window: 12,
             summary_max_chars: 1200,
             profile_note: None,
+            personalization: None,
         };
         assert_eq!(
             config.sqlite_path,
@@ -293,6 +298,33 @@ mod tests {
         assert_eq!(runtime.profile, MemoryProfile::WindowPlusSummary);
         assert_eq!(runtime.mode, MemoryMode::WindowPlusSummary);
         assert_eq!(runtime.summary_max_chars, 900);
+    }
+
+    #[test]
+    fn runtime_config_from_memory_config_carries_personalization() {
+        let _env = ScopedEnv::new();
+        let default_personalization = PersonalizationConfig::default();
+        let schema_version = default_personalization.schema_version;
+        let personalization = PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Balanced),
+            initiative_level: Some(crate::config::InitiativeLevel::AskBeforeActing),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: Some("zh-CN".to_owned()),
+            prompt_state: crate::config::PersonalizationPromptState::Suppressed,
+            schema_version,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+        let config = MemoryConfig {
+            personalization: Some(personalization),
+            ..MemoryConfig::default()
+        };
+
+        let runtime = MemoryRuntimeConfig::from_memory_config(&config);
+        let expected_personalization = config.trimmed_personalization();
+
+        assert_eq!(runtime.personalization, expected_personalization);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 {
-  "eyebrow": "Web Dashboard",
+  "eyebrow": "状态",
   "title": "运行控制台",
   "subtitle": "在一个页面里查看 provider、runtime、工具和本地配置。",
   "cards": {
@@ -22,7 +22,8 @@
     "configEyebrow": "配置快照",
     "configTitle": "本地配置",
     "toolsEyebrow": "工具面",
-    "toolsTitle": "工具策略"
+    "toolsTitle": "工具策略",
+    "toolsGovernanceLabel": "工具治理"
   },
   "fields": {
     "source": "来源",
@@ -56,7 +57,7 @@
     "fileRoot": "文件根目录",
     "lastProvider": "上次 Provider",
     "approval": "审批",
-    "shellPolicy": "默认策略",
+    "shellPolicy": "策略",
     "allowed": "允许",
     "denied": "拒绝",
     "providerHost": "Provider 域名",
@@ -117,16 +118,27 @@
     "probeTransportFailure": "传输失败"
   },
   "toolItems": {
-    "shell_policy": "Shell 能力",
+    "bash_exec": "Bash 执行",
     "sessions": "会话工具",
     "messages": "消息工具",
     "delegate": "委派",
     "browser": "浏览器",
-    "browser_companion": "浏览器伴随器",
+    "browser_companion": "浏览器助手",
     "web_fetch": "Web 抓取",
     "web_search": "网页搜索",
     "file_tools": "文件工具",
     "external_skills": "外部技能"
+  },
+  "toolMeta": {
+    "native": "原生",
+    "companion": "伴随器",
+    "provider": "Provider",
+    "local": "本地",
+    "catalog": "目录",
+    "discoverable": "可发现",
+    "executable": "可执行",
+    "policyLimited": "policy 限制",
+    "runtimeUnavailable": "runtime 不可用"
   },
   "actions": {
     "reload": "重新加载 Runtime",
@@ -136,7 +148,7 @@
     "title": "调试控制台",
     "subtitle": "在一个只读控制台里查看最近的 runtime 操作与调试输出。",
     "open": "调试控制台",
-    "back": "返回 Dashboard",
+    "back": "返回状态",
     "eyebrow": "Runtime / Debug Console",
     "panelTitle": "只读调试视图",
     "loading": "正在加载运行态与日志输出...",

@@ -37,7 +37,17 @@
   },
   "inspector": {
     "sessionLoaded": "会话已加载",
-    "waitingForSession": "等待选择会话"
+    "waitingForSession": "等待选择会话",
+    "recentTools": "最近工具",
+    "noRecentTools": "暂无最近工具活动"
+  },
+  "recentTools": {
+    "detail": {
+      "ok": "已完成",
+      "error": "执行失败",
+      "interrupted": "中途中断",
+      "pending": "等待工具活动"
+    }
   },
   "errors": {
     "providerHostFallback": "当前 provider 域名",

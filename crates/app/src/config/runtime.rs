@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::CliResult;
 
 use super::{
+    OnebotChannelConfig, QqbotChannelConfig, WeixinChannelConfig,
     audit::AuditConfig,
     channels::{
         CliChannelConfig, DingtalkChannelConfig, DiscordChannelConfig, EmailChannelConfig,
@@ -96,6 +97,12 @@ pub struct LoongClawConfig {
     pub matrix: MatrixChannelConfig,
     #[serde(default)]
     pub wecom: WecomChannelConfig,
+    #[serde(default)]
+    pub weixin: WeixinChannelConfig,
+    #[serde(default)]
+    pub qqbot: QqbotChannelConfig,
+    #[serde(default)]
+    pub onebot: OnebotChannelConfig,
     #[serde(default)]
     pub discord: DiscordChannelConfig,
     #[serde(default)]
@@ -1036,6 +1043,9 @@ fn canonicalize_channel_configs_for_encoding(config: &mut LoongClawConfig) {
     canonicalize_feishu_channel_for_encoding(&mut config.feishu);
     canonicalize_matrix_channel_for_encoding(&mut config.matrix);
     canonicalize_wecom_channel_for_encoding(&mut config.wecom);
+    canonicalize_weixin_channel_for_encoding(&mut config.weixin);
+    canonicalize_qqbot_channel_for_encoding(&mut config.qqbot);
+    canonicalize_onebot_channel_for_encoding(&mut config.onebot);
     canonicalize_discord_channel_for_encoding(&mut config.discord);
     canonicalize_line_channel_for_encoding(&mut config.line);
     canonicalize_dingtalk_channel_for_encoding(&mut config.dingtalk);
@@ -1096,6 +1106,48 @@ fn canonicalize_wecom_channel_for_encoding(config: &mut WecomChannelConfig) {
     for account in config.accounts.values_mut() {
         canonicalize_env_secret_reference(&mut account.bot_id, &mut account.bot_id_env);
         canonicalize_env_secret_reference(&mut account.secret, &mut account.secret_env);
+    }
+}
+
+fn canonicalize_weixin_channel_for_encoding(config: &mut WeixinChannelConfig) {
+    canonicalize_env_string_reference(&mut config.bridge_url, &mut config.bridge_url_env);
+    canonicalize_env_secret_reference(
+        &mut config.bridge_access_token,
+        &mut config.bridge_access_token_env,
+    );
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_string_reference(&mut account.bridge_url, &mut account.bridge_url_env);
+        canonicalize_env_secret_reference(
+            &mut account.bridge_access_token,
+            &mut account.bridge_access_token_env,
+        );
+    }
+}
+
+fn canonicalize_qqbot_channel_for_encoding(config: &mut QqbotChannelConfig) {
+    canonicalize_env_secret_reference(&mut config.app_id, &mut config.app_id_env);
+    canonicalize_env_secret_reference(&mut config.client_secret, &mut config.client_secret_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_secret_reference(&mut account.app_id, &mut account.app_id_env);
+        canonicalize_env_secret_reference(
+            &mut account.client_secret,
+            &mut account.client_secret_env,
+        );
+    }
+}
+
+fn canonicalize_onebot_channel_for_encoding(config: &mut OnebotChannelConfig) {
+    canonicalize_env_string_reference(&mut config.websocket_url, &mut config.websocket_url_env);
+    canonicalize_env_secret_reference(&mut config.access_token, &mut config.access_token_env);
+
+    for account in config.accounts.values_mut() {
+        canonicalize_env_string_reference(
+            &mut account.websocket_url,
+            &mut account.websocket_url_env,
+        );
+        canonicalize_env_secret_reference(&mut account.access_token, &mut account.access_token_env);
     }
 }
 
@@ -1335,6 +1387,37 @@ fn canonicalize_provider_secret_env_reference(
         });
     }
     *env_name = None;
+}
+
+fn canonicalize_env_string_reference(value: &mut Option<String>, env_name: &mut Option<String>) {
+    let explicit_env_name = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|raw| !raw.is_empty())
+        .and_then(|raw| {
+            let secret_ref = loongclaw_contracts::SecretRef::Inline(raw.to_owned());
+            secret_ref_env_name(Some(&secret_ref))
+        });
+    let Some(explicit_env_name) = explicit_env_name else {
+        return;
+    };
+
+    let configured_env_name = env_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|configured| !configured.is_empty());
+
+    match configured_env_name {
+        None => {
+            *env_name = Some(explicit_env_name);
+            *value = None;
+        }
+        Some(configured_env_name) if configured_env_name == explicit_env_name => {
+            *env_name = Some(explicit_env_name);
+            *value = None;
+        }
+        Some(_) => {}
+    }
 }
 
 fn normalize_acp_agent_id(raw: &str) -> Option<String> {
@@ -2060,6 +2143,10 @@ fn template_web_search_usage_comment() -> String {
 mod tests {
     use super::*;
     use crate::config::ProviderKind;
+    use crate::config::{
+        ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV,
+        QQBOT_CLIENT_SECRET_ENV, WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV,
+    };
     use loongclaw_contracts::SecretRef;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2243,6 +2330,45 @@ bot_token_env = "123456789:telegram-inline-secret-literal"
         assert!(raw.contains("access_token_env = \"MATRIX_ACCESS_TOKEN\""));
         assert!(raw.contains("sync_timeout_s = 30"));
         assert!(raw.contains("ignore_self_messages = true"));
+
+        std::fs::remove_file(&config_path).ok();
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_template_includes_plugin_backed_bridge_channel_defaults() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before unix epoch")
+            .as_nanos();
+        let temp_dir =
+            std::env::temp_dir().join(format!("loongclaw-template-plugin-bridges-{unique}"));
+        std::fs::create_dir_all(&temp_dir).expect("create temp directory");
+        let config_path = temp_dir.join("config.toml");
+
+        write_template(Some(config_path.to_string_lossy().as_ref()), true)
+            .expect("write template should succeed");
+
+        let raw = std::fs::read_to_string(&config_path).expect("read template");
+
+        assert!(raw.contains("[weixin]"));
+        assert!(raw.contains(format!("bridge_url_env = \"{WEIXIN_BRIDGE_URL_ENV}\"").as_str()));
+        assert!(raw.contains(
+            format!("bridge_access_token_env = \"{WEIXIN_BRIDGE_ACCESS_TOKEN_ENV}\"").as_str()
+        ));
+
+        assert!(raw.contains("[qqbot]"));
+        assert!(raw.contains(format!("app_id_env = \"{QQBOT_APP_ID_ENV}\"").as_str()));
+        assert!(
+            raw.contains(format!("client_secret_env = \"{QQBOT_CLIENT_SECRET_ENV}\"").as_str())
+        );
+
+        assert!(raw.contains("[onebot]"));
+        assert!(
+            raw.contains(format!("websocket_url_env = \"{ONEBOT_WEBSOCKET_URL_ENV}\"").as_str())
+        );
+        assert!(raw.contains(format!("access_token_env = \"{ONEBOT_ACCESS_TOKEN_ENV}\"").as_str()));
 
         std::fs::remove_file(&config_path).ok();
         std::fs::remove_dir_all(&temp_dir).ok();
@@ -2548,6 +2674,67 @@ api_key_env = "{secret}"
             loaded.memory.profile_note.as_deref(),
             Some("Imported NanoBot preferences")
         );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn write_persists_typed_personalization_metadata() {
+        let path = unique_config_path("loongclaw-personalization-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        let personalization = crate::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Thorough),
+            initiative_level: Some(crate::config::InitiativeLevel::HighInitiative),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: Some("zh-CN".to_owned()),
+            prompt_state: crate::config::PersonalizationPromptState::Configured,
+            schema_version: 1,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+
+        config.memory.profile = crate::config::MemoryProfile::ProfilePlusWindow;
+        config.memory.personalization = Some(personalization);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let load_result = load(Some(&path_string));
+        let (_, loaded) = load_result.expect("config load should pass");
+        let loaded_personalization = loaded
+            .memory
+            .personalization
+            .expect("typed personalization should persist");
+        let preferred_name = loaded_personalization.preferred_name.as_deref();
+        let response_density = loaded_personalization.response_density;
+        let initiative_level = loaded_personalization.initiative_level;
+        let standing_boundaries = loaded_personalization.standing_boundaries.as_deref();
+        let timezone = loaded_personalization.timezone.as_deref();
+        let locale = loaded_personalization.locale.as_deref();
+        let prompt_state = loaded_personalization.prompt_state;
+        let schema_version = loaded_personalization.schema_version;
+        let updated_at_epoch_seconds = loaded_personalization.updated_at_epoch_seconds;
+
+        assert_eq!(preferred_name, Some("Chum"));
+        assert_eq!(
+            response_density,
+            Some(crate::config::ResponseDensity::Thorough)
+        );
+        assert_eq!(
+            initiative_level,
+            Some(crate::config::InitiativeLevel::HighInitiative)
+        );
+        assert_eq!(standing_boundaries, Some("Ask before destructive actions."));
+        assert_eq!(timezone, Some("Asia/Shanghai"));
+        assert_eq!(locale, Some("zh-CN"));
+        assert_eq!(
+            prompt_state,
+            crate::config::PersonalizationPromptState::Configured
+        );
+        assert_eq!(schema_version, 1);
+        assert_eq!(updated_at_epoch_seconds, Some(1_775_095_200));
 
         let _ = fs::remove_file(path);
     }
@@ -3011,63 +3198,51 @@ model = "gpt-5"
 
     #[test]
     #[cfg(feature = "config-toml")]
-    fn write_canonicalizes_irc_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-irc-env");
+    fn write_canonicalizes_matching_plugin_backed_channel_env_name_fields() {
+        let path = unique_config_path("loongclaw-config-runtime-trimmed-plugin-bridge-env");
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
-        let mut ops_account = crate::config::channels::IrcAccountConfig::default();
 
-        config.irc.server_env = Some(" IRC_SERVER ".to_owned());
-        config.irc.nickname_env = Some(" IRC_NICKNAME ".to_owned());
-        ops_account.server_env = Some(" OPS_IRC_SERVER ".to_owned());
-        ops_account.nickname_env = Some(" OPS_IRC_NICKNAME ".to_owned());
-        config.irc.accounts.insert("ops".to_owned(), ops_account);
-
-        write(Some(&path_string), &config, true).expect("config write should pass");
-
-        let raw = fs::read_to_string(&path).expect("read written config");
-
-        assert!(raw.contains("server_env = \"IRC_SERVER\""));
-        assert!(raw.contains("nickname_env = \"IRC_NICKNAME\""));
-        assert!(raw.contains("server_env = \"OPS_IRC_SERVER\""));
-        assert!(raw.contains("nickname_env = \"OPS_IRC_NICKNAME\""));
-        assert!(!raw.contains("server_env = \" IRC_SERVER \""));
-        assert!(!raw.contains("nickname_env = \" IRC_NICKNAME \""));
-        assert!(!raw.contains("server_env = \" OPS_IRC_SERVER \""));
-        assert!(!raw.contains("nickname_env = \" OPS_IRC_NICKNAME \""));
-
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    #[cfg(feature = "config-toml")]
-    fn write_canonicalizes_twitch_env_name_fields() {
-        let path = unique_config_path("loongclaw-config-runtime-trimmed-twitch-env");
-        let path_string = path.display().to_string();
-        let mut config = LoongClawConfig::default();
-        let mut backup_account = crate::config::channels::TwitchAccountConfig::default();
-
-        config.twitch.access_token = Some(SecretRef::Inline("${TWITCH_ACCESS_TOKEN}".to_owned()));
-        config.twitch.access_token_env = Some(" TWITCH_ACCESS_TOKEN ".to_owned());
-        backup_account.access_token = Some(SecretRef::Inline(
-            "${BACKUP_TWITCH_ACCESS_TOKEN}".to_owned(),
+        config.weixin.bridge_url = Some("${WEIXIN_BRIDGE_URL}".to_owned());
+        config.weixin.bridge_url_env = Some(" WEIXIN_BRIDGE_URL ".to_owned());
+        config.weixin.bridge_access_token = Some(SecretRef::Inline(
+            "${WEIXIN_BRIDGE_ACCESS_TOKEN}".to_owned(),
         ));
-        backup_account.access_token_env = Some(" BACKUP_TWITCH_ACCESS_TOKEN ".to_owned());
-        config
-            .twitch
-            .accounts
-            .insert("backup".to_owned(), backup_account);
+        config.weixin.bridge_access_token_env = Some(" WEIXIN_BRIDGE_ACCESS_TOKEN ".to_owned());
+
+        config.qqbot.app_id = Some(SecretRef::Inline("${QQBOT_APP_ID}".to_owned()));
+        config.qqbot.app_id_env = Some(" QQBOT_APP_ID ".to_owned());
+        config.qqbot.client_secret = Some(SecretRef::Inline("${QQBOT_CLIENT_SECRET}".to_owned()));
+        config.qqbot.client_secret_env = Some(" QQBOT_CLIENT_SECRET ".to_owned());
+
+        config.onebot.websocket_url = Some("${ONEBOT_WEBSOCKET_URL}".to_owned());
+        config.onebot.websocket_url_env = Some(" ONEBOT_WEBSOCKET_URL ".to_owned());
+        config.onebot.access_token = Some(SecretRef::Inline("${ONEBOT_ACCESS_TOKEN}".to_owned()));
+        config.onebot.access_token_env = Some(" ONEBOT_ACCESS_TOKEN ".to_owned());
 
         write(Some(&path_string), &config, true).expect("config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read written config");
 
-        assert!(raw.contains("access_token_env = \"TWITCH_ACCESS_TOKEN\""));
-        assert!(raw.contains("access_token_env = \"BACKUP_TWITCH_ACCESS_TOKEN\""));
-        assert!(!raw.contains("access_token_env = \" TWITCH_ACCESS_TOKEN \""));
-        assert!(!raw.contains("access_token_env = \" BACKUP_TWITCH_ACCESS_TOKEN \""));
-        assert!(!raw.contains("access_token = \"${TWITCH_ACCESS_TOKEN}\""));
-        assert!(!raw.contains("access_token = \"${BACKUP_TWITCH_ACCESS_TOKEN}\""));
+        assert!(raw.contains(format!("bridge_url_env = \"{WEIXIN_BRIDGE_URL_ENV}\"").as_str()));
+        assert!(raw.contains(
+            format!("bridge_access_token_env = \"{WEIXIN_BRIDGE_ACCESS_TOKEN_ENV}\"").as_str()
+        ));
+        assert!(raw.contains(format!("app_id_env = \"{QQBOT_APP_ID_ENV}\"").as_str()));
+        assert!(
+            raw.contains(format!("client_secret_env = \"{QQBOT_CLIENT_SECRET_ENV}\"").as_str())
+        );
+        assert!(
+            raw.contains(format!("websocket_url_env = \"{ONEBOT_WEBSOCKET_URL_ENV}\"").as_str())
+        );
+        assert!(raw.contains(format!("access_token_env = \"{ONEBOT_ACCESS_TOKEN_ENV}\"").as_str()));
+
+        assert!(!raw.contains("bridge_url = \"${WEIXIN_BRIDGE_URL}\""));
+        assert!(!raw.contains("bridge_access_token = \"${WEIXIN_BRIDGE_ACCESS_TOKEN}\""));
+        assert!(!raw.contains("app_id = \"${QQBOT_APP_ID}\""));
+        assert!(!raw.contains("client_secret = \"${QQBOT_CLIENT_SECRET}\""));
+        assert!(!raw.contains("websocket_url = \"${ONEBOT_WEBSOCKET_URL}\""));
+        assert!(!raw.contains("access_token = \"${ONEBOT_ACCESS_TOKEN}\""));
 
         let _ = fs::remove_file(path);
     }
@@ -3432,7 +3607,10 @@ model = "gpt-5"
         assert!(!loaded.external_skills.enabled);
         assert!(loaded.external_skills.require_download_approval);
         assert!(loaded.external_skills.allowed_domains.is_empty());
-        assert!(loaded.external_skills.blocked_domains.is_empty());
+        assert_eq!(
+            loaded.external_skills.blocked_domains,
+            vec!["*.clawhub.io".to_owned()]
+        );
         assert!(loaded.external_skills.install_root.is_none());
         assert!(!loaded.external_skills.auto_expose_installed);
 

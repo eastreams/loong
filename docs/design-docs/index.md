@@ -55,7 +55,7 @@ All decisions from the research repository. Status reflects implementation reali
 
 | ID | Decision | Implementation Status |
 |----|----------|---------------------|
-| D-003 | Append-only event log as single source of truth | Partial — audit events exist, in-memory only (TD-006) |
+| D-003 | Append-only event log as single source of truth | Partial — audit events exist, JSONL/fanout retention exists, no tamper-evident verification or query baseline yet |
 | D-004 | Materialized views from event log | Not started |
 | D-005 | Control/data plane separation | Partial — planes exist, not fully separated |
 | D-006 | Consensus-agnostic event log trait | Not started — no trait defined |

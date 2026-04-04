@@ -5,7 +5,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use super::shared::{ConfigValidationIssue, expand_path, validate_numeric_range};
+use super::shared::{
+    ConfigValidationIssue, default_loongclaw_home, expand_path, validate_numeric_range,
+};
 
 pub const DEFAULT_WEB_FETCH_MAX_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_WEB_FETCH_TIMEOUT_SECONDS: u64 = 15;
@@ -16,6 +18,7 @@ pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
 pub const DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 20_000;
 pub const DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 150_000;
+pub const DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES: [&str; 1] = ["*.clawhub.io"];
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MIN_WEB_FETCH_TIMEOUT_SECONDS: usize = 1;
@@ -62,6 +65,8 @@ pub struct ToolConfig {
     pub browser: BrowserToolConfig,
     #[serde(default)]
     pub browser_companion: BrowserCompanionToolConfig,
+    #[serde(default)]
+    pub bash: BashToolConfig,
     #[serde(default)]
     pub web: WebToolConfig,
     #[serde(default)]
@@ -270,6 +275,14 @@ pub struct BrowserCompanionToolConfig {
     pub blocked_domains: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct BashToolConfig {
+    #[serde(default)]
+    pub login_shell: bool,
+    #[serde(default)]
+    pub rules_dir: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuntimeSelfToolConfig {
     #[serde(default = "default_runtime_self_max_source_chars")]
@@ -457,6 +470,13 @@ fn default_shell_allow() -> Vec<String> {
         .collect()
 }
 
+fn default_external_skills_blocked_domains() -> Vec<String> {
+    DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES
+        .iter()
+        .map(|rule| (*rule).to_owned())
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalSkillsConfig {
     #[serde(default)]
@@ -465,7 +485,7 @@ pub struct ExternalSkillsConfig {
     pub require_download_approval: bool,
     #[serde(default)]
     pub allowed_domains: Vec<String>,
-    #[serde(default)]
+    #[serde(default = "default_external_skills_blocked_domains")]
     pub blocked_domains: Vec<String>,
     #[serde(default)]
     pub install_root: Option<String>,
@@ -488,6 +508,7 @@ impl Default for ToolConfig {
             runtime_self: RuntimeSelfToolConfig::default(),
             browser: BrowserToolConfig::default(),
             browser_companion: BrowserCompanionToolConfig::default(),
+            bash: BashToolConfig::default(),
             web: WebToolConfig::default(),
             web_search: WebSearchToolConfig::default(),
             tool_execution: ToolExecutionToolConfig::default(),
@@ -586,7 +607,7 @@ impl Default for ExternalSkillsConfig {
             enabled: false,
             require_download_approval: default_require_download_approval(),
             allowed_domains: Vec::new(),
-            blocked_domains: Vec::new(),
+            blocked_domains: default_external_skills_blocked_domains(),
             install_root: None,
             auto_expose_installed: default_auto_expose_installed(),
         }
@@ -829,6 +850,17 @@ impl ToolConfig {
     }
 }
 
+impl BashToolConfig {
+    pub fn resolved_rules_dir(&self) -> PathBuf {
+        self.rules_dir
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(expand_path)
+            .unwrap_or_else(|| default_loongclaw_home().join("rules"))
+    }
+}
+
 pub fn normalize_web_search_provider(raw: &str) -> Option<&'static str> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "duckduckgo" | "ddg" => Some(WEB_SEARCH_PROVIDER_DUCKDUCKGO),
@@ -1033,6 +1065,7 @@ fn normalize_domain_entries(entries: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn tool_config_defaults_expose_session_runtime_policy() {
@@ -1601,6 +1634,57 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         );
     }
 
+    #[cfg(feature = "config-toml")]
+    #[test]
+    fn tool_config_parses_bash_rules_dir_override() {
+        let config: ToolConfig =
+            toml::from_str("[bash]\nrules_dir = \"custom/rules\"\n").expect("bash tool config");
+
+        assert_eq!(config.bash.rules_dir.as_deref(), Some("custom/rules"));
+    }
+
+    #[test]
+    fn bash_tool_config_defaults_to_loongclaw_home_rules_dir() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+
+        assert_eq!(
+            BashToolConfig::default().resolved_rules_dir(),
+            crate::config::default_loongclaw_home().join("rules")
+        );
+    }
+
+    #[test]
+    fn bash_tool_config_resolves_relative_rules_dir_like_other_path_fields() {
+        let config = BashToolConfig {
+            rules_dir: Some("custom/rules".to_owned()),
+            ..BashToolConfig::default()
+        };
+
+        assert_eq!(config.resolved_rules_dir(), PathBuf::from("custom/rules"));
+    }
+
+    #[test]
+    fn bash_tool_config_treats_blank_rules_dir_override_as_unset() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+
+        for raw in ["", "   "] {
+            let config = BashToolConfig {
+                rules_dir: Some(raw.to_owned()),
+                ..BashToolConfig::default()
+            };
+
+            assert_eq!(
+                config.resolved_rules_dir(),
+                crate::config::default_loongclaw_home().join("rules"),
+                "blank rules_dir `{raw}` should fall back to the default home rules dir"
+            );
+        }
+    }
+
     #[test]
     fn browser_companion_defaults_to_safe_public_mode() {
         let config = BrowserCompanionToolConfig::default();
@@ -1647,7 +1731,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         assert!(!config.enabled);
         assert!(config.require_download_approval);
         assert!(config.allowed_domains.is_empty());
-        assert!(config.blocked_domains.is_empty());
+        assert_eq!(config.blocked_domains, vec!["*.clawhub.io".to_owned()]);
         assert!(config.install_root.is_none());
         assert!(!config.auto_expose_installed);
     }
@@ -1660,7 +1744,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
             allowed_domains: vec![
                 "Skills.SH".to_owned(),
                 "skills.sh".to_owned(),
-                "  CLAWHUB.IO ".to_owned(),
+                "  CLAWHUB.AI ".to_owned(),
             ],
             blocked_domains: vec![
                 "Bad.Example".to_owned(),
@@ -1672,7 +1756,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         };
         assert_eq!(
             config.normalized_allowed_domains(),
-            vec!["clawhub.io".to_owned(), "skills.sh".to_owned()]
+            vec!["clawhub.ai".to_owned(), "skills.sh".to_owned()]
         );
         assert_eq!(
             config.normalized_blocked_domains(),

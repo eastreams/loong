@@ -10,8 +10,6 @@ use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::json;
 
 use crate::config::MemoryBackendKind;
-use crate::runtime_identity;
-
 mod canonical;
 mod context;
 #[cfg(feature = "memory-sqlite")]
@@ -262,18 +260,7 @@ pub fn load_prompt_context_with_diagnostics(
     session_id: &str,
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(Vec<MemoryContextEntry>, SqliteContextLoadDiagnostics), String> {
-    let mut profile_entry = None;
-    let profile_section =
-        runtime_identity::render_session_profile_section(config.profile_note.as_deref());
-    if matches!(config.mode, crate::config::MemoryMode::ProfilePlusWindow)
-        && let Some(profile_section) = profile_section
-    {
-        profile_entry = Some(MemoryContextEntry {
-            kind: MemoryContextKind::Profile,
-            role: "system".to_owned(),
-            content: profile_section,
-        });
-    }
+    let mut profile_entry = context::build_profile_entry(config);
 
     let (snapshot, diagnostics) =
         sqlite::load_context_snapshot_with_diagnostics(session_id, config)?;

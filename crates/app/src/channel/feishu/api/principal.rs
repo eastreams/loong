@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+const FEISHU_GROUP_MESSAGE_READ_SCOPE: &str = "im:message.group_msg";
+const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:readonly";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeishuAccountBinding {
     pub account_id: String,
@@ -59,7 +62,11 @@ impl FeishuGrantScopeSet {
 
     pub fn contains(&self, scope: &str) -> bool {
         let expected = scope.trim();
-        !expected.is_empty() && self.scopes.iter().any(|value| value == expected)
+        !expected.is_empty()
+            && self
+                .scopes
+                .iter()
+                .any(|value| scopes_match(value.as_str(), expected))
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &String> {
@@ -83,6 +90,23 @@ impl From<Vec<String>> for FeishuGrantScopeSet {
     fn from(value: Vec<String>) -> Self {
         Self::from_scopes(value)
     }
+}
+
+fn scopes_match(stored: &str, expected: &str) -> bool {
+    if stored == expected {
+        return true;
+    }
+
+    matches!(
+        (stored, expected),
+        (
+            FEISHU_GROUP_MESSAGE_READ_SCOPE,
+            FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY
+        ) | (
+            FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY,
+            FEISHU_GROUP_MESSAGE_READ_SCOPE
+        )
+    )
 }
 
 #[cfg(test)]
@@ -129,5 +153,16 @@ mod tests {
                 "docx:document:readonly".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn grant_scope_set_contains_group_message_scope_aliases() {
+        let current = FeishuGrantScopeSet::from_scopes(["im:message.group_msg"]);
+        assert!(current.contains("im:message.group_msg"));
+        assert!(current.contains("im:message.group_msg:readonly"));
+
+        let legacy = FeishuGrantScopeSet::from_scopes(["im:message.group_msg:readonly"]);
+        assert!(legacy.contains("im:message.group_msg"));
+        assert!(legacy.contains("im:message.group_msg:readonly"));
     }
 }

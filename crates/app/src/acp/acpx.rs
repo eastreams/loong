@@ -1741,6 +1741,9 @@ mod tests {
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
 
     #[cfg(unix)]
+    const ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS: u64 = 60_000;
+
+    #[cfg(unix)]
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -1831,7 +1834,7 @@ mod tests {
         write_executable_script_atomically(
             &script_path,
             &format!(
-                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nargs_contain() {{\n  haystack=$1\n  needle=$2\n  case \"$haystack\" in\n    *\"$needle\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  while IFS= read -r line || [ -n \"${{line:-}}\" ]; do\n    :\n  done\n}}\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
+                "#!/bin/sh\nset -eu\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  _acpx_haystack=$1\n  _acpx_needle=$2\n  case \"$_acpx_haystack\" in\n    *\"$_acpx_needle\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  while IFS= read -r _acpx_ignored_line; do\n    :\n  done\n}}\n{}\n",
                 log_path.display(),
                 body
             ),
@@ -2020,18 +2023,28 @@ exit 0
 
     #[cfg(unix)]
     fn fake_acpx_config(script_path: &Path, cwd: &Path) -> LoongClawConfig {
+        let command = script_path.display().to_string();
+        let working_directory = cwd.display().to_string();
+        let expected_version = "0.1.16".to_owned();
+        let permission_mode = "approve-reads".to_owned();
+        let non_interactive_permissions = "fail".to_owned();
+        let timeout_seconds = 12.5;
+        let queue_owner_ttl_seconds = 0.25;
+        let startup_timeout_ms = ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS;
+
         LoongClawConfig {
             acp: AcpConfig {
+                startup_timeout_ms: Some(startup_timeout_ms),
                 allow_mcp_server_injection: false,
                 backends: AcpBackendProfilesConfig {
                     acpx: Some(AcpxBackendConfig {
-                        command: Some(script_path.display().to_string()),
-                        expected_version: Some("0.1.16".to_owned()),
-                        cwd: Some(cwd.display().to_string()),
-                        permission_mode: Some("approve-reads".to_owned()),
-                        non_interactive_permissions: Some("fail".to_owned()),
-                        timeout_seconds: Some(12.5),
-                        queue_owner_ttl_seconds: Some(0.25),
+                        command: Some(command),
+                        expected_version: Some(expected_version),
+                        cwd: Some(working_directory),
+                        permission_mode: Some(permission_mode),
+                        non_interactive_permissions: Some(non_interactive_permissions),
+                        timeout_seconds: Some(timeout_seconds),
+                        queue_owner_ttl_seconds: Some(queue_owner_ttl_seconds),
                         ..AcpxBackendConfig::default()
                     }),
                 },
@@ -2039,6 +2052,18 @@ exit 0
             },
             ..LoongClawConfig::default()
         }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn fake_acpx_config_uses_explicit_process_test_startup_timeout() {
+        let temp_dir = unique_temp_dir("loongclaw-acpx-config-timeout");
+        let script_path = temp_dir.join("fake-acpx");
+
+        let config = fake_acpx_config(&script_path, &temp_dir);
+        let startup_timeout_ms = config.acp.startup_timeout_ms();
+
+        assert_eq!(startup_timeout_ms, ACPX_FAKE_RUNTIME_STARTUP_TIMEOUT_MS);
     }
 
     #[tokio::test]
@@ -2204,22 +2229,28 @@ case "$*" in
     ;;
 esac
 
-if args_contain "$*" 'config show'; then
-  echo '{"agents":{"codex":{"command":"npx @zed-industries/codex-acp"}}}'
-  exit 0
-fi
+case "$*" in
+  *"config show"*)
+    echo '{"agents":{"codex":{"command":"npx @zed-industries/codex-acp"}}}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'sessions ensure --name'; then
-  echo '{"acpxSessionId":"sess-mcp","agentSessionId":"agent-mcp","acpxRecordId":"record-mcp"}'
-  exit 0
-fi
+case "$*" in
+  *"sessions ensure --name"*)
+    echo '{"acpxSessionId":"sess-mcp","agentSessionId":"agent-mcp","acpxRecordId":"record-mcp"}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'prompt --session'; then
-  drain_stdin
-  echo '{"type":"text","content":"proxy ok"}'
-  echo '{"type":"done"}'
-  exit 0
-fi
+case "$*" in
+  *"prompt --session"*)
+    drain_stdin
+    echo '{"type":"text","content":"proxy ok"}'
+    echo '{"type":"done"}'
+    exit 0
+    ;;
+esac
 
 exit 0
 "#,
@@ -2373,24 +2404,30 @@ case "$*" in
     ;;
 esac
 
-if args_contain "$*" 'sessions ensure --name'; then
-  echo '{"acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
-  exit 0
-fi
+case "$*" in
+  *"sessions ensure --name"*)
+    echo '{"acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'prompt --session'; then
-  drain_stdin
-  echo '{"type":"text","content":"hello "}'
-  echo '{"type":"text","content":"world"}'
-  echo '{"type":"usage_update","used":7,"size":128}'
-  echo '{"type":"done"}'
-  exit 0
-fi
+case "$*" in
+  *"prompt --session"*)
+    drain_stdin
+    echo '{"type":"text","content":"hello "}'
+    echo '{"type":"text","content":"world"}'
+    echo '{"type":"usage_update","used":7,"size":128}'
+    echo '{"type":"done"}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'status --session'; then
-  echo '{"status":"ready","acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
-  exit 0
-fi
+case "$*" in
+  *"status --session"*)
+    echo '{"status":"ready","acpxSessionId":"sess-42","agentSessionId":"agent-42","acpxRecordId":"record-42"}'
+    exit 0
+    ;;
+esac
 
 exit 0
 "#,
@@ -2551,18 +2588,20 @@ case "$*" in
     ;;
 esac
 
-if args_contain "$*" 'sessions ensure --name'; then
-  echo '{"acpxSessionId":"sess-abort","agentSessionId":"agent-abort","acpxRecordId":"record-abort"}'
-  exit 0
-fi
+case "$*" in
+  *"sessions ensure --name"*)
+    echo '{"acpxSessionId":"sess-abort","agentSessionId":"agent-abort","acpxRecordId":"record-abort"}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'prompt --session'; then
-  drain_stdin
-  while :; do
-    :
-  done
-  exit 0
-fi
+case "$*" in
+  *"prompt --session"*)
+    drain_stdin
+    /bin/sleep 30
+    exit 0
+    ;;
+esac
 
 exit 0
 "#,
@@ -2650,15 +2689,19 @@ case "$*" in
     ;;
 esac
 
-if args_contain "$*" 'sessions ensure --name'; then
-  echo '{}'
-  exit 0
-fi
+case "$*" in
+  *"sessions ensure --name"*)
+    echo '{}'
+    exit 0
+    ;;
+esac
 
-if args_contain "$*" 'sessions new --name'; then
-  echo '{"acpxSessionId":"sess-fallback","agentSessionId":"agent-fallback","acpxRecordId":"record-fallback"}'
-  exit 0
-fi
+case "$*" in
+  *"sessions new --name"*)
+    echo '{"acpxSessionId":"sess-fallback","agentSessionId":"agent-fallback","acpxRecordId":"record-fallback"}'
+    exit 0
+    ;;
+esac
 
 exit 0
 "#,

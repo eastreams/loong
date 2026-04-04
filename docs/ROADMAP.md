@@ -61,8 +61,9 @@ Delivered:
 - external profile integrity lock (`security_scan.profile_sha256`) with fail-closed behavior
 - external profile signature verification (`security_scan.profile_signature`, ed25519)
 - JSONL SIEM export lane (`security_scan.siem_export`) with optional fail-closed mode
-- kernel-level tool-call policy gate (`PolicyEngine::check_tool_call`) with explicit
-  deny/approval-required outcomes before tool dispatch (Rule of Two)
+- kernel-level request-policy gate for tool calls through `PolicyEngine::authorize(...)`
+  plus `PolicyExtensionChain`, with explicit deny/approval-required outcomes before
+  tool dispatch (Rule of Two)
 - WASM static scan controls:
   - allowed artifact paths
   - module size cap
@@ -93,11 +94,13 @@ Delivered in current baseline:
 - Core-module WASM host ABI v0 for plugin data exchange:
   - request payload delivery into guest memory
   - structured JSON output capture from guest memory
+  - allowlisted guest-readable config access via namespaced `provider.` / `channel.` keys
   - bounded guest logging surfaced in runtime evidence
   - explicit guest abort propagation
   - backward-compatible fallback to legacy `run() -> ()`
 - Policy-driven runtime guardrails in `bridge_support.security_scan.runtime`:
   - required `allowed_path_prefixes` when `execute_wasm_component=true` (fail closed)
+  - optional `guest_readable_config_keys` allowlist for WASM guest config reads
   - `max_component_bytes`
   - optional `max_output_bytes` for host ABI output capture
   - optional `fuel_limit`

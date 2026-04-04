@@ -16,9 +16,18 @@ export interface ActiveToolStatus {
   status: "running" | "ok" | "error";
 }
 
+export interface RecentToolStatus {
+  toolId: string;
+  label: string;
+  status: "ok" | "error";
+  finishedAt: string;
+  detail?: string;
+}
+
 export interface SessionViewState {
   messages: ChatMessage[];
   activeTools: ActiveToolStatus[];
+  recentTools: RecentToolStatus[];
   pendingAssistantId: string | null;
   streamPhase: StreamPhase;
 }
@@ -59,6 +68,7 @@ export function useChatSessions(t: TFunction) {
   // Currently visible states
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [activeTools, setActiveTools] = useState<ActiveToolStatus[]>([]);
+  const [recentTools, setRecentTools] = useState<RecentToolStatus[]>([]);
   const [pendingAssistantId, setPendingAssistantId] = useState<string | null>(null);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
 
@@ -69,6 +79,7 @@ export function useChatSessions(t: TFunction) {
   const currentViewStateRef = useRef<SessionViewState>({
     messages,
     activeTools,
+    recentTools,
     pendingAssistantId,
     streamPhase,
   });
@@ -115,6 +126,7 @@ export function useChatSessions(t: TFunction) {
       : sessionViewStateRef.current.get(sessionId) ?? {
           messages: [],
           activeTools: [],
+          recentTools: [],
           pendingAssistantId: null,
           streamPhase: "idle" as StreamPhase,
         };
@@ -126,6 +138,7 @@ export function useChatSessions(t: TFunction) {
       syncCurrentViewState(nextState);
       setMessages(nextState.messages);
       setActiveTools(nextState.activeTools);
+      setRecentTools(nextState.recentTools);
       setPendingAssistantId(nextState.pendingAssistantId);
       setStreamPhase(nextState.streamPhase);
     }
@@ -226,12 +239,14 @@ export function useChatSessions(t: TFunction) {
       const emptyState: SessionViewState = {
         messages: [],
         activeTools: [],
+        recentTools: [],
         pendingAssistantId: null,
         streamPhase: "idle",
       };
       syncCurrentViewState(emptyState);
       setMessages([]);
       setActiveTools([]);
+      setRecentTools([]);
       setPendingAssistantId(null);
       setStreamPhase("idle");
       return;
@@ -245,18 +260,21 @@ export function useChatSessions(t: TFunction) {
       syncCurrentViewState(cachedViewState);
       setMessages(cachedViewState.messages);
       setActiveTools(cachedViewState.activeTools);
+      setRecentTools(cachedViewState.recentTools);
       setPendingAssistantId(cachedViewState.pendingAssistantId);
       setStreamPhase(cachedViewState.streamPhase);
     } else {
       const emptyState: SessionViewState = {
         messages: [],
         activeTools: [],
+        recentTools: [],
         pendingAssistantId: null,
         streamPhase: "idle",
       };
       syncCurrentViewState(emptyState);
       setMessages([]);
       setActiveTools([]);
+      setRecentTools([]);
       setPendingAssistantId(null);
       setStreamPhase("idle");
     }
@@ -278,12 +296,14 @@ export function useChatSessions(t: TFunction) {
             ? {
                 messages: (currentCached && currentCached.messages.length > 0) ? currentCached.messages : loadedMessages,
                 activeTools: currentCached?.activeTools ?? [],
+                recentTools: currentCached?.recentTools ?? [],
                 pendingAssistantId: currentCached?.pendingAssistantId ?? null,
                 streamPhase: currentCached?.streamPhase ?? "idle",
               }
             : {
                 messages: loadedMessages,
                 activeTools: [],
+                recentTools: currentCached?.recentTools ?? [],
                 pendingAssistantId: null,
                 streamPhase: "idle",
               };
@@ -293,6 +313,7 @@ export function useChatSessions(t: TFunction) {
           syncCurrentViewState(nextState);
           setMessages(nextState.messages);
           setActiveTools(nextState.activeTools);
+          setRecentTools(nextState.recentTools);
           setPendingAssistantId(nextState.pendingAssistantId);
           setStreamPhase(nextState.streamPhase);
         }
@@ -333,6 +354,7 @@ export function useChatSessions(t: TFunction) {
         if (!nextSessionId) {
           setMessages([]);
           setActiveTools([]);
+          setRecentTools([]);
         }
       }
     } catch (err) {
@@ -355,12 +377,14 @@ export function useChatSessions(t: TFunction) {
       const emptyState: SessionViewState = {
         messages: [],
         activeTools: [],
+        recentTools: [],
         pendingAssistantId: null,
         streamPhase: "idle",
       };
       syncCurrentViewState(emptyState);
       setMessages([]);
       setActiveTools([]);
+      setRecentTools([]);
       setPendingAssistantId(null);
       setStreamPhase("idle");
     }
@@ -371,6 +395,7 @@ export function useChatSessions(t: TFunction) {
     selectedSessionId,
     messages,
     activeTools,
+    recentTools,
     pendingAssistantId,
     streamPhase,
     isLoadingSessions,
@@ -380,6 +405,7 @@ export function useChatSessions(t: TFunction) {
     setError,
     setMessages,
     setActiveTools,
+    setRecentTools,
     setPendingAssistantId,
     setStreamPhase,
     selectSession,

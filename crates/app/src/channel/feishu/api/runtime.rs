@@ -348,10 +348,8 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn temp_dir(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "loongclaw-feishu-runtime-{label}-{}",
-            unix_ts_now()
-        ))
+        let prefix = format!("loongclaw-feishu-runtime-{label}");
+        crate::test_support::unique_temp_dir(prefix.as_str())
     }
 
     fn sample_grant(account_id: &str, open_id: &str, now_s: i64) -> FeishuGrant {

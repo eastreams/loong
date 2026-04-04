@@ -3,12 +3,13 @@ use super::ProviderErrorMode;
 use super::persistence::format_provider_error_reply;
 use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
+use super::tool_result_compaction::compact_tool_search_payload_summary_str;
 use super::turn_engine::{
-    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolResultPayloadSemantics,
-    TurnResult,
+    ApprovalRequirement, ApprovalRequirementKind, ProviderTurn, ToolBatchExecutionIntentStatus,
+    ToolBatchExecutionTrace, ToolIntent, ToolResultPayloadSemantics, TurnResult,
 };
 use serde::Serialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -165,6 +166,163 @@ pub fn tool_driven_followup_payload(
     }
 }
 
+pub(crate) fn summarize_tool_followup_request(intents: &[ToolIntent]) -> Option<String> {
+    match intents {
+        [] => None,
+        [intent] => summarize_single_tool_followup_request(intent),
+        intents => serde_json::to_string(
+            &intents
+                .iter()
+                .map(tool_followup_request_entry)
+                .collect::<Vec<_>>(),
+        )
+        .ok(),
+    }
+}
+
+pub(crate) fn summarize_single_tool_followup_request(intent: &ToolIntent) -> Option<String> {
+    let entry = tool_followup_request_entry(intent);
+    serde_json::to_string(&entry).ok()
+}
+
+pub(crate) fn summarize_provider_lane_tool_request(
+    turn: &ProviderTurn,
+    turn_result: &TurnResult,
+    trace: Option<&ToolBatchExecutionTrace>,
+) -> Option<String> {
+    match turn_result {
+        TurnResult::FinalText(_) | TurnResult::StreamingText(_) | TurnResult::StreamingDone(_) => {
+            summarize_tool_followup_request(&turn.tool_intents)
+        }
+        TurnResult::NeedsApproval(_)
+        | TurnResult::ToolDenied(_)
+        | TurnResult::ToolError(_)
+        | TurnResult::ProviderError(_) => summarize_failed_provider_lane_tool_request(turn, trace),
+    }
+}
+
+pub(crate) fn summarize_failed_provider_lane_tool_request(
+    turn: &ProviderTurn,
+    trace: Option<&ToolBatchExecutionTrace>,
+) -> Option<String> {
+    let failed_tool_call_id = trace.and_then(first_failed_provider_lane_tool_call_id);
+    if let Some(failed_tool_call_id) = failed_tool_call_id {
+        let failed_intent = turn
+            .tool_intents
+            .iter()
+            .find(|intent| intent.tool_call_id == failed_tool_call_id)?;
+        let summary = summarize_single_tool_followup_request(failed_intent);
+        return summary;
+    }
+
+    match turn.tool_intents.as_slice() {
+        [intent] => summarize_single_tool_followup_request(intent),
+        [] => None,
+        _ => summarize_tool_followup_request(&turn.tool_intents),
+    }
+}
+
+fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> Option<&str> {
+    let failed_outcome = trace.intent_outcomes.iter().find(|intent_outcome| {
+        !matches!(
+            intent_outcome.status,
+            ToolBatchExecutionIntentStatus::Completed
+        )
+    })?;
+    let tool_call_id = failed_outcome.tool_call_id.as_str();
+    Some(tool_call_id)
+}
+
+fn tool_followup_request_entry(intent: &ToolIntent) -> Value {
+    let tool_name = effective_followup_tool_name(intent);
+    let request = effective_followup_request(intent);
+    let request = sanitize_followup_request_summary(tool_name.as_str(), request);
+    serde_json::json!({
+        "tool": tool_name,
+        "request": request,
+    })
+}
+
+fn sanitize_followup_request_summary(tool_name: &str, request: Value) -> Value {
+    if tool_name != crate::tools::SHELL_EXEC_TOOL_NAME {
+        return request;
+    }
+
+    sanitize_shell_followup_request_summary(request)
+}
+
+fn sanitize_shell_followup_request_summary(request: Value) -> Value {
+    let Value::Object(request_object) = request else {
+        return request;
+    };
+
+    let command = request_object
+        .get("command")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let timeout_ms = request_object.get("timeout_ms").cloned();
+    let args_redacted = request_object
+        .get("args")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .filter(|count| *count > 0);
+
+    let mut sanitized_request = serde_json::Map::new();
+
+    if let Some(command) = command {
+        sanitized_request.insert("command".to_owned(), Value::String(command));
+    }
+
+    if let Some(timeout_ms) = timeout_ms {
+        sanitized_request.insert("timeout_ms".to_owned(), timeout_ms);
+    }
+
+    if let Some(args_redacted) = args_redacted {
+        let args_redacted = serde_json::Number::from(args_redacted);
+        sanitized_request.insert("args_redacted".to_owned(), Value::Number(args_redacted));
+    }
+
+    Value::Object(sanitized_request)
+}
+
+pub(crate) fn effective_followup_tool_name(intent: &ToolIntent) -> String {
+    let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
+    if canonical_tool_name != "tool.invoke" {
+        return canonical_tool_name.to_owned();
+    }
+
+    intent
+        .args_json
+        .get("tool_id")
+        .and_then(Value::as_str)
+        .map(crate::tools::canonical_tool_name)
+        .unwrap_or(canonical_tool_name)
+        .to_owned()
+}
+
+pub(crate) fn effective_followup_request(intent: &ToolIntent) -> Value {
+    let canonical_tool_name = crate::tools::canonical_tool_name(intent.tool_name.as_str());
+    if canonical_tool_name != "tool.invoke" {
+        return crate::tools::normalize_shell_payload_for_request(
+            canonical_tool_name,
+            intent.args_json.clone(),
+        );
+    }
+
+    let invoked_tool_name = intent
+        .args_json
+        .get("tool_id")
+        .and_then(Value::as_str)
+        .map(crate::tools::canonical_tool_name)
+        .unwrap_or(canonical_tool_name);
+    let request_payload = intent
+        .args_json
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| intent.args_json.clone());
+
+    crate::tools::normalize_shell_payload_for_request(invoked_tool_name, request_payload)
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDrivenReplyBaseDecision {
     FinalizeDirect {
@@ -984,6 +1142,22 @@ pub fn build_tool_followup_user_prompt(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
 ) -> String {
+    build_tool_followup_user_prompt_with_context(
+        user_input,
+        loop_warning_reason,
+        tool_result_text,
+        rendered_tool_result_text,
+        None,
+    )
+}
+
+pub fn build_tool_followup_user_prompt_with_context(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+    extra_context: Option<&str>,
+) -> String {
     let prompt =
         if followup_prompt_uses_discovery_guidance(tool_result_text, rendered_tool_result_text) {
             DISCOVERY_RESULT_FOLLOWUP_PROMPT
@@ -999,6 +1173,9 @@ pub fn build_tool_followup_user_prompt(
     }
     if followup_prompt_needs_truncation_hint(tool_result_text, rendered_tool_result_text) {
         sections.push(TOOL_TRUNCATION_HINT_PROMPT.to_owned());
+    }
+    if let Some(extra_context) = extra_context {
+        sections.push(extra_context.to_owned());
     }
     sections.push(format!("Original request:\n{user_input}"));
     sections.join("\n\n")
@@ -1184,9 +1361,7 @@ fn reduce_tool_result_line_for_model(line: &str) -> String {
             reduce_shell_payload_summary(&mut payload_json).map(|summary| (summary, true))
         }
         _ if !payload_truncated => {
-            let payload_semantics = envelope_payload_semantics(&envelope);
-            compact_discovery_payload_summary_str(payload_summary, payload_semantics)
-                .map(|summary| (summary, false))
+            compact_tool_search_payload_summary_str(payload_summary).map(|summary| (summary, false))
         }
         _ => None,
     };
@@ -1331,80 +1506,6 @@ pub fn build_external_skill_followup_user_prompt(
     sections.join("\n\n")
 }
 
-fn compact_discovery_payload_summary_str(
-    payload_summary: &str,
-    payload_semantics: Option<ToolResultPayloadSemantics>,
-) -> Option<String> {
-    let payload_json = serde_json::from_str::<Value>(payload_summary).ok()?;
-    let compacted_summary = compact_discovery_payload_summary(&payload_json, payload_semantics)?;
-    let compacted_summary_str = serde_json::to_string(&compacted_summary).ok()?;
-    (compacted_summary_str.len() < payload_summary.len()).then_some(compacted_summary_str)
-}
-
-fn compact_discovery_payload_summary(
-    payload: &Value,
-    payload_semantics: Option<ToolResultPayloadSemantics>,
-) -> Option<Value> {
-    let use_discovery_compaction = payload_semantics
-        == Some(ToolResultPayloadSemantics::DiscoveryResult)
-        || payload_summary_looks_like_discovery_result(payload);
-    if !use_discovery_compaction {
-        return None;
-    }
-    let payload_object = payload.as_object()?;
-    let results = payload_object.get("results")?.as_array()?;
-
-    let mut compacted = Map::new();
-    if let Some(query) = payload_object.get("query") {
-        compacted.insert("query".to_owned(), query.clone());
-    }
-    compacted.insert(
-        "results".to_owned(),
-        Value::Array(
-            results
-                .iter()
-                .map(compact_discovery_payload_result)
-                .collect(),
-        ),
-    );
-
-    Some(Value::Object(compacted))
-}
-
-fn compact_discovery_payload_result(result: &Value) -> Value {
-    let Some(result_object) = result.as_object() else {
-        return result.clone();
-    };
-
-    let mut compacted = Map::new();
-    clone_field_if_present(result_object, &mut compacted, "tool_id");
-    clone_field_if_present(result_object, &mut compacted, "summary");
-    clone_field_if_present(result_object, &mut compacted, "argument_hint");
-    clone_array_field_if_present(result_object, &mut compacted, "required_fields");
-    clone_array_field_if_present(result_object, &mut compacted, "required_field_groups");
-    clone_field_if_present(result_object, &mut compacted, "lease");
-    Value::Object(compacted)
-}
-
-fn clone_field_if_present(source: &Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
-    if let Some(value) = source.get(key) {
-        target.insert(key.to_owned(), value.clone());
-    }
-}
-
-fn clone_array_field_if_present(
-    source: &Map<String, Value>,
-    target: &mut Map<String, Value>,
-    key: &str,
-) {
-    let Some(value) = source.get(key) else {
-        return;
-    };
-    if value.as_array().is_some() {
-        target.insert(key.to_owned(), value.clone());
-    }
-}
-
 pub fn build_tool_result_followup_tail<F>(
     assistant_preface: &str,
     tool_result_text: &str,
@@ -1452,11 +1553,34 @@ where
     messages
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_failure_followup_tail<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_failure_followup_tail_with_request_summary(
+        assistant_preface,
+        tool_failure_reason,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub fn build_tool_failure_followup_tail_with_request_summary<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
     mut payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1464,7 +1588,22 @@ where
 {
     let mut messages = Vec::new();
     append_followup_preface(&mut messages, assistant_preface);
+
+    if let Some(tool_request_summary) = tool_request_summary {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("[tool_request]\n{tool_request_summary}"),
+        }));
+    }
+
+    let repair_guidance =
+        render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary);
     let bounded_failure = payload_mapper("tool_failure", tool_failure_reason);
+    let bounded_failure = if repair_guidance.is_some() {
+        format!("tool input needs repair: {bounded_failure}")
+    } else {
+        bounded_failure
+    };
     messages.push(serde_json::json!({
         "role": "assistant",
         "content": format!("[tool_failure]\n{bounded_failure}"),
@@ -1472,16 +1611,45 @@ where
     append_followup_warning(&mut messages, loop_warning_reason);
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None, None),
+        "content": build_tool_followup_user_prompt_with_context(
+            user_input,
+            loop_warning_reason,
+            None,
+            None,
+            repair_guidance.as_deref(),
+        ),
     }));
     messages
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 pub fn build_tool_driven_followup_tail<F>(
     assistant_preface: &str,
     payload: &ToolDrivenFollowupPayload,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_driven_followup_tail_with_request_summary(
+        assistant_preface,
+        payload,
+        user_input,
+        loop_warning_reason,
+        None,
+        payload_mapper,
+    )
+}
+
+pub fn build_tool_driven_followup_tail_with_request_summary<F>(
+    assistant_preface: &str,
+    payload: &ToolDrivenFollowupPayload,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
     payload_mapper: F,
 ) -> Vec<Value>
 where
@@ -1495,14 +1663,49 @@ where
             loop_warning_reason,
             payload_mapper,
         ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => build_tool_failure_followup_tail(
-            assistant_preface,
-            reason.as_str(),
-            user_input,
-            loop_warning_reason,
-            payload_mapper,
-        ),
+        ToolDrivenFollowupPayload::ToolFailure { reason } => {
+            build_tool_failure_followup_tail_with_request_summary(
+                assistant_preface,
+                reason.as_str(),
+                user_input,
+                loop_warning_reason,
+                tool_request_summary,
+                payload_mapper,
+            )
+        }
     }
+}
+
+fn render_tool_failure_repair_guidance(
+    tool_failure_reason: &str,
+    tool_request_summary: Option<&str>,
+) -> Option<String> {
+    let tool_request_summary = tool_request_summary?;
+    let request_summary_json = serde_json::from_str::<Value>(tool_request_summary).ok()?;
+    let tool_name = request_summary_json.get("tool").and_then(Value::as_str)?;
+    if tool_name != "shell.exec" {
+        return None;
+    }
+
+    let request_object = request_summary_json.get("request")?.as_object()?;
+    let command = request_object.get("command").and_then(Value::as_str)?;
+    let has_path_separator = command.contains('/') || command.contains('\\');
+    let mentions_payload_command = tool_failure_reason.contains("payload.command");
+    let mentions_path_separator = tool_failure_reason.contains("path separators");
+
+    if !has_path_separator && !mentions_payload_command && !mentions_path_separator {
+        return None;
+    }
+
+    let bare_command = command
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(command)
+        .to_ascii_lowercase();
+    let guidance = format!(
+        "Repair guidance for shell.exec:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
+    );
+    Some(guidance)
 }
 
 pub fn build_tool_loop_guard_tail<F>(
@@ -2776,7 +2979,12 @@ mod tests {
             "adapter": "core-tools",
             "tool_name": "tool.search",
             "query": "read repo file",
+            "exact_tool_id": "file.read",
             "returned": 1,
+            "diagnostics": {
+                "reason": "exact_tool_id_not_visible",
+                "requested_tool_id": "file.read"
+            },
             "results": [
                 {
                     "tool_id": "file.read",
@@ -2822,9 +3030,14 @@ mod tests {
             .expect("reduced payload should keep the first result");
 
         assert_eq!(summary["query"], "read repo file");
+        assert_eq!(summary["exact_tool_id"], "file.read");
+        assert_eq!(
+            summary["diagnostics"]["reason"],
+            "exact_tool_id_not_visible"
+        );
         assert!(summary.get("adapter").is_none());
         assert!(summary.get("tool_name").is_none());
-        assert!(summary.get("returned").is_none());
+        assert_eq!(summary["returned"], 1);
         assert_eq!(first["tool_id"], "file.read");
         assert_eq!(first["lease"], "lease-file");
         assert!(first.get("tags").is_none());
@@ -2889,6 +3102,46 @@ mod tests {
 
         assert_eq!(reduced.as_ref(), tool_result);
         assert_eq!(reduced.as_ptr(), tool_result.as_ptr());
+    }
+
+    #[test]
+    fn summarize_failed_provider_lane_tool_request_preserves_multi_intent_context_without_trace() {
+        let turn = ProviderTurn {
+            assistant_text: String::new(),
+            tool_intents: vec![
+                ToolIntent {
+                    tool_name: "file.read".to_owned(),
+                    args_json: json!({"path": "Cargo.toml"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-1".to_owned(),
+                },
+                ToolIntent {
+                    tool_name: "shell.exec".to_owned(),
+                    args_json: json!({"command": "ls /root"}),
+                    source: "provider_tool_call".to_owned(),
+                    session_id: "session-a".to_owned(),
+                    turn_id: "turn-a".to_owned(),
+                    tool_call_id: "call-2".to_owned(),
+                },
+            ],
+            raw_meta: Value::Null,
+        };
+
+        let request_summary = summarize_failed_provider_lane_tool_request(&turn, None)
+            .expect("multi-intent failures should retain a request summary");
+        let request_summary_json: Value =
+            serde_json::from_str(&request_summary).expect("request summary should be valid json");
+        let request_entries = request_summary_json
+            .as_array()
+            .expect("multi-intent request summary should be an array");
+
+        assert_eq!(request_entries.len(), 2);
+        assert_eq!(request_entries[0]["tool"], "file.read");
+        assert_eq!(request_entries[1]["tool"], "shell.exec");
+        assert_eq!(request_entries[1]["request"]["command"], "ls");
+        assert_eq!(request_entries[1]["request"]["args_redacted"], 1);
     }
 
     #[test]

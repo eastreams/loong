@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 #[cfg(feature = "channel-feishu")]
 use std::path::Path;
 #[cfg(feature = "channel-feishu")]
@@ -40,21 +39,30 @@ use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
 const FEISHU_ALLOWLIST_ALL_SENTINEL: &str = "*";
 
-pub(in crate::channel) fn feishu_allowlist_allows_all(allowed_chat_ids: &BTreeSet<String>) -> bool {
+pub(in crate::channel) fn feishu_allowlist_allows_all<'a, I>(allowed_chat_ids: I) -> bool
+where
+    I: IntoIterator<Item = &'a String>,
+{
     allowed_chat_ids
-        .iter()
+        .into_iter()
         .any(|chat_id| chat_id.trim() == FEISHU_ALLOWLIST_ALL_SENTINEL)
 }
 
-pub(in crate::channel) fn feishu_allowlist_allows_chat(
-    allowed_chat_ids: &BTreeSet<String>,
+pub(in crate::channel) fn feishu_allowlist_allows_chat<'a, I>(
+    allowed_chat_ids: I,
     chat_id: &str,
-) -> bool {
+) -> bool
+where
+    I: IntoIterator<Item = &'a String> + Clone,
+{
     let chat_id = chat_id.trim();
     if chat_id.is_empty() {
         return false;
     }
-    feishu_allowlist_allows_all(allowed_chat_ids) || allowed_chat_ids.contains(chat_id)
+    feishu_allowlist_allows_all(allowed_chat_ids.clone())
+        || allowed_chat_ids
+            .into_iter()
+            .any(|allowed| allowed.trim() == chat_id)
 }
 
 #[cfg(feature = "channel-feishu")]
@@ -194,7 +202,11 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    fn set(ids: &[&str]) -> BTreeSet<String> {
+    fn set(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn btree_set(ids: &[&str]) -> std::collections::BTreeSet<String> {
         ids.iter().map(|value| value.to_string()).collect()
     }
 
@@ -212,7 +224,40 @@ mod tests {
         assert!(!feishu_allowlist_allows_chat(&exact_only, "oc_other"));
         assert!(!feishu_allowlist_allows_chat(&exact_only, " "));
 
+        let spaced_exact_only = set(&["  oc_demo  "]);
+        assert!(feishu_allowlist_allows_chat(&spaced_exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(
+            &spaced_exact_only,
+            "oc_other"
+        ));
+
         let wildcard = set(&["*"]);
+        assert!(feishu_allowlist_allows_chat(&wildcard, "oc_other"));
+    }
+
+    /// Regression tests with BTreeSet to ensure container-agnostic behavior.
+    #[test]
+    fn btree_set_allowlist_allows_all_when_wildcard_present() {
+        assert!(feishu_allowlist_allows_all(&btree_set(&["oc_demo", "*"])));
+        assert!(feishu_allowlist_allows_all(&btree_set(&["  *  "])));
+        assert!(!feishu_allowlist_allows_all(&btree_set(&["oc_demo"])));
+    }
+
+    #[test]
+    fn btree_set_allowlist_allows_chat_for_exact_and_wildcard_matches() {
+        let exact_only = btree_set(&["oc_demo"]);
+        assert!(feishu_allowlist_allows_chat(&exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(&exact_only, "oc_other"));
+        assert!(!feishu_allowlist_allows_chat(&exact_only, " "));
+
+        let spaced_exact_only = btree_set(&["  oc_demo  "]);
+        assert!(feishu_allowlist_allows_chat(&spaced_exact_only, "oc_demo"));
+        assert!(!feishu_allowlist_allows_chat(
+            &spaced_exact_only,
+            "oc_other"
+        ));
+
+        let wildcard = btree_set(&["*"]);
         assert!(feishu_allowlist_allows_chat(&wildcard, "oc_other"));
     }
 

@@ -59,6 +59,8 @@ export interface DashboardConfigSnapshot {
 export interface DashboardToolItem {
   id: string;
   enabled: boolean;
+  source: string;
+  capabilityState: string;
   detail: string;
 }
 

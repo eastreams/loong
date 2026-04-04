@@ -312,6 +312,8 @@ struct DashboardToolsPayload {
 struct DashboardToolItemPayload {
     id: &'static str,
     enabled: bool,
+    source: &'static str,
+    capability_state: &'static str,
     detail: String,
 }
 
@@ -554,8 +556,16 @@ fn build_tool_items(
 ) -> Vec<DashboardToolItemPayload> {
     vec![
         DashboardToolItemPayload {
-            id: "shell_policy",
+            id: "bash_exec",
             enabled: true,
+            source: "native",
+            capability_state: if config.tools.shell_default_mode == "deny"
+                && config.tools.shell_allow.is_empty()
+            {
+                "policy_limited"
+            } else {
+                "executable"
+            },
             detail: format!(
                 "{} default, {} allow / {} deny",
                 config.tools.shell_default_mode,
@@ -566,6 +576,12 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "sessions",
             enabled: config.tools.sessions.enabled,
+            source: "native",
+            capability_state: if config.tools.sessions.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: format!(
                 "{} visibility, list {} / history {}",
                 match config.tools.sessions.visibility {
@@ -579,11 +595,23 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "messages",
             enabled: config.tools.messages.enabled,
+            source: "native",
+            capability_state: if config.tools.messages.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: "message tool surface".to_owned(),
         },
         DashboardToolItemPayload {
             id: "delegate",
             enabled: config.tools.delegate.enabled,
+            source: "native",
+            capability_state: if config.tools.delegate.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: format!(
                 "depth {}, active children {}",
                 config.tools.delegate.max_depth, config.tools.delegate.max_active_children
@@ -592,6 +620,12 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "browser",
             enabled: config.tools.browser.enabled,
+            source: "native",
+            capability_state: if config.tools.browser.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: format!(
                 "{} sessions, {} links, {} chars",
                 config.tools.browser.max_sessions,
@@ -602,6 +636,14 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "browser_companion",
             enabled: config.tools.browser_companion.enabled,
+            source: "companion",
+            capability_state: if !config.tools.browser_companion.enabled {
+                "discoverable"
+            } else if runtime.browser_companion.is_runtime_ready() {
+                "executable"
+            } else {
+                "runtime_unavailable"
+            },
             // Prefer runtime-ready signals here so the dashboard reflects whether
             // the companion can actually be used right now, not just how it is configured.
             detail: format!(
@@ -622,6 +664,12 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "web_fetch",
             enabled: config.tools.web.enabled,
+            source: "native",
+            capability_state: if config.tools.web.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: format!(
                 "{}s timeout, {} bytes, {} redirects",
                 config.tools.web.timeout_seconds,
@@ -632,6 +680,12 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "web_search",
             enabled: config.tools.web_search.enabled,
+            source: "provider",
+            capability_state: if config.tools.web_search.enabled {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: format!(
                 "{} provider, {}s timeout, {} results",
                 runtime.web_search.default_provider,
@@ -642,6 +696,8 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "file_tools",
             enabled: true,
+            source: "local",
+            capability_state: "executable",
             detail: format!(
                 "read / write / edit within {}",
                 config.tools.resolved_file_root().display()
@@ -650,6 +706,14 @@ fn build_tool_items(
         DashboardToolItemPayload {
             id: "external_skills",
             enabled: config.external_skills.enabled,
+            source: "catalog",
+            capability_state: if !config.external_skills.enabled {
+                "discoverable"
+            } else if config.external_skills.auto_expose_installed {
+                "executable"
+            } else {
+                "discoverable"
+            },
             detail: if config.external_skills.auto_expose_installed {
                 "auto expose installed".to_owned()
             } else {

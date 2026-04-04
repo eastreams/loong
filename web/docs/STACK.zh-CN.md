@@ -10,7 +10,8 @@
 当前目标不是独立云端产品，而是基于现有 runtime 提供：
 
 - Web Chat
-- Web Dashboard
+- Web Status
+- Web Abilities
 - 首次进入 / onboarding
 - 本地诊断与调试入口
 
@@ -93,6 +94,7 @@ web/
       surfaces/
     contexts/
     features/
+      abilities/
       chat/
       dashboard/
       onboarding/
@@ -127,6 +129,14 @@ web/
 
 - `hooks/useChatSessions.ts`
 - `hooks/useChatStream.ts`
+
+### `web/src/features/abilities/`
+
+当前作为第三个大页面骨架，后续主要承接：
+
+- personalization
+- channels snapshot
+- skills / external skills
 
 ### `web/src/features/dashboard/`
 
@@ -178,7 +188,7 @@ web/
 
 ### 路由与页面保活
 
-当前 `chat` 与 `dashboard` 已加入 keep-alive 语义，用来保留切页返回后的可见状态。
+当前 `chat`、`dashboard` 与 `abilities` 已加入 keep-alive 语义，用来保留切页返回后的可见状态。
 
 收益：
 
@@ -236,7 +246,7 @@ web/
 这轮 WebUI 专项 review 之后，当前结构上的结论是：
 
 - 大状态机已经开始从页面文件拆到 feature hooks，方向是对的
-- Chat / Dashboard / Onboarding 三条主链现在都已有自己的状态 hook
+- Chat / Status / Onboarding 三条主链现在都已有自己的状态 hook
 - 近期已修复几条真实运行时问题：
   - 流式失败时不再误删已接受的用户消息
   - 新建会话失败时不再残留空白会话

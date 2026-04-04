@@ -120,8 +120,12 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
 
-    fn read_test_http_request(stream: &mut TcpStream) -> Result<(), String> {
-        let read_timeout = Duration::from_millis(250);
+    const EXPECTED_OUTBOUND_REQUEST_ACCEPT_TIMEOUT: Duration = DEFAULT_OUTBOUND_HTTP_TIMEOUT;
+    const UNEXPECTED_OUTBOUND_REQUEST_ACCEPT_TIMEOUT: Duration = Duration::from_millis(250);
+    fn read_test_http_request(
+        stream: &mut TcpStream,
+        read_timeout: Duration,
+    ) -> Result<(), String> {
         stream
             .set_read_timeout(Some(read_timeout))
             .map_err(|error| format!("set test server read timeout: {error}"))?;
@@ -179,11 +183,16 @@ mod tests {
 
         let handle = std::thread::spawn(move || -> Result<bool, String> {
             let deadline = std::time::Instant::now() + accept_timeout;
+            let minimum_request_read_timeout = Duration::from_secs(1);
+            let request_read_timeout = accept_timeout.max(minimum_request_read_timeout);
 
             loop {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
-                        read_test_http_request(&mut stream)?;
+                        stream.set_nonblocking(false).map_err(|error| {
+                            format!("set test server stream blocking mode: {error}")
+                        })?;
+                        read_test_http_request(&mut stream, request_read_timeout)?;
                         stream
                             .write_all(response.as_bytes())
                             .map_err(|error| format!("write test server response: {error}"))?;
@@ -253,14 +262,14 @@ mod tests {
         let final_response =
             "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_owned();
         let (final_url, final_handle) =
-            spawn_test_http_server(final_response, Duration::from_millis(250))
+            spawn_test_http_server(final_response, UNEXPECTED_OUTBOUND_REQUEST_ACCEPT_TIMEOUT)
                 .expect("spawn final test server");
 
         let redirect_response = format!(
             "HTTP/1.1 302 Found\r\nLocation: {final_url}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
         let (redirect_url, redirect_handle) =
-            spawn_test_http_server(redirect_response, Duration::from_secs(2))
+            spawn_test_http_server(redirect_response, EXPECTED_OUTBOUND_REQUEST_ACCEPT_TIMEOUT)
                 .expect("spawn redirect test server");
 
         let client =
@@ -286,5 +295,42 @@ mod tests {
 
         assert!(redirect_requested);
         assert!(!final_requested);
+    }
+
+    #[test]
+    fn outbound_http_client_returns_redirect_status_after_slow_start() {
+        let policy = ChannelOutboundHttpPolicy {
+            allow_private_hosts: true,
+        };
+
+        let redirect_target = "http://127.0.0.1:9/final";
+        let redirect_response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {redirect_target}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (redirect_url, redirect_handle) =
+            spawn_test_http_server(redirect_response, EXPECTED_OUTBOUND_REQUEST_ACCEPT_TIMEOUT)
+                .expect("spawn slow-start redirect test server");
+
+        let slow_start_delay = Duration::from_millis(2200);
+        std::thread::park_timeout(slow_start_delay);
+
+        let client =
+            build_outbound_http_client("slow-start redirect test", policy).expect("build client");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build tokio runtime");
+        let response = runtime
+            .block_on(async { client.get(redirect_url).send().await })
+            .expect("send slow-start redirect test request");
+
+        assert_eq!(response.status(), reqwest::StatusCode::FOUND);
+
+        let redirect_requested = redirect_handle
+            .join()
+            .expect("join slow-start redirect server thread")
+            .expect("slow-start redirect server result");
+
+        assert!(redirect_requested);
     }
 }

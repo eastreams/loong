@@ -20,10 +20,11 @@ use super::turn_engine::{
 use super::turn_observer::map_streaming_callback_data_to_token_event;
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ToolDrivenFollowupPayload,
-    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase, build_tool_driven_followup_tail,
-    build_tool_loop_guard_tail, decide_provider_turn_request_action,
-    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
-    tool_loop_circuit_breaker_reply, user_requested_raw_tool_output,
+    ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
+    build_tool_driven_followup_tail_with_request_summary, build_tool_loop_guard_tail,
+    decide_provider_turn_request_action, reduce_followup_payload_for_model,
+    request_completion_with_raw_fallback, tool_loop_circuit_breaker_reply,
+    user_requested_raw_tool_output,
 };
 
 #[derive(Default)]
@@ -43,6 +44,7 @@ struct TurnLoopSessionState {
 struct RoundKernelEvaluation {
     assistant_preface: String,
     had_tool_intents: bool,
+    tool_request_summary: Option<String>,
     turn_result: TurnResult,
     loop_verdict: Option<ToolLoopSupervisorVerdict>,
 }
@@ -76,6 +78,7 @@ enum RoundFollowup {
         assistant_preface: String,
         payload: ToolDrivenFollowupPayload,
         loop_warning_reason: Option<String>,
+        tool_request_summary: Option<String>,
     },
     Guard {
         assistant_preface: String,
@@ -394,12 +397,18 @@ async fn evaluate_round_kernel(
             .conversation
             .fast_lane_parallel_tool_execution_max_in_flight(),
     );
-    let turn_result = match engine.validate_turn_in_context(turn, session_context) {
-        Ok(TurnValidation::FinalText(text)) => TurnResult::FinalText(text),
-        Err(failure) => TurnResult::ToolDenied(failure),
+    let (turn_result, _turn_trace) = match engine.validate_turn_in_context(turn, session_context) {
+        Ok(TurnValidation::FinalText(text)) => (TurnResult::FinalText(text), None),
+        Err(failure) => (TurnResult::ToolDenied(failure), None),
         Ok(TurnValidation::ToolExecutionRequired) => {
             engine
-                .execute_turn_in_context(turn, session_context, app_dispatcher, binding, None)
+                .execute_turn_in_context_with_trace(
+                    turn,
+                    session_context,
+                    app_dispatcher,
+                    binding,
+                    None,
+                )
                 .await
         }
     };
@@ -423,6 +432,7 @@ async fn evaluate_round_kernel(
     RoundKernelEvaluation {
         assistant_preface: turn.assistant_text.clone(),
         had_tool_intents,
+        tool_request_summary: None,
         turn_result,
         loop_verdict,
     }
@@ -481,6 +491,7 @@ fn decide_round_kernel_action(
         assistant_preface: evaluation.assistant_preface,
         payload: tool_payload,
         loop_warning_reason,
+        tool_request_summary: evaluation.tool_request_summary,
     };
 
     match round_budget.followup_decision() {
@@ -506,6 +517,7 @@ fn append_round_followup_messages(
             assistant_preface,
             payload,
             loop_warning_reason,
+            tool_request_summary,
         } => append_tool_driven_followup_messages(
             &mut session.messages,
             assistant_preface.as_str(),
@@ -513,6 +525,7 @@ fn append_round_followup_messages(
             user_input,
             &mut session.followup_payload_budget,
             loop_warning_reason.as_deref(),
+            tool_request_summary.as_deref(),
         ),
         RoundFollowup::Guard {
             assistant_preface,
@@ -540,12 +553,14 @@ fn append_tool_driven_followup_messages(
     user_input: &str,
     followup_payload_budget: &mut FollowupPayloadBudget,
     loop_warning_reason: Option<&str>,
+    tool_request_summary: Option<&str>,
 ) {
-    messages.extend(build_tool_driven_followup_tail(
+    messages.extend(build_tool_driven_followup_tail_with_request_summary(
         assistant_preface,
         payload,
         user_input,
         loop_warning_reason,
+        tool_request_summary,
         |label, text| {
             let reduced = reduce_followup_payload_for_model(label, text);
             followup_payload_budget.truncate_payload(label, reduced.as_ref())
@@ -1021,6 +1036,7 @@ mod tests {
             "summarize note.md",
             &mut budget,
             None,
+            None,
         );
 
         let user_prompt = messages
@@ -1047,6 +1063,7 @@ mod tests {
             "summarize note.md",
             &mut budget,
             None,
+            None,
         );
 
         let user_prompt = messages
@@ -1072,6 +1089,7 @@ mod tests {
             },
             "summarize note.md",
             &mut budget,
+            None,
             None,
         );
 
@@ -1124,6 +1142,7 @@ mod tests {
             "apply the skill",
             &mut budget,
             None,
+            None,
         );
 
         let system_content = messages[0]["content"]
@@ -1147,6 +1166,7 @@ mod tests {
             &ToolDrivenFollowupPayload::ToolResult { text: tool_result },
             "summarize README.md",
             &mut budget,
+            None,
             None,
         );
 
@@ -1196,6 +1216,7 @@ mod tests {
             "summarize the test run",
             &mut budget,
             None,
+            None,
         );
 
         let (envelope, summary) =
@@ -1235,7 +1256,12 @@ mod tests {
             "adapter": "core-tools",
             "tool_name": "tool.search",
             "query": "read repo file",
+            "exact_tool_id": "file.read",
             "returned": 2,
+            "diagnostics": {
+                "reason": "exact_tool_id_not_visible",
+                "requested_tool_id": "file.read"
+            },
             "results": [
                 {
                     "tool_id": "file.read",
@@ -1279,6 +1305,7 @@ mod tests {
             "find the right tool",
             &mut budget,
             None,
+            None,
         );
 
         let assistant_tool_result = messages
@@ -1316,9 +1343,14 @@ mod tests {
         assert_eq!(envelope["tool"], "tool.search");
         assert_eq!(envelope["payload_truncated"], false);
         assert_eq!(summary["query"], "read repo file");
+        assert_eq!(summary["exact_tool_id"], "file.read");
+        assert_eq!(
+            summary["diagnostics"]["reason"],
+            "exact_tool_id_not_visible"
+        );
         assert!(summary.get("adapter").is_none());
         assert!(summary.get("tool_name").is_none());
-        assert!(summary.get("returned").is_none());
+        assert_eq!(summary["returned"], 2);
         assert_eq!(first["tool_id"], "file.read");
         assert_eq!(first["lease"], "lease-file");
         for entry in summary["results"]
@@ -1402,7 +1434,12 @@ mod tests {
             "adapter": "core-tools",
             "tool_name": "tool.search",
             "query": "read repo file",
+            "exact_tool_id": "file.read",
             "returned": 1,
+            "diagnostics": {
+                "reason": "exact_tool_id_not_visible",
+                "requested_tool_id": "file.read"
+            },
             "results": [
                 {
                     "tool_id": "file.read",
@@ -1448,9 +1485,14 @@ mod tests {
         assert_eq!(envelope["tool"], "tool.search");
         assert_eq!(envelope["payload_truncated"], false);
         assert_eq!(summary["query"], "read repo file");
+        assert_eq!(summary["exact_tool_id"], "file.read");
+        assert_eq!(
+            summary["diagnostics"]["reason"],
+            "exact_tool_id_not_visible"
+        );
         assert!(summary.get("adapter").is_none());
         assert!(summary.get("tool_name").is_none());
-        assert!(summary.get("returned").is_none());
+        assert_eq!(summary["returned"], 1);
         assert_eq!(first["tool_id"], "file.read");
         assert_eq!(first["lease"], "lease-file");
         assert!(first.get("tags").is_none());
@@ -1462,6 +1504,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
                 reason: "warning".to_owned(),
@@ -1479,6 +1522,7 @@ mod tests {
             assistant_preface,
             payload: ToolDrivenFollowupPayload::ToolResult { text },
             loop_warning_reason,
+            ..
         }) = decision
         {
             assert_eq!(assistant_preface, "preface");
@@ -1494,6 +1538,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::HardStop {
                 reason: "stop".to_owned(),
@@ -1531,6 +1576,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::ToolError(TurnFailure::retryable(
                 "tool_failed",
                 "tool failure",
@@ -1574,6 +1620,7 @@ mod tests {
         let evaluation = RoundKernelEvaluation {
             assistant_preface: "preface".to_owned(),
             had_tool_intents: true,
+            tool_request_summary: None,
             turn_result: TurnResult::FinalText("tool output".to_owned()),
             loop_verdict: Some(ToolLoopSupervisorVerdict::InjectWarning {
                 reason: "warning".to_owned(),

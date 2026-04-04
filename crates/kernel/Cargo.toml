@@ -4,9 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Internal support crate for LoongClaw: kernel primitives and governance core"
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
-loongclaw-contracts = { path = "../contracts" }
+loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
 async-trait.workspace = true
 futures-util.workspace = true
 serde.workspace = true

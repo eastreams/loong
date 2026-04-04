@@ -16,6 +16,8 @@ const MAX_FEISHU_RETRY_MAX_ATTEMPTS: usize = 8;
 const MIN_FEISHU_RETRY_INITIAL_BACKOFF_MS: usize = 0;
 const MAX_FEISHU_RETRY_INITIAL_BACKOFF_MS: usize = 30_000;
 const MAX_FEISHU_RETRY_MAX_BACKOFF_MS: usize = 60_000;
+const FEISHU_GROUP_MESSAGE_READ_SCOPE: &str = "im:message.group_msg";
+const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:readonly";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FeishuIntegrationConfig {
@@ -57,11 +59,13 @@ impl FeishuIntegrationConfig {
     pub fn trimmed_default_scopes(&self) -> Vec<String> {
         let mut normalized = Vec::new();
         for raw in &self.default_scopes {
-            let scope = raw.trim();
-            if scope.is_empty() || normalized.iter().any(|existing| existing == scope) {
+            let Some(scope) = normalize_scope_alias(raw) else {
+                continue;
+            };
+            if normalized.iter().any(|existing| existing == &scope) {
                 continue;
             }
-            normalized.push(scope.to_owned());
+            normalized.push(scope);
         }
         normalized
     }
@@ -144,10 +148,22 @@ fn default_scopes() -> Vec<String> {
         "offline_access".to_owned(),
         "docx:document:readonly".to_owned(),
         "im:message:readonly".to_owned(),
-        "im:message.group_msg:readonly".to_owned(),
+        "im:message.group_msg".to_owned(),
         "search:message".to_owned(),
         "calendar:calendar:readonly".to_owned(),
     ]
+}
+
+fn normalize_scope_alias(raw: &str) -> Option<String> {
+    let scope = raw.trim();
+    if scope.is_empty() {
+        return None;
+    }
+
+    Some(match scope {
+        FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY => FEISHU_GROUP_MESSAGE_READ_SCOPE.to_owned(),
+        _ => scope.to_owned(),
+    })
 }
 
 #[cfg(test)]
@@ -201,6 +217,26 @@ mod tests {
             vec![
                 "offline_access".to_owned(),
                 "docs:document:readonly".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn trimmed_default_scopes_normalizes_legacy_group_message_scope() {
+        let config = FeishuIntegrationConfig {
+            default_scopes: vec![
+                "offline_access".to_owned(),
+                "im:message.group_msg:readonly".to_owned(),
+                "im:message.group_msg".to_owned(),
+            ],
+            ..FeishuIntegrationConfig::default()
+        };
+
+        assert_eq!(
+            config.trimmed_default_scopes(),
+            vec![
+                "offline_access".to_owned(),
+                "im:message.group_msg".to_owned()
             ]
         );
     }

@@ -10,12 +10,13 @@ use crate::KernelContext;
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{
-    ToolView, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate,
+    ToolView, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_with_delegate,
 };
 
 use super::super::memory;
 use super::super::{config::LoongClawConfig, provider};
+use super::context_engine::ContextArtifactKind;
 use super::context_engine::{
     AssembledConversationContext, ContextEngineBootstrapResult, ContextEngineIngestResult,
     ContextEngineMetadata, ConversationContextEngine, DefaultContextEngine,
@@ -24,7 +25,9 @@ use super::context_engine_registry::{
     DEFAULT_CONTEXT_ENGINE_ID, context_engine_id_from_env, describe_context_engine,
     list_context_engine_metadata, resolve_context_engine,
 };
-use super::runtime_binding::ConversationRuntimeBinding;
+use super::prompt_orchestrator::seed_prompt_fragments_from_context;
+use super::prompt_orchestrator::sync_prompt_fragments_into_context;
+use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::subagent::ConstrainedSubagentExecution;
 use super::turn_engine::ProviderTurn;
 use super::turn_middleware::{
@@ -34,9 +37,12 @@ use super::turn_middleware_registry::{
     default_turn_middleware_ids, describe_turn_middlewares, list_turn_middleware_metadata,
     resolve_turn_middlewares, turn_middleware_ids_from_env,
 };
+use super::{PromptFragment, PromptLane};
 
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
+use crate::operator::session_graph::OperatorSessionGraph;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     SessionKind, SessionRepository, SessionState, SessionToolPolicyRecord,
@@ -259,6 +265,8 @@ fn build_base_tool_view_from_snapshot(
     session_id: &str,
     snapshot: Option<&PersistedSessionSnapshot>,
 ) -> CliResult<ToolView> {
+    let tool_runtime_config =
+        crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None);
     let Some(snapshot) = snapshot else {
         return Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
             config,
@@ -266,14 +274,16 @@ fn build_base_tool_view_from_snapshot(
     };
 
     if snapshot.parent_session_id.is_some() {
-        let depth = match repo.session_lineage_depth(session_id) {
+        let session_graph = OperatorSessionGraph::new(repo);
+        let depth = match session_graph.lineage_depth(session_id) {
             Ok(depth) => depth,
             Err(error)
                 if error.starts_with("session_lineage_broken:")
                     || error.starts_with("session_lineage_cycle_detected:") =>
             {
-                return Ok(delegate_child_tool_view_for_config_with_delegate(
+                return Ok(delegate_child_tool_view_for_runtime_config_with_delegate(
                     &config.tools,
+                    &tool_runtime_config,
                     false,
                 ));
             }
@@ -284,14 +294,18 @@ fn build_base_tool_view_from_snapshot(
             }
         };
         let allow_nested_delegate = depth < config.tools.delegate.max_depth;
-        return Ok(delegate_child_tool_view_for_config_with_delegate(
+        return Ok(delegate_child_tool_view_for_runtime_config_with_delegate(
             &config.tools,
+            &tool_runtime_config,
             allow_nested_delegate,
         ));
     }
 
     if snapshot.is_delegate_child {
-        return Ok(delegate_child_tool_view_for_config(&config.tools));
+        return Ok(delegate_child_tool_view_for_runtime_config(
+            &config.tools,
+            &tool_runtime_config,
+        ));
     }
 
     Ok(crate::tools::runtime_tool_view_from_loongclaw_config(
@@ -308,7 +322,7 @@ pub struct AsyncDelegateSpawnRequest {
     pub execution: ConstrainedSubagentExecution,
     pub(crate) runtime_self_continuity: Option<RuntimeSelfContinuity>,
     pub timeout_seconds: u64,
-    pub kernel_context: Option<KernelContext>,
+    pub binding: OwnedConversationRuntimeBinding,
 }
 
 #[async_trait]
@@ -335,11 +349,22 @@ impl DefaultAsyncDelegateSpawner {
 #[async_trait]
 impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
     async fn spawn(&self, request: AsyncDelegateSpawnRequest) -> Result<(), String> {
-        let execution_timeout_seconds = request.execution.timeout_seconds;
-        if request.timeout_seconds != execution_timeout_seconds {
+        let AsyncDelegateSpawnRequest {
+            child_session_id,
+            parent_session_id,
+            task,
+            label,
+            execution,
+            runtime_self_continuity,
+            timeout_seconds,
+            binding,
+        } = request;
+
+        let execution_timeout_seconds = execution.timeout_seconds;
+        if timeout_seconds != execution_timeout_seconds {
             return Err(format!(
                 "async_delegate_timeout_mismatch: request timeout {} != execution timeout {}",
-                request.timeout_seconds, execution_timeout_seconds
+                timeout_seconds, execution_timeout_seconds
             ));
         }
 
@@ -347,50 +372,49 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
             &self.config.memory,
         ))?;
         let runtime = DefaultConversationRuntime::from_config_or_env(self.config.as_ref())?;
+        let runtime_ref = &runtime;
+        let child_session_id_for_spawn = child_session_id.clone();
+        let parent_session_id_for_spawn = parent_session_id.clone();
+        let borrowed_binding = binding.as_borrowed();
+        let child_binding = binding.clone();
         super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
-            &runtime,
-            &request.parent_session_id,
-            &request.child_session_id,
-            ConversationRuntimeBinding::from_optional_kernel_context(
-                request.kernel_context.as_ref(),
-            ),
-            || async {
+            runtime_ref,
+            &parent_session_id,
+            &child_session_id,
+            borrowed_binding,
+            move || async move {
                 let started = repo.transition_session_with_event_if_current(
-                    &request.child_session_id,
+                    &child_session_id_for_spawn,
                     TransitionSessionWithEventIfCurrentRequest {
                         expected_state: SessionState::Ready,
                         next_state: SessionState::Running,
                         last_error: None,
                         event_kind: "delegate_started".to_owned(),
-                        actor_session_id: Some(request.parent_session_id.clone()),
-                        event_payload_json: request
-                            .execution
-                            .spawn_payload_with_runtime_self_continuity(
-                                &request.task,
-                                request.label.as_deref(),
-                                request.runtime_self_continuity.as_ref(),
-                            ),
+                        actor_session_id: Some(parent_session_id_for_spawn.clone()),
+                        event_payload_json: execution.spawn_payload_with_runtime_self_continuity(
+                            &task,
+                            label.as_deref(),
+                            runtime_self_continuity.as_ref(),
+                        ),
                     },
                 )?;
                 if started.is_none() {
                     return Err(format!(
                         "async_delegate_spawn_skipped: session `{}` was not in Ready state",
-                        request.child_session_id
+                        child_session_id_for_spawn
                     ));
                 }
 
                 let _ = super::turn_coordinator::run_started_delegate_child_turn_with_runtime(
                     self.config.as_ref(),
-                    &runtime,
-                    &request.child_session_id,
-                    &request.parent_session_id,
-                    request.label,
-                    &request.task,
-                    request.execution,
+                    runtime_ref,
+                    &child_session_id_for_spawn,
+                    &parent_session_id_for_spawn,
+                    label,
+                    &task,
+                    execution,
                     execution_timeout_seconds,
-                    ConversationRuntimeBinding::from_optional_kernel_context(
-                        request.kernel_context.as_ref(),
-                    ),
+                    child_binding.as_borrowed(),
                 )
                 .await;
                 Ok(())
@@ -619,14 +643,20 @@ where
         let delegate_runtime_contract = include_system_prompt
             .then(|| delegate_child_runtime_contract_prompt_summary(config, session_context))
             .flatten();
-        assembled.system_prompt_addition = merge_system_prompt_additions(
-            assembled.system_prompt_addition.as_deref(),
-            runtime_self_continuity.as_deref(),
+
+        seed_prompt_fragments_from_context(&mut assembled);
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "runtime-self-continuity",
+            runtime_self_continuity,
         );
-        assembled.system_prompt_addition = merge_system_prompt_additions(
-            assembled.system_prompt_addition.as_deref(),
-            delegate_runtime_contract.as_deref(),
+        append_runtime_prompt_fragment(
+            &mut assembled,
+            "delegate-child-runtime-contract",
+            delegate_runtime_contract,
         );
+        sync_prompt_fragments_into_context(&mut assembled);
+
         self.apply_turn_middlewares_to_context(
             config,
             session_context.session_id.as_str(),
@@ -1290,7 +1320,7 @@ fn provider_runtime_binding(
         ConversationRuntimeBinding::Kernel(kernel_ctx) => {
             provider::ProviderRuntimeBinding::kernel(kernel_ctx)
         }
-        ConversationRuntimeBinding::Direct => provider::ProviderRuntimeBinding::direct(),
+        ConversationRuntimeBinding::Direct => provider::ProviderRuntimeBinding::advisory_only(),
     }
 }
 
@@ -1319,17 +1349,27 @@ fn runtime_self_continuity_prompt_summary(
     runtime_self_continuity::render_runtime_self_continuity_section(&missing_continuity, inherited)
 }
 
-fn merge_system_prompt_additions(existing: Option<&str>, extra: Option<&str>) -> Option<String> {
-    match (
-        existing.map(str::trim).filter(|s| !s.is_empty()),
-        extra.map(str::trim).filter(|s| !s.is_empty()),
-    ) {
-        (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
-        (Some(a), None) => Some(a.to_owned()),
-        (None, Some(b)) => Some(b.to_owned()),
-        (None, None) => None,
-    }
+fn append_runtime_prompt_fragment(
+    assembled: &mut AssembledConversationContext,
+    source_id: &'static str,
+    content: Option<String>,
+) {
+    let Some(content) = content else {
+        return;
+    };
+
+    let fragment = PromptFragment::new(
+        source_id,
+        PromptLane::Continuity,
+        source_id,
+        content,
+        ContextArtifactKind::RuntimeContract,
+    )
+    .with_dedupe_key(source_id);
+
+    assembled.prompt_fragments.push(fragment);
 }
+
 fn normalize_turn_middleware_ids(ids: Vec<String>) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut normalized = Vec::new();
@@ -1347,10 +1387,10 @@ mod tests {
     use crate::test_support::TurnTestHarness;
 
     #[test]
-    fn provider_runtime_binding_maps_direct_conversation_binding_to_direct() {
+    fn provider_runtime_binding_maps_direct_conversation_binding_to_advisory_only() {
         assert!(matches!(
             provider_runtime_binding(ConversationRuntimeBinding::direct()),
-            provider::ProviderRuntimeBinding::Direct
+            provider::ProviderRuntimeBinding::AdvisoryOnly
         ));
     }
 

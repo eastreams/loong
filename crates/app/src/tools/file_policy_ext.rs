@@ -111,6 +111,53 @@ impl FilePolicyExtension {
         let normalized = super::normalize_without_fs(&combined);
         !normalized.starts_with(effective_root)
     }
+
+    fn authorize_file_payload(
+        &self,
+        tool_name: &str,
+        payload: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<(), PolicyError> {
+        let Some(root) = self.file_root.as_deref() else {
+            return Ok(());
+        };
+
+        let path_key = if tool_name == "claw.migrate" {
+            "input_path"
+        } else {
+            "path"
+        };
+        let raw_path = payload
+            .get(path_key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+
+        let has_path = !raw_path.is_empty();
+        if !has_path {
+            return Ok(());
+        }
+
+        let escapes_root = self.path_escapes_root(raw_path);
+        if !escapes_root {
+            return Ok(());
+        }
+
+        let reason = format!("path `{raw_path}` escapes file root `{}`", root.display());
+        Err(PolicyError::ExtensionDenied {
+            extension: self.name().to_owned(),
+            reason,
+        })
+    }
+}
+
+pub(crate) fn authorize_direct_file_payload(
+    tool_name: &str,
+    payload: &serde_json::Map<String, serde_json::Value>,
+    rt: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<(), String> {
+    let extension = FilePolicyExtension::new(rt.file_root.clone());
+    extension
+        .authorize_file_payload(tool_name, payload)
+        .map_err(|error| format!("policy_denied: {error}"))
 }
 
 impl PolicyExtension for FilePolicyExtension {
@@ -143,26 +190,12 @@ impl PolicyExtension for FilePolicyExtension {
             });
         }
 
-        if let Some(ref root) = self.file_root {
-            // claw.migrate uses `input_path`; all other file tools use `path`.
-            let path_key = if tool_name == "claw.migrate" {
-                "input_path"
-            } else {
-                "path"
-            };
-            let raw_path = params
-                .get("payload")
-                .and_then(|p| p.get(path_key))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+        let payload = params.get("payload").and_then(serde_json::Value::as_object);
+        let Some(payload) = payload else {
+            return Ok(());
+        };
 
-            if !raw_path.is_empty() && self.path_escapes_root(raw_path) {
-                return Err(PolicyError::ExtensionDenied {
-                    extension: self.name().to_owned(),
-                    reason: format!("path `{raw_path}` escapes file root `{}`", root.display()),
-                });
-            }
-        }
+        self.authorize_file_payload(tool_name, payload)?;
 
         Ok(())
     }

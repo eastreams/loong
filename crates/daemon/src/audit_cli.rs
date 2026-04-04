@@ -2938,7 +2938,7 @@ mod tests {
     use crate::kernel::{
         AuditEvent, AuditEventKind, Capability, CapabilityToken, ExecutionPlane, PlaneTier,
     };
-    use crate::mvp::test_support::ScopedEnv;
+    use crate::test_support::ScopedEnv;
 
     use super::*;
 

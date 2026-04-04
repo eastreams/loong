@@ -203,6 +203,7 @@ architecture_boundary_check_keys() {
 memory_literals
 provider_mod_helper_definitions
 conversation_provider_optional_binding_roundtrip
+conversation_app_dispatcher_optional_kernel_context
 spec_app_dependency
 BOUNDARIES
 }
@@ -242,6 +243,30 @@ architecture_conversation_provider_optional_binding_roundtrip_hits() {
   fi
 }
 
+architecture_conversation_app_dispatcher_optional_kernel_context_hits() {
+  local files=(
+    "crates/app/src/conversation/turn_engine.rs"
+    "crates/app/src/conversation/turn_coordinator.rs"
+  )
+  local file
+  local pattern
+
+  for file in "${files[@]}"; do
+    if [[ ! -f "$file" ]]; then
+      echo "missing boundary file: $file" >&2
+      return 1
+    fi
+  done
+
+  pattern='kernel_ctx:[[:space:]]*Option<[[:space:]]*&[^>]*KernelContext[^>]*>'
+
+  if have_rg; then
+    rg -n "$pattern" "${files[@]}" || true
+  else
+    grep -En "$pattern" "${files[@]}" || true
+  fi
+}
+
 architecture_boundary_pass_summary() {
   case "$1" in
     memory_literals)
@@ -252,6 +277,9 @@ architecture_boundary_pass_summary() {
       ;;
     conversation_provider_optional_binding_roundtrip)
       echo "conversation/runtime.rs translates explicit conversation bindings into provider bindings without optional-kernel roundtrips"
+      ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      echo "conversation app-tool dispatcher approval hooks stay binding-based without optional kernel fallbacks"
       ;;
     spec_app_dependency)
       echo "spec crate remains detached from app crate at the Cargo dependency boundary"
@@ -273,6 +301,9 @@ architecture_boundary_fail_summary() {
     conversation_provider_optional_binding_roundtrip)
       echo "conversation/runtime.rs still rebuilds provider bindings from optional kernel context"
       ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      echo "conversation app-tool dispatcher approval hooks still expose raw optional kernel context"
+      ;;
     spec_app_dependency)
       echo "spec crate depends on app crate directly"
       ;;
@@ -293,6 +324,9 @@ architecture_boundary_hits() {
     conversation_provider_optional_binding_roundtrip)
       architecture_conversation_provider_optional_binding_roundtrip_hits
       ;;
+    conversation_app_dispatcher_optional_kernel_context)
+      architecture_conversation_app_dispatcher_optional_kernel_context_hits
+      ;;
     spec_app_dependency)
       architecture_spec_app_dependency_hits
       ;;
@@ -305,7 +339,7 @@ architecture_boundary_hits() {
 architecture_boundary_status() {
   local key="$1"
   local hits
-  hits="$(architecture_boundary_hits "$key")"
+  hits="$(architecture_boundary_hits "$key")" || return 1
   if [[ -n "$hits" ]]; then
     echo "FAIL"
   else
@@ -316,7 +350,7 @@ architecture_boundary_status() {
 architecture_boundary_detail_single_line() {
   local key="$1"
   local hits
-  hits="$(architecture_boundary_hits "$key")"
+  hits="$(architecture_boundary_hits "$key")" || return 1
   if [[ -z "$hits" ]]; then
     architecture_boundary_pass_summary "$key"
     return 0

@@ -172,6 +172,30 @@ pub struct FeishuBitableTable {
     pub revision: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuBitableApp {
+    pub app_token: Option<String>,
+    pub name: Option<String>,
+    pub revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableField {
+    pub field_id: Option<String>,
+    pub field_name: Option<String>,
+    #[serde(rename = "type")]
+    pub r#type: Option<i64>,
+    pub ui_type: Option<String>,
+    pub property: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuBitableView {
+    pub view_id: Option<String>,
+    pub view_name: Option<String>,
+    pub view_type: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FeishuBitableTableListPage {
     pub items: Vec<FeishuBitableTable>,
@@ -194,9 +218,45 @@ pub struct FeishuBitableRecordPage {
     pub total: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableAppListPage {
+    pub apps: Vec<Value>,
+    pub page_token: Option<String>,
+    pub has_more: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableFieldListPage {
+    pub items: Vec<FeishuBitableField>,
+    pub page_token: Option<String>,
+    pub has_more: Option<bool>,
+    pub total: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FeishuBitableViewListPage {
+    pub items: Vec<FeishuBitableView>,
+    pub page_token: Option<String>,
+    pub has_more: Option<bool>,
+    pub total: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuBitableDeletedRecord {
+    pub deleted: bool,
+    pub record_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeishuBitableDeletedField {
+    pub deleted: bool,
+    pub field_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn feishu_message_resource_type_accepts_audio_and_media_aliases() {
@@ -218,5 +278,47 @@ mod tests {
                 .expect("image should parse"),
             FeishuMessageResourceType::Image
         );
+    }
+
+    #[test]
+    fn feishu_bitable_field_deserializes_type_and_property() {
+        let field: FeishuBitableField = serde_json::from_value(json!({
+            "field_id": "fld_123",
+            "field_name": "Status",
+            "type": 3,
+            "ui_type": "SingleSelect",
+            "property": {
+                "options": [{"name": "Open"}]
+            }
+        }))
+        .expect("field should deserialize");
+
+        assert_eq!(field.field_id.as_deref(), Some("fld_123"));
+        assert_eq!(field.field_name.as_deref(), Some("Status"));
+        assert_eq!(field.r#type, Some(3));
+        assert_eq!(field.ui_type.as_deref(), Some("SingleSelect"));
+        assert_eq!(field.property, Some(json!({"options": [{"name": "Open"}]})));
+    }
+
+    #[test]
+    fn feishu_bitable_view_list_page_deserializes_items() {
+        let page: FeishuBitableViewListPage = serde_json::from_value(json!({
+            "items": [
+                {
+                    "view_id": "vew_123",
+                    "view_name": "All Tasks",
+                    "view_type": "grid"
+                }
+            ],
+            "has_more": false,
+            "page_token": "page_1",
+            "total": 1
+        }))
+        .expect("view page should deserialize");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].view_id.as_deref(), Some("vew_123"));
+        assert_eq!(page.items[0].view_type.as_deref(), Some("grid"));
+        assert_eq!(page.total, Some(1));
     }
 }

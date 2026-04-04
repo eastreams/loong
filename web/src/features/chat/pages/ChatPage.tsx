@@ -24,7 +24,6 @@ export default function ChatPage() {
   const [composerText, setComposerText] = useState("");
   const [memoryWindow, setMemoryWindow] = useState<number | null>(null);
   const [currentModel, setCurrentModel] = useState("");
-  const [currentProvider, setCurrentProvider] = useState<string | null>(null);
   const [loadingLabelIndex, setLoadingLabelIndex] = useState(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -36,6 +35,7 @@ export default function ChatPage() {
     selectedSessionId,
     messages,
     activeTools,
+    recentTools,
     pendingAssistantId,
     streamPhase,
     isLoadingSessions,
@@ -124,7 +124,6 @@ export default function ChatPage() {
         if (!cancelled) {
           setMemoryWindow(config.slidingWindow);
           setCurrentModel(config.model);
-          setCurrentProvider(config.activeProvider);
         }
       } catch (loadError) {
         if (!cancelled && loadError instanceof ApiRequestError && loadError.status === 401) {
@@ -166,6 +165,38 @@ export default function ChatPage() {
         <pre className="message-markdown-fallback">{content}</pre>
       </div>
     );
+  }
+
+  function formatRecentToolTime(value: string) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return value;
+    }
+    return parsed.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }
+
+  function resolveRecentToolStatusTone(tool: (typeof recentTools)[number]) {
+    if (tool.status === "error" && /timeout/i.test(tool.detail ?? "")) {
+      return "warning";
+    }
+    return tool.status;
+  }
+
+  function resolveRecentToolDetail(tool: (typeof recentTools)[number]) {
+    const genericDetails = new Set([
+      t("chat.recentTools.detail.ok"),
+      t("chat.recentTools.detail.error"),
+    ]);
+
+    if (!tool.detail || genericDetails.has(tool.detail)) {
+      return null;
+    }
+
+    return tool.detail;
   }
 
   return (
@@ -236,12 +267,20 @@ export default function ChatPage() {
                 </div>
               </div>
               <div className="chat-topline-meta">
-                <span>{selectedSession?.updatedAt ?? t("chat.noHistory")}</span>
+                <div className="chat-topline-status-row">
+                  <span>{selectedSession?.updatedAt ?? t("chat.noHistory")}</span>
+                  <span
+                    className="chat-status-dot"
+                    title={t("status.connected")}
+                    aria-label={t("status.connected")}
+                  />
+                </div>
                 <span
-                  className="chat-status-dot"
-                  title={t("status.connected")}
-                  aria-label={t("status.connected")}
-                />
+                  className="chat-topline-model"
+                  title={currentModel || t("chat.currentModel.pending")}
+                >
+                  {currentModel || t("chat.currentModel.pending")}
+                </span>
               </div>
             </div>
 
@@ -380,33 +419,62 @@ export default function ChatPage() {
         </Panel>
 
         <Panel eyebrow={t("chat.panels.inspector")} title={t("status.local")}>
-            <div className="metric-grid metric-grid-scroll">
-              <div className="metric-card">
-                <span className="metric-label">{t("status.providerReady")}</span>
-                <strong>{selectedSession ? t("chat.inspector.sessionLoaded") : t("chat.inspector.waitingForSession")}</strong>
+            <div className="chat-inspector-body metric-grid-scroll">
+            <div className="chat-inspector-summary">
+              <div className="chat-inspector-summary-row">
+                <span className="chat-inspector-summary-label">{t("status.providerReady")}</span>
+                <strong className="chat-inspector-summary-value">
+                  {selectedSession ? t("chat.inspector.sessionLoaded") : t("chat.inspector.waitingForSession")}
+                </strong>
               </div>
-              <div className="metric-card">
-                <span className="metric-label">{t("status.memoryHealthy")}</span>
-                <strong>{messages.length > 0 ? `${messages.length} messages` : "No history"}</strong>
+              <div className="chat-inspector-summary-row">
+                <span className="chat-inspector-summary-label">{t("status.memoryHealthy")}</span>
+                <strong className="chat-inspector-summary-value">
+                  {messages.length > 0 ? `${messages.length} messages` : "No history"}
+                </strong>
               </div>
-              <div className="metric-card">
-                <span className="metric-label">{t("chat.memoryWindow.label")}</span>
-                <strong>
+              <div className="chat-inspector-summary-row">
+                <span className="chat-inspector-summary-label">{t("chat.memoryWindow.label")}</span>
+                <strong className="chat-inspector-summary-value">
                   {memoryWindow !== null
                     ? t("chat.memoryWindow.value", { count: memoryWindow })
                     : t("chat.memoryWindow.pending")}
                 </strong>
               </div>
-              <div className="metric-card">
-                <span className="metric-label">{t("chat.currentModel.label")}</span>
-                <strong title={currentModel || t("chat.currentModel.pending")}>
-                  {currentModel || t("chat.currentModel.pending")}
-                </strong>
-                <span>
-                  {currentProvider
-                    ? t("chat.currentModel.provider", { provider: currentProvider })
-                    : t("chat.currentModel.providerPending")}
-                </span>
+            </div>
+
+            <div className="chat-inspector-section">
+              <div className="metric-label">
+                {t("chat.inspector.recentTools")}
+              </div>
+                {recentTools.length > 0 ? (
+                  <div className="chat-inspector-tool-list">
+                    {recentTools.map((tool) => (
+                      <div key={`${tool.toolId}-${tool.finishedAt}`} className="chat-inspector-tool-item">
+                        <div className="chat-inspector-tool-head">
+                          <strong className="chat-inspector-tool-name">{tool.label}</strong>
+                          <div className="chat-inspector-tool-side">
+                            <span>{formatRecentToolTime(tool.finishedAt)}</span>
+                            <span
+                              className={`chat-recent-tool-dot chat-recent-tool-dot-${resolveRecentToolStatusTone(tool)}`}
+                              aria-label={t(`chat.toolStatus.${tool.status}`)}
+                              title={t(`chat.toolStatus.${tool.status}`)}
+                            />
+                          </div>
+                        </div>
+                        {resolveRecentToolDetail(tool) ? (
+                          <div className="chat-inspector-tool-meta">
+                            <span>{resolveRecentToolDetail(tool)}</span>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="chat-inspector-empty">
+                    {t("chat.inspector.noRecentTools")}
+                  </div>
+                )}
               </div>
             </div>
           </Panel>

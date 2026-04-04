@@ -3129,11 +3129,10 @@ pub(crate) async fn send_text_to_known_session(
                             .to_owned(),
                     );
                 }
-                if !resolved
-                    .allowed_chat_ids
-                    .iter()
-                    .any(|allowed| allowed.trim() == conversation_id)
-                {
+                if !crate::channel::feishu::feishu_allowlist_allows_chat(
+                    &resolved.allowed_chat_ids,
+                    &conversation_id,
+                ) {
                     return Err(format!(
                         "sessions_send_target_not_allowed: feishu target `{conversation_id}` is not present in feishu.allowed_chat_ids"
                     ));
@@ -3327,16 +3326,22 @@ pub(crate) async fn process_inbound_with_provider(
     feedback_policy: ChannelTurnFeedbackPolicy,
 ) -> CliResult<String> {
     let started_at = std::time::Instant::now();
-    let turn_config = reload_channel_turn_config(config, resolved_path)?;
-    let runtime = DefaultConversationRuntime::from_config_or_env(&turn_config)?;
-    let result = process_inbound_with_runtime_and_feedback(
-        &turn_config,
-        &runtime,
-        message,
-        ConversationRuntimeBinding::kernel(kernel_ctx),
-        feedback_policy,
-    )
-    .await;
+    let result = match reload_channel_turn_config(config, resolved_path) {
+        Ok(turn_config) => match DefaultConversationRuntime::from_config_or_env(&turn_config) {
+            Ok(runtime) => {
+                process_inbound_with_runtime_and_feedback(
+                    &turn_config,
+                    &runtime,
+                    message,
+                    ConversationRuntimeBinding::kernel(kernel_ctx),
+                    feedback_policy,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
+    };
     let duration_ms = started_at.elapsed().as_millis();
     match &result {
         Ok(reply) => {
@@ -3757,4 +3762,40 @@ pub(super) fn validate_wecom_security_config(config: &ResolvedWecomChannelConfig
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "channel-feishu"))]
+mod tests {
+    #[test]
+    fn wildcard_allows_send_to_any_chat_id() {
+        let allowed_chat_ids: Vec<String> = vec!["*".to_owned(), "oc_other".to_owned()];
+
+        let result =
+            crate::channel::feishu::feishu_allowlist_allows_chat(&allowed_chat_ids, "oc_random");
+
+        assert!(result, "wildcard '*' should allow any chat_id");
+    }
+
+    #[test]
+    fn exact_match_allows_send_without_wildcard() {
+        let allowed_chat_ids: Vec<String> = vec!["oc_demo".to_owned()];
+
+        let result =
+            crate::channel::feishu::feishu_allowlist_allows_chat(&allowed_chat_ids, "oc_demo");
+
+        assert!(result, "exact match should still work");
+    }
+
+    #[test]
+    fn non_matched_chat_rejected_without_wildcard() {
+        let allowed_chat_ids: Vec<String> = vec!["oc_demo".to_owned()];
+
+        let result =
+            crate::channel::feishu::feishu_allowlist_allows_chat(&allowed_chat_ids, "oc_other");
+
+        assert!(
+            !result,
+            "non-matched chat_id should be rejected without wildcard"
+        );
+    }
 }

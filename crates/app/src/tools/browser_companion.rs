@@ -121,6 +121,11 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
         timeout_seconds: u64,
         request: &BrowserCompanionProtocolRequest,
     ) -> Result<Value, String> {
+        #[cfg(test)]
+        let _test_guard = browser_companion_command_test_lock()
+            .lock()
+            .map_err(|error| format!("browser companion test lock poisoned: {error}"))?;
+
         let encoded = serde_json::to_vec(request)
             .map_err(|error| format!("browser_companion_request_encode_failed: {error}"))?;
         let mut child = retry_executable_file_busy(|| {
@@ -264,6 +269,14 @@ where
             cleanup();
             format!("browser_companion_stdin_write_failed: {error}")
         })?;
+        stdin.write_all(b"\n").map_err(|error| {
+            cleanup();
+            format!("browser_companion_stdin_write_failed: {error}")
+        })?;
+        stdin.flush().map_err(|error| {
+            cleanup();
+            format!("browser_companion_stdin_write_failed: {error}")
+        })?;
     }
 
     Ok(())
@@ -309,6 +322,12 @@ static BROWSER_COMPANION_SESSIONS: OnceLock<
 fn browser_companion_sessions()
 -> &'static Mutex<BTreeMap<String, BTreeMap<String, BrowserCompanionSession>>> {
     BROWSER_COMPANION_SESSIONS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(test)]
+fn browser_companion_command_test_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn next_browser_companion_sequence() -> u64 {
@@ -847,6 +866,17 @@ mod tests {
             cleaned_up.load(Ordering::Relaxed),
             "stdin write failure should trigger child cleanup"
         );
+    }
+
+    #[test]
+    fn write_browser_companion_request_appends_newline_frame() {
+        let mut buffer = Vec::new();
+        let mut writer = io::Cursor::new(&mut buffer);
+
+        super::write_browser_companion_request(Some(&mut writer), br#"{"ok":true}"#, || {})
+            .expect("request write should succeed");
+
+        assert_eq!(buffer, b"{\"ok\":true}\n");
     }
 
     #[test]

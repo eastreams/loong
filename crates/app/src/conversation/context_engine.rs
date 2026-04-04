@@ -100,6 +100,7 @@ pub struct AssembledConversationContext {
     pub messages: Vec<Value>,
     pub artifacts: Vec<ContextArtifactDescriptor>,
     pub estimated_tokens: Option<usize>,
+    pub prompt_fragments: Vec<crate::conversation::PromptFragment>,
     pub system_prompt_addition: Option<String>,
 }
 
@@ -109,6 +110,7 @@ impl AssembledConversationContext {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: None,
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         }
     }
@@ -431,15 +433,19 @@ impl ConversationContextEngine for DefaultContextEngine {
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<AssembledConversationContext> {
         if !binding.is_kernel_bound() {
-            let projected = crate::provider::build_projected_context_for_session(
+            let provider_binding = crate::provider::ProviderRuntimeBinding::advisory_only();
+            let projected = crate::provider::build_projected_context_for_session_with_binding(
                 config,
                 session_id,
                 include_system_prompt,
-            )?;
+                provider_binding,
+            )
+            .await?;
             return Ok(AssembledConversationContext {
                 messages: projected.messages,
                 artifacts: projected.artifacts,
                 estimated_tokens: None,
+                prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
             });
         }
@@ -451,10 +457,11 @@ impl ConversationContextEngine for DefaultContextEngine {
                 .ok_or_else(|| "kernel-bound context engine requires kernel context".to_owned())?;
             let provider_binding = crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx);
             let envelope = load_stage_envelope(config, session_id, binding).await?;
+            let runtime_tool_view = crate::tools::runtime_tool_view_from_loongclaw_config(config);
             let projected = crate::provider::project_hydrated_memory_context_for_view_with_binding(
                 config,
                 include_system_prompt,
-                &crate::tools::runtime_tool_view(),
+                &runtime_tool_view,
                 provider_binding,
                 &envelope.hydrated,
             )
@@ -463,6 +470,7 @@ impl ConversationContextEngine for DefaultContextEngine {
                 messages: projected.messages,
                 artifacts: projected.artifacts,
                 estimated_tokens: None,
+                prompt_fragments: projected.prompt_fragments,
                 system_prompt_addition: None,
             });
         }
@@ -666,6 +674,30 @@ mod tests {
     use crate::config::MemoryProfile;
     use crate::test_support::TurnTestHarness;
 
+    #[cfg(feature = "memory-sqlite")]
+    async fn provider_messages_with_kernel_binding(
+        config: &LoongClawConfig,
+        session_id: &str,
+        kernel_ctx: &crate::KernelContext,
+    ) -> Vec<Value> {
+        let envelope = load_stage_envelope(
+            config,
+            session_id,
+            ConversationRuntimeBinding::kernel(kernel_ctx),
+        )
+        .await
+        .expect("load staged memory envelope");
+        crate::provider::project_hydrated_memory_context_for_view_with_binding(
+            config,
+            true,
+            &crate::tools::runtime_tool_view(),
+            crate::provider::ProviderRuntimeBinding::kernel(kernel_ctx),
+            &envelope.hydrated,
+        )
+        .await
+        .messages
+    }
+
     #[test]
     fn default_engine_metadata_has_stable_identity() {
         let metadata = DefaultContextEngine.metadata();
@@ -798,8 +830,7 @@ mod tests {
             .await
             .expect("assemble messages");
         let provider_messages =
-            crate::provider::build_messages_for_session(&config, session_id, true)
-                .expect("build provider messages");
+            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -851,8 +882,7 @@ mod tests {
             .await
             .expect("assemble messages");
         let provider_messages =
-            crate::provider::build_messages_for_session(&config, session_id, true)
-                .expect("build provider messages");
+            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -901,8 +931,7 @@ mod tests {
             .await
             .expect("assemble messages");
         let provider_messages =
-            crate::provider::build_messages_for_session(&config, session_id, true)
-                .expect("build provider messages");
+            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,
@@ -955,8 +984,7 @@ mod tests {
             .await
             .expect("assemble messages");
         let provider_messages =
-            crate::provider::build_messages_for_session(&config, session_id, true)
-                .expect("build provider messages");
+            provider_messages_with_kernel_binding(&config, session_id, &harness.kernel_ctx).await;
 
         assert_eq!(
             kernel_messages, provider_messages,

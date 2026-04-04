@@ -3,11 +3,11 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::LoongClawConfig;
+use crate::config::{LoongClawConfig, PersonalizationConfig};
 use crate::runtime_identity::{self, ResolvedRuntimeIdentity};
 use crate::runtime_self::{self, RuntimeSelfModel};
 #[cfg(feature = "memory-sqlite")]
-use crate::session::repository::SessionRepository;
+use crate::session::repository::{SessionEventRecord, SessionRepository};
 use crate::tools::runtime_config::ToolRuntimeConfig;
 
 const DURABLE_RECALL_INTRO: &str = concat!(
@@ -63,6 +63,7 @@ impl RuntimeSelfContinuity {
 pub(crate) fn resolve_runtime_self_continuity(
     workspace_root: Option<&Path>,
     profile_note: Option<&str>,
+    personalization: Option<&PersonalizationConfig>,
 ) -> Option<RuntimeSelfContinuity> {
     let runtime_self = match workspace_root {
         Some(workspace_root) => runtime_self::load_runtime_self_model(workspace_root),
@@ -70,7 +71,8 @@ pub(crate) fn resolve_runtime_self_continuity(
     };
     let resolved_identity =
         runtime_identity::resolve_runtime_identity(Some(&runtime_self), profile_note);
-    let session_profile_projection = runtime_identity::render_session_profile_section(profile_note);
+    let session_profile_projection =
+        runtime_identity::render_session_profile_section(profile_note, personalization);
     let continuity = RuntimeSelfContinuity {
         runtime_self,
         resolved_identity,
@@ -86,7 +88,12 @@ pub(crate) fn resolve_runtime_self_continuity_for_config(
     let tool_runtime_config = ToolRuntimeConfig::from_loongclaw_config(config, None);
     let workspace_root = tool_runtime_config.file_root.as_deref();
     let profile_note = config.memory.trimmed_profile_note();
-    resolve_runtime_self_continuity(workspace_root, profile_note.as_deref())
+    let personalization = config.memory.trimmed_personalization();
+    resolve_runtime_self_continuity(
+        workspace_root,
+        profile_note.as_deref(),
+        personalization.as_ref(),
+    )
 }
 
 pub(crate) fn runtime_self_continuity_from_event_payload(
@@ -101,22 +108,34 @@ pub(crate) fn load_persisted_runtime_self_continuity(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<RuntimeSelfContinuity>, String> {
-    let recent_events = repo.list_recent_events(session_id, 64)?;
-    let recent_continuity = recent_events.into_iter().rev().find_map(|event| {
-        let is_continuity_event = event.event_kind == RUNTIME_SELF_CONTINUITY_EVENT_KIND;
-        if !is_continuity_event {
-            return None;
-        }
+    load_persisted_runtime_self_continuity_with_delegate_events(repo, session_id, None)
+}
 
-        runtime_self_continuity_from_event_payload(&event.payload_json)
-    });
-    if recent_continuity.is_some() {
-        return Ok(recent_continuity);
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn load_persisted_runtime_self_continuity_with_delegate_events(
+    repo: &SessionRepository,
+    session_id: &str,
+    delegate_events: Option<&[SessionEventRecord]>,
+) -> Result<Option<RuntimeSelfContinuity>, String> {
+    let latest_event =
+        repo.load_latest_event_by_kind(session_id, RUNTIME_SELF_CONTINUITY_EVENT_KIND)?;
+    let latest_continuity = latest_event
+        .as_ref()
+        .and_then(|event| runtime_self_continuity_from_event_payload(&event.payload_json));
+    if latest_continuity.is_some() {
+        return Ok(latest_continuity);
     }
 
-    let delegate_events = repo.list_delegate_lifecycle_events(session_id)?;
+    let loaded_delegate_events = match delegate_events {
+        Some(_) => None,
+        None => Some(repo.list_delegate_lifecycle_events(session_id)?),
+    };
+    let delegate_events = match delegate_events {
+        Some(events) => events,
+        None => loaded_delegate_events.as_deref().unwrap_or(&[]),
+    };
     let delegate_continuity = delegate_events
-        .into_iter()
+        .iter()
         .rev()
         .find_map(|event| runtime_self_continuity_from_event_payload(&event.payload_json));
     Ok(delegate_continuity)

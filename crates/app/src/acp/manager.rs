@@ -176,7 +176,7 @@ impl AcpSessionManager {
         request: &AcpTurnRequest,
         sink: Option<&dyn AcpTurnEventSink>,
     ) -> CliResult<AcpTurnResult> {
-        let started_at = std::time::Instant::now();
+        let end_to_end_started_at = std::time::Instant::now();
         let actor_key = actor_key_for_bootstrap(bootstrap);
         let _turn_queue_guard = self.acquire_turn_queue_guard(actor_key.clone()).await?;
         self.cleanup_idle_sessions(config).await?;
@@ -207,6 +207,7 @@ impl AcpSessionManager {
         });
         self.register_active_turn(actor_key.as_str(), active_turn.clone())?;
         let turn_started_ms = now_ms();
+        let execution_started_at = std::time::Instant::now();
         let buffered_sink = BufferedAcpTurnEventSink::default();
         let result = match sink {
             Some(external_sink) => {
@@ -238,11 +239,13 @@ impl AcpSessionManager {
         };
 
         self.clear_active_turn(actor_key.as_str())?;
+        let end_to_end_duration_ms = end_to_end_started_at.elapsed().as_millis();
+        let execution_duration_ms = execution_started_at.elapsed().as_millis();
+        let queue_wait_ms = end_to_end_duration_ms.saturating_sub(execution_duration_ms);
         match result {
             Ok(mut result) => {
                 self.record_turn_completion(turn_started_ms, true)?;
                 let streamed_events = buffered_sink.snapshot()?;
-                let duration_ms = started_at.elapsed().as_millis();
                 let reported_event_count = result.events.len();
                 let streamed_event_count = streamed_events.len();
                 result.events = merge_turn_events(&result.events, &streamed_events);
@@ -258,7 +261,9 @@ impl AcpSessionManager {
                     reported_event_count,
                     streamed_event_count,
                     merged_event_count = result.events.len(),
-                    duration_ms,
+                    end_to_end_duration_ms,
+                    execution_duration_ms,
+                    queue_wait_ms,
                     has_trace_id = trace_id.is_some(),
                     "ACP turn completed"
                 );
@@ -273,7 +278,10 @@ impl AcpSessionManager {
                 tracing::warn!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
-                    duration_ms = started_at.elapsed().as_millis(),
+                    trace_id = ?trace_id,
+                    end_to_end_duration_ms,
+                    execution_duration_ms,
+                    queue_wait_ms,
                     error = %crate::observability::summarize_error(error.as_str()),
                     has_trace_id = trace_id.is_some(),
                     "ACP turn failed"

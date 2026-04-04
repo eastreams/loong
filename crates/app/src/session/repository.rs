@@ -500,6 +500,13 @@ impl SessionRepository {
         Self::load_session_summary_with_legacy_fallback_with_conn(&conn, &session_id)
     }
 
+    pub fn latest_resumable_root_session_summary(
+        &self,
+    ) -> Result<Option<SessionSummaryRecord>, String> {
+        let conn = self.open_connection()?;
+        Self::latest_resumable_root_session_summary_with_conn(&conn)
+    }
+
     pub fn load_session_observation(
         &self,
         session_id: &str,
@@ -883,6 +890,17 @@ impl SessionRepository {
         Self::list_recent_events_with_conn(&conn, &session_id, limit)
     }
 
+    pub fn load_latest_event_by_kind(
+        &self,
+        session_id: &str,
+        event_kind: &str,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let event_kind = normalize_required_text(event_kind, "event_kind")?;
+        let conn = self.open_connection()?;
+        Self::load_latest_event_by_kind_with_conn(&conn, &session_id, &event_kind)
+    }
+
     pub fn list_events_after(
         &self,
         session_id: &str,
@@ -1212,9 +1230,6 @@ impl SessionRepository {
         let scope_session_id =
             normalize_required_text(&record.scope_session_id, "scope_session_id")?;
         let approval_key = normalize_required_text(&record.approval_key, "approval_key")?;
-        if self.load_session(&scope_session_id)?.is_none() {
-            return Err(format!("session `{scope_session_id}` not found"));
-        }
         let created_by_session_id = normalize_optional_text(record.created_by_session_id);
         let ts = unix_ts_now();
         let conn = self.open_connection()?;
@@ -1844,6 +1859,154 @@ impl SessionRepository {
         Self::infer_legacy_session_summary_with_conn(conn, session_id)
     }
 
+    fn latest_resumable_root_session_summary_with_conn(
+        conn: &Connection,
+    ) -> Result<Option<SessionSummaryRecord>, String> {
+        let mut candidates = Self::list_resumable_root_session_summaries_with_conn(conn)?;
+        sort_session_summaries(&mut candidates);
+        Ok(candidates.into_iter().next())
+    }
+
+    fn list_resumable_root_session_summaries_with_conn(
+        conn: &Connection,
+    ) -> Result<Vec<SessionSummaryRecord>, String> {
+        let mut candidates = Self::list_concrete_session_summaries_with_conn(conn)?;
+        let legacy_candidates = Self::list_legacy_turn_only_session_summaries_with_conn(conn)?;
+
+        candidates.retain(is_resumable_root_session_summary);
+        for candidate in legacy_candidates {
+            if is_resumable_root_session_summary(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+
+        Ok(candidates)
+    }
+
+    fn list_concrete_session_summaries_with_conn(
+        conn: &Connection,
+    ) -> Result<Vec<SessionSummaryRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    s.session_id,
+                    s.kind,
+                    s.parent_session_id,
+                    s.label,
+                    s.state,
+                    s.created_at,
+                    s.updated_at,
+                    s.last_error,
+                    archived.archived_at,
+                    COUNT(t.id) AS turn_count,
+                    MAX(t.ts) AS last_turn_at
+                 FROM sessions s
+                 LEFT JOIN (
+                    SELECT session_id, MAX(ts) AS archived_at
+                    FROM session_events
+                    WHERE event_kind = 'session_archived'
+                    GROUP BY session_id
+                 ) archived ON archived.session_id = s.session_id
+                 LEFT JOIN turns t ON t.session_id = s.session_id
+                 WHERE s.kind = 'root'
+                 GROUP BY
+                    s.session_id,
+                    s.kind,
+                    s.parent_session_id,
+                    s.label,
+                    s.state,
+                    s.created_at,
+                    s.updated_at,
+                    s.last_error,
+                    archived.archived_at",
+            )
+            .map_err(|error| format!("prepare concrete session summary query failed: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RawSessionSummaryRecord {
+                    session_id: row.get(0)?,
+                    kind: row.get(1)?,
+                    parent_session_id: row.get(2)?,
+                    label: row.get(3)?,
+                    state: row.get(4)?,
+                    created_at: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    last_error: row.get(7)?,
+                    archived_at: row.get(8)?,
+                    turn_count: row.get(9)?,
+                    last_turn_at: row.get(10)?,
+                })
+            })
+            .map_err(|error| format!("query concrete session summaries failed: {error}"))?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            let raw =
+                row.map_err(|error| format!("decode concrete session summary failed: {error}"))?;
+            let summary = SessionSummaryRecord::try_from_raw(raw)?;
+            sessions.push(summary);
+        }
+
+        Ok(sessions)
+    }
+
+    fn list_legacy_turn_only_session_summaries_with_conn(
+        conn: &Connection,
+    ) -> Result<Vec<SessionSummaryRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    t.session_id,
+                    MIN(t.ts) AS created_at,
+                    MAX(t.ts) AS updated_at,
+                    COUNT(t.id) AS turn_count
+                 FROM turns t
+                 LEFT JOIN sessions s ON s.session_id = t.session_id
+                 WHERE s.session_id IS NULL
+                 GROUP BY t.session_id",
+            )
+            .map_err(|error| format!("prepare legacy session summary query failed: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            })
+            .map_err(|error| format!("query legacy session summaries failed: {error}"))?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            let decoded_row =
+                row.map_err(|error| format!("decode legacy session summary failed: {error}"))?;
+            let (session_id, created_at_value, updated_at_value, turn_count_value) = decoded_row;
+            let created_at = created_at_value.unwrap_or_default();
+            let updated_at = updated_at_value.unwrap_or(created_at);
+            let bounded_turn_count = turn_count_value.max(0);
+            let turn_count = bounded_turn_count as usize;
+            let kind = infer_legacy_session_kind(&session_id);
+
+            let summary = SessionSummaryRecord {
+                session_id,
+                kind,
+                parent_session_id: None,
+                label: None,
+                state: SessionState::Ready,
+                created_at,
+                updated_at,
+                archived_at: None,
+                turn_count,
+                last_turn_at: Some(updated_at),
+                last_error: None,
+            };
+            sessions.push(summary);
+        }
+
+        Ok(sessions)
+    }
+
     fn list_recent_events_with_conn(
         conn: &Connection,
         session_id: &str,
@@ -1878,6 +2041,41 @@ impl SessionRepository {
         }
         events.reverse();
         Ok(events)
+    }
+
+    fn load_latest_event_by_kind_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        event_kind: &str,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, session_id, event_kind, actor_session_id, payload_json, ts
+                 FROM session_events
+                 WHERE session_id = ?1 AND event_kind = ?2
+                 ORDER BY id DESC
+                 LIMIT 1",
+            )
+            .map_err(|error| format!("prepare latest session event query failed: {error}"))?;
+        let raw = stmt
+            .query_row(params![session_id, event_kind], |row| {
+                Ok(RawSessionEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    event_kind: row.get(2)?,
+                    actor_session_id: row.get(3)?,
+                    payload_json: row.get(4)?,
+                    ts: row.get(5)?,
+                })
+            })
+            .optional()
+            .map_err(|error| format!("query latest session event failed: {error}"))?;
+        let raw = match raw {
+            Some(raw) => raw,
+            None => return Ok(None),
+        };
+        let event = SessionEventRecord::try_from_raw(raw)?;
+        Ok(Some(event))
     }
 
     fn list_events_after_with_conn(
@@ -2353,6 +2551,19 @@ fn infer_legacy_session_kind(session_id: &str) -> SessionKind {
     }
 }
 
+fn is_resumable_root_session_summary(summary: &SessionSummaryRecord) -> bool {
+    if summary.kind != SessionKind::Root {
+        return false;
+    }
+    if summary.archived_at.is_some() {
+        return false;
+    }
+    if summary.turn_count == 0 {
+        return false;
+    }
+    true
+}
+
 fn sort_session_summaries(sessions: &mut [SessionSummaryRecord]) {
     sessions.sort_by(|left, right| {
         right
@@ -2390,6 +2601,78 @@ mod tests {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         }
+    }
+
+    fn create_root_session(repo: &SessionRepository, session_id: &str) {
+        repo.create_session(NewSessionRecord {
+            session_id: session_id.to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some(session_id.to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+    }
+
+    fn create_delegate_child_session(
+        repo: &SessionRepository,
+        session_id: &str,
+        parent_session_id: &str,
+    ) {
+        repo.create_session(NewSessionRecord {
+            session_id: session_id.to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some(parent_session_id.to_owned()),
+            label: Some(session_id.to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create delegate child session");
+    }
+
+    fn append_session_turn(
+        config: &MemoryRuntimeConfig,
+        session_id: &str,
+        role: &str,
+        content: &str,
+    ) {
+        append_turn_direct(session_id, role, content, config).expect("append session turn");
+    }
+
+    fn set_session_updated_at(repo: &SessionRepository, session_id: &str, updated_at: i64) {
+        let conn = repo.open_connection().expect("open connection");
+        conn.execute(
+            "UPDATE sessions
+             SET updated_at = ?2
+             WHERE session_id = ?1",
+            params![session_id, updated_at],
+        )
+        .expect("set session updated_at");
+    }
+
+    fn set_turn_timestamps(repo: &SessionRepository, session_id: &str, ts: i64) {
+        let conn = repo.open_connection().expect("open connection");
+        conn.execute(
+            "UPDATE turns
+             SET ts = ?2
+             WHERE session_id = ?1",
+            params![session_id, ts],
+        )
+        .expect("set turn timestamps");
+    }
+
+    fn archive_session(repo: &SessionRepository, session_id: &str, archived_at: i64) {
+        let conn = repo.open_connection().expect("open connection");
+        conn.execute(
+            "INSERT INTO session_events(
+                session_id,
+                event_kind,
+                actor_session_id,
+                payload_json,
+                ts
+             ) VALUES (?1, ?2, NULL, ?3, ?4)",
+            params![session_id, "session_archived", "{}", archived_at],
+        )
+        .expect("insert archive event");
     }
 
     #[test]
@@ -2869,6 +3152,109 @@ mod tests {
             .find(|session| session.session_id == "telegram:456")
             .expect("telegram legacy session");
         assert_eq!(telegram_session.kind, SessionKind::Root);
+    }
+
+    #[test]
+    fn latest_resumable_root_session_prefers_newest_eligible_root() {
+        let config = isolated_memory_config("latest-resumable-root");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        create_root_session(&repo, "root-old");
+        append_session_turn(&config, "root-old", "user", "old");
+        set_session_updated_at(&repo, "root-old", 100);
+        set_turn_timestamps(&repo, "root-old", 100);
+
+        create_root_session(&repo, "root-new");
+        append_session_turn(&config, "root-new", "user", "new");
+        set_session_updated_at(&repo, "root-new", 200);
+        set_turn_timestamps(&repo, "root-new", 200);
+
+        create_delegate_child_session(&repo, "delegate-child", "root-new");
+        append_session_turn(&config, "delegate-child", "assistant", "child");
+        set_session_updated_at(&repo, "delegate-child", 400);
+        set_turn_timestamps(&repo, "delegate-child", 400);
+
+        create_root_session(&repo, "root-archived");
+        append_session_turn(&config, "root-archived", "assistant", "archived");
+        set_session_updated_at(&repo, "root-archived", 500);
+        set_turn_timestamps(&repo, "root-archived", 500);
+        archive_session(&repo, "root-archived", 600);
+
+        create_root_session(&repo, "root-empty");
+        set_session_updated_at(&repo, "root-empty", 700);
+
+        let latest = repo
+            .latest_resumable_root_session_summary()
+            .expect("load latest resumable root session")
+            .expect("eligible root session");
+
+        assert_eq!(latest.session_id, "root-new");
+        assert_eq!(latest.kind, SessionKind::Root);
+        assert_eq!(latest.archived_at, None);
+        assert_eq!(latest.turn_count, 1);
+    }
+
+    #[test]
+    fn latest_resumable_root_session_includes_legacy_root_when_newest() {
+        let config = isolated_memory_config("latest-legacy-root");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        create_root_session(&repo, "root-session");
+        append_session_turn(&config, "root-session", "user", "root");
+        set_session_updated_at(&repo, "root-session", 100);
+        set_turn_timestamps(&repo, "root-session", 100);
+
+        append_session_turn(&config, "telegram:latest", "assistant", "legacy");
+        set_turn_timestamps(&repo, "telegram:latest", 200);
+
+        let latest = repo
+            .latest_resumable_root_session_summary()
+            .expect("load latest resumable root session")
+            .expect("latest session");
+
+        assert_eq!(latest.session_id, "telegram:latest");
+        assert_eq!(latest.kind, SessionKind::Root);
+        assert_eq!(latest.turn_count, 1);
+        assert_eq!(latest.last_turn_at, Some(200));
+        assert!(
+            repo.load_session("telegram:latest")
+                .expect("load legacy session")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn latest_resumable_root_session_returns_none_when_no_root_is_resumable() {
+        let config = isolated_memory_config("latest-no-resumable-root");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        create_root_session(&repo, "root-empty");
+        set_session_updated_at(&repo, "root-empty", 300);
+
+        create_root_session(&repo, "root-archived");
+        append_session_turn(&config, "root-archived", "assistant", "archived");
+        set_session_updated_at(&repo, "root-archived", 400);
+        set_turn_timestamps(&repo, "root-archived", 400);
+        archive_session(&repo, "root-archived", 500);
+
+        create_delegate_child_session(&repo, "delegate-child", "root-archived");
+        append_session_turn(&config, "delegate-child", "assistant", "delegate");
+        set_session_updated_at(&repo, "delegate-child", 600);
+        set_turn_timestamps(&repo, "delegate-child", 600);
+
+        append_session_turn(
+            &config,
+            "delegate:legacy-child",
+            "assistant",
+            "legacy delegate",
+        );
+        set_turn_timestamps(&repo, "delegate:legacy-child", 700);
+
+        let latest = repo
+            .latest_resumable_root_session_summary()
+            .expect("load latest resumable root session");
+
+        assert!(latest.is_none());
     }
 
     #[test]

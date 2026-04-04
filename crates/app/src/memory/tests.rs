@@ -25,6 +25,13 @@ fn isolated_memory_workspace(prefix: &str) -> (PathBuf, runtime_config::MemoryRu
     (root, config)
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn cleanup_memory_workspace(workspace_root: &std::path::Path, db_path: &std::path::Path) {
+    let _ = drop_cached_sqlite_runtime(db_path);
+    let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_dir(workspace_root);
+}
+
 #[test]
 fn fallback_memory_operation_stays_compatible() {
     let outcome = execute_memory_core(MemoryCoreRequest {
@@ -264,6 +271,71 @@ fn load_prompt_context_with_diagnostics_omits_legacy_identity_from_profile_proje
 
     let _ = fs::remove_file(&db_path);
     let _ = fs::remove_dir(&tmp);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
+fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_profile_note() {
+    use crate::config::{MemoryMode, MemoryProfile};
+
+    let workspace_root = crate::test_support::unique_temp_dir(
+        "loongclaw-test-memory-profile-diagnostics-personalization",
+    );
+    std::fs::create_dir_all(&workspace_root).expect("create diagnostics workspace");
+
+    let db_path = workspace_root.join("profile-diagnostics-personalization.sqlite3");
+    let default_personalization = crate::config::PersonalizationConfig::default();
+    let schema_version = default_personalization.schema_version;
+    let personalization = crate::config::PersonalizationConfig {
+        preferred_name: Some("Chum".to_owned()),
+        response_density: Some(crate::config::ResponseDensity::Balanced),
+        initiative_level: Some(crate::config::InitiativeLevel::AskBeforeActing),
+        standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+        timezone: Some("Asia/Shanghai".to_owned()),
+        locale: None,
+        prompt_state: crate::config::PersonalizationPromptState::Configured,
+        schema_version,
+        updated_at_epoch_seconds: Some(1_775_095_200),
+    };
+    let config = runtime_config::MemoryRuntimeConfig {
+        profile: MemoryProfile::ProfilePlusWindow,
+        mode: MemoryMode::ProfilePlusWindow,
+        sqlite_path: Some(db_path.clone()),
+        sliding_window: 2,
+        profile_note: None,
+        personalization: Some(personalization),
+        ..runtime_config::MemoryRuntimeConfig::default()
+    };
+
+    append_turn_direct(
+        "profile-diagnostics-personalization-session",
+        "user",
+        "recent turn",
+        &config,
+    )
+    .expect("append_turn_direct should succeed");
+
+    let diagnostics_context = load_prompt_context_with_diagnostics(
+        "profile-diagnostics-personalization-session",
+        &config,
+    );
+    let (entries, _diagnostics) =
+        diagnostics_context.expect("load_prompt_context_with_diagnostics should succeed");
+    let profile_entry = entries
+        .iter()
+        .find(|entry| entry.kind == MemoryContextKind::Profile)
+        .expect("profile entry");
+    let profile_content = profile_entry.content.as_str();
+
+    assert!(profile_content.contains("## Session Profile"));
+    assert!(profile_content.contains("Preferred name: Chum"));
+    assert!(profile_content.contains("Response density: balanced"));
+    assert!(profile_content.contains("Initiative level: ask_before_acting"));
+    assert!(profile_content.contains("Ask before destructive actions."));
+    assert!(profile_content.contains("Timezone: Asia/Shanghai"));
+    assert!(!profile_content.contains("## Resolved Runtime Identity"));
+
+    cleanup_memory_workspace(&workspace_root, &db_path);
 }
 
 #[cfg(feature = "memory-sqlite")]

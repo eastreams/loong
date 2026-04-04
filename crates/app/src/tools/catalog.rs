@@ -222,6 +222,7 @@ pub enum ToolVisibilityGate {
     Delegate,
     Browser,
     BrowserCompanion,
+    BashRuntime,
     ExternalSkills,
     MemoryFileRoot,
     WebFetch,
@@ -256,6 +257,10 @@ impl ToolDescriptor {
         tool_argument_hint(self.name)
     }
 
+    pub fn search_hint(&self) -> &'static str {
+        tool_search_hint(self.name, self.description)
+    }
+
     pub fn parameter_types(&self) -> &'static [(&'static str, &'static str)] {
         tool_parameter_types(self.name)
     }
@@ -286,6 +291,14 @@ impl ToolDescriptor {
 
     pub fn governance_profile(&self) -> ToolGovernanceProfile {
         self.policy.governance_profile
+    }
+
+    pub fn requires_kernel_binding(&self) -> bool {
+        let governance_profile = self.governance_profile();
+        let approval_mode = governance_profile.approval_mode;
+        let execution_kind = self.execution_kind;
+
+        execution_kind == ToolExecutionKind::App && approval_mode == ToolApprovalMode::PolicyDriven
     }
 }
 
@@ -474,6 +487,58 @@ fn build_tool_catalog() -> ToolCatalog {
             capability_action_class: CapabilityActionClass::CapabilityFetch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: external_skills_fetch_definition,
+        },
+        ToolDescriptor {
+            name: "external_skills.resolve",
+            provider_name: "external_skills_resolve",
+            aliases: &[],
+            description: "Normalize an external skill reference into a source-aware candidate",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: external_skills_resolve_definition,
+        },
+        ToolDescriptor {
+            name: "external_skills.search",
+            provider_name: "external_skills_search",
+            aliases: &[],
+            description: "Search the resolved external-skills inventory for active and shadowed matches",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: external_skills_search_definition,
+        },
+        ToolDescriptor {
+            name: "external_skills.recommend",
+            provider_name: "external_skills_recommend",
+            aliases: &[],
+            description: "Recommend the best-fit resolved external skills for an operator goal",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: external_skills_recommend_definition,
+        },
+        ToolDescriptor {
+            name: "external_skills.source_search",
+            provider_name: "external_skills_source_search",
+            aliases: &[],
+            description: "Search preferred external skill ecosystems and return normalized source-aware candidates",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::ExternalSkills,
+            capability_action_class: CapabilityActionClass::Discover,
+            policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: external_skills_source_search_definition,
         },
         ToolDescriptor {
             name: "external_skills.inspect",
@@ -793,6 +858,41 @@ fn build_tool_catalog() -> ToolCatalog {
     {
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.bitable.app.create",
+            "feishu_bitable_app_create",
+            "Create a Feishu Bitable app with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.get",
+            "feishu_bitable_app_get",
+            "Fetch Feishu Bitable app metadata with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.list",
+            "feishu_bitable_app_list",
+            "List Feishu Bitable apps through the Drive API with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.patch",
+            "feishu_bitable_app_patch",
+            "Update Feishu Bitable app metadata with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.app.copy",
+            "feishu_bitable_app_copy",
+            "Copy a Feishu Bitable app with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.bitable.list",
             "feishu_bitable_list",
             "List data tables in a Feishu Bitable app with the selected account grant",
@@ -800,9 +900,121 @@ fn build_tool_catalog() -> ToolCatalog {
         );
         push_feishu_tool_descriptor(
             &mut descriptors,
+            "feishu.bitable.table.create",
+            "feishu_bitable_table_create",
+            "Create a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.table.patch",
+            "feishu_bitable_table_patch",
+            "Rename a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.table.batch_create",
+            "feishu_bitable_table_batch_create",
+            "Batch create Feishu Bitable tables with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
             "feishu.bitable.record.create",
             "feishu_bitable_record_create",
             "Create a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.update",
+            "feishu_bitable_record_update",
+            "Update a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.delete",
+            "feishu_bitable_record_delete",
+            "Delete a record in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_create",
+            "feishu_bitable_record_batch_create",
+            "Batch create records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_update",
+            "feishu_bitable_record_batch_update",
+            "Batch update records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.record.batch_delete",
+            "feishu_bitable_record_batch_delete",
+            "Batch delete records in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.create",
+            "feishu_bitable_field_create",
+            "Create a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.list",
+            "feishu_bitable_field_list",
+            "List fields in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.update",
+            "feishu_bitable_field_update",
+            "Update a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.field.delete",
+            "feishu_bitable_field_delete",
+            "Delete a field in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.create",
+            "feishu_bitable_view_create",
+            "Create a view in a Feishu Bitable table with the selected account grant",
+            ELEVATED_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.get",
+            "feishu_bitable_view_get",
+            "Fetch a view in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.list",
+            "feishu_bitable_view_list",
+            "List views in a Feishu Bitable table with the selected account grant",
+            DEFAULT_TOOL_POLICY_DESCRIPTOR,
+        );
+        push_feishu_tool_descriptor(
+            &mut descriptors,
+            "feishu.bitable.view.patch",
+            "feishu_bitable_view_patch",
+            "Patch a view in a Feishu Bitable table with the selected account grant",
             ELEVATED_TOOL_POLICY_DESCRIPTOR,
         );
         push_feishu_tool_descriptor(
@@ -989,6 +1201,23 @@ fn build_tool_catalog() -> ToolCatalog {
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: shell_exec_definition,
+        });
+    }
+
+    #[cfg(feature = "tool-shell")]
+    {
+        descriptors.push(ToolDescriptor {
+            name: "bash.exec",
+            provider_name: "bash_exec",
+            aliases: &[],
+            description: "Execute bash commands",
+            execution_kind: ToolExecutionKind::Core,
+            availability: ToolAvailability::Runtime,
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::BashRuntime,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: bash_exec_definition,
         });
     }
 
@@ -1233,8 +1462,31 @@ pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
     delegate_child_tool_view_for_config_with_delegate(config, false)
 }
 
+pub fn delegate_child_tool_view_for_runtime_config(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+) -> ToolView {
+    delegate_child_tool_view_for_runtime_config_with_delegate(config, runtime_config, false)
+}
+
 pub fn delegate_child_tool_view_for_config_with_delegate(
     config: &ToolConfig,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(config, None, allow_delegate)
+}
+
+pub fn delegate_child_tool_view_for_runtime_config_with_delegate(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+}
+
+fn build_delegate_child_tool_view(
+    config: &ToolConfig,
+    runtime_config: Option<&ToolRuntimeConfig>,
     allow_delegate: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
@@ -1260,10 +1512,10 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
                 }
             }
             name if allowlist.contains(name)
-                && tool_visibility_gate_enabled_for_runtime_view(
+                && tool_visibility_gate_enabled_for_delegate_child(
                     descriptor.visibility_gate,
                     config,
-                    false,
+                    runtime_config,
                 ) =>
             {
                 names.push(name);
@@ -1290,6 +1542,32 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     }
 
     ToolView::from_tool_names(names)
+}
+
+fn tool_visibility_gate_enabled_for_delegate_child(
+    gate: ToolVisibilityGate,
+    config: &ToolConfig,
+    runtime_config: Option<&ToolRuntimeConfig>,
+) -> bool {
+    match gate {
+        ToolVisibilityGate::BashRuntime => runtime_config.is_some_and(|config| {
+            tool_visibility_gate_enabled_for_runtime_policy(ToolVisibilityGate::BashRuntime, config)
+        }),
+        ToolVisibilityGate::Always
+        | ToolVisibilityGate::Sessions
+        | ToolVisibilityGate::SessionMutation
+        | ToolVisibilityGate::Messages
+        | ToolVisibilityGate::Feishu
+        | ToolVisibilityGate::Delegate
+        | ToolVisibilityGate::Browser
+        | ToolVisibilityGate::BrowserCompanion
+        | ToolVisibilityGate::ExternalSkills
+        | ToolVisibilityGate::MemoryFileRoot
+        | ToolVisibilityGate::WebFetch
+        | ToolVisibilityGate::WebSearch => {
+            tool_visibility_gate_enabled_for_runtime_view(gate, config, false)
+        }
+    }
 }
 
 pub fn provider_core_tool_catalog() -> Vec<ToolCatalogEntry> {
@@ -1357,6 +1635,7 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::Delegate => config.delegate.enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => false,
+        ToolVisibilityGate::BashRuntime => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
         ToolVisibilityGate::MemoryFileRoot => config
             .file_root
@@ -1394,6 +1673,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::Delegate => config.delegate_enabled,
         ToolVisibilityGate::Browser => config.browser.enabled,
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
+        ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
         ToolVisibilityGate::MemoryFileRoot => {
             let has_file_root = config
@@ -1433,12 +1713,20 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "English natural-language description of the tool capability you need."
                     },
+                    "exact_tool_id": {
+                        "type": "string",
+                        "description": "Optional exact tool id to refresh a known visible tool card."
+                    },
                     "limit": {
                         "type": "integer",
                         "description": "Optional maximum number of search results to return."
                     }
                 },
-                "required": ["query"],
+                "required": [],
+                "anyOf": [
+                    { "required": ["query"] },
+                    { "required": ["exact_tool_id"] }
+                ],
                 "additionalProperties": false
             }
         }
@@ -1887,13 +2175,17 @@ fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Download an external skill artifact with strict domain policy checks and explicit approval gating.",
+            "description": "Resolve and download an external skill artifact from a direct URL, GitHub reference, skills.sh page, clawhub.ai page, or npm package with strict domain policy checks and explicit approval gating.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "reference": {
+                        "type": "string",
+                        "description": "Preferred external skill reference. Supports direct URLs, GitHub refs, skills.sh pages, clawhub.ai pages, and npm packages."
+                    },
                     "url": {
                         "type": "string",
-                        "description": "HTTPS URL to download."
+                        "description": "Backward-compatible alias for `reference` when passing a direct URL or ecosystem reference."
                     },
                     "approval_granted": {
                         "type": "boolean",
@@ -1910,7 +2202,117 @@ fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Maximum download size in bytes. Defaults to 5242880 and is capped at 20971520."
                     }
                 },
-                "required": ["url"],
+                "anyOf": [
+                    { "required": ["reference"] },
+                    { "required": ["url"] }
+                ],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn external_skills_resolve_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Normalize a direct URL, GitHub reference, skills.sh page, ClawHub page, or npm package into a source-aware external skill candidate.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reference": {
+                        "type": "string",
+                        "description": "External skill reference to normalize."
+                    }
+                },
+                "required": ["reference"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn external_skills_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Search the resolved external-skills inventory for active and shadowed matches.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Task phrase, capability phrase, or skill name to rank against discovered skills."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum number of ranked matches to return."
+                    }
+                },
+                "required": ["query", "limit"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn external_skills_recommend_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Recommend the best-fit resolved external skills for an operator goal.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Operator goal, task phrase, or workflow description."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum number of ranked recommendations to return."
+                    }
+                },
+                "required": ["query", "limit"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
+fn external_skills_source_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": "Search preferred external skill ecosystems and return normalized source-aware candidates ranked by source priority.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query or external skill reference."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Maximum number of normalized candidates to return."
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional source filter list. Supported values: skills_sh, clawhub, github, npm."
+                    }
+                },
+                "required": ["query"],
                 "additionalProperties": false
             }
         }
@@ -1943,13 +2345,13 @@ fn external_skills_install_definition(descriptor: &ToolDescriptor) -> Value {
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Install a managed external skill from a local directory, local .tgz/.tar.gz archive, or a first-party bundled skill id.",
+            "description": "Install a managed external skill from a local directory, local .tgz/.tar.gz/.zip archive, or a first-party bundled skill id.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path to a local directory containing SKILL.md or a local .tgz/.tar.gz archive."
+                        "description": "Path to a local directory containing SKILL.md or a local .tgz/.tar.gz/.zip archive."
                     },
                     "bundled_skill_id": {
                         "type": "string",
@@ -1958,6 +2360,15 @@ fn external_skills_install_definition(descriptor: &ToolDescriptor) -> Value {
                     "skill_id": {
                         "type": "string",
                         "description": "Optional explicit managed skill id override."
+                    },
+                    "source_skill_id": {
+                        "type": "string",
+                        "description": "Optional source skill selector when the input archive or directory contains multiple SKILL.md roots."
+                    },
+                    "security_decision": {
+                        "type": "string",
+                        "enum": ["approve_once", "deny"],
+                        "description": "Optional one-time security override after a risky install was scanned and returned needs_approval."
                     },
                     "replace": {
                         "type": "boolean",
@@ -2285,6 +2696,37 @@ fn shell_exec_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn bash_exec_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Bash command to execute."
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory."
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 600000,
+                        "description": "Optional command timeout in milliseconds. Defaults to 120000 and is clamped to 1000..=600000."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn approval_request_resolve_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -2382,6 +2824,11 @@ fn sessions_list_definition(descriptor: &ToolDescriptor) -> Value {
                         "minimum": 1,
                         "maximum": 200,
                         "description": "Maximum visible sessions to return after filtering."
+                    },
+                    "offset": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Number of matching visible sessions to skip before applying limit."
                     },
                     "state": {
                         "type": "string",
@@ -2932,14 +3379,75 @@ fn feishu_definition(descriptor: &ToolDescriptor) -> Value {
 
 fn tool_argument_hint(name: &str) -> &'static str {
     match name {
+        "feishu.bitable.app.create" => {
+            "account_id?:string,open_id?:string,name:string,folder_token?:string"
+        }
+        "feishu.bitable.app.get" => "account_id?:string,open_id?:string,app_token:string",
+        "feishu.bitable.app.list" => {
+            "account_id?:string,open_id?:string,folder_token?:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.app.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,name?:string,is_advanced?:boolean"
+        }
+        "feishu.bitable.app.copy" => {
+            "account_id?:string,open_id?:string,app_token:string,name:string,folder_token?:string"
+        }
         "feishu.bitable.list" => {
             "account_id?:string,open_id?:string,app_token:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.table.create" => {
+            "account_id?:string,open_id?:string,app_token:string,name:string,default_view_name?:string,fields?:array"
+        }
+        "feishu.bitable.table.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,name:string"
+        }
+        "feishu.bitable.table.batch_create" => {
+            "account_id?:string,open_id?:string,app_token:string,tables:array"
         }
         "feishu.bitable.record.create" => {
             "account_id?:string,open_id?:string,app_token:string,table_id:string,fields:object"
         }
+        "feishu.bitable.record.update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,record_id:string,fields:object"
+        }
+        "feishu.bitable.record.delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,record_id:string"
+        }
+        "feishu.bitable.record.batch_create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.record.batch_update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.record.batch_delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,records:array"
+        }
+        "feishu.bitable.field.create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_name:string,type:integer,property?:object"
+        }
+        "feishu.bitable.field.list" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.field.update" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_id:string,field_name:string,type:integer,property?:object"
+        }
+        "feishu.bitable.field.delete" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,field_id:string"
+        }
+        "feishu.bitable.view.create" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_name:string,view_type?:string"
+        }
+        "feishu.bitable.view.get" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id:string"
+        }
+        "feishu.bitable.view.list" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,page_size?:integer,page_token?:string"
+        }
+        "feishu.bitable.view.patch" => {
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id:string,view_name:string"
+        }
         "feishu.bitable.record.search" => {
-            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],page_size?:integer,page_token?:string"
+            "account_id?:string,open_id?:string,app_token:string,table_id:string,view_id?:string,filter?:object,sort?:array,field_names?:string[],automatic_fields?:boolean,page_size?:integer,page_token?:string"
         }
         "feishu.calendar.freebusy" => {
             "account_id?:string,open_id?:string,time_min:string,time_max:string,user_id?:string,room_id?:string"
@@ -2975,15 +3483,19 @@ fn tool_argument_hint(name: &str) -> &'static str {
             "account_id?:string,open_id?:string,receive_id:string,receive_id_type?:string,text?:string,post?:object,image_key?:string,file_key?:string,card?:object,markdown?:string"
         }
         "feishu.whoami" => "account_id?:string,open_id?:string",
-        "tool.search" => "query:string,limit?:integer",
+        "tool.search" => "query?:string,exact_tool_id?:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
         "claw.migrate" => "input_path?:string,mode?:string,source?:string",
         "external_skills.fetch" => {
-            "url:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
+            "reference?:string,url?:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
         }
+        "external_skills.resolve" => "reference:string",
+        "external_skills.search" => "query:string,limit:integer",
+        "external_skills.recommend" => "query:string,limit:integer",
+        "external_skills.source_search" => "query:string,max_results?:integer,sources?:string[]",
         "external_skills.inspect" => "skill_id:string",
         "external_skills.install" => {
-            "path?:string,bundled_skill_id?:string,skill_id?:string,replace?:boolean"
+            "path?:string,bundled_skill_id?:string,skill_id?:string,source_skill_id?:string,security_decision?:string,replace?:boolean"
         }
         "external_skills.invoke" => "skill_id:string",
         "external_skills.list" => "",
@@ -3004,6 +3516,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "file.write" => "path:string,content:string,create_dirs?:boolean",
         "file.edit" => "path:string,old_string:string,new_string:string,replace_all?:boolean",
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
+        "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
         "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
@@ -3012,15 +3525,72 @@ fn tool_argument_hint(name: &str) -> &'static str {
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
-        "sessions_list" => "limit?:integer,state?:string",
+        "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",
     }
 }
 
+fn tool_search_hint(name: &str, fallback: &'static str) -> &'static str {
+    match name {
+        "tool.search" => {
+            "discover a non-core tool for the task or refresh a known tool card by exact tool id"
+        }
+        "tool.invoke" => "invoke a discovered non-core tool with a valid short-lived lease",
+        "file.read" => "read a workspace file, inspect file contents, open a repo text file",
+        "file.write" => {
+            "write a workspace file, save file content, create or overwrite a repo file"
+        }
+        "file.edit" => "edit a workspace file, patch file content, replace text in a repo file",
+        "shell.exec" => {
+            "run a shell command, execute a terminal command, bash, zsh, powershell, cli"
+        }
+        "web.fetch" => "fetch a web page, download page text, inspect http content from a url",
+        "web.search" => "search the web, look up web results, find information online",
+        "memory_search" => {
+            "search durable workspace memory, recall prior notes, query stored memory"
+        }
+        "memory_get" => "read a memory note by path, inspect saved durable memory content",
+        "provider.switch" => "switch model provider, change runtime provider selection",
+        _ => fallback,
+    }
+}
+
 fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
     match name {
+        "feishu.bitable.app.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("name", "string"),
+            ("folder_token", "string"),
+        ],
+        "feishu.bitable.app.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+        ],
+        "feishu.bitable.app.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("folder_token", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.app.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("is_advanced", "boolean"),
+        ],
+        "feishu.bitable.app.copy" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("folder_token", "string"),
+        ],
         "feishu.bitable.list" => &[
             ("account_id", "string"),
             ("open_id", "string"),
@@ -3028,12 +3598,135 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("page_size", "integer"),
             ("page_token", "string"),
         ],
+        "feishu.bitable.table.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("name", "string"),
+            ("default_view_name", "string"),
+            ("fields", "array"),
+        ],
+        "feishu.bitable.table.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("name", "string"),
+        ],
+        "feishu.bitable.table.batch_create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("tables", "array"),
+        ],
         "feishu.bitable.record.create" => &[
             ("account_id", "string"),
             ("open_id", "string"),
             ("app_token", "string"),
             ("table_id", "string"),
             ("fields", "object"),
+        ],
+        "feishu.bitable.record.update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("record_id", "string"),
+            ("fields", "object"),
+        ],
+        "feishu.bitable.record.delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("record_id", "string"),
+        ],
+        "feishu.bitable.record.batch_create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.record.batch_update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.record.batch_delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("records", "array"),
+        ],
+        "feishu.bitable.field.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_name", "string"),
+            ("type", "integer"),
+            ("property", "object"),
+        ],
+        "feishu.bitable.field.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.field.update" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_id", "string"),
+            ("field_name", "string"),
+            ("type", "integer"),
+            ("property", "object"),
+        ],
+        "feishu.bitable.field.delete" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("field_id", "string"),
+        ],
+        "feishu.bitable.view.create" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_name", "string"),
+            ("view_type", "string"),
+        ],
+        "feishu.bitable.view.get" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+        ],
+        "feishu.bitable.view.list" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("page_size", "integer"),
+            ("page_token", "string"),
+        ],
+        "feishu.bitable.view.patch" => &[
+            ("account_id", "string"),
+            ("open_id", "string"),
+            ("app_token", "string"),
+            ("table_id", "string"),
+            ("view_id", "string"),
+            ("view_name", "string"),
         ],
         "feishu.bitable.record.search" => &[
             ("account_id", "string"),
@@ -3044,6 +3737,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("filter", "object"),
             ("sort", "array"),
             ("field_names", "array"),
+            ("automatic_fields", "boolean"),
             ("page_size", "integer"),
             ("page_token", "string"),
         ],
@@ -3147,7 +3841,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("markdown", "string"),
         ],
         "feishu.whoami" => &[("account_id", "string"), ("open_id", "string")],
-        "tool.search" => &[("query", "string"), ("limit", "integer")],
+        "tool.search" => &[
+            ("query", "string"),
+            ("exact_tool_id", "string"),
+            ("limit", "integer"),
+        ],
         "tool.invoke" => &[
             ("tool_id", "string"),
             ("lease", "string"),
@@ -3159,10 +3857,19 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("source", "string"),
         ],
         "external_skills.fetch" => &[
+            ("reference", "string"),
             ("url", "string"),
             ("approval_granted", "boolean"),
             ("save_as", "string"),
             ("max_bytes", "integer"),
+        ],
+        "external_skills.resolve" => &[("reference", "string")],
+        "external_skills.search" => &[("query", "string"), ("limit", "integer")],
+        "external_skills.recommend" => &[("query", "string"), ("limit", "integer")],
+        "external_skills.source_search" => &[
+            ("query", "string"),
+            ("max_results", "integer"),
+            ("sources", "array"),
         ],
         "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {
             &[("skill_id", "string")]
@@ -3171,6 +3878,8 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("path", "string"),
             ("bundled_skill_id", "string"),
             ("skill_id", "string"),
+            ("source_skill_id", "string"),
+            ("security_decision", "string"),
             ("replace", "boolean"),
         ],
         "external_skills.list" => &[],
@@ -3219,6 +3928,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("timeout_ms", "integer"),
             ("cwd", "string"),
         ],
+        "bash.exec" => &[
+            ("command", "string"),
+            ("cwd", "string"),
+            ("timeout_ms", "integer"),
+        ],
         "provider.switch" => &[("selector", "string")],
         "delegate" | "delegate_async" => &[
             ("task", "string"),
@@ -3233,7 +3947,11 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
-        "sessions_list" => &[("limit", "integer"), ("state", "string")],
+        "sessions_list" => &[
+            ("limit", "integer"),
+            ("offset", "integer"),
+            ("state", "string"),
+        ],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         "web.search" => &[
             ("query", "string"),
@@ -3246,8 +3964,31 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
 
 fn tool_required_fields(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.app.create" => &["name"],
+        "feishu.bitable.app.get" => &["app_token"],
+        "feishu.bitable.app.list" => &[],
+        "feishu.bitable.app.patch" => &["app_token"],
+        "feishu.bitable.app.copy" => &["app_token", "name"],
         "feishu.bitable.list" => &["app_token"],
+        "feishu.bitable.table.create" => &["app_token", "name"],
+        "feishu.bitable.table.patch" => &["app_token", "table_id", "name"],
+        "feishu.bitable.table.batch_create" => &["app_token", "tables"],
         "feishu.bitable.record.create" => &["app_token", "table_id", "fields"],
+        "feishu.bitable.record.update" => &["app_token", "table_id", "record_id", "fields"],
+        "feishu.bitable.record.delete" => &["app_token", "table_id", "record_id"],
+        "feishu.bitable.record.batch_create"
+        | "feishu.bitable.record.batch_update"
+        | "feishu.bitable.record.batch_delete" => &["app_token", "table_id", "records"],
+        "feishu.bitable.field.create" => &["app_token", "table_id", "field_name", "type"],
+        "feishu.bitable.field.list" => &["app_token", "table_id"],
+        "feishu.bitable.field.update" => {
+            &["app_token", "table_id", "field_id", "field_name", "type"]
+        }
+        "feishu.bitable.field.delete" => &["app_token", "table_id", "field_id"],
+        "feishu.bitable.view.create" => &["app_token", "table_id", "view_name"],
+        "feishu.bitable.view.get" => &["app_token", "table_id", "view_id"],
+        "feishu.bitable.view.list" => &["app_token", "table_id"],
+        "feishu.bitable.view.patch" => &["app_token", "table_id", "view_id", "view_name"],
         "feishu.bitable.record.search" => &["app_token", "table_id"],
         "feishu.calendar.freebusy" => &["time_min", "time_max"],
         "feishu.doc.append" | "feishu.doc.read" => &["url"],
@@ -3255,9 +3996,13 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "feishu.messages.reply" => &["message_id"],
         "feishu.messages.search" => &["query"],
         "feishu.messages.send" => &["receive_id"],
-        "tool.search" => &["query"],
+        "tool.search" => &[],
         "tool.invoke" => &["tool_id", "lease", "arguments"],
-        "external_skills.fetch" => &["url"],
+        "external_skills.fetch" => &[],
+        "external_skills.resolve" => &["reference"],
+        "external_skills.search" => &["query", "limit"],
+        "external_skills.recommend" => &["query", "limit"],
+        "external_skills.source_search" => &["query"],
         "external_skills.inspect" | "external_skills.invoke" | "external_skills.remove" => {
             &["skill_id"]
         }
@@ -3276,6 +4021,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "file.write" => &["path", "content"],
         "file.edit" => &["path", "old_string", "new_string"],
         "shell.exec" => &["command"],
+        "bash.exec" => &["command"],
         "delegate" | "delegate_async" => &["task"],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[],
         "session_tool_policy_set" => &[],
@@ -3289,8 +4035,32 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
 
 fn tool_tags(name: &str) -> &'static [&'static str] {
     match name {
+        "feishu.bitable.app.get" | "feishu.bitable.app.list" => {
+            &["feishu", "bitable", "app", "read"]
+        }
+        "feishu.bitable.app.create" | "feishu.bitable.app.patch" | "feishu.bitable.app.copy" => {
+            &["feishu", "bitable", "app", "write"]
+        }
         "feishu.bitable.list" | "feishu.bitable.record.search" => &["feishu", "bitable", "read"],
-        "feishu.bitable.record.create" => &["feishu", "bitable", "write"],
+        "feishu.bitable.table.create"
+        | "feishu.bitable.table.patch"
+        | "feishu.bitable.table.batch_create" => &["feishu", "bitable", "table", "write"],
+        "feishu.bitable.record.create"
+        | "feishu.bitable.record.update"
+        | "feishu.bitable.record.delete"
+        | "feishu.bitable.record.batch_create"
+        | "feishu.bitable.record.batch_update"
+        | "feishu.bitable.record.batch_delete" => &["feishu", "bitable", "write"],
+        "feishu.bitable.field.list" => &["feishu", "bitable", "field", "read"],
+        "feishu.bitable.field.create"
+        | "feishu.bitable.field.update"
+        | "feishu.bitable.field.delete" => &["feishu", "bitable", "field", "write"],
+        "feishu.bitable.view.get" | "feishu.bitable.view.list" => {
+            &["feishu", "bitable", "view", "read"]
+        }
+        "feishu.bitable.view.create" | "feishu.bitable.view.patch" => {
+            &["feishu", "bitable", "view", "write"]
+        }
         "feishu.calendar.freebusy" | "feishu.calendar.list" => &["feishu", "calendar", "read"],
         "feishu.card.update" => &["feishu", "card", "update", "callback"],
         "feishu.doc.read" => &["feishu", "docs", "read"],
@@ -3306,6 +4076,10 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "tool.invoke" => &["core", "dispatch", "invoke"],
         "claw.migrate" => &["migration", "migrate", "config", "legacy"],
         "external_skills.fetch" => &["skills", "download", "external", "fetch"],
+        "external_skills.resolve" => &["skills", "resolve", "normalize", "external"],
+        "external_skills.search" => &["skills", "search", "inventory", "discover"],
+        "external_skills.recommend" => &["skills", "recommend", "inventory", "discover"],
+        "external_skills.source_search" => &["skills", "search", "discover", "external"],
         "external_skills.inspect" => &["skills", "inspect", "metadata"],
         "external_skills.install" => &["skills", "install", "package"],
         "external_skills.invoke" => &["skills", "invoke", "instructions"],
@@ -3326,6 +4100,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "file.write" => &["file", "write", "filesystem"],
         "file.edit" => &["file", "edit", "filesystem"],
         "shell.exec" => &["shell", "command", "process", "exec"],
+        "bash.exec" => &["bash", "command", "process", "exec"],
         "provider.switch" => &["provider", "switch", "model", "runtime"],
         "delegate" | "delegate_async" => &["session", "delegate", "child"],
         "session_tool_policy_status" | "session_tool_policy_set" | "session_tool_policy_clear" => {
@@ -3543,6 +4318,82 @@ mod tests {
         assert!(!child_view.contains("web.fetch"));
     }
 
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_hides_allowlisted_bash_exec_without_runtime_visibility() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+
+        let child_view = delegate_child_tool_view_for_config(&config);
+
+        assert!(!child_view.contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_runtime_visibility_gate_hides_bash_exec_when_governance_rules_failed_to_load() {
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                governance: crate::tools::runtime_config::BashGovernanceRuntimePolicy {
+                    load_error: Some("broken rules".to_owned()),
+                    ..crate::tools::runtime_config::BashGovernanceRuntimePolicy::default()
+                },
+                ..crate::tools::runtime_config::BashExecRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::BashRuntime,
+            &runtime
+        ));
+        assert!(!runtime_tool_view_for_runtime_config(&runtime).contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_hides_allowlisted_bash_exec_when_governance_rules_failed_to_load() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                governance: crate::tools::runtime_config::BashGovernanceRuntimePolicy {
+                    load_error: Some("broken rules".to_owned()),
+                    ..crate::tools::runtime_config::BashGovernanceRuntimePolicy::default()
+                },
+                ..crate::tools::runtime_config::BashExecRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        let child_view = delegate_child_tool_view_for_runtime_config(&config, &runtime);
+
+        assert!(!child_view.contains("bash.exec"));
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn delegate_child_tool_view_exposes_allowlisted_bash_exec_when_runtime_ready() {
+        let mut config = ToolConfig::default();
+        config.delegate.child_tool_allowlist = vec!["bash.exec".to_owned()];
+        let runtime = ToolRuntimeConfig {
+            bash_exec: crate::tools::runtime_config::BashExecRuntimePolicy {
+                available: true,
+                command: Some(std::path::PathBuf::from("bash")),
+                ..crate::tools::runtime_config::BashExecRuntimePolicy::default()
+            },
+            ..ToolRuntimeConfig::default()
+        };
+
+        let child_view = delegate_child_tool_view_for_runtime_config(&config, &runtime);
+
+        assert!(child_view.contains("bash.exec"));
+    }
+
     #[test]
     fn scheduling_class_marks_parallel_safe_subset() {
         let catalog = tool_catalog();
@@ -3666,6 +4517,16 @@ mod tests {
         assert_ne!(descriptor.provider_name, "shell");
         assert!(descriptor.aliases.contains(&"shell"));
         assert_eq!(alias_policy, expected_policy);
+    }
+
+    #[cfg(feature = "tool-shell")]
+    #[test]
+    fn bash_exec_uses_high_risk_governance_profile() {
+        let policy = governance_profile_for_tool_name("bash.exec");
+
+        assert_eq!(policy.scope, ToolGovernanceScope::Routine);
+        assert_eq!(policy.risk_class, ToolRiskClass::High);
+        assert_eq!(policy.approval_mode, ToolApprovalMode::PolicyDriven);
     }
 
     #[test]
@@ -3818,5 +4679,50 @@ mod tests {
 
         assert!(description.contains("channel-backed"));
         assert!(description.contains("Matrix"));
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn feishu_bitable_record_search_catalog_metadata_includes_automatic_fields() {
+        let descriptor = tool_catalog()
+            .descriptor("feishu.bitable.record.search")
+            .expect("feishu bitable record search descriptor");
+
+        assert!(
+            descriptor
+                .argument_hint()
+                .contains("automatic_fields?:boolean")
+        );
+        assert!(
+            descriptor
+                .parameter_types()
+                .contains(&("automatic_fields", "boolean"))
+        );
+    }
+
+    #[test]
+    fn sessions_list_definition_and_hint_surface_offset_pagination() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("sessions_list")
+            .expect("sessions_list descriptor");
+        let definition = descriptor.provider_definition();
+        let function_definition = &definition["function"];
+        let parameter_definition = &function_definition["parameters"];
+        let property_definition = &parameter_definition["properties"];
+        let offset_definition = &property_definition["offset"];
+        let offset_description_value = &offset_definition["description"];
+        let offset_description = offset_description_value
+            .as_str()
+            .expect("offset description");
+        let parameter_types = descriptor.parameter_types();
+        let has_offset_parameter = parameter_types.contains(&("offset", "integer"));
+
+        assert!(offset_description.contains("skip"));
+        assert_eq!(
+            descriptor.argument_hint(),
+            "limit?:integer,offset?:integer,state?:string"
+        );
+        assert!(has_offset_parameter);
     }
 }

@@ -122,10 +122,52 @@ pub enum FeishuCalendarCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum FeishuBitableCommand {
+    /// Create a Bitable app
+    AppCreate(FeishuBitableAppCreateArgs),
+    /// Fetch Bitable app metadata
+    AppGet(FeishuBitableAppGetArgs),
+    /// List Bitable apps through the Drive API
+    AppList(FeishuBitableAppListArgs),
+    /// Update Bitable app metadata
+    AppPatch(FeishuBitableAppPatchArgs),
+    /// Copy a Bitable app
+    AppCopy(FeishuBitableAppCopyArgs),
     /// List data tables in a Bitable app
     ListTables(FeishuBitableListTablesArgs),
+    /// Create a data table in a Bitable app
+    CreateTable(FeishuBitableCreateTableArgs),
+    /// Rename a data table in a Bitable app
+    PatchTable(FeishuBitablePatchTableArgs),
+    /// Batch create data tables in a Bitable app
+    BatchCreateTables(FeishuBitableBatchCreateTablesArgs),
     /// Create a record in a Bitable table
     CreateRecord(FeishuBitableCreateRecordArgs),
+    /// Update a record in a Bitable table
+    UpdateRecord(FeishuBitableUpdateRecordArgs),
+    /// Delete a record in a Bitable table
+    DeleteRecord(FeishuBitableDeleteRecordArgs),
+    /// Batch create records in a Bitable table
+    BatchCreateRecords(FeishuBitableBatchCreateRecordsArgs),
+    /// Batch update records in a Bitable table
+    BatchUpdateRecords(FeishuBitableBatchUpdateRecordsArgs),
+    /// Batch delete records in a Bitable table
+    BatchDeleteRecords(FeishuBitableBatchDeleteRecordsArgs),
+    /// Create a field in a Bitable table
+    CreateField(FeishuBitableCreateFieldArgs),
+    /// List fields in a Bitable table
+    ListFields(FeishuBitableListFieldsArgs),
+    /// Update a field in a Bitable table
+    UpdateField(FeishuBitableUpdateFieldArgs),
+    /// Delete a field in a Bitable table
+    DeleteField(FeishuBitableDeleteFieldArgs),
+    /// Create a view in a Bitable table
+    CreateView(FeishuBitableCreateViewArgs),
+    /// Get a view in a Bitable table
+    GetView(FeishuBitableGetViewArgs),
+    /// List views in a Bitable table
+    ListViews(FeishuBitableListViewsArgs),
+    /// Patch a view in a Bitable table
+    PatchView(FeishuBitablePatchViewArgs),
     /// Search records in a Bitable table
     SearchRecords(FeishuBitableSearchRecordsArgs),
 }
@@ -371,6 +413,60 @@ pub struct FeishuBitableListTablesArgs {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct FeishuBitableAppCreateArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub folder_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableAppGetArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableAppListArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub folder_token: Option<String>,
+    #[arg(long)]
+    pub page_size: Option<usize>,
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableAppPatchArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub is_advanced: Option<bool>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableAppCopyArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub folder_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct FeishuBitableCreateRecordArgs {
     #[command(flatten)]
     pub grant: FeishuGrantArgs,
@@ -380,6 +476,42 @@ pub struct FeishuBitableCreateRecordArgs {
     pub table_id: String,
     #[arg(long)]
     pub fields: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableCreateTableArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub name: String,
+    #[arg(long)]
+    pub default_view_name: Option<String>,
+    #[arg(long)]
+    pub fields: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitablePatchTableArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub name: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableBatchCreateTablesArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub tables: String,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -399,9 +531,189 @@ pub struct FeishuBitableSearchRecordsArgs {
     #[arg(long)]
     pub sort: Option<String>,
     #[arg(long)]
+    pub automatic_fields: bool,
+    #[arg(long)]
     pub page_size: Option<usize>,
     #[arg(long)]
     pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableUpdateRecordArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub record_id: String,
+    #[arg(long)]
+    pub fields: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableDeleteRecordArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub record_id: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableBatchCreateRecordsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub records: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableBatchUpdateRecordsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub records: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableBatchDeleteRecordsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub records: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableCreateFieldArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub field_name: String,
+    #[arg(long = "type")]
+    pub field_type: i64,
+    #[arg(long)]
+    pub property: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableListFieldsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub view_id: Option<String>,
+    #[arg(long)]
+    pub page_size: Option<usize>,
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableUpdateFieldArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub field_id: String,
+    #[arg(long)]
+    pub field_name: Option<String>,
+    #[arg(long = "type")]
+    pub field_type: Option<i64>,
+    #[arg(long)]
+    pub property: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableDeleteFieldArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub field_id: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableCreateViewArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub view_name: String,
+    #[arg(long)]
+    pub view_type: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableGetViewArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub view_id: String,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitableListViewsArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub page_size: Option<usize>,
+    #[arg(long)]
+    pub page_token: Option<String>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct FeishuBitablePatchViewArgs {
+    #[command(flatten)]
+    pub grant: FeishuGrantArgs,
+    #[arg(long)]
+    pub app_token: String,
+    #[arg(long)]
+    pub table_id: String,
+    #[arg(long)]
+    pub view_id: String,
+    #[arg(long)]
+    pub view_name: String,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -565,12 +877,52 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
             }
         },
         FeishuCommand::Bitable { command } => match command {
+            FeishuBitableCommand::AppCreate(args) => {
+                let payload = execute_feishu_bitable_app_create(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
+            }
+            FeishuBitableCommand::AppGet(args) => {
+                let payload = execute_feishu_bitable_app_get(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
+            }
+            FeishuBitableCommand::AppList(args) => {
+                let payload = execute_feishu_bitable_app_list(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_app_list_text,
+                )?;
+            }
+            FeishuBitableCommand::AppPatch(args) => {
+                let payload = execute_feishu_bitable_app_patch(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
+            }
+            FeishuBitableCommand::AppCopy(args) => {
+                let payload = execute_feishu_bitable_app_copy(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_app_text)?;
+            }
             FeishuBitableCommand::ListTables(args) => {
                 let payload = execute_feishu_bitable_list_tables(&args).await?;
                 print_feishu_payload(
                     &payload,
                     args.grant.common.json,
                     render_bitable_list_tables_text,
+                )?;
+            }
+            FeishuBitableCommand::CreateTable(args) => {
+                let payload = execute_feishu_bitable_create_table(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_table_text)?;
+            }
+            FeishuBitableCommand::PatchTable(args) => {
+                let payload = execute_feishu_bitable_patch_table(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_table_text)?;
+            }
+            FeishuBitableCommand::BatchCreateTables(args) => {
+                let payload = execute_feishu_bitable_batch_create_tables(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_table_batch_create_text,
                 )?;
             }
             FeishuBitableCommand::CreateRecord(args) => {
@@ -580,6 +932,90 @@ pub async fn run_feishu_command(command: FeishuCommand) -> CliResult<()> {
                     args.grant.common.json,
                     render_bitable_create_record_text,
                 )?;
+            }
+            FeishuBitableCommand::UpdateRecord(args) => {
+                let payload = execute_feishu_bitable_update_record(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_create_record_text,
+                )?;
+            }
+            FeishuBitableCommand::DeleteRecord(args) => {
+                let payload = execute_feishu_bitable_delete_record(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_delete_record_text,
+                )?;
+            }
+            FeishuBitableCommand::BatchCreateRecords(args) => {
+                let payload = execute_feishu_bitable_batch_create_records(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_batch_records_text,
+                )?;
+            }
+            FeishuBitableCommand::BatchUpdateRecords(args) => {
+                let payload = execute_feishu_bitable_batch_update_records(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_batch_records_text,
+                )?;
+            }
+            FeishuBitableCommand::BatchDeleteRecords(args) => {
+                let payload = execute_feishu_bitable_batch_delete_records(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_batch_records_text,
+                )?;
+            }
+            FeishuBitableCommand::CreateField(args) => {
+                let payload = execute_feishu_bitable_create_field(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_field_text)?;
+            }
+            FeishuBitableCommand::ListFields(args) => {
+                let payload = execute_feishu_bitable_list_fields(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_field_list_text,
+                )?;
+            }
+            FeishuBitableCommand::UpdateField(args) => {
+                let payload = execute_feishu_bitable_update_field(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_field_text)?;
+            }
+            FeishuBitableCommand::DeleteField(args) => {
+                let payload = execute_feishu_bitable_delete_field(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_delete_field_text,
+                )?;
+            }
+            FeishuBitableCommand::CreateView(args) => {
+                let payload = execute_feishu_bitable_create_view(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
+            }
+            FeishuBitableCommand::GetView(args) => {
+                let payload = execute_feishu_bitable_get_view(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
+            }
+            FeishuBitableCommand::ListViews(args) => {
+                let payload = execute_feishu_bitable_list_views(&args).await?;
+                print_feishu_payload(
+                    &payload,
+                    args.grant.common.json,
+                    render_bitable_view_list_text,
+                )?;
+            }
+            FeishuBitableCommand::PatchView(args) => {
+                let payload = execute_feishu_bitable_patch_view(&args).await?;
+                print_feishu_payload(&payload, args.grant.common.json, render_bitable_view_text)?;
             }
             FeishuBitableCommand::SearchRecords(args) => {
                 let payload = execute_feishu_bitable_search_records(&args).await?;
@@ -1349,6 +1785,12 @@ pub async fn execute_feishu_bitable_list_tables(
     args: &FeishuBitableListTablesArgs,
 ) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:table:read"],
+        "loongclaw feishu bitable list-tables",
+    )?;
     let client = context.build_client()?;
     let result = mvp::channel::feishu::api::resources::bitable::list_bitable_tables(
         &client,
@@ -1363,7 +1805,144 @@ pub async fn execute_feishu_bitable_list_tables(
         "account_id": context.account_id(),
         "configured_account": context.resolved.configured_account_label,
         "principal": grant.principal,
-        "result": result,
+        "tables": result.items,
+        "has_more": result.has_more,
+        "page_token": result.page_token,
+    }))
+}
+
+pub async fn execute_feishu_bitable_app_create(
+    args: &FeishuBitableAppCreateArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable app-create",
+    )?;
+    let client = context.build_client()?;
+    let app = mvp::channel::feishu::api::resources::bitable::create_bitable_app(
+        &client,
+        &grant.access_token,
+        &args.name,
+        args.folder_token.as_deref(),
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "app": app,
+    }))
+}
+
+pub async fn execute_feishu_bitable_app_get(args: &FeishuBitableAppGetArgs) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable app-get",
+    )?;
+    let client = context.build_client()?;
+    let app = mvp::channel::feishu::api::resources::bitable::get_bitable_app(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "app": app,
+    }))
+}
+
+pub async fn execute_feishu_bitable_app_list(args: &FeishuBitableAppListArgs) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["drive:drive:readonly"],
+        "loongclaw feishu bitable app-list",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::list_bitable_apps(
+        &client,
+        &grant.access_token,
+        &mvp::channel::feishu::api::resources::bitable::BitableAppListQuery {
+            folder_token: args.folder_token.clone(),
+            page_size: args.page_size,
+            page_token: args.page_token.clone(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "apps": result.apps,
+        "page_token": result.page_token,
+        "has_more": result.has_more,
+    }))
+}
+
+pub async fn execute_feishu_bitable_app_patch(
+    args: &FeishuBitableAppPatchArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable app-patch",
+    )?;
+    let client = context.build_client()?;
+    let app = mvp::channel::feishu::api::resources::bitable::patch_bitable_app(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        args.name.as_deref(),
+        args.is_advanced,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "app": app,
+    }))
+}
+
+pub async fn execute_feishu_bitable_app_copy(args: &FeishuBitableAppCopyArgs) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable app-copy",
+    )?;
+    let client = context.build_client()?;
+    let app = mvp::channel::feishu::api::resources::bitable::copy_bitable_app(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.name,
+        args.folder_token.as_deref(),
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "app": app,
     }))
 }
 
@@ -1400,10 +1979,119 @@ pub async fn execute_feishu_bitable_create_record(
     }))
 }
 
+pub async fn execute_feishu_bitable_create_table(
+    args: &FeishuBitableCreateTableArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable create-table",
+    )?;
+    let client = context.build_client()?;
+    let fields = args
+        .fields
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(|error| format!("invalid --fields JSON: {error}"))?;
+    let fields = match fields {
+        Some(Value::Array(items)) => Some(items),
+        Some(_) => return Err("--fields must be a JSON array".to_owned()),
+        None => None,
+    };
+    let result = mvp::channel::feishu::api::resources::bitable::create_bitable_table(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.name,
+        args.default_view_name.as_deref(),
+        fields,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_patch_table(
+    args: &FeishuBitablePatchTableArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable patch-table",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::patch_bitable_table(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.name,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_batch_create_tables(
+    args: &FeishuBitableBatchCreateTablesArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable batch-create-tables",
+    )?;
+    let client = context.build_client()?;
+    let tables = serde_json::from_str::<Value>(&args.tables)
+        .map_err(|error| format!("invalid --tables JSON: {error}"))?;
+    let tables = match tables {
+        Value::Array(items) => items,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            return Err("--tables must be a JSON array".to_owned());
+        }
+    };
+    let result = mvp::channel::feishu::api::resources::bitable::batch_create_bitable_tables(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        tables,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
 pub async fn execute_feishu_bitable_search_records(
     args: &FeishuBitableSearchRecordsArgs,
 ) -> CliResult<Value> {
     let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:retrieve"],
+        "loongclaw feishu bitable search-records",
+    )?;
     let client = context.build_client()?;
     let filter = args
         .filter
@@ -1429,6 +2117,7 @@ pub async fn execute_feishu_bitable_search_records(
             filter,
             sort,
             field_names: (!args.field_names.is_empty()).then(|| args.field_names.clone()),
+            automatic_fields: args.automatic_fields.then_some(true),
         },
     )
     .await?;
@@ -1438,6 +2127,465 @@ pub async fn execute_feishu_bitable_search_records(
         "configured_account": context.resolved.configured_account_label,
         "principal": grant.principal,
         "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_update_record(
+    args: &FeishuBitableUpdateRecordArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:write"],
+        "loongclaw feishu bitable update-record",
+    )?;
+    let client = context.build_client()?;
+    let fields = serde_json::from_str::<Value>(&args.fields)
+        .map_err(|error| format!("invalid --fields JSON: {error}"))?;
+    if !fields.is_object() {
+        return Err("--fields must be a JSON object (e.g. '{\"Name\": \"value\"}')".to_owned());
+    }
+    let record = mvp::channel::feishu::api::resources::bitable::update_bitable_record(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.record_id,
+        fields,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "record": record,
+    }))
+}
+
+pub async fn execute_feishu_bitable_delete_record(
+    args: &FeishuBitableDeleteRecordArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:write"],
+        "loongclaw feishu bitable delete-record",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::delete_bitable_record(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.record_id,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "deleted": result.deleted,
+        "record_id": result.record_id,
+    }))
+}
+
+pub async fn execute_feishu_bitable_batch_create_records(
+    args: &FeishuBitableBatchCreateRecordsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:write"],
+        "loongclaw feishu bitable batch-create-records",
+    )?;
+    let client = context.build_client()?;
+    let records = serde_json::from_str::<Value>(&args.records)
+        .map_err(|error| format!("invalid --records JSON: {error}"))?;
+    let records = match records {
+        Value::Array(items) => items,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            return Err("--records must be a JSON array".to_owned());
+        }
+    };
+    if records.len() > 500 {
+        return Err(format!(
+            "feishu.bitable.record.batch_create: batch size must be <= 500, got {}",
+            records.len()
+        ));
+    }
+    let result = mvp::channel::feishu::api::resources::bitable::batch_create_bitable_records(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        records,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_batch_update_records(
+    args: &FeishuBitableBatchUpdateRecordsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:write"],
+        "loongclaw feishu bitable batch-update-records",
+    )?;
+    let client = context.build_client()?;
+    let records = serde_json::from_str::<Value>(&args.records)
+        .map_err(|error| format!("invalid --records JSON: {error}"))?;
+    let records = match records {
+        Value::Array(items) => items,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            return Err("--records must be a JSON array".to_owned());
+        }
+    };
+    if records.len() > 500 {
+        return Err(format!(
+            "feishu.bitable.record.batch_update: batch size must be <= 500, got {}",
+            records.len()
+        ));
+    }
+    let result = mvp::channel::feishu::api::resources::bitable::batch_update_bitable_records(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        records,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_batch_delete_records(
+    args: &FeishuBitableBatchDeleteRecordsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["base:record:write"],
+        "loongclaw feishu bitable batch-delete-records",
+    )?;
+    let client = context.build_client()?;
+    let records = serde_json::from_str::<Value>(&args.records)
+        .map_err(|error| format!("invalid --records JSON: {error}"))?;
+    let records = match records {
+        Value::Array(items) => items
+            .into_iter()
+            .map(|item| {
+                item.as_str()
+                    .map(ToOwned::to_owned)
+                    .ok_or_else(|| "--records must be a JSON array of strings".to_owned())
+            })
+            .collect::<CliResult<Vec<_>>>()?,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_) => {
+            return Err("--records must be a JSON array".to_owned());
+        }
+    };
+    if records.len() > 500 {
+        return Err(format!(
+            "feishu.bitable.record.batch_delete: batch size must be <= 500, got {}",
+            records.len()
+        ));
+    }
+    let result = mvp::channel::feishu::api::resources::bitable::batch_delete_bitable_records(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        records,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "result": result,
+    }))
+}
+
+pub async fn execute_feishu_bitable_create_field(
+    args: &FeishuBitableCreateFieldArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable create-field",
+    )?;
+    let client = context.build_client()?;
+    let property = args
+        .property
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(|error| format!("invalid --property JSON: {error}"))?;
+    let field = mvp::channel::feishu::api::resources::bitable::create_bitable_field(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.field_name,
+        args.field_type,
+        property,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "field": field,
+    }))
+}
+
+pub async fn execute_feishu_bitable_list_fields(
+    args: &FeishuBitableListFieldsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable list-fields",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::list_bitable_fields(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &mvp::channel::feishu::api::resources::bitable::BitableFieldListQuery {
+            view_id: args.view_id.clone(),
+            page_size: args.page_size,
+            page_token: args.page_token.clone(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "fields": result.items,
+        "page_token": result.page_token,
+        "has_more": result.has_more,
+        "total": result.total,
+    }))
+}
+
+pub async fn execute_feishu_bitable_update_field(
+    args: &FeishuBitableUpdateFieldArgs,
+) -> CliResult<Value> {
+    let field_name = args
+        .field_name
+        .as_deref()
+        .ok_or_else(|| "--field-name and --type are required for field update".to_owned())?;
+    let field_type = args
+        .field_type
+        .ok_or_else(|| "--field-name and --type are required for field update".to_owned())?;
+
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable update-field",
+    )?;
+    let client = context.build_client()?;
+    let property = args
+        .property
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .map_err(|error| format!("invalid --property JSON: {error}"))?;
+    let field = mvp::channel::feishu::api::resources::bitable::update_bitable_field(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.field_id,
+        field_name,
+        field_type,
+        property,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "field": field,
+    }))
+}
+
+pub async fn execute_feishu_bitable_delete_field(
+    args: &FeishuBitableDeleteFieldArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable delete-field",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::delete_bitable_field(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.field_id,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "deleted": result.deleted,
+        "field_id": result.field_id,
+    }))
+}
+
+pub async fn execute_feishu_bitable_create_view(
+    args: &FeishuBitableCreateViewArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable create-view",
+    )?;
+    let client = context.build_client()?;
+    let view = mvp::channel::feishu::api::resources::bitable::create_bitable_view(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.view_name,
+        args.view_type.as_deref(),
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "view": view,
+    }))
+}
+
+pub async fn execute_feishu_bitable_get_view(args: &FeishuBitableGetViewArgs) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable get-view",
+    )?;
+    let client = context.build_client()?;
+    let view = mvp::channel::feishu::api::resources::bitable::get_bitable_view(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.view_id,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "view": view,
+    }))
+}
+
+pub async fn execute_feishu_bitable_list_views(
+    args: &FeishuBitableListViewsArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable list-views",
+    )?;
+    let client = context.build_client()?;
+    let result = mvp::channel::feishu::api::resources::bitable::list_bitable_views(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &mvp::channel::feishu::api::resources::bitable::BitableViewListQuery {
+            page_size: args.page_size,
+            page_token: args.page_token.clone(),
+        },
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "views": result.items,
+        "page_token": result.page_token,
+        "has_more": result.has_more,
+        "total": result.total,
+    }))
+}
+
+pub async fn execute_feishu_bitable_patch_view(
+    args: &FeishuBitablePatchViewArgs,
+) -> CliResult<Value> {
+    let (context, grant) = load_context_and_fresh_grant(&args.grant).await?;
+    ensure_grant_has_any_scope(
+        &grant,
+        context.resolved.configured_account_id.as_str(),
+        &["bitable:app"],
+        "loongclaw feishu bitable patch-view",
+    )?;
+    let client = context.build_client()?;
+    let view = mvp::channel::feishu::api::resources::bitable::patch_bitable_view(
+        &client,
+        &grant.access_token,
+        &args.app_token,
+        &args.table_id,
+        &args.view_id,
+        &args.view_name,
+    )
+    .await?;
+
+    Ok(json!({
+        "account_id": context.account_id(),
+        "configured_account": context.resolved.configured_account_label,
+        "principal": grant.principal,
+        "view": view,
     }))
 }
 
@@ -1879,6 +3027,9 @@ fn render_auth_start_text(payload: &Value) -> CliResult<String> {
             required_json_string(payload, "sqlite_path")?
         ),
     ]);
+    if let Some(status) = payload.get("status").and_then(Value::as_str) {
+        lines.push(format!("status: {status}"));
+    }
     Ok(lines.join("\n"))
 }
 
@@ -2843,9 +3994,6 @@ fn render_calendar_freebusy_text(payload: &Value) -> CliResult<String> {
 }
 
 fn render_bitable_list_tables_text(payload: &Value) -> CliResult<String> {
-    let result = payload
-        .get("result")
-        .ok_or_else(|| "feishu bitable list payload missing result".to_owned())?;
     let mut lines = vec![
         "feishu bitable list-tables".to_owned(),
         format!("account: {}", required_json_string(payload, "account_id")?),
@@ -2856,21 +4004,79 @@ fn render_bitable_list_tables_text(payload: &Value) -> CliResult<String> {
     lines.extend([
         format!(
             "tables: {}",
-            result
-                .get("items")
+            payload
+                .get("tables")
                 .and_then(Value::as_array)
                 .map_or(0, std::vec::Vec::len)
         ),
         format!(
             "has_more: {}",
-            result
+            payload
                 .get("has_more")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         ),
         format!(
             "page_token: {}",
-            result
+            payload
+                .get("page_token")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_app_text(payload: &Value) -> CliResult<String> {
+    let app = payload
+        .get("app")
+        .ok_or_else(|| "feishu bitable app payload missing app".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable app".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "app_token: {}",
+            app.get("app_token").and_then(Value::as_str).unwrap_or("-")
+        ),
+        format!(
+            "name: {}",
+            app.get("name").and_then(Value::as_str).unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_app_list_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu bitable app-list".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "apps: {}",
+            payload
+                .get("apps")
+                .and_then(Value::as_array)
+                .map_or(0, std::vec::Vec::len)
+        ),
+        format!(
+            "has_more: {}",
+            payload
+                .get("has_more")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+        format!(
+            "page_token: {}",
+            payload
                 .get("page_token")
                 .and_then(Value::as_str)
                 .unwrap_or("-")
@@ -2909,6 +4115,54 @@ fn render_bitable_create_record_text(payload: &Value) -> CliResult<String> {
     Ok(lines.join("\n"))
 }
 
+fn render_bitable_table_text(payload: &Value) -> CliResult<String> {
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "feishu bitable table payload missing result".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable table".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "table_id: {}",
+            result
+                .get("table_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+        format!(
+            "name: {}",
+            result.get("name").and_then(Value::as_str).unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_table_batch_create_text(payload: &Value) -> CliResult<String> {
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "feishu bitable batch create tables payload missing result".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable batch-create-tables".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.push(format!(
+        "table_ids: {}",
+        result
+            .get("table_ids")
+            .and_then(Value::as_array)
+            .map_or(0, std::vec::Vec::len)
+    ));
+    Ok(lines.join("\n"))
+}
+
 fn render_bitable_search_records_text(payload: &Value) -> CliResult<String> {
     let result = payload
         .get("result")
@@ -2943,6 +4197,167 @@ fn render_bitable_search_records_text(payload: &Value) -> CliResult<String> {
                 .unwrap_or("-")
         ),
     ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_delete_record_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu bitable delete-record".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "record_id: {}",
+            payload
+                .get("record_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+        format!(
+            "deleted: {}",
+            payload
+                .get("deleted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_batch_records_text(payload: &Value) -> CliResult<String> {
+    let result = payload
+        .get("result")
+        .ok_or_else(|| "feishu bitable batch payload missing result".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable batch-records".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    if let Some(records) = result.get("records").and_then(Value::as_array) {
+        lines.push(format!("records: {}", records.len()));
+    }
+    if let Some(success) = result.get("success").and_then(Value::as_bool) {
+        lines.push(format!("success: {success}"));
+    }
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_field_text(payload: &Value) -> CliResult<String> {
+    let field = payload
+        .get("field")
+        .ok_or_else(|| "feishu bitable field payload missing field".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable field".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "field_id: {}",
+            field.get("field_id").and_then(Value::as_str).unwrap_or("-")
+        ),
+        format!(
+            "field_name: {}",
+            field
+                .get("field_name")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_field_list_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu bitable list-fields".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.push(format!(
+        "fields: {}",
+        payload
+            .get("fields")
+            .and_then(Value::as_array)
+            .map_or(0, std::vec::Vec::len)
+    ));
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_delete_field_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu bitable delete-field".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "field_id: {}",
+            payload
+                .get("field_id")
+                .and_then(Value::as_str)
+                .unwrap_or("-")
+        ),
+        format!(
+            "deleted: {}",
+            payload
+                .get("deleted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_view_text(payload: &Value) -> CliResult<String> {
+    let view = payload
+        .get("view")
+        .ok_or_else(|| "feishu bitable view payload missing view".to_owned())?;
+    let mut lines = vec![
+        "feishu bitable view".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.extend([
+        format!(
+            "view_id: {}",
+            view.get("view_id").and_then(Value::as_str).unwrap_or("-")
+        ),
+        format!(
+            "view_name: {}",
+            view.get("view_name").and_then(Value::as_str).unwrap_or("-")
+        ),
+    ]);
+    Ok(lines.join("\n"))
+}
+
+fn render_bitable_view_list_text(payload: &Value) -> CliResult<String> {
+    let mut lines = vec![
+        "feishu bitable list-views".to_owned(),
+        format!("account: {}", required_json_string(payload, "account_id")?),
+    ];
+    if let Some(configured_account) = payload.get("configured_account").and_then(Value::as_str) {
+        lines.push(format!("configured_account: {configured_account}"));
+    }
+    lines.push(format!(
+        "views: {}",
+        payload
+            .get("views")
+            .and_then(Value::as_array)
+            .map_or(0, std::vec::Vec::len)
+    ));
     Ok(lines.join("\n"))
 }
 

@@ -23,7 +23,7 @@ if [[ "$ENFORCE_GATE" != "true" && "$ENFORCE_GATE" != "false" ]]; then
   exit 2
 fi
 
-CARGO_ARGS=(run -p loongclaw-daemon)
+CARGO_ARGS=(run -p loongclaw)
 if [[ "$BENCH_PROFILE" == "release" ]]; then
   CARGO_ARGS+=(--release)
 fi

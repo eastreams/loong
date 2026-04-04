@@ -164,7 +164,7 @@ jobs:
         env:
           LOONGCLAW_RELEASE_BUILD: "1"
         run: |
-          cargo zigbuild --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} \
+          cargo zigbuild --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} \
             --target "${{ matrix.target }}.${{ env.LINUX_ARM64_GLIBC_FLOOR }}"
 
       - name: Build release binary (Android/Termux)
@@ -179,13 +179,13 @@ jobs:
           export CXX_aarch64_linux_android="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang++"
           export AR_aarch64_linux_android="${toolchain}/llvm-ar"
           export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="${toolchain}/aarch64-linux-android${ANDROID_API_LEVEL}-clang"
-          cargo build --release --locked -p loongclaw-daemon --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target "${{ matrix.target }}"
+          cargo build --release --locked -p loongclaw --bin "${BIN_NAME}" --bin "${LEGACY_BIN_NAME}" --target "${{ matrix.target }}"
 
       - name: Build release binary (native)
         if: matrix.use_zig != true && matrix.use_android_ndk != true
         env:
           LOONGCLAW_RELEASE_BUILD: "1"
-        run: cargo build --release --locked -p loongclaw-daemon --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} --target ${{ matrix.target }}
+        run: cargo build --release --locked -p loongclaw --bin ${{ env.BIN_NAME }} --bin ${{ env.LEGACY_BIN_NAME }} --target ${{ matrix.target }}
 
       - name: Package archive (Unix)
         if: matrix.archive == 'tar.gz'

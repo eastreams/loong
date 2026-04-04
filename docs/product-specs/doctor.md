@@ -27,17 +27,18 @@ can recover a broken setup without reverse-engineering runtime internals.
 - [ ] On a healthy setup, the first-turn recommendations read like the next user
       action, not just a status report, for example "Get a first answer" and
       "Continue in chat".
+- [ ] On a healthy setup, doctor can also recommend an optional personalization
+      next step when operator preferences have not been configured, but that
+      recommendation remains secondary to repair or first-value commands.
 - [ ] When `onboard`, `ask`, `chat`, or channel setup hits a common health
       failure, the CLI points users toward `doctor`.
 - [ ] Doctor checks cover the current MVP path: config presence, provider
       readiness, SQLite memory readiness, shipped channel prerequisites, and
       the optional browser preview companion readiness path.
-- [ ] `doctor security` covers the current operator-facing security posture:
-      audit retention durability, shell default policy, explicit tool file
-      root, web fetch egress, external skills download posture, secret storage
-      hygiene, and browser automation readiness posture.
-- [ ] `doctor security` rejects `--fix` and `--skip-model-probe` instead of
-      silently accepting unsupported parent-command flags.
+- [ ] Doctor treats plugin-backed bridge surfaces such as `weixin`, `qqbot`,
+      and `onebot` as first-class channel checks, validating LoongClaw's local
+      bridge contract without falsely failing just because the live runtime is
+      owned by an external plugin or gateway.
 - [ ] Durable audit readiness checks exercise the runtime `open + lock + unlock`
       path for JSONL retention instead of relying on metadata-only validation.
 - [ ] When `tools.browser_companion.enabled=true`, doctor surfaces companion

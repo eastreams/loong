@@ -279,6 +279,12 @@ loong completions elvish >> ~/.config/elvish/rc.elv
    loong chat
    ```
 
+Optional follow-up: if you want LoongClaw to remember advisory working preferences such as preferred name, response density, or standing boundaries for future sessions, run:
+
+```bash
+loong personalize
+```
+
 5. Repair local health issues when needed:
 
    ```bash
@@ -299,6 +305,16 @@ loong completions elvish >> ~/.config/elvish/rc.elv
    loong audit recent --event-id evt-123 --token-id token-abc
    loong audit token-trail --token-id token-abc
    ```
+
+When delegated work outlives one foreground turn, use the session shell to
+inspect the retained session lineage directly:
+
+```bash
+loong sessions list --session default
+loong sessions status --session default delegate:child-1
+loong sessions history --session default delegate:child-1
+loong sessions wait --session default delegate:child-1 --timeout-ms 1000
+```
 
 Channel setup comes after the base CLI path is healthy.
 
@@ -602,18 +618,37 @@ loong multi-channel-serve \
 
 `--session` is required. Repeat `--channel-account <CHANNEL=ACCOUNT>` to pin specific channel accounts. LoongClaw normalizes runtime-backed aliases such as `lark` to canonical channel ids and only supervises runtime-backed channels that are enabled in the loaded config.
 
-The longer-term direction remains to let one gateway-owned service host
-decouple CLI lifecycle from service lifecycle and own routes, status, logs,
-pairing, and richer channel runtimes.
+`loongclaw channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. That catalog now distinguishes config-backed outbound surfaces from plugin-backed bridge surfaces such as Weixin, QQBot, and OneBot. When a bridge-backed surface is configured, the same output now exposes config-derived account snapshots and bridge endpoint summaries without claiming native runtime ownership.
 
-`loong channels --json` exposes the broader channel catalog separately from shipped runtime-backed surfaces. Planned surfaces already modeled in the catalog include Discord, Slack, LINE, DingTalk, WhatsApp, Google Chat, Signal, Synology Chat, Tlon, iMessage / BlueBubbles, Nostr, Twitch, Zalo, and WebChat, but they do not claim runtime support until an adapter is actually shipped.
+Plugin-backed channel surfaces are intentionally honest:
 
-Tool policy stays explicit:
+- they publish stable channel ids, setup hints, requirement keys, and target families
+- they reserve native command ids such as `weixin-send` or `qqbot-serve` without claiming those commands are implemented yet
+- they let bridge plugins converge on one LoongClaw-owned contract before native adapters exist
+
+Current bridge-first target families include:
+
+- `weixin:<account>:contact:<id>` and `weixin:<account>:room:<id>`
+- `qqbot:<account>:c2c:<openid>`, `qqbot:<account>:group:<openid>`, and `qqbot:<account>:channel:<id>`
+- `onebot:<account>:private:<user_id>` and `onebot:<account>:group:<group_id>`
+
+Pure catalog-only planned surfaces such as Tlon, Nostr, Twitch, Zalo, and WebChat still do not claim runtime support until an adapter is actually shipped.
+
+Tool policy stays explicit, and `bash.exec` is an experimental parallel tool
+that does not replace `shell.exec`. Legacy `shell_default_mode`,
+`shell_allow`, and `shell_deny` still feed the compatibility defaults and
+compatibility rules for `bash.exec`, while the default rule files live under
+`~/.loongclaw/rules`:
 
 ```toml
 [tools]
 shell_default_mode = "deny"
 shell_allow = ["echo", "ls", "git", "cargo"]
+shell_deny = ["rm"]
+
+[tools.bash]
+login_shell = false
+# rules_dir = "~/.loongclaw/rules"
 
 [tools.browser]
 enabled = true
@@ -635,6 +670,16 @@ max_results = 5
 # exa_api_key = "${EXA_API_KEY}"
 # jina_api_key = "${JINA_API_KEY}"
 # or "${JINA_AUTH_TOKEN}"
+```
+
+```text
+# ~/.loongclaw/rules/00-allow-basic.rules
+prefix_rule(pattern=["printf"], decision="allow")
+prefix_rule(pattern=["git", "status"], decision="allow")
+
+# ~/.loongclaw/rules/90-deny-dangerous.rules
+prefix_rule(pattern=["rm"], decision="deny")
+prefix_rule(pattern=["cargo", "publish"], decision="deny")
 ```
 
 Further references:
@@ -735,7 +780,8 @@ downloads and installed skill execution.
 ### Delivery Surfaces
 
 - CLI is first-class today, but it is no longer the only surface
-- Telegram, Feishu / Lark, and Matrix already exist as real channel surfaces with runtime state and security validation
+- Telegram, Feishu / Lark, Matrix, and WeCom already exist as real channel surfaces with runtime state and security validation
+- Weixin, QQBot, and OneBot are now first-class plugin-backed catalog surfaces, so bridge integrations can align on stable ids and target contracts without pretending LoongClaw already owns their native runtime
 - browser, file, shell, and web tools are exposed through runtime policy rather than left in
   scattered helper scripts
 
@@ -776,7 +822,7 @@ Three design rules matter most:
 - **Core / Extension approach**: runtime, tool, memory, and connector surfaces are organized around trusted cores with richer extension layers, so specialization goes through adapters instead of kernel forks.
 - **Control planes stay distinct**: provider turns, context assembly, channel routing, and ACP control behavior are modeled as separate concerns, which keeps future collaboration and routing upgrades from forcing a rewrite of the conversation core.
 - **Governance is not an afterthought**: capability checks, policy gates, approvals, and audit trails are part of the main execution path rather than a perimeter feature added later.
-- **The product layer is already concrete**: a CLI-first entry path, Telegram / Feishu / Matrix channels, browser / file / shell / web tools, and configurable provider / memory / tool-policy baselines already form a real path through the current system.
+- **The product layer is already concrete**: a CLI-first entry path, Telegram / Feishu / Matrix / WeCom channels, plugin-backed Weixin / QQBot / OneBot catalog contracts, browser / file / shell / web tools, and configurable provider / memory / tool-policy baselines already form a real path through the current system.
 
 Some ecosystem pieces are still better described as architecture direction than as finished product surfaces, and we prefer to say that plainly in the README.
 

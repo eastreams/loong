@@ -93,6 +93,30 @@ const WECOM_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     serve_subcommand: Some(WECOM_CATALOG_COMMAND_FAMILY_DESCRIPTOR.serve.command),
 };
 
+const WEIXIN_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "weixin",
+    label: "weixin",
+    surface_label: "weixin channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const QQBOT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "qqbot",
+    label: "qqbot",
+    surface_label: "qq bot channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
+const ONEBOT_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
+    id: "onebot",
+    label: "onebot",
+    surface_label: "onebot channel",
+    runtime_kind: ChannelRuntimeKind::Service,
+    serve_subcommand: None,
+};
+
 const DISCORD_CHANNEL_DESCRIPTOR: ChannelDescriptor = ChannelDescriptor {
     id: "discord",
     label: "discord",
@@ -305,6 +329,30 @@ const WECOM_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrati
     background_surface_is_enabled: Some(wecom_background_surface_is_enabled),
 };
 
+const WEIXIN_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &WEIXIN_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: weixin_channel_is_enabled,
+    collect_validation_issues: collect_weixin_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const QQBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &QQBOT_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: qqbot_channel_is_enabled,
+    collect_validation_issues: collect_qqbot_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
+const ONEBOT_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
+    descriptor: &ONEBOT_CHANNEL_DESCRIPTOR,
+    background_runtime: None,
+    is_enabled: onebot_channel_is_enabled,
+    collect_validation_issues: collect_onebot_channel_validation_issues,
+    background_surface_is_enabled: None,
+};
+
 const DISCORD_CHANNEL_INTEGRATION: ChannelIntegrationDescriptor = ChannelIntegrationDescriptor {
     descriptor: &DISCORD_CHANNEL_DESCRIPTOR,
     background_runtime: None,
@@ -472,6 +520,9 @@ const CHANNEL_INTEGRATIONS: &[ChannelIntegrationDescriptor] = &[
     FEISHU_CHANNEL_INTEGRATION,
     MATRIX_CHANNEL_INTEGRATION,
     WECOM_CHANNEL_INTEGRATION,
+    WEIXIN_CHANNEL_INTEGRATION,
+    QQBOT_CHANNEL_INTEGRATION,
+    ONEBOT_CHANNEL_INTEGRATION,
     DISCORD_CHANNEL_INTEGRATION,
     SLACK_CHANNEL_INTEGRATION,
     LINE_CHANNEL_INTEGRATION,
@@ -604,6 +655,18 @@ fn wecom_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.wecom.enabled
 }
 
+fn weixin_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.weixin.enabled
+}
+
+fn qqbot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.qqbot.enabled
+}
+
+fn onebot_channel_is_enabled(config: &LoongClawConfig) -> bool {
+    config.onebot.enabled
+}
+
 fn discord_channel_is_enabled(config: &LoongClawConfig) -> bool {
     config.discord.enabled
 }
@@ -700,6 +763,22 @@ fn collect_matrix_channel_validation_issues(
 
 fn collect_wecom_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
     config.wecom.validate()
+}
+
+fn collect_weixin_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.weixin.validate()
+}
+
+fn collect_qqbot_channel_validation_issues(config: &LoongClawConfig) -> Vec<ConfigValidationIssue> {
+    config.qqbot.validate()
+}
+
+fn collect_onebot_channel_validation_issues(
+    config: &LoongClawConfig,
+) -> Vec<ConfigValidationIssue> {
+    config.onebot.validate()
 }
 
 fn collect_discord_channel_validation_issues(
@@ -878,23 +957,6 @@ mod tests {
 
     use super::*;
 
-    fn expected_service_channel_ids() -> Vec<&'static str> {
-        let mut channel_ids = Vec::new();
-        let catalog = super::super::registry::list_channel_catalog();
-
-        for catalog_entry in catalog {
-            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
-                continue;
-            };
-            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
-                continue;
-            }
-            channel_ids.push(descriptor.id);
-        }
-
-        channel_ids
-    }
-
     fn expected_background_channel_ids() -> Vec<&'static str> {
         let mut channel_ids = Vec::new();
         let catalog = super::super::registry::list_channel_catalog();
@@ -926,8 +988,37 @@ mod tests {
             .into_iter()
             .map(|descriptor| descriptor.id)
             .collect::<Vec<_>>();
-        let expected_ids = expected_service_channel_ids();
-        assert_eq!(ids, expected_ids);
+
+        assert_eq!(
+            ids,
+            vec![
+                "telegram",
+                "feishu",
+                "matrix",
+                "wecom",
+                "weixin",
+                "qqbot",
+                "onebot",
+                "discord",
+                "slack",
+                "line",
+                "dingtalk",
+                "whatsapp",
+                "email",
+                "webhook",
+                "google-chat",
+                "signal",
+                "twitch",
+                "teams",
+                "mattermost",
+                "nextcloud-talk",
+                "synology-chat",
+                "irc",
+                "imessage",
+                "nostr",
+                "tlon",
+            ]
+        );
     }
 
     #[test]
@@ -958,6 +1049,24 @@ mod tests {
             .expect("feishu alias should normalize through the channel registry");
 
         assert!(!enabled);
+    }
+
+    #[test]
+    fn channel_descriptor_lookup_normalizes_plugin_backed_aliases() {
+        let weixin = channel_descriptor("wechat").expect("wechat alias should resolve");
+        assert_eq!(weixin.id, "weixin");
+        assert_eq!(weixin.surface_label, "weixin channel");
+        assert_eq!(weixin.serve_subcommand, None);
+
+        let qqbot = channel_descriptor("qq").expect("qq alias should resolve");
+        assert_eq!(qqbot.id, "qqbot");
+        assert_eq!(qqbot.surface_label, "qq bot channel");
+        assert_eq!(qqbot.serve_subcommand, None);
+
+        let onebot = channel_descriptor("onebot-v11").expect("onebot alias should resolve");
+        assert_eq!(onebot.id, "onebot");
+        assert_eq!(onebot.surface_label, "onebot channel");
+        assert_eq!(onebot.serve_subcommand, None);
     }
 
     #[cfg(feature = "feishu-integration")]

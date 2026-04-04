@@ -77,6 +77,7 @@ pub use sha2;
 pub mod audit_cli;
 mod browser_companion_diagnostics;
 pub mod browser_preview;
+mod channel_bridge_render;
 #[cfg(test)]
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
@@ -102,6 +103,8 @@ pub mod onboard_presentation;
 mod onboard_types;
 mod onboard_web_search;
 mod onboarding_model_policy;
+pub mod operator_prompt;
+pub mod personalize_cli;
 pub mod plugins_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
@@ -110,6 +113,7 @@ mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
@@ -118,6 +122,13 @@ mod tlon_cli;
 #[path = "web/mod.rs"]
 pub mod web_cli;
 
+use channel_bridge_render::{
+    push_channel_surface_managed_plugin_bridge_discovery,
+    push_channel_surface_plugin_bridge_contract,
+};
+pub(crate) use channel_bridge_render::{
+    render_line_safe_optional_text_value, render_line_safe_text_value, render_line_safe_text_values,
+};
 pub use gateway::read_models::{ChannelsCliJsonPayload, ChannelsCliJsonSchema};
 pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
@@ -145,7 +156,7 @@ pub fn active_cli_command_name() -> &'static str {
 
 fn render_welcome_long_about(command_name: &str) -> String {
     format!(
-        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        "Show the configured welcome banner and quick commands.\n\nquick commands:\n- {command_name} ask --config <path> --message \"...\"\n- {command_name} chat --config <path>\n- {command_name} personalize --config <path>\n- {command_name} doctor --config <path>\n- {command_name} --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
     )
 }
 
@@ -301,7 +312,7 @@ pub enum InitSpecPreset {
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     #[command(
-        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
+        long_about = "Show the configured welcome banner and quick commands.\n\nquick commands:\n- loong ask --config <path> --message \"...\"\n- loong chat --config <path>\n- loong personalize --config <path>\n- loong doctor --config <path>\n- loong --help\n\nReplace <path> with your current config path, or set LOONGCLAW_CONFIG_PATH first."
     )]
     /// Show a welcome banner for an already configured install
     Welcome,
@@ -494,6 +505,15 @@ pub enum Commands {
         skip_model_probe: bool,
     },
     #[command(
+        about = "Capture optional operator preferences for future sessions",
+        long_about = "Capture optional operator preferences for future sessions.\n\nThis command stores advisory working preferences such as preferred name, response density, initiative level, and standing boundaries. Rerun it any time to update or clear saved preferences. It does not replace runtime identity files, and it does not change the primary setup path. If you do not have a config yet, run `loong onboard` first."
+    )]
+    Personalize {
+        /// Config file path to update (defaults to auto-discovery)
+        #[arg(long)]
+        config: Option<String>,
+    },
+    #[command(
         about = "Preview or apply migration sources explicitly",
         long_about = "Power-user import flow for previewing or applying detected migration sources explicitly.\n\nUse this when you want exact CLI control over which source and domains are reused. If you want the guided path, use `loong onboard` instead. When the same source kind resolves to multiple detected configs, rerun with `--source-path <path>` to choose one exact source."
     )]
@@ -613,6 +633,20 @@ pub enum Commands {
         session: String,
         #[command(subcommand)]
         command: tasks_cli::TasksCommands,
+    },
+    #[command(
+        about = "Inspect and manage persisted runtime sessions through an operator-facing session shell",
+        long_about = "Bounded operator-facing session shell for persisted runtime sessions.\n\nUse this surface to list visible sessions, inspect one session's workflow metadata, review lifecycle events, inspect transcript history, and apply bounded recover, cancel, or archive actions without inventing a second session model."
+    )]
+    Sessions {
+        #[arg(long, global = true)]
+        config: Option<String>,
+        #[arg(long, global = true, default_value_t = false)]
+        json: bool,
+        #[arg(long, global = true, default_value = "default")]
+        session: String,
+        #[command(subcommand)]
+        command: sessions_cli::SessionsCommands,
     },
     #[command(
         visible_alias = "plugin",
@@ -1279,6 +1313,106 @@ pub enum Commands {
     },
 }
 
+impl Commands {
+    pub fn command_kind_for_logging(&self) -> &'static str {
+        match self {
+            Self::Welcome => "welcome",
+            Self::Demo => "demo",
+            Self::RunTask { .. } => "run_task",
+            Self::InvokeConnector { .. } => "invoke_connector",
+            Self::AuditDemo => "audit_demo",
+            Self::InitSpec { .. } => "init_spec",
+            Self::RunSpec { .. } => "run_spec",
+            Self::BenchmarkProgrammaticPressure { .. } => "benchmark_programmatic_pressure",
+            Self::BenchmarkProgrammaticPressureLint { .. } => {
+                "benchmark_programmatic_pressure_lint"
+            }
+            Self::BenchmarkWasmCache { .. } => "benchmark_wasm_cache",
+            Self::BenchmarkMemoryContext { .. } => "benchmark_memory_context",
+            Self::ValidateConfig { .. } => "validate_config",
+            Self::Onboard { .. } => "onboard",
+            Self::Personalize { .. } => "personalize",
+            Self::Import { .. } => "import",
+            Self::Migrate { .. } => "migrate",
+            Self::Doctor { .. } => "doctor",
+            Self::Audit { .. } => "audit",
+            Self::Skills { .. } => "skills",
+            Self::Tasks { .. } => "tasks",
+            Self::Sessions { .. } => "sessions",
+            Self::Plugins { .. } => "plugins",
+            Self::Channels { .. } => "channels",
+            Self::ListModels { .. } => "list_models",
+            Self::RuntimeSnapshot { .. } => "runtime_snapshot",
+            Self::RuntimeRestore { .. } => "runtime_restore",
+            Self::RuntimeExperiment { .. } => "runtime_experiment",
+            Self::RuntimeCapability { .. } => "runtime_capability",
+            Self::ListContextEngines { .. } => "list_context_engines",
+            Self::ListMemorySystems { .. } => "list_memory_systems",
+            Self::ListAcpBackends { .. } => "list_acp_backends",
+            Self::ListAcpSessions { .. } => "list_acp_sessions",
+            Self::AcpStatus { .. } => "acp_status",
+            Self::AcpObservability { .. } => "acp_observability",
+            Self::AcpEventSummary { .. } => "acp_event_summary",
+            Self::AcpDispatch { .. } => "acp_dispatch",
+            Self::AcpDoctor { .. } => "acp_doctor",
+            Self::Ask { .. } => "ask",
+            Self::Chat { .. } => "chat",
+            Self::SafeLaneSummary { .. } => "safe_lane_summary",
+            Self::TelegramSend { .. } => "telegram_send",
+            Self::TelegramServe { .. } => "telegram_serve",
+            Self::FeishuSend { .. } => "feishu_send",
+            Self::FeishuServe { .. } => "feishu_serve",
+            Self::MatrixSend { .. } => "matrix_send",
+            Self::MatrixServe { .. } => "matrix_serve",
+            Self::WecomSend { .. } => "wecom_send",
+            Self::WecomServe { .. } => "wecom_serve",
+            Self::WhatsappServe { .. } => "whatsapp_serve",
+            Self::DiscordSend { .. } => "discord_send",
+            Self::DingtalkSend { .. } => "dingtalk_send",
+            Self::SlackSend { .. } => "slack_send",
+            Self::LineSend { .. } => "line_send",
+            Self::WhatsappSend { .. } => "whatsapp_send",
+            Self::EmailSend { .. } => "email_send",
+            Self::WebhookSend { .. } => "webhook_send",
+            Self::GoogleChatSend { .. } => "google_chat_send",
+            Self::TeamsSend { .. } => "teams_send",
+            Self::TlonSend { .. } => "tlon_send",
+            Self::SignalSend { .. } => "signal_send",
+            Self::TwitchSend { .. } => "twitch_send",
+            Self::MattermostSend { .. } => "mattermost_send",
+            Self::NextcloudTalkSend { .. } => "nextcloud_talk_send",
+            Self::SynologyChatSend { .. } => "synology_chat_send",
+            Self::IrcSend { .. } => "irc_send",
+            Self::ImessageSend { .. } => "imessage_send",
+            Self::NostrSend { .. } => "nostr_send",
+            Self::MultiChannelServe { .. } => "multi_channel_serve",
+            Self::Gateway { .. } => "gateway",
+            Self::Feishu { .. } => "feishu",
+            Self::Web { .. } => "web",
+            Self::Completions { .. } => "completions",
+        }
+    }
+}
+
+#[cfg(test)]
+mod command_kind_tests {
+    use super::Commands;
+
+    #[test]
+    fn command_kind_for_logging_uses_stable_variant_names() {
+        assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
+        assert_eq!(Commands::AuditDemo.command_kind_for_logging(), "audit_demo");
+        assert_eq!(
+            Commands::RunTask {
+                objective: "test".to_owned(),
+                payload: "{}".to_owned(),
+            }
+            .command_kind_for_logging(),
+            "run_task"
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ValidateConfigOutput {
     Text,
@@ -1434,29 +1568,35 @@ fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     }
 }
 
-fn render_welcome_banner(config_path: &Path) -> String {
-    let config_path = config_path.to_string_lossy();
-    let ask_command = crate::cli_handoff::format_ask_with_config(
-        &config_path,
-        next_actions::DEFAULT_FIRST_ASK_MESSAGE,
-    );
-    let chat_command = crate::cli_handoff::format_subcommand_with_config("chat", &config_path);
-    let doctor_command = crate::cli_handoff::format_subcommand_with_config("doctor", &config_path);
+fn render_welcome_banner(config_path: &Path, config: &mvp::config::LoongClawConfig) -> String {
+    let config_path_display = config_path.display().to_string();
+    let next_actions = next_actions::collect_setup_next_actions(config, &config_path_display);
+    let mut quick_command_lines = Vec::new();
+
+    for action in next_actions {
+        let action_label = action.label;
+        let action_command = action.command;
+        let quick_command_line = format!("- {action_label}: {action_command}");
+        quick_command_lines.push(quick_command_line);
+    }
+
+    quick_command_lines.push(format!("- Help: {} --help", CLI_COMMAND_NAME));
+    let quick_commands = quick_command_lines.join("\n");
 
     format!(
-        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n- First answer: {}\n- Chat: {}\n- Doctor: {}\n- Help: {} --help",
+        "LoongClaw is configured and ready.\nVersion: {}\nConfig: {}\n\nQuick commands:\n{}",
         env!("CARGO_PKG_VERSION"),
-        config_path,
-        ask_command,
-        chat_command,
-        doctor_command,
-        active_cli_command_name(),
+        config_path_display,
+        quick_commands,
     )
 }
 
 pub fn run_welcome_cli() -> CliResult<()> {
     let config_path = resolve_welcome_config_path()?;
-    println!("{}", render_welcome_banner(config_path.as_path()));
+    let config_path_string = config_path.display().to_string();
+    let load_result = mvp::config::load(Some(config_path_string.as_str()))?;
+    let (_resolved_path, config) = load_result;
+    println!("{}", render_welcome_banner(config_path.as_path(), &config));
     Ok(())
 }
 
@@ -1505,6 +1645,7 @@ pub async fn run_demo() -> CliResult<()> {
 #[cfg(test)]
 mod first_run_entry_tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
     use std::{
         fs,
         path::{Path, PathBuf},
@@ -1525,8 +1666,8 @@ mod first_run_entry_tests {
         std::env::temp_dir().join(format!("{prefix}-{pid}-{nanos}-{counter}"))
     }
 
-    fn isolated_home(prefix: &str) -> (mvp::test_support::ScopedEnv, PathBuf) {
-        let mut env = mvp::test_support::ScopedEnv::new();
+    fn isolated_home(prefix: &str) -> (ScopedEnv, PathBuf) {
+        let mut env = ScopedEnv::new();
         let home = unique_temp_dir(prefix);
         fs::create_dir_all(&home).expect("create isolated home");
         env.set("HOME", &home);
@@ -1563,7 +1704,7 @@ mod first_run_entry_tests {
 
     #[test]
     fn resolve_default_entry_command_honors_loongclaw_config_path_override() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         let config_path = unique_temp_dir("loongclaw-default-entry-env").join("custom-config.toml");
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent).expect("create config parent");
@@ -1584,7 +1725,7 @@ mod first_run_entry_tests {
 
     #[test]
     fn resolve_default_entry_command_routes_to_onboard_when_config_path_is_a_directory() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         let config_dir = unique_temp_dir("loongclaw-default-entry-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
         env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
@@ -1597,7 +1738,7 @@ mod first_run_entry_tests {
 
     #[test]
     fn run_welcome_cli_rejects_missing_config_file() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         let config_path = unique_temp_dir("loongclaw-welcome-missing").join("missing-config.toml");
         env.set("LOONGCLAW_CONFIG_PATH", &config_path);
 
@@ -1615,7 +1756,7 @@ mod first_run_entry_tests {
 
     #[test]
     fn run_welcome_cli_rejects_directory_config_path() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         let config_dir = unique_temp_dir("loongclaw-welcome-dir");
         fs::create_dir_all(&config_dir).expect("create config directory");
         env.set("LOONGCLAW_CONFIG_PATH", &config_dir);
@@ -1630,7 +1771,8 @@ mod first_run_entry_tests {
 
     #[test]
     fn render_welcome_banner_includes_version_and_next_commands() {
-        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"));
+        let config = mvp::config::LoongClawConfig::default();
+        let rendered = render_welcome_banner(Path::new("/tmp/loongclaw's config.toml"), &config);
 
         assert!(
             rendered.contains(env!("CARGO_PKG_VERSION")),
@@ -1645,12 +1787,20 @@ mod first_run_entry_tests {
             "welcome banner should include a quoted chat command: {rendered}"
         );
         assert!(
-            rendered.contains("loong doctor --config '/tmp/loongclaw'\"'\"'s config.toml'"),
-            "welcome banner should include a quoted doctor command: {rendered}"
+            rendered.contains("loong personalize --config '/tmp/loongclaw'\"'\"'s config.toml'"),
+            "welcome banner should include a quoted personalize command: {rendered}"
         );
         assert!(
             rendered.contains("loong --help"),
             "welcome banner should point users to root help: {rendered}"
+        );
+        assert!(
+            rendered.contains("- first answer:"),
+            "welcome banner should preserve the shared next-action label for ask: {rendered}"
+        );
+        assert!(
+            rendered.contains("- working preferences:"),
+            "welcome banner should preserve the shared next-action label for personalize: {rendered}"
         );
     }
 }
@@ -1932,6 +2082,9 @@ fn plugin_activation_status_label(status: PluginActivationStatus) -> &'static st
     match status {
         PluginActivationStatus::Ready => "ready",
         PluginActivationStatus::SetupIncomplete => "setup_incomplete",
+        PluginActivationStatus::BlockedInvalidManifestContract => {
+            "blocked_invalid_manifest_contract"
+        }
         PluginActivationStatus::BlockedUnsupportedBridge => "blocked_unsupported_bridge",
         PluginActivationStatus::BlockedUnsupportedAdapterFamily => {
             "blocked_unsupported_adapter_family"
@@ -3439,6 +3592,8 @@ pub fn render_channel_surfaces_text(
 
         push_channel_surface_header(&mut lines, surface);
         lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+        push_channel_surface_plugin_bridge_contract(&mut lines, surface);
+        push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
         for snapshot in &surface.configured_accounts {
             let api_base_url = snapshot.api_base_url.as_deref().unwrap_or("-");
             lines.push(format!(
@@ -3518,6 +3673,8 @@ pub fn render_channel_surfaces_text(
         for surface in catalog_only_surfaces {
             push_channel_surface_header(&mut lines, surface);
             lines.push(render_channel_onboarding_line(&surface.catalog.onboarding));
+            push_channel_surface_plugin_bridge_contract(&mut lines, surface);
+            push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
             for operation in &surface.catalog.operations {
                 lines.push(format!(
                     "  catalog op {} ({}) availability={} tracks_runtime={} target_kinds={} requirements={}",
@@ -5428,6 +5585,7 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
                 .unwrap_or("-"),
             render_string_list(surface.catalog.aliases.iter().copied())
         ));
+        push_channel_surface_managed_plugin_bridge_discovery(&mut lines, surface);
     }
     lines.push(format!(
         "tool_runtime shell_default={} shell_allow={} shell_deny={} sessions_enabled={} messages_enabled={} delegate_enabled={}",

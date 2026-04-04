@@ -9,6 +9,29 @@ import {
 } from "../api";
 import type { SessionViewState } from "./useChatSessions";
 
+function upsertRecentTool(
+  current: SessionViewState,
+  tool: {
+    toolId: string;
+    label: string;
+    status: "ok" | "error";
+    detail?: string;
+  },
+): SessionViewState["recentTools"] {
+  const nextItem = {
+    toolId: tool.toolId,
+    label: tool.label,
+    status: tool.status,
+    finishedAt: new Date().toISOString(),
+    detail: tool.detail,
+  };
+
+  return [
+    nextItem,
+    ...current.recentTools.filter((item) => item.toolId !== tool.toolId),
+  ].slice(0, 6);
+}
+
 function extractErrorHost(message: string): string | null {
   const match = message.match(/https?:\/\/([^/\s)]+)/i);
   return match?.[1] ?? null;
@@ -146,6 +169,15 @@ export function useChatStream({
                   }
                 : item,
             ),
+            recentTools: upsertRecentTool(current, {
+              toolId: event.toolId,
+              label: event.label,
+              status: event.outcome === "ok" ? "ok" : "error",
+              detail:
+                event.outcome === "ok"
+                  ? t("chat.recentTools.detail.ok")
+                  : t("chat.recentTools.detail.error"),
+            }),
           }));
           break;
         case "turn.completed":
@@ -154,6 +186,7 @@ export function useChatStream({
               message.id === placeholderId ? event.message : message,
             ),
             activeTools: [],
+            recentTools: current.recentTools,
             pendingAssistantId: null,
             streamPhase: "idle",
           }));
@@ -162,6 +195,19 @@ export function useChatStream({
           updateSessionViewState(targetSessionId, (current) => ({
             messages: current.messages.filter((message) => message.id !== placeholderId),
             activeTools: [],
+            recentTools: current.activeTools.reduce(
+              (acc, item) => [
+                {
+                  toolId: item.toolId,
+                  label: item.label,
+                  status: "error" as const,
+                  finishedAt: new Date().toISOString(),
+                  detail: t("chat.recentTools.detail.interrupted"),
+                },
+                ...acc.filter((recent) => recent.toolId !== item.toolId),
+              ].slice(0, 6),
+              current.recentTools,
+            ),
             pendingAssistantId: null,
             streamPhase: "idle",
           }));
@@ -226,6 +272,7 @@ export function useChatStream({
           updateSessionViewState(targetSessionId, () => ({
             messages: initialMessagesForNewSession,
             activeTools: [],
+            recentTools: [],
             pendingAssistantId: placeholderAssistantId,
             streamPhase: "connecting",
           }));

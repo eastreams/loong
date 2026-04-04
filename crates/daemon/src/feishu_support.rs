@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 
+const FEISHU_GROUP_MESSAGE_READ_SCOPE: &str = "im:message.group_msg";
+const FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY: &str = "im:message.group_msg:readonly";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FeishuAuthCapability {
     ReadOnly,
@@ -323,7 +326,13 @@ fn random_urlsafe_token(bytes_len: usize) -> String {
 
 fn normalize_scope(raw: &str) -> Option<String> {
     let scope = raw.trim();
-    (!scope.is_empty()).then(|| scope.to_owned())
+    if scope.is_empty() {
+        return None;
+    }
+    Some(match scope {
+        FEISHU_GROUP_MESSAGE_READ_SCOPE_LEGACY => FEISHU_GROUP_MESSAGE_READ_SCOPE.to_owned(),
+        _ => scope.to_owned(),
+    })
 }
 
 fn push_scope_if_missing(scopes: &mut Vec<String>, raw: &str) {
@@ -550,6 +559,27 @@ mod tests {
                 .filter(|scope| scope.as_str() == "im:message")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn resolve_scopes_normalizes_legacy_group_message_scope_alias() {
+        let scopes = resolve_scopes(
+            &[],
+            &[
+                "offline_access".to_owned(),
+                "im:message.group_msg:readonly".to_owned(),
+            ],
+            &[],
+            false,
+        );
+
+        assert_eq!(
+            scopes,
+            vec![
+                "offline_access".to_owned(),
+                "im:message.group_msg".to_owned()
+            ]
         );
     }
 

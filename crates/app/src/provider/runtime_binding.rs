@@ -1,10 +1,12 @@
+use loongclaw_contracts::GovernedSessionMode;
+
 use crate::KernelContext;
 
 #[derive(Clone, Copy, Default)]
 pub enum ProviderRuntimeBinding<'a> {
     Kernel(&'a KernelContext),
     #[default]
-    Direct,
+    AdvisoryOnly,
 }
 
 impl<'a> ProviderRuntimeBinding<'a> {
@@ -12,25 +14,40 @@ impl<'a> ProviderRuntimeBinding<'a> {
         Self::Kernel(kernel_ctx)
     }
 
+    pub const fn advisory_only() -> Self {
+        Self::AdvisoryOnly
+    }
+
     pub const fn direct() -> Self {
-        Self::Direct
+        Self::AdvisoryOnly
     }
 
     pub fn kernel_context(self) -> Option<&'a KernelContext> {
         match self {
             Self::Kernel(kernel_ctx) => Some(kernel_ctx),
-            Self::Direct => None,
+            Self::AdvisoryOnly => None,
         }
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Kernel(_) => "kernel",
-            Self::Direct => "direct",
+            Self::AdvisoryOnly => "advisory_only",
         }
     }
 
     pub const fn is_kernel_bound(self) -> bool {
+        matches!(self, Self::Kernel(_))
+    }
+
+    pub const fn session_mode(self) -> GovernedSessionMode {
+        match self {
+            Self::Kernel(_) => GovernedSessionMode::MutatingCapable,
+            Self::AdvisoryOnly => GovernedSessionMode::AdvisoryOnly,
+        }
+    }
+
+    pub const fn allows_mutation(self) -> bool {
         matches!(self, Self::Kernel(_))
     }
 }
@@ -46,7 +63,7 @@ mod tests {
                 .expect("kernel context should bootstrap");
         let binding = ProviderRuntimeBinding::kernel(&kernel_context);
 
-        assert_eq!(ProviderRuntimeBinding::direct().as_str(), "direct");
+        assert_eq!(ProviderRuntimeBinding::direct().as_str(), "advisory_only");
         assert_eq!(binding.as_str(), "kernel");
     }
 }

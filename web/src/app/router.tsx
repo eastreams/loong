@@ -4,6 +4,7 @@ import RootLayout from "./layouts/RootLayout";
 
 const ChatPage = lazy(() => import("../features/chat/pages/ChatPage"));
 const DashboardPage = lazy(() => import("../features/dashboard/pages/DashboardPage"));
+const AbilitiesPage = lazy(() => import("../features/abilities/pages/AbilitiesPage"));
 
 export const router = createBrowserRouter([
   {
@@ -21,6 +22,10 @@ export const router = createBrowserRouter([
       {
         path: "dashboard",
         element: <DashboardPage />,
+      },
+      {
+        path: "abilities",
+        element: <AbilitiesPage />,
       },
     ],
   },

@@ -216,6 +216,16 @@ cargo install --path crates/daemon
    loong doctor --fix
    ```
 
+当委派出来的后台工作超出单次前台交互后，可以直接用 session shell
+检查保留下来的 session lineage：
+
+```bash
+loong sessions list --session default
+loong sessions status --session default delegate:child-1
+loong sessions history --session default delegate:child-1
+loong sessions wait --session default delegate:child-1 --timeout-ms 1000
+```
+
 先把 CLI 这条基础路径走通，再继续配置其他通道。
 
 ### 仓库可观测性
@@ -368,14 +378,37 @@ loong multi-channel-serve \
 
 `--session` 是必填项。通过重复传入 `--channel-account <CHANNEL=ACCOUNT>` 来固定具体的通道账号。LoongClaw 会把 `lark` 这类 runtime-backed alias 归一化到 canonical channel id，并且只监督当前配置里已启用的 runtime-backed 通道。
 
-更广义的 channel catalog 可以通过 `loong channels --json` 查看。当前 catalog 已经显式建模了 Discord、Slack、LINE、DingTalk、WhatsApp、Google Chat、Signal、Synology Chat、Tlon、iMessage / BlueBubbles、Nostr、Twitch、Zalo、WebChat 等 planned surface，但在真正的 adapter 落地前不会宣称它们已经具备 runtime 支持。
+更广义的 channel catalog 可以通过 `loongclaw channels --json` 查看。这个 catalog 现在会明确区分 config-backed outbound surface，以及像 Weixin、QQBot、OneBot 这样的 plugin-backed bridge surface。只要 bridge-backed surface 已经配置，输出里也会额外给出基于配置解析出的账号快照和桥接 endpoint 摘要，同时仍然不会伪装成 LoongClaw 已经拥有原生 runtime。
 
-工具策略需要明确配置：
+plugin-backed channel surface 的定位是刻意保持诚实的：
+
+- 它们会公开稳定的 channel id、setup hint、requirements key 和 target family
+- 会预留 `weixin-send`、`qqbot-serve` 这类原生命令 id，但不会假装这些命令已经实现
+- 能让 bridge plugin 和未来原生 adapter 先围绕同一套 LoongClaw 契约收敛
+
+当前 bridge-first target family 约定包括：
+
+- `weixin:<account>:contact:<id>` 与 `weixin:<account>:room:<id>`
+- `qqbot:<account>:c2c:<openid>`、`qqbot:<account>:group:<openid>` 与 `qqbot:<account>:channel:<id>`
+- `onebot:<account>:private:<user_id>` 与 `onebot:<account>:group:<group_id>`
+
+而像 Tlon、Nostr、Twitch、Zalo、WebChat 这类纯 catalog-only planned surface，仍然不会在 adapter 真正落地前宣称已经具备 runtime 支持。
+
+工具策略需要明确配置。`bash.exec` 仍处于实验阶段，它与
+`shell.exec` 并行存在，不代表这轮已经收敛成单一执行面，也不替代
+`shell.exec`。旧有的 `shell_default_mode`、`shell_allow` 和
+`shell_deny` 仍会继续作为 `bash.exec` 的兼容默认模式与兼容规则输入，
+默认规则文件则位于 `~/.loongclaw/rules`：
 
 ```toml
 [tools]
 shell_default_mode = "deny"
 shell_allow = ["echo", "ls", "git", "cargo"]
+shell_deny = ["rm"]
+
+[tools.bash]
+login_shell = false
+# rules_dir = "~/.loongclaw/rules"
 
 [tools.browser]
 enabled = true
@@ -399,11 +432,21 @@ max_results = 5
 # 或 "${JINA_AUTH_TOKEN}"
 ```
 
+```text
+# ~/.loongclaw/rules/00-allow-basic.rules
+prefix_rule(pattern=["printf"], decision="allow")
+prefix_rule(pattern=["git", "status"], decision="allow")
+
+# ~/.loongclaw/rules/90-deny-dangerous.rules
+prefix_rule(pattern=["rm"], decision="deny")
+prefix_rule(pattern=["cargo", "publish"], decision="deny")
+```
+
 进一步参考：
 
 - `default_provider` 支持 `duckduckgo`（或 `ddg`）、`brave`、`tavily`、`perplexity`（或 `perplexity_search`）、`exa`、`jina`（或 `jinaai` / `jina-ai`）
 - `BRAVE_API_KEY`、`TAVILY_API_KEY`、`PERPLEXITY_API_KEY`、`EXA_API_KEY`、`JINA_API_KEY`、`JINA_AUTH_TOKEN` 都可以作为环境变量回退
-- [工具策略配置](docs/configuration/tool-policy.md)
+- [工具表面规格](docs/product-specs/tool-surface.md)
 - [产品规格](docs/product-specs/index.md)
 - `loong validate-config --config ~/.loongclaw/config.toml --json`
 
@@ -461,7 +504,8 @@ loong migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ### 接入方式
 
 - CLI 是当前的主要入口，但并不是唯一的接入方式
-- Telegram 轮询与飞书 / Lark webhook 已有实际通道实现与安全校验
+- Telegram、飞书 / Lark、Matrix 与企业微信已经有实际通道实现、运行时状态与安全校验
+- Weixin、QQBot、OneBot 现在是一级的 plugin-backed catalog surface，让 bridge 集成可以先围绕稳定 id 与 target contract 对齐，而不是伪装成 LoongClaw 已经拥有原生 runtime
 - `browser`、`file`、`shell`、`web` 等工具通过运行时策略暴露，而不是散在外围脚本里
 
 ## 架构概览
@@ -500,7 +544,7 @@ contracts (leaf -- zero internal deps)
 - **Core / Extension 思路**：运行时、工具、记忆、连接器都按“核心适配器 + 扩展适配器”的方向组织，扩展走正门，而不是绕过内核。
 - **控制层与执行层分离**：模型轮次、上下文组装、通道路由与 ACP 控制层分开建模，后续做更复杂的协作、路由和调度时，不必推倒对话核心重写。
 - **治理不是后补丁**：能力、策略、审批与审计从一开始就被放进关键调用路径里，而不是等接近上线时再补外围约束。
-- **今天已经可用的产品层**：`onboard`、`ask`、`chat`、`doctor`、CLI 主入口、Telegram / 飞书通道、`browser` / `file` / `shell` / `web` 工具，以及可配置的模型提供方、记忆与工具策略默认配置。
+- **今天已经可用的产品层**：`onboard`、`ask`、`chat`、`doctor`、CLI 主入口、Telegram / 飞书 / Matrix / WeCom 通道、plugin-backed 的 Weixin / QQBot / OneBot catalog contract、`browser` / `file` / `shell` / `web` 工具，以及可配置的模型提供方、记忆与工具策略默认配置。
 
 更长线的插件生态与集成控制能力，确实是我们关心的方向；但在 README 里，我们更愿意把它表述成正在展开的架构能力，而不是已经完全成熟的产品现实。
 

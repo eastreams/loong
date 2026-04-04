@@ -21,6 +21,9 @@ use crate::acp::{
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
+#[cfg(all(test, feature = "memory-sqlite"))]
+#[allow(clippy::expect_used)]
+mod latest_session_selector_tests;
 
 use self::cli_input::ConcurrentCliInputReader;
 
@@ -51,6 +54,10 @@ use super::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lan
 use super::memory;
 #[cfg(feature = "memory-sqlite")]
 use super::memory::runtime_config::MemoryRuntimeConfig;
+#[cfg(feature = "memory-sqlite")]
+use super::session::LATEST_SESSION_SELECTOR;
+#[cfg(feature = "memory-sqlite")]
+use super::session::latest_resumable_root_session_id;
 use super::tui_surface::{
     TuiActionSpec, TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec,
     TuiHeaderStyle, TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec,
@@ -475,7 +482,6 @@ fn initialize_cli_turn_runtime_with_loaded_config(
         return Err("CLI channel is disabled by config.cli.enabled=false".to_owned());
     }
 
-    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
     if initialize_runtime_environment {
         crate::runtime_env::initialize_runtime_environment(&config, Some(&resolved_path));
     }
@@ -490,19 +496,29 @@ fn initialize_cli_turn_runtime_with_loaded_config(
         .acp_working_directory
         .clone()
         .or_else(|| config.acp.dispatch.resolved_working_directory());
-    let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
 
     #[cfg(feature = "memory-sqlite")]
-    let (memory_config, memory_label) = {
-        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+
+    #[cfg(feature = "memory-sqlite")]
+    let memory_label = {
         let sqlite_path = config.memory.resolved_sqlite_path();
         let initialized = memory::ensure_memory_db_ready(Some(sqlite_path), &memory_config)
             .map_err(|error| format!("failed to initialize sqlite memory: {error}"))?;
-        (memory_config, initialized.display().to_string())
+        initialized.display().to_string()
     };
 
     #[cfg(not(feature = "memory-sqlite"))]
     let memory_label = "disabled".to_owned();
+
+    #[cfg(feature = "memory-sqlite")]
+    let session_id =
+        resolve_cli_runtime_session_id(session_hint, session_requirement, &memory_config)?;
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
+
+    let session_address = ConversationSessionAddress::from_session_id(session_id.clone());
 
     Ok(CliTurnRuntime {
         resolved_path,
@@ -536,6 +552,28 @@ fn resolve_cli_session_id(
             }
         },
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_cli_runtime_session_id(
+    session_hint: Option<&str>,
+    session_requirement: CliSessionRequirement,
+    memory_config: &MemoryRuntimeConfig,
+) -> CliResult<String> {
+    let session_id = resolve_cli_session_id(session_hint, session_requirement)?;
+    let should_resolve_latest = session_requirement == CliSessionRequirement::AllowImplicitDefault
+        && session_id == LATEST_SESSION_SELECTOR;
+
+    if !should_resolve_latest {
+        return Ok(session_id);
+    }
+
+    let latest_session_id = latest_resumable_root_session_id(memory_config)?;
+    let latest_session_id = latest_session_id.ok_or_else(|| {
+        "CLI session selector `latest` did not find any resumable root session".to_owned()
+    })?;
+
+    Ok(latest_session_id)
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -4565,14 +4603,16 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn cleanup_chat_test_memory(sqlite_path: &Path) {
+    pub(super) fn cleanup_chat_test_memory(sqlite_path: &Path) {
         let _ = std::fs::remove_file(sqlite_path);
         let _ = std::fs::remove_file(format!("{}-wal", sqlite_path.display()));
         let _ = std::fs::remove_file(format!("{}-shm", sqlite_path.display()));
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn init_chat_test_memory(label: &str) -> (LoongClawConfig, MemoryRuntimeConfig, PathBuf) {
+    pub(super) fn init_chat_test_memory(
+        label: &str,
+    ) -> (LoongClawConfig, MemoryRuntimeConfig, PathBuf) {
         let sqlite_path = unique_chat_sqlite_path(label);
         cleanup_chat_test_memory(&sqlite_path);
 

@@ -176,16 +176,9 @@ pub fn load_prompt_context(
 ) -> Result<Vec<MemoryContextEntry>, String> {
     let mut entries = Vec::new();
 
-    let profile_section =
-        runtime_identity::render_session_profile_section(config.profile_note.as_deref());
-    if matches!(config.mode, MemoryMode::ProfilePlusWindow)
-        && let Some(profile_section) = profile_section
-    {
-        entries.push(MemoryContextEntry {
-            kind: MemoryContextKind::Profile,
-            role: "system".to_owned(),
-            content: profile_section,
-        });
+    let profile_entry = build_profile_entry(config);
+    if let Some(profile_entry) = profile_entry {
+        entries.push(profile_entry);
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -218,6 +211,24 @@ pub fn load_prompt_context(
     }
 
     Ok(entries)
+}
+
+pub(super) fn build_profile_entry(config: &MemoryRuntimeConfig) -> Option<MemoryContextEntry> {
+    let profile_plus_window_mode = matches!(config.mode, MemoryMode::ProfilePlusWindow);
+    if !profile_plus_window_mode {
+        return None;
+    }
+
+    let profile_note = config.profile_note.as_deref();
+    let personalization = config.personalization.as_ref();
+    let profile_section =
+        runtime_identity::render_session_profile_section(profile_note, personalization)?;
+
+    Some(MemoryContextEntry {
+        kind: MemoryContextKind::Profile,
+        role: "system".to_owned(),
+        content: profile_section,
+    })
 }
 
 #[cfg(test)]
@@ -315,6 +326,120 @@ mod tests {
                 .iter()
                 .any(|entry| entry.content.contains("Imported ZeroClaw preferences")),
             "expected profile note content"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn profile_plus_window_includes_typed_personalization_section() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-personalization-memory-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("personalization.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let default_personalization = crate::config::PersonalizationConfig::default();
+        let schema_version = default_personalization.schema_version;
+        let personalization = crate::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Thorough),
+            initiative_level: Some(crate::config::InitiativeLevel::HighInitiative),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: None,
+            prompt_state: crate::config::PersonalizationPromptState::Configured,
+            schema_version,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            personalization: Some(personalization),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        super::super::append_turn_direct("personalization-session", "user", "recent turn", &config)
+            .expect("append turn should succeed");
+
+        let hydrated =
+            load_prompt_context("personalization-session", &config).expect("load prompt context");
+        let profile_entry = hydrated
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Profile)
+            .expect("profile entry");
+        let profile_content = profile_entry.content.as_str();
+
+        assert!(profile_content.contains("## Session Profile"));
+        assert!(profile_content.contains("Preferred name: Chum"));
+        assert!(profile_content.contains("Response density: thorough"));
+        assert!(profile_content.contains("Initiative level: high_initiative"));
+        assert!(profile_content.contains("Ask before destructive actions."));
+        assert!(profile_content.contains("Timezone: Asia/Shanghai"));
+        assert!(!profile_content.contains("## Resolved Runtime Identity"));
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn window_only_ignores_typed_personalization_section() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-window-only-personalization-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-only-personalization.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        let default_personalization = crate::config::PersonalizationConfig::default();
+        let schema_version = default_personalization.schema_version;
+        let personalization = crate::config::PersonalizationConfig {
+            preferred_name: Some("Chum".to_owned()),
+            response_density: Some(crate::config::ResponseDensity::Balanced),
+            initiative_level: Some(crate::config::InitiativeLevel::AskBeforeActing),
+            standing_boundaries: Some("Ask before destructive actions.".to_owned()),
+            timezone: Some("Asia/Shanghai".to_owned()),
+            locale: None,
+            prompt_state: crate::config::PersonalizationPromptState::Configured,
+            schema_version,
+            updated_at_epoch_seconds: Some(1_775_095_200),
+        };
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            personalization: Some(personalization),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        super::super::append_turn_direct(
+            "window-only-personalization-session",
+            "user",
+            "recent turn",
+            &config,
+        )
+        .expect("append turn should succeed");
+
+        let hydrated = load_prompt_context("window-only-personalization-session", &config)
+            .expect("load prompt context");
+        let has_profile_entry = hydrated
+            .iter()
+            .any(|entry| entry.kind == MemoryContextKind::Profile);
+
+        assert!(
+            !has_profile_entry,
+            "window-only should not project personalization"
         );
 
         let _ = std::fs::remove_file(&db_path);

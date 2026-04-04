@@ -2,10 +2,17 @@
   "appName": "LoongClaw Web",
   "nav": {
     "chat": "对话",
-    "dashboard": "仪表盘",
+    "dashboard": "状态",
+    "abilities": "能力",
     "theme": "主题",
     "language": "语言",
     "restartOnboarding": "返回首次进入"
+  },
+  "abilities": {
+    "eyebrow": "能力",
+    "title": "能力",
+    "subtitle": "这里后面会承接个性化、Channel 快照和 Skills。",
+    "placeholder": "页面骨架已经就位，后面可以直接往这里继续放能力内容。"
   },
   "status": {
     "connected": "已连接",

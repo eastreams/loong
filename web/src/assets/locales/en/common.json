@@ -2,10 +2,17 @@
   "appName": "LoongClaw Web",
   "nav": {
     "chat": "Chat",
-    "dashboard": "Dashboard",
+    "dashboard": "Status",
+    "abilities": "Abilities",
     "theme": "Theme",
     "language": "Language",
     "restartOnboarding": "Return to onboarding"
+  },
+  "abilities": {
+    "eyebrow": "Abilities",
+    "title": "Abilities",
+    "subtitle": "A home for personalization, channel snapshots, and skills.",
+    "placeholder": "This page is ready. We can start dropping capabilities here next."
   },
   "status": {
     "connected": "Connected",

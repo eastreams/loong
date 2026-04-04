@@ -13,6 +13,12 @@ mod tools;
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
+pub use channels::bridge::{
+    OnebotAccountConfig, OnebotChannelConfig, QqbotAccountConfig, QqbotChannelConfig,
+    ResolvedOnebotChannelConfig, ResolvedQqbotChannelConfig, ResolvedWeixinChannelConfig,
+    WeixinAccountConfig, WeixinChannelConfig,
+};
+#[allow(unused_imports)]
 pub use channels::{
     ChannelAccountIdentity, ChannelAccountIdentitySource, ChannelAcpConfig,
     ChannelDefaultAccountSelection, ChannelDefaultAccountSelectionSource, ChannelDescriptor,
@@ -47,14 +53,16 @@ pub(crate) use channels::{
     IMESSAGE_BRIDGE_URL_ENV, LINE_CHANNEL_ACCESS_TOKEN_ENV, LINE_CHANNEL_SECRET_ENV,
     MATRIX_ACCESS_TOKEN_ENV, MATTERMOST_BOT_TOKEN_ENV, MATTERMOST_SERVER_URL_ENV,
     NEXTCLOUD_TALK_SERVER_URL_ENV, NEXTCLOUD_TALK_SHARED_SECRET_ENV, NOSTR_PRIVATE_KEY_ENV,
-    NOSTR_RELAY_URLS_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
+    NOSTR_RELAY_URLS_ENV, ONEBOT_ACCESS_TOKEN_ENV, ONEBOT_WEBSOCKET_URL_ENV, QQBOT_APP_ID_ENV,
+    QQBOT_CLIENT_SECRET_ENV, SIGNAL_ACCOUNT_ENV, SIGNAL_SERVICE_URL_ENV, SLACK_BOT_TOKEN_ENV,
     SYNOLOGY_CHAT_INCOMING_URL_ENV, SYNOLOGY_CHAT_TOKEN_ENV, TEAMS_APP_ID_ENV,
     TEAMS_APP_PASSWORD_ENV, TEAMS_TENANT_ID_ENV, TEAMS_WEBHOOK_URL_ENV, TELEGRAM_BOT_TOKEN_ENV,
     TLON_CODE_ENV, TLON_SHIP_ENV, TLON_URL_ENV, TWITCH_ACCESS_TOKEN_ENV, WEBHOOK_AUTH_TOKEN_ENV,
     WEBHOOK_ENDPOINT_URL_ENV, WEBHOOK_SIGNING_SECRET_ENV, WECOM_BOT_ID_ENV, WECOM_SECRET_ENV,
-    WHATSAPP_ACCESS_TOKEN_ENV, WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV,
-    WHATSAPP_VERIFY_TOKEN_ENV, normalize_channel_account_id, parse_email_smtp_endpoint,
-    parse_nostr_private_key_hex, parse_nostr_public_key_hex,
+    WEIXIN_BRIDGE_ACCESS_TOKEN_ENV, WEIXIN_BRIDGE_URL_ENV, WHATSAPP_ACCESS_TOKEN_ENV,
+    WHATSAPP_APP_SECRET_ENV, WHATSAPP_PHONE_NUMBER_ID_ENV, WHATSAPP_VERIFY_TOKEN_ENV,
+    normalize_channel_account_id, parse_email_smtp_endpoint, parse_nostr_private_key_hex,
+    parse_nostr_public_key_hex,
 };
 #[allow(unused_imports)]
 pub use conversation::{ConversationConfig, ConversationTurnLoopConfig};
@@ -65,7 +73,8 @@ pub(crate) use irc::{
 };
 #[allow(unused_imports)]
 pub use memory::{
-    MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile, MemorySystemKind,
+    InitiativeLevel, MemoryBackendKind, MemoryConfig, MemoryIngestMode, MemoryMode, MemoryProfile,
+    MemorySystemKind, PersonalizationConfig, PersonalizationPromptState, ResponseDensity,
 };
 #[allow(unused_imports)]
 pub use outbound_http::OutboundHttpConfig;
@@ -106,9 +115,10 @@ pub use tools::{
     AUTONOMY_PROFILE_VALID_VALUES, AutonomyProfile, BrowserCompanionToolConfig, BrowserToolConfig,
     DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS, DEFAULT_BROWSER_MAX_LINKS,
     DEFAULT_BROWSER_MAX_SESSIONS, DEFAULT_BROWSER_MAX_TEXT_CHARS,
-    DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS, DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS,
-    DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES, DEFAULT_WEB_FETCH_MAX_REDIRECTS,
-    DEFAULT_WEB_FETCH_TIMEOUT_SECONDS, DEFAULT_WEB_SEARCH_MAX_RESULTS, DEFAULT_WEB_SEARCH_PROVIDER,
+    DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES, DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS,
+    DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS, DEFAULT_SHELL_ALLOW, DEFAULT_WEB_FETCH_MAX_BYTES,
+    DEFAULT_WEB_FETCH_MAX_REDIRECTS, DEFAULT_WEB_FETCH_TIMEOUT_SECONDS,
+    DEFAULT_WEB_SEARCH_MAX_RESULTS, DEFAULT_WEB_SEARCH_PROVIDER,
     DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS, ExternalSkillsConfig, GovernedToolApprovalConfig,
     GovernedToolApprovalMode, MAX_BROWSER_MAX_LINKS, MAX_BROWSER_MAX_SESSIONS,
     MAX_BROWSER_MAX_TEXT_CHARS, MAX_RUNTIME_SELF_MAX_SOURCE_CHARS,
@@ -152,44 +162,33 @@ mod tests {
     }
 
     fn expected_service_channel_ids() -> Vec<&'static str> {
-        let mut service_ids = Vec::new();
-        let catalog = crate::channel::list_channel_catalog();
-
-        for catalog_entry in catalog {
-            let Some(descriptor) = channel_descriptor(catalog_entry.id) else {
-                continue;
-            };
-            if descriptor.runtime_kind != ChannelRuntimeKind::Service {
-                continue;
-            }
-            service_ids.push(descriptor.id);
-        }
-
-        service_ids
-    }
-
-    fn config_with_all_service_channels_enabled() -> LoongClawConfig {
-        let default_config = LoongClawConfig::default();
-        let mut config_value =
-            serde_json::to_value(default_config).expect("serialize default config");
-        let config_object = config_value
-            .as_object_mut()
-            .expect("config should serialize to an object");
-        let service_ids = expected_service_channel_ids();
-
-        for channel_id in service_ids {
-            let field_name = channel_id.replace('-', "_");
-            let channel_value = config_object
-                .get_mut(field_name.as_str())
-                .expect("service channel config field");
-            let channel_object = channel_value
-                .as_object_mut()
-                .expect("channel config should serialize to an object");
-            let enabled_value = serde_json::Value::Bool(true);
-            channel_object.insert("enabled".to_owned(), enabled_value);
-        }
-
-        serde_json::from_value(config_value).expect("deserialize enabled config")
+        vec![
+            "telegram",
+            "feishu",
+            "matrix",
+            "wecom",
+            "weixin",
+            "qqbot",
+            "onebot",
+            "discord",
+            "slack",
+            "line",
+            "dingtalk",
+            "whatsapp",
+            "email",
+            "webhook",
+            "google-chat",
+            "signal",
+            "twitch",
+            "teams",
+            "mattermost",
+            "nextcloud-talk",
+            "synology-chat",
+            "irc",
+            "imessage",
+            "nostr",
+            "tlon",
+        ]
     }
 
     #[test]
@@ -230,6 +229,24 @@ mod tests {
         assert_eq!(wecom.surface_label, "wecom channel");
         assert_eq!(wecom.runtime_kind, ChannelRuntimeKind::Service);
         assert_eq!(wecom.serve_subcommand, Some("wecom-serve"));
+
+        let weixin = channel_descriptor("wechat").expect("weixin descriptor");
+        assert_eq!(weixin.id, "weixin");
+        assert_eq!(weixin.surface_label, "weixin channel");
+        assert_eq!(weixin.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(weixin.serve_subcommand, None);
+
+        let qqbot = channel_descriptor("qq").expect("qqbot descriptor");
+        assert_eq!(qqbot.id, "qqbot");
+        assert_eq!(qqbot.surface_label, "qq bot channel");
+        assert_eq!(qqbot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(qqbot.serve_subcommand, None);
+
+        let onebot = channel_descriptor("onebot-v11").expect("onebot descriptor");
+        assert_eq!(onebot.id, "onebot");
+        assert_eq!(onebot.surface_label, "onebot channel");
+        assert_eq!(onebot.runtime_kind, ChannelRuntimeKind::Service);
+        assert_eq!(onebot.serve_subcommand, None);
 
         let discord = channel_descriptor("discord").expect("discord descriptor");
         assert_eq!(discord.id, "discord");
@@ -336,7 +353,7 @@ mod tests {
         let default_config = LoongClawConfig::default();
         assert_eq!(default_config.enabled_channel_ids(), vec!["cli"]);
         assert!(default_config.enabled_service_channel_ids().is_empty());
-        let config = config_with_all_service_channels_enabled();
+        let mut config = LoongClawConfig::default();
         let expected_service_ids = expected_service_channel_ids();
         let expected_enabled_service_ids = expected_service_ids
             .iter()
@@ -344,6 +361,32 @@ mod tests {
             .collect::<Vec<_>>();
         let mut expected_enabled_channel_ids = vec!["cli".to_owned()];
         expected_enabled_channel_ids.extend(expected_enabled_service_ids.iter().cloned());
+
+        config.telegram.enabled = true;
+        config.feishu.enabled = true;
+        config.matrix.enabled = true;
+        config.wecom.enabled = true;
+        config.weixin.enabled = true;
+        config.qqbot.enabled = true;
+        config.onebot.enabled = true;
+        config.discord.enabled = true;
+        config.slack.enabled = true;
+        config.line.enabled = true;
+        config.dingtalk.enabled = true;
+        config.whatsapp.enabled = true;
+        config.email.enabled = true;
+        config.webhook.enabled = true;
+        config.google_chat.enabled = true;
+        config.signal.enabled = true;
+        config.twitch.enabled = true;
+        config.teams.enabled = true;
+        config.mattermost.enabled = true;
+        config.nextcloud_talk.enabled = true;
+        config.synology_chat.enabled = true;
+        config.irc.enabled = true;
+        config.imessage.enabled = true;
+        config.nostr.enabled = true;
+        config.tlon.enabled = true;
 
         assert_eq!(config.enabled_channel_ids(), expected_enabled_channel_ids);
         assert_eq!(

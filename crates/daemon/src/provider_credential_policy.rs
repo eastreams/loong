@@ -282,6 +282,7 @@ fn secret_ref_has_inline_literal(secret_ref: Option<&SecretRef>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::ScopedEnv;
 
     #[test]
     fn provider_credential_env_hints_prioritize_oauth_defaults() {
@@ -320,7 +321,7 @@ mod tests {
 
     #[test]
     fn provider_has_locally_available_credentials_accepts_x_api_key_providers() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         env.set("ANTHROPIC_API_KEY", "test-anthropic-key");
         let provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::Anthropic,
@@ -363,7 +364,7 @@ mod tests {
 
     #[test]
     fn provider_available_credential_env_binding_preserves_oauth_env_bindings() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         env.set("OPENAI_SESSION_TOKEN", "test-openai-session-token");
         let provider = mvp::config::ProviderConfig {
             kind: mvp::config::ProviderKind::Openai,
@@ -396,7 +397,7 @@ mod tests {
 
     #[test]
     fn provider_available_credential_env_binding_uses_first_populated_env_hint() {
-        let mut env = mvp::test_support::ScopedEnv::new();
+        let mut env = ScopedEnv::new();
         env.set("OPENAI_API_KEY", "test-openai-key");
         let provider =
             mvp::config::ProviderConfig::fresh_for_kind(mvp::config::ProviderKind::Openai);

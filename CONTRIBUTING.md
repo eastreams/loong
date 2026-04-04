@@ -8,7 +8,8 @@ collaboration.
 
 - Rust stable toolchain installed.
 - `cargo` available in shell.
-- `task` CLI installed (`go-task`), required for `task verify` / `task verify:full`.
+- `task` CLI installed (`go-task`) if you want to use the convenience wrappers in
+  `Taskfile.yml` such as `task verify` / `task verify:full`.
 - Go toolchain installed (required by `task check:conventions`).
 - `cargo-deny` installed (required by `task check:deny`).
 - GitHub account with fork access.
@@ -35,14 +36,14 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 ```
 
-Canonical local gate:
+Optional convenience wrapper:
 
 ```bash
 task verify
 ```
 
-If `task`/`go`/convention skill dependencies are unavailable locally, run at least CI parity plus
-architecture/dep-graph checks directly:
+If `task` or its transitive dependencies are unavailable locally, run at least
+CI parity plus architecture/dep-graph checks directly:
 
 ```bash
 cargo fmt --all -- --check

@@ -1,6 +1,8 @@
 #![cfg(unix)]
 
+use super::latest_selector_process_support::LatestSelectorCliFixture;
 use super::*;
+use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -25,6 +27,12 @@ fn unique_temp_path(label: &str) -> PathBuf {
 
 fn render_output(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+fn invoked_chat_cli_command_name() -> &'static str {
+    mvp::config::detect_invoked_cli_command_name_from_arg0(Some(OsStr::new(env!(
+        "CARGO_BIN_EXE_loongclaw"
+    ))))
 }
 
 struct PermissionsResetGuard {
@@ -161,7 +169,8 @@ fn chat_without_config_runs_onboard_for_explicit_yes() {
     );
     assert!(
         fixture.onboard_log().contains("onboard"),
-        "explicit yes should invoke `loongclaw onboard`: {:?}",
+        "explicit yes should invoke `{} onboard`: {:?}",
+        super::active_cli_command_name(),
         fixture.onboard_log()
     );
 }
@@ -179,7 +188,8 @@ fn chat_without_config_runs_onboard_for_default_enter() {
     );
     assert!(
         fixture.onboard_log().contains("onboard"),
-        "default enter should invoke `loongclaw onboard`: {:?}",
+        "default enter should invoke `{} onboard`: {:?}",
+        super::active_cli_command_name(),
         fixture.onboard_log()
     );
 }
@@ -218,7 +228,8 @@ fn chat_without_config_decline_hint_preserves_explicit_config_path() {
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
     let expected_hint = format!(
-        "You can run 'loongclaw onboard --output {}' later to get started.",
+        "You can run '{} onboard --output {}' later to get started.",
+        invoked_chat_cli_command_name(),
         explicit_config.display()
     );
     let compacted_stdout = stdout.split_whitespace().collect::<String>();
@@ -246,6 +257,12 @@ fn chat_without_config_treats_explicit_no_as_decline() {
     let output = fixture.run_chat_command(None, Some(b"n\n"));
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
+    let expected_hint = format!(
+        "You can run '{} onboard' later to get started.",
+        invoked_chat_cli_command_name()
+    );
+    let compacted_stdout = stdout.split_whitespace().collect::<String>();
+    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -257,7 +274,7 @@ fn chat_without_config_treats_explicit_no_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        compacted_stdout.contains(&compacted_expected_hint),
         "explicit no should leave a follow-up hint: {stdout:?}"
     );
 }
@@ -269,6 +286,12 @@ fn chat_without_config_treats_eof_as_decline() {
     let output = fixture.run_chat_command(None, None);
     let stdout = render_output(&output.stdout);
     let stderr = render_output(&output.stderr);
+    let expected_hint = format!(
+        "You can run '{} onboard' later to get started.",
+        invoked_chat_cli_command_name()
+    );
+    let compacted_stdout = stdout.split_whitespace().collect::<String>();
+    let compacted_expected_hint = expected_hint.split_whitespace().collect::<String>();
 
     assert!(
         output.status.success(),
@@ -280,7 +303,7 @@ fn chat_without_config_treats_eof_as_decline() {
         fixture.onboard_log()
     );
     assert!(
-        stdout.contains("You can run 'loongclaw onboard' later to get started."),
+        compacted_stdout.contains(&compacted_expected_hint),
         "eof should still leave the follow-up hint: {stdout:?}"
     );
 }
@@ -334,5 +357,90 @@ fn chat_without_config_surfaces_config_path_access_errors() {
         fixture.onboard_log().is_empty(),
         "path access errors should not invoke onboarding: {:?}",
         fixture.onboard_log()
+    );
+}
+
+#[test]
+fn chat_cli_latest_session_selector_process_uses_selected_root_session_history() {
+    let fixture = LatestSelectorCliFixture::new("chat-latest-selector-process");
+    fixture.write_config_with(|_| {});
+
+    fixture.create_root_session("root-old");
+    fixture.append_session_turn("root-old", "user", "old root turn");
+    fixture.set_session_updated_at("root-old", 100);
+    fixture.set_turn_timestamps("root-old", 100);
+
+    fixture.create_root_session("root-new");
+    fixture.append_session_turn("root-new", "user", "selected user turn");
+    fixture.append_session_turn("root-new", "assistant", "selected assistant turn");
+    fixture.set_session_updated_at("root-new", 200);
+    fixture.set_turn_timestamps("root-new", 200);
+
+    fixture.create_delegate_child_session("delegate-child", "root-new");
+    fixture.append_session_turn("delegate-child", "assistant", "delegate child turn");
+    fixture.set_session_updated_at("delegate-child", 400);
+    fixture.set_turn_timestamps("delegate-child", 400);
+
+    fixture.create_root_session("root-archived");
+    fixture.append_session_turn("root-archived", "assistant", "archived root turn");
+    fixture.set_session_updated_at("root-archived", 500);
+    fixture.set_turn_timestamps("root-archived", 500);
+    fixture.archive_session("root-archived", 600);
+
+    let output = fixture.run_process(&["chat", "--session", "latest"], Some(b"/history\n/exit\n"));
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "chat latest selector should succeed, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stdout.contains("- session: root-new"),
+        "chat startup should surface the resolved latest session id: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("selected user turn"),
+        "history output should include the selected latest root user turn: {stdout:?}"
+    );
+    assert!(
+        stdout.contains("selected assistant turn"),
+        "history output should include the selected latest root assistant turn: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("old root turn"),
+        "older root history should not appear in the latest session output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("delegate child turn"),
+        "delegate child history should not appear in the latest root output: {stdout:?}"
+    );
+    assert!(
+        !stdout.contains("archived root turn"),
+        "archived root history should not appear in the latest root output: {stdout:?}"
+    );
+}
+
+#[test]
+fn chat_cli_latest_session_selector_process_rejects_missing_resumable_root() {
+    let fixture = LatestSelectorCliFixture::new("chat-latest-selector-empty");
+    fixture.write_config_with(|_| {});
+
+    let output = fixture.run_process(&["chat", "--session", "latest"], None);
+    let stdout = render_output(&output.stdout);
+    let stderr = render_output(&output.stderr);
+
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "missing latest root session should fail before chat starts, stdout={stdout:?}, stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("latest"),
+        "chat error output should mention the latest selector: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("resumable root session"),
+        "chat error output should explain the missing latest root session: {stderr:?}"
     );
 }

@@ -37,7 +37,17 @@
   },
   "inspector": {
     "sessionLoaded": "Live session loaded",
-    "waitingForSession": "Waiting for session"
+    "waitingForSession": "Waiting for session",
+    "recentTools": "Recent tools",
+    "noRecentTools": "No recent tool activity"
+  },
+  "recentTools": {
+    "detail": {
+      "ok": "Completed successfully",
+      "error": "Finished with an error",
+      "interrupted": "Interrupted before completion",
+      "pending": "Awaiting tool activity"
+    }
   },
   "errors": {
     "providerHostFallback": "the provider host",

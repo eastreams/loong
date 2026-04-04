@@ -315,6 +315,11 @@ elif ! grep -Fq "${EXPECTED_ADVISORY_URL}" "$ISSUE_TEMPLATE_CONFIG"; then
     ERRORS=$((ERRORS + 1))
 fi
 
+# --- 6. Governance architecture doc consistency checks ---
+if ! "$REPO_ROOT/scripts/check_governance_docs_consistency.sh"; then
+    ERRORS=$((ERRORS + 1))
+fi
+
 # --- Summary ---
 if [ "$ERRORS" -gt 0 ]; then
     echo ""

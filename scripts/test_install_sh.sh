@@ -794,6 +794,8 @@ run_missing_release_guidance_test() {
   fi
 
   assert_contains "$output_file" "no GitHub release is published for loongclaw-ai/loongclaw yet"
+  assert_contains "$output_file" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  assert_contains "$output_file" 'source "$HOME/.cargo/env"'
   assert_contains "$output_file" "git clone https://github.com/loongclaw-ai/loongclaw.git"
   assert_contains "$output_file" "bash scripts/install.sh --source --onboard"
 }

@@ -378,6 +378,7 @@ pub(super) enum TurnCheckpointRequest {
 pub(super) struct TurnLaneExecutionSnapshot {
     pub(super) lane: ExecutionLane,
     pub(super) had_tool_intents: bool,
+    pub(super) tool_request_summary: Option<String>,
     pub(super) raw_tool_output_requested: bool,
     pub(super) result_kind: TurnCheckpointResultKind,
     pub(super) safe_lane_terminal_route: Option<SafeLaneFailureRoute>,
@@ -847,6 +848,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let resume_input =
@@ -883,6 +885,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let resume_input =
@@ -924,6 +927,7 @@ mod tests {
             messages,
             artifacts: Vec::new(),
             estimated_tokens: Some(9),
+            prompt_fragments: Vec::new(),
             system_prompt_addition: None,
         };
         let error = TurnCheckpointRepairResumeInput::from_assembled_context(assembled, &checkpoint)

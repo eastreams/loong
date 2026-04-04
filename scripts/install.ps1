@@ -118,7 +118,7 @@ function Install-FromSource {
     $previousReleaseBuild = $env:LOONGCLAW_RELEASE_BUILD
     try {
         $env:LOONGCLAW_RELEASE_BUILD = "1"
-        cargo build -p loongclaw-daemon --bin $BinName --release --locked | Out-Host
+        cargo build -p loongclaw --bin $BinName --release --locked | Out-Host
     } finally {
         if ($hadReleaseBuild) {
             $env:LOONGCLAW_RELEASE_BUILD = $previousReleaseBuild
