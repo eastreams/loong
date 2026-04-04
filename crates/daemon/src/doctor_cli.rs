@@ -4441,6 +4441,20 @@ mod tests {
                 .any(|step| step.contains("loong audit repair")),
             "doctor should not recommend audit repair before the journal exists: {next_steps:#?}"
         );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn unique_temp_dir(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before epoch")
+            .as_nanos();
+        let sequence = FEISHU_TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "loongclaw-doctor-{label}-{}-{nanos}-{sequence}",
+            std::process::id()
+        ))
     }
 
     fn unique_temp_feishu_db(label: &str) -> String {

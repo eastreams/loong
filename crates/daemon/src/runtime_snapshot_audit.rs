@@ -24,9 +24,8 @@ pub fn collect_runtime_snapshot_audit_state(
     let integrity_paths = kernel::derive_jsonl_audit_integrity_paths(&journal_path);
     let journal_missing = !journal_path.exists();
 
-    let verification = if matches!(audit.mode, mvp::config::AuditMode::InMemory) {
-        None
-    } else if journal_missing {
+    let verification = if matches!(audit.mode, mvp::config::AuditMode::InMemory) || journal_missing
+    {
         None
     } else {
         let report = kernel::verify_jsonl_audit_journal_integrity(&journal_path)
