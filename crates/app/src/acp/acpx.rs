@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use async_trait::async_trait;
-#[cfg(test)]
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -467,7 +466,6 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             .unwrap_or_else(|| ACPX_DEFAULT_COMMAND.to_owned());
         let expected_version = raw_profile.expected_version();
         let cwd = raw_profile.cwd();
-        let injectable_mcp_server_count = injectable_mcp_server_count(config)?;
         let mut diagnostics = BTreeMap::from([
             ("backend".to_owned(), self.id().to_owned()),
             ("command".to_owned(), command.clone()),
@@ -477,11 +475,21 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                     .clone()
                     .unwrap_or_else(|| ACPX_VERSION_ANY.to_owned()),
             ),
-            (
-                "mcp_server_count".to_owned(),
-                injectable_mcp_server_count.to_string(),
-            ),
         ]);
+        let injectable_mcp_server_count = match injectable_mcp_server_count(config) {
+            Ok(count) => {
+                diagnostics.insert("mcp_server_count".to_owned(), count.to_string());
+                count
+            }
+            Err(error) => {
+                diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
+                diagnostics.insert("error".to_owned(), error);
+                return Ok(Some(AcpDoctorReport {
+                    healthy: false,
+                    diagnostics,
+                }));
+            }
+        };
 
         if let Some(permission_mode) = raw_profile.permission_mode() {
             diagnostics.insert("permission_mode".to_owned(), permission_mode);
@@ -1590,6 +1598,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(unix)]
     use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    use base64::Engine;
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};

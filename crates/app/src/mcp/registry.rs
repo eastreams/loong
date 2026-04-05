@@ -261,8 +261,8 @@ fn registry_entry_from_acpx_profile(
     server: &AcpxMcpServerConfig,
 ) -> McpRegistryEntry {
     let transport = McpTransportSnapshot::Stdio {
-        command: server.command.clone(),
-        args: server.args.clone(),
+        command: redact_stdio_command(server.command.as_str()),
+        args: redact_stdio_args(&server.args),
         cwd: None,
         env_var_names: server.env.keys().cloned().collect(),
     };
@@ -670,6 +670,59 @@ mod tests {
 
         assert!(has_acpx_origin);
         assert_eq!(server.status.kind, McpServerStatusKind::Pending);
+    }
+
+    #[test]
+    fn collect_mcp_runtime_snapshot_redacts_acpx_profile_servers() {
+        let config = LoongClawConfig {
+            acp: AcpConfig {
+                backends: crate::config::AcpBackendProfilesConfig {
+                    acpx: Some(crate::config::AcpxBackendConfig {
+                        mcp_servers: BTreeMap::from([(
+                            "filesystem".to_owned(),
+                            AcpxMcpServerConfig {
+                                command: "npx".to_owned(),
+                                args: vec![
+                                    "--apiKey=secret".to_owned(),
+                                    "-H".to_owned(),
+                                    "Authorization: Bearer secret".to_owned(),
+                                    "https://mcp.example.com?token=secret".to_owned(),
+                                ],
+                                env: BTreeMap::from([(
+                                    "NODE_ENV".to_owned(),
+                                    "production".to_owned(),
+                                )]),
+                            },
+                        )]),
+                        ..crate::config::AcpxBackendConfig::default()
+                    }),
+                },
+                ..AcpConfig::default()
+            },
+            ..LoongClawConfig::default()
+        };
+
+        let snapshot = collect_mcp_runtime_snapshot(&config).expect("collect MCP snapshot");
+        let server = snapshot
+            .servers
+            .iter()
+            .find(|server| server.name == "filesystem")
+            .expect("filesystem server");
+
+        assert_eq!(
+            server.transport,
+            McpTransportSnapshot::Stdio {
+                command: "npx".to_owned(),
+                args: vec![
+                    "--apiKey=<redacted>".to_owned(),
+                    "-H".to_owned(),
+                    "<redacted>".to_owned(),
+                    "https://mcp.example.com/?token=%3Credacted%3E".to_owned(),
+                ],
+                cwd: None,
+                env_var_names: vec!["NODE_ENV".to_owned()],
+            }
+        );
     }
 
     #[test]

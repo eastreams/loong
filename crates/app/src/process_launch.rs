@@ -40,9 +40,20 @@ fn resolve_shebang_invocation(
 ) -> Option<ResolvedCommandInvocation> {
     let script_path = resolve_existing_command_path(command)?;
     let shebang = read_shebang(script_path.as_path())?;
-    let mut parts = shebang.split_whitespace();
-    let interpreter = parts.next()?;
-    let mut resolved_args = parts.map(OsString::from).collect::<Vec<_>>();
+    let trimmed_shebang = shebang.trim();
+    let separator_index = trimmed_shebang.find(char::is_whitespace);
+    let interpreter = match separator_index {
+        Some(index) => trimmed_shebang.get(..index)?,
+        None => trimmed_shebang,
+    };
+    let mut resolved_args = Vec::new();
+    let remainder = separator_index.and_then(|index| trimmed_shebang.get(index..));
+    let remainder = remainder.map(str::trim_start);
+    if let Some(remainder) = remainder
+        && !remainder.is_empty()
+    {
+        resolved_args.push(OsString::from(remainder));
+    }
     let script_arg = script_path.into_os_string();
     resolved_args.push(script_arg);
     for argument in collected_args {
@@ -152,6 +163,33 @@ mod tests {
             resolved.args,
             vec![
                 std::ffi::OsString::from("python3"),
+                PathBuf::from(&script_path).into_os_string(),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_command_invocation_preserves_env_split_arguments_as_one_argument() {
+        let root = crate::test_support::unique_temp_dir("loongclaw-process-launch-env-s");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let script_path = root.join("script.py");
+        crate::test_support::write_executable_script_atomically(
+            &script_path,
+            "#!/usr/bin/env -S python3 -u\nprint('ok')\n",
+        )
+        .expect("write script");
+
+        let resolved = resolve_command_invocation(
+            script_path.to_string_lossy().as_ref(),
+            Vec::<String>::new(),
+        );
+
+        assert_eq!(resolved.program, std::ffi::OsString::from("/usr/bin/env"));
+        assert_eq!(
+            resolved.args,
+            vec![
+                std::ffi::OsString::from("-S python3 -u"),
                 PathBuf::from(&script_path).into_os_string(),
             ]
         );
