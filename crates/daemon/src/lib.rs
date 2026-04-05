@@ -131,6 +131,7 @@ pub mod supervisor;
 mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
+pub mod trajectory_cli;
 
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
@@ -148,6 +149,13 @@ use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
+pub use trajectory_cli::{
+    TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
+    TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
+    TrajectoryExportTurn, collect_trajectory_export_artifact, format_trajectory_export_text,
+    format_trajectory_inspect_text, load_trajectory_export_artifact, run_trajectory_export_cli,
+    run_trajectory_inspect_cli,
+};
 
 #[allow(
     clippy::expect_used,
@@ -886,6 +894,39 @@ pub enum Commands {
         session: Option<String>,
         #[arg(long, default_value_t = 200)]
         limit: usize,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Search transcript turns across visible sessions
+    SessionSearch {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long, default_value_t = false)]
+        include_archived: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Export one session trajectory artifact with transcript turns and session events
+    TrajectoryExport {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        output: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Inspect one exported trajectory artifact
+    TrajectoryInspect {
+        #[arg(long)]
+        artifact: String,
         #[arg(long, default_value_t = false)]
         json: bool,
     },
@@ -3393,7 +3434,10 @@ fn runtime_snapshot_optional_arg(raw: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn persist_runtime_snapshot_artifact(output_path: &str, payload: &Value) -> CliResult<()> {
+pub(crate) fn persist_runtime_snapshot_artifact(
+    output_path: &str,
+    payload: &Value,
+) -> CliResult<()> {
     let output_path = PathBuf::from(output_path);
     if let Some(parent) = output_path.parent()
         && !parent.as_os_str().is_empty()
@@ -4556,6 +4600,136 @@ pub fn run_safe_lane_summary_cli(
         let _ = (config, session_id, as_json);
         Err("safe-lane-summary requires memory-sqlite feature".to_owned())
     }
+}
+
+pub fn run_session_search_cli(
+    config_path: Option<&str>,
+    session: Option<&str>,
+    query: &str,
+    limit: usize,
+    include_archived: bool,
+    as_json: bool,
+) -> CliResult<()> {
+    if limit == 0 {
+        return Err("session-search limit must be >= 1".to_owned());
+    }
+    let query = query.trim();
+    if query.is_empty() {
+        return Err("session-search requires a non-empty --query value".to_owned());
+    }
+
+    let (_, config) = mvp::config::load(config_path)?;
+    let session_id = session
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_owned();
+    let mem_config =
+        mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let outcome = mvp::tools::execute_app_tool_with_config(
+        ToolCoreRequest {
+            tool_name: "session_search".to_owned(),
+            payload: json!({
+                "query": query,
+                "limit": limit,
+                "include_archived": include_archived,
+            }),
+        },
+        &session_id,
+        &mem_config,
+        &config.tools,
+    )?;
+
+    if as_json {
+        let payload = session_search_cli_json(
+            &session_id,
+            query,
+            limit,
+            include_archived,
+            &outcome.payload,
+        );
+        let pretty = serde_json::to_string_pretty(&payload)
+            .map_err(|error| format!("serialize session-search output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    print!(
+        "{}",
+        format_session_search_text(
+            &session_id,
+            query,
+            limit,
+            include_archived,
+            &outcome.payload,
+        )
+    );
+    Ok(())
+}
+
+pub fn session_search_cli_json(
+    session_id: &str,
+    query: &str,
+    limit: usize,
+    include_archived: bool,
+    payload: &Value,
+) -> Value {
+    json!({
+        "session": session_id,
+        "query": query,
+        "limit": limit,
+        "include_archived": include_archived,
+        "result": payload,
+    })
+}
+
+pub fn format_session_search_text(
+    session_id: &str,
+    query: &str,
+    limit: usize,
+    include_archived: bool,
+    payload: &Value,
+) -> String {
+    let returned_count = payload
+        .get("returned_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let hits = payload
+        .get("hits")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    let mut lines = vec![format!(
+        "session_search session={} query={} limit={} include_archived={} returned_count={}",
+        session_id, query, limit, include_archived, returned_count
+    )];
+
+    if hits.is_empty() {
+        lines.push("hits: -".to_owned());
+        return lines.join("\n") + "\n";
+    }
+
+    for hit in hits {
+        let session = hit.get("session").cloned().unwrap_or(Value::Null);
+        let hit_session_id = session
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let role = hit.get("role").and_then(Value::as_str).unwrap_or("-");
+        let turn_index = hit
+            .get("session_turn_index")
+            .and_then(Value::as_u64)
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_owned());
+        let snippet = hit.get("snippet").and_then(Value::as_str).unwrap_or("");
+        lines.push(format!(
+            "- session={} turn_index={} role={} snippet={}",
+            hit_session_id, turn_index, role, snippet
+        ));
+    }
+
+    lines.join("\n") + "\n"
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -483,6 +483,35 @@ async fn main() {
             limit,
             json,
         } => run_safe_lane_summary_cli(config.as_deref(), session.as_deref(), limit, json),
+        Commands::SessionSearch {
+            config,
+            session,
+            query,
+            limit,
+            include_archived,
+            json,
+        } => run_session_search_cli(
+            config.as_deref(),
+            session.as_deref(),
+            &query,
+            limit,
+            include_archived,
+            json,
+        ),
+        Commands::TrajectoryExport {
+            config,
+            session,
+            output,
+            json,
+        } => run_trajectory_export_cli(
+            config.as_deref(),
+            session.as_deref(),
+            output.as_deref(),
+            json,
+        ),
+        Commands::TrajectoryInspect { artifact, json } => {
+            run_trajectory_inspect_cli(&artifact, json)
+        }
         Commands::TelegramSend {
             config,
             account,
