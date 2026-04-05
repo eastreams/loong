@@ -91,6 +91,7 @@ pub(crate) fn extract_trust_event_payload(payload: &Value) -> Option<TrustEventE
     Some(trust_event)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn delegate_child_trust_event(
     parent_session_id: &str,
     child_session_id: &str,

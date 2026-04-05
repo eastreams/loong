@@ -723,6 +723,18 @@ impl Default for ToolRuntimeConfig {
 }
 
 impl ToolRuntimeConfig {
+    pub fn with_file_root_override(&self, file_root: PathBuf) -> Self {
+        let mut overridden = self.clone();
+        overridden.file_root = Some(file_root);
+        overridden
+    }
+
+    pub fn default_working_directory(&self) -> PathBuf {
+        let configured_root = self.file_root.clone();
+        let fallback_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        configured_root.unwrap_or(fallback_root)
+    }
+
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
@@ -2349,6 +2361,7 @@ mod tests {
     #[test]
     fn injected_config_overrides_global() {
         let _env = ScopedEnv::new();
+        std::fs::create_dir_all("/tmp/injected-root").expect("create injected file root");
         let config = ToolRuntimeConfig {
             file_root: Some(PathBuf::from("/tmp/injected-root")),
             shell_allow: BTreeSet::from(["echo".to_owned()]),
@@ -3195,6 +3208,7 @@ mod tests {
         };
         let execution = ConstrainedSubagentExecution {
             mode: crate::conversation::ConstrainedSubagentMode::Async,
+            isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
             depth: 1,
             max_depth: 2,
             active_children: 0,
@@ -3202,6 +3216,7 @@ mod tests {
             timeout_seconds: 60,
             allow_shell_in_child: false,
             child_tool_allowlist: vec!["web.fetch".to_owned()],
+            workspace_root: None,
             runtime_narrowing: narrowing,
             kernel_bound: false,
             identity: Some(ConstrainedSubagentIdentity {

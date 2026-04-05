@@ -29,11 +29,11 @@ use crate::acp::{
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
-    build_delegate_child_lifecycle_seed, next_delegate_child_depth,
+    DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed, next_delegate_child_depth,
 };
 use crate::runtime_self_continuity;
 
-use super::super::config::LoongClawConfig;
+use super::super::config::{LoongClawConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
@@ -126,15 +126,22 @@ use super::turn_shared::{
 };
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
-use crate::config::ToolConsentMode;
-#[cfg(all(feature = "memory-sqlite", test))]
-use crate::session::recovery::RECOVERY_EVENT_KIND;
+use crate::conversation::workspace_isolation::{
+    DelegateWorkspaceCleanupResult, cleanup_delegate_workspace_root,
+    cleanup_prepared_delegate_workspace_root, prepare_delegate_workspace_root,
+};
+#[cfg(feature = "memory-sqlite")]
+use crate::session::recovery::{
+    RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
+    build_terminal_finalize_recovery_payload,
+};
 #[cfg(all(test, feature = "memory-sqlite"))]
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalDecision, ApprovalRequestStatus, FinalizeSessionTerminalRequest, NewSessionEvent,
     NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    TransitionSessionWithEventIfCurrentRequest,
 };
 
 #[derive(Default)]
@@ -3231,6 +3238,8 @@ fn estimate_tokens_for_messages(
     estimated_tokens.or_else(|| estimate_tokens(messages))
 }
 
+const DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS: usize = 200;
+
 async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
     runtime: &R,
     session_id: &str,
@@ -3252,6 +3261,154 @@ async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
                 required_capabilities: Vec::new(),
             },
         );
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn emit_async_delegate_child_queued_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<&str>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
+    isolation: crate::conversation::ConstrainedSubagentIsolation,
+    timeout_seconds: u64,
+    workspace_root: Option<&std::path::Path>,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    emit_delegate_child_projection_event(
+        runtime,
+        parent_session_id,
+        "delegate_child_queued",
+        json!({
+            "child_session_id": child_session_id,
+            "label": child_label,
+            "profile": profile.map(crate::conversation::DelegateBuiltinProfile::as_str),
+            "mode": "async",
+            "phase": "queued",
+            "isolation": isolation.as_str(),
+            "timeout_seconds": timeout_seconds,
+            "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
+        }),
+        binding,
+    )
+    .await;
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<&str>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
+    phase: &'static str,
+    isolation: crate::conversation::ConstrainedSubagentIsolation,
+    duration_ms: u64,
+    turn_count: Option<usize>,
+    error: Option<&str>,
+    final_output: Option<&str>,
+    workspace_root: Option<&std::path::Path>,
+    workspace_retained: Option<bool>,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    emit_delegate_child_projection_event(
+        runtime,
+        parent_session_id,
+        "delegate_child_terminal",
+        json!({
+            "child_session_id": child_session_id,
+            "label": child_label,
+            "profile": profile.map(crate::conversation::DelegateBuiltinProfile::as_str),
+            "mode": "async",
+            "phase": phase,
+            "isolation": isolation.as_str(),
+            "duration_ms": duration_ms,
+            "turn_count": turn_count,
+            "error": error,
+            "final_output_preview": final_output.map(truncate_delegate_child_output_preview),
+            "workspace_root": workspace_root.map(|workspace_root| workspace_root.display().to_string()),
+            "workspace_retained": workspace_retained,
+        }),
+        binding,
+    )
+    .await;
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn emit_delegate_child_projection_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    parent_session_id: &str,
+    event_name: &str,
+    payload: Value,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    let _ =
+        persist_conversation_event(runtime, parent_session_id, event_name, payload, binding).await;
+    if let Some(ctx) = binding.kernel_context() {
+        let _ = ctx.kernel.record_audit_event(
+            Some(ctx.agent_id()),
+            AuditEventKind::PlaneInvoked {
+                pack_id: ctx.pack_id().to_owned(),
+                plane: ExecutionPlane::Runtime,
+                tier: PlaneTier::Core,
+                primary_adapter: "conversation.delegate_child".to_owned(),
+                delegated_core_adapter: None,
+                operation: format!("conversation.delegate_child.{event_name}"),
+                required_capabilities: Vec::new(),
+            },
+        );
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn truncate_delegate_child_output_preview(value: &str) -> String {
+    let total_chars = value.chars().count();
+    if total_chars <= DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS {
+        return value.to_owned();
+    }
+
+    let mut truncated = String::new();
+    for ch in value.chars().take(DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS) {
+        truncated.push(ch);
+    }
+    let omitted = total_chars.saturating_sub(DELEGATE_CHILD_OUTPUT_PREVIEW_CHARS);
+    truncated.push_str(&format!("...(truncated {omitted} chars)"));
+    truncated
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn inject_delegate_workspace_metadata(
+    outcome: &mut loongclaw_contracts::ToolCoreOutcome,
+    execution: &ConstrainedSubagentExecution,
+    cleanup: Option<&DelegateWorkspaceCleanupResult>,
+    cleanup_error: Option<String>,
+) {
+    let Some(object) = outcome.payload.as_object_mut() else {
+        return;
+    };
+
+    object.insert("isolation".to_owned(), json!(execution.isolation.as_str()));
+    if let Some(workspace_root) = execution.workspace_root.as_ref() {
+        let display_path = workspace_root.display().to_string();
+        object.insert("workspace_root".to_owned(), json!(display_path));
+    }
+    if let Some(cleanup) = cleanup {
+        object.insert("workspace_retained".to_owned(), json!(cleanup.retained));
+        object.insert("workspace_dirty".to_owned(), json!(cleanup.dirty));
+    }
+    if let Some(cleanup_error) = cleanup_error {
+        object.insert("workspace_cleanup_error".to_owned(), json!(cleanup_error));
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn split_delegate_workspace_cleanup(
+    cleanup: Result<Option<DelegateWorkspaceCleanupResult>, String>,
+) -> (Option<DelegateWorkspaceCleanupResult>, Option<String>) {
+    match cleanup {
+        Ok(metadata) => (metadata, None),
+        Err(error) => (None, Some(error)),
     }
 }
 
@@ -3967,14 +4124,22 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         &payload,
         config.tools.delegate.timeout_seconds,
     )?;
+    let delegate_policy =
+        crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
+    let child_session_id = crate::tools::delegate::next_delegate_session_id();
+    let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let child_session_id = crate::tools::delegate::next_delegate_session_id();
-    let child_label = delegate_request.label.clone();
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
+    let workspace_root =
+        prepare_delegate_workspace_root(config, &child_session_id, delegate_policy.isolation)?;
+    let workspace_cleanup_owned_by_child =
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let workspace_cleanup_owned_by_child_for_work =
+        std::sync::Arc::clone(&workspace_cleanup_owned_by_child);
     with_prepared_subagent_spawn_cleanup_if_kernel_bound(
         runtime,
         &session_context.session_id,
@@ -3985,11 +4150,19 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                 &session_context.session_id,
                 config.tools.delegate.max_active_children,
                 |active_children| {
+                    let execution_policy = DelegateChildExecutionPolicy {
+                        isolation: delegate_policy.isolation,
+                        profile: delegate_policy.profile,
+                        timeout_seconds: delegate_policy.timeout_seconds,
+                        allow_shell_in_child: delegate_policy.allow_shell_in_child,
+                        child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
+                        runtime_narrowing: delegate_policy.runtime_narrowing.clone(),
+                        workspace_root: workspace_root.clone(),
+                    };
                     let seed = build_delegate_child_lifecycle_seed(
                         config,
                         binding,
                         ConstrainedSubagentMode::Inline,
-                        delegate_request.timeout_seconds,
                         next_child_depth,
                         active_children,
                         &session_context.session_id,
@@ -3997,11 +4170,14 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                         child_label.clone(),
                         &delegate_request.task,
                         runtime_self_continuity.as_ref(),
+                        execution_policy,
                         subagent_identity.clone(),
                     );
                     Ok((seed.request, seed.execution))
                 },
             )?;
+            workspace_cleanup_owned_by_child_for_work
+                .store(true, std::sync::atomic::Ordering::Release);
 
             run_started_delegate_child_turn_with_runtime(
                 config,
@@ -4010,14 +4186,27 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                 &session_context.session_id,
                 child_label,
                 &delegate_request.task,
+                delegate_policy.profile,
                 execution,
-                delegate_request.timeout_seconds,
+                delegate_policy.timeout_seconds,
                 binding,
             )
             .await
         },
     )
     .await
+    .inspect_err(|_error| {
+        let cleanup_owned_by_child =
+            workspace_cleanup_owned_by_child.load(std::sync::atomic::Ordering::Acquire);
+        if cleanup_owned_by_child {
+            return;
+        }
+
+        let _ = cleanup_prepared_delegate_workspace_root(
+            delegate_policy.isolation,
+            workspace_root.as_deref(),
+        );
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4037,10 +4226,12 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+    let delegate_policy =
+        crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
+    let child_session_id = crate::tools::delegate::next_delegate_session_id();
+    let child_label = delegate_policy.label.clone();
     let subagent_identity =
         crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
-    let child_session_id = crate::tools::delegate::next_delegate_session_id();
-    let child_label = delegate_request.label.clone();
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
@@ -4049,48 +4240,86 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
-    let (_, execution) = repo.create_delegate_child_session_with_event_if_within_limit(
-        &session_context.session_id,
-        config.tools.delegate.max_active_children,
-        |active_children| {
-            let seed = build_delegate_child_lifecycle_seed(
-                config,
-                binding,
-                ConstrainedSubagentMode::Async,
-                delegate_request.timeout_seconds,
-                next_child_depth,
-                active_children,
-                &session_context.session_id,
-                &child_session_id,
-                child_label.clone(),
-                &delegate_request.task,
-                runtime_self_continuity.as_ref(),
-                subagent_identity.clone(),
+    let workspace_root =
+        prepare_delegate_workspace_root(config, &child_session_id, delegate_policy.isolation)?;
+    let (_, execution) = repo
+        .create_delegate_child_session_with_event_if_within_limit(
+            &session_context.session_id,
+            config.tools.delegate.max_active_children,
+            |active_children| {
+                let execution_policy = DelegateChildExecutionPolicy {
+                    isolation: delegate_policy.isolation,
+                    profile: delegate_policy.profile,
+                    timeout_seconds: delegate_policy.timeout_seconds,
+                    allow_shell_in_child: delegate_policy.allow_shell_in_child,
+                    child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
+                    runtime_narrowing: delegate_policy.runtime_narrowing.clone(),
+                    workspace_root: workspace_root.clone(),
+                };
+                let seed = build_delegate_child_lifecycle_seed(
+                    config,
+                    binding,
+                    ConstrainedSubagentMode::Async,
+                    next_child_depth,
+                    active_children,
+                    &session_context.session_id,
+                    &child_session_id,
+                    child_label.clone(),
+                    &delegate_request.task,
+                    runtime_self_continuity.as_ref(),
+                    execution_policy,
+                    subagent_identity.clone(),
+                );
+                Ok((seed.request, seed.execution))
+            },
+        )
+        .inspect_err(|_error| {
+            let _ = cleanup_prepared_delegate_workspace_root(
+                delegate_policy.isolation,
+                workspace_root.as_deref(),
             );
-            Ok((seed.request, seed.execution))
+        })?;
+
+    let queued_execution = execution.clone();
+    let queued_workspace_root = execution.workspace_root.clone();
+    spawn_async_delegate_detached(
+        runtime_handle,
+        memory_config,
+        spawner,
+        AsyncDelegateSpawnRequest {
+            child_session_id: child_session_id.clone(),
+            parent_session_id: session_context.session_id.clone(),
+            task: delegate_request.task,
+            label: child_label,
+            profile: delegate_policy.profile,
+            execution: queued_execution,
+            runtime_self_continuity,
+            timeout_seconds: delegate_policy.timeout_seconds,
+            binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
         },
-    )?;
+    );
+    emit_async_delegate_child_queued_event(
+        runtime,
+        &session_context.session_id,
+        &child_session_id,
+        delegate_policy.label.as_deref(),
+        delegate_policy.profile,
+        delegate_policy.isolation,
+        delegate_policy.timeout_seconds,
+        queued_workspace_root.as_deref(),
+        binding,
+    )
+    .await;
 
-    let queued_contract = execution.contract_view();
-    let request = AsyncDelegateSpawnRequest {
-        child_session_id: child_session_id.clone(),
-        parent_session_id: session_context.session_id.clone(),
-        task: delegate_request.task,
-        label: child_label,
-        execution,
-        runtime_self_continuity,
-        timeout_seconds: delegate_request.timeout_seconds,
-        binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
-    };
-    spawn_async_delegate_detached(runtime_handle, memory_config, spawner, request);
-
-    Ok(crate::tools::delegate::delegate_async_queued_outcome(
+    let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
         Some(session_context.session_id.clone()),
-        delegate_request.label,
-        Some(&queued_contract),
-        delegate_request.timeout_seconds,
-    ))
+        delegate_policy.label,
+        delegate_policy.profile,
+        delegate_policy.timeout_seconds,
+    );
+    inject_delegate_workspace_metadata(&mut outcome, &execution, None, None);
+    Ok(outcome)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4188,6 +4417,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
     parent_session_id: &str,
     child_label: Option<String>,
     user_input: &str,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: ConstrainedSubagentExecution,
     timeout_seconds: u64,
     binding: ConversationRuntimeBinding<'_>,
@@ -4216,15 +4446,24 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 .load_session_summary(child_session_id)?
                 .map(|session| session.turn_count)
                 .unwrap_or_default();
-            let subagent_contract = execution.contract_view();
-            let outcome = crate::tools::delegate::delegate_success_outcome(
+            let final_output_preview = final_output.clone();
+            let mut outcome = crate::tools::delegate::delegate_success_outcome(
                 child_session_id.to_owned(),
                 Some(parent_session_id.to_owned()),
-                child_label,
-                Some(&subagent_contract),
+                child_label.clone(),
+                profile,
                 final_output,
                 turn_count,
                 duration_ms,
+            );
+            let workspace_cleanup = cleanup_delegate_workspace_root(&execution);
+            let (cleanup_metadata, cleanup_error) =
+                split_delegate_workspace_cleanup(workspace_cleanup);
+            inject_delegate_workspace_metadata(
+                &mut outcome,
+                &execution,
+                cleanup_metadata.as_ref(),
+                cleanup_error,
             );
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
@@ -4244,17 +4483,44 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     outcome_payload_json: outcome.payload.clone(),
                 },
             )?;
+            if execution.mode == ConstrainedSubagentMode::Async {
+                emit_async_delegate_child_terminal_event(
+                    runtime,
+                    parent_session_id,
+                    child_session_id,
+                    child_label.as_deref(),
+                    profile,
+                    "completed",
+                    execution.isolation,
+                    duration_ms,
+                    Some(turn_count),
+                    None,
+                    Some(final_output_preview.as_str()),
+                    execution.workspace_root.as_deref(),
+                    cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
+                    binding,
+                )
+                .await;
+            }
             Ok(outcome)
         }
         Ok(Ok(Err(error))) => {
-            let subagent_contract = execution.contract_view();
-            let outcome = crate::tools::delegate::delegate_error_outcome(
+            let mut outcome = crate::tools::delegate::delegate_error_outcome(
                 child_session_id.to_owned(),
                 Some(parent_session_id.to_owned()),
-                child_label,
-                Some(&subagent_contract),
+                child_label.clone(),
+                profile,
                 error.clone(),
                 duration_ms,
+            );
+            let workspace_cleanup = cleanup_delegate_workspace_root(&execution);
+            let (cleanup_metadata, cleanup_error) =
+                split_delegate_workspace_cleanup(workspace_cleanup);
+            inject_delegate_workspace_metadata(
+                &mut outcome,
+                &execution,
+                cleanup_metadata.as_ref(),
+                cleanup_error,
             );
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
@@ -4274,18 +4540,45 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     outcome_payload_json: outcome.payload.clone(),
                 },
             )?;
+            if execution.mode == ConstrainedSubagentMode::Async {
+                emit_async_delegate_child_terminal_event(
+                    runtime,
+                    parent_session_id,
+                    child_session_id,
+                    child_label.as_deref(),
+                    profile,
+                    "failed",
+                    execution.isolation,
+                    duration_ms,
+                    None,
+                    Some(error.as_str()),
+                    None,
+                    execution.workspace_root.as_deref(),
+                    cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
+                    binding,
+                )
+                .await;
+            }
             Ok(outcome)
         }
         Ok(Err(panic_payload)) => {
             let panic_error = format_delegate_child_panic(panic_payload);
-            let subagent_contract = execution.contract_view();
-            let outcome = crate::tools::delegate::delegate_error_outcome(
+            let mut outcome = crate::tools::delegate::delegate_error_outcome(
                 child_session_id.to_owned(),
                 Some(parent_session_id.to_owned()),
-                child_label,
-                Some(&subagent_contract),
+                child_label.clone(),
+                profile,
                 panic_error.clone(),
                 duration_ms,
+            );
+            let workspace_cleanup = cleanup_delegate_workspace_root(&execution);
+            let (cleanup_metadata, cleanup_error) =
+                split_delegate_workspace_cleanup(workspace_cleanup);
+            inject_delegate_workspace_metadata(
+                &mut outcome,
+                &execution,
+                cleanup_metadata.as_ref(),
+                cleanup_error,
             );
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
@@ -4305,17 +4598,44 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     outcome_payload_json: outcome.payload.clone(),
                 },
             )?;
+            if execution.mode == ConstrainedSubagentMode::Async {
+                emit_async_delegate_child_terminal_event(
+                    runtime,
+                    parent_session_id,
+                    child_session_id,
+                    child_label.as_deref(),
+                    profile,
+                    "failed",
+                    execution.isolation,
+                    duration_ms,
+                    None,
+                    Some(panic_error.as_str()),
+                    None,
+                    execution.workspace_root.as_deref(),
+                    cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
+                    binding,
+                )
+                .await;
+            }
             Ok(outcome)
         }
         Err(_) => {
             let timeout_error = "delegate_timeout".to_owned();
-            let subagent_contract = execution.contract_view();
-            let outcome = crate::tools::delegate::delegate_timeout_outcome(
+            let mut outcome = crate::tools::delegate::delegate_timeout_outcome(
                 child_session_id.to_owned(),
                 Some(parent_session_id.to_owned()),
-                child_label,
-                Some(&subagent_contract),
+                child_label.clone(),
+                profile,
                 duration_ms,
+            );
+            let workspace_cleanup = cleanup_delegate_workspace_root(&execution);
+            let (cleanup_metadata, cleanup_error) =
+                split_delegate_workspace_cleanup(workspace_cleanup);
+            inject_delegate_workspace_metadata(
+                &mut outcome,
+                &execution,
+                cleanup_metadata.as_ref(),
+                cleanup_error,
             );
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
@@ -4335,28 +4655,78 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     outcome_payload_json: outcome.payload.clone(),
                 },
             )?;
+            if execution.mode == ConstrainedSubagentMode::Async {
+                emit_async_delegate_child_terminal_event(
+                    runtime,
+                    parent_session_id,
+                    child_session_id,
+                    child_label.as_deref(),
+                    profile,
+                    "timed_out",
+                    execution.isolation,
+                    duration_ms,
+                    None,
+                    Some(timeout_error.as_str()),
+                    None,
+                    execution.workspace_root.as_deref(),
+                    cleanup_metadata.as_ref().map(|cleanup| cleanup.retained),
+                    binding,
+                )
+                .await;
+            }
             Ok(outcome)
         }
     }
 }
 
-#[cfg(all(feature = "memory-sqlite", test))]
+#[cfg(feature = "memory-sqlite")]
 fn finalize_async_delegate_spawn_failure(
     memory_config: &MemoryRuntimeConfig,
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
     error: String,
 ) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure(
-        memory_config,
-        child_session_id,
-        parent_session_id,
+    let repo = SessionRepository::new(memory_config)?;
+    let mut outcome = crate::tools::delegate::delegate_error_outcome(
+        child_session_id.to_owned(),
+        Some(parent_session_id.to_owned()),
         label,
+        profile,
+        error.clone(),
+        0,
+    );
+    let workspace_cleanup = cleanup_delegate_workspace_root(execution);
+    let (cleanup_metadata, cleanup_error) = split_delegate_workspace_cleanup(workspace_cleanup);
+    inject_delegate_workspace_metadata(
+        &mut outcome,
         execution,
-        error,
-    )
+        cleanup_metadata.as_ref(),
+        cleanup_error,
+    );
+    let request = FinalizeSessionTerminalRequest {
+        state: SessionState::Failed,
+        last_error: Some(error.clone()),
+        event_kind: "delegate_spawn_failed".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json: execution.terminal_payload(
+            ConstrainedSubagentTerminalReason::SpawnFailed,
+            0,
+            None,
+            Some(error.as_str()),
+        ),
+        outcome_status: outcome.status.clone(),
+        outcome_payload_json: outcome.payload.clone(),
+    };
+    finalize_terminal_if_current_allowing_stale_state(
+        &repo,
+        child_session_id,
+        SessionState::Ready,
+        request,
+    )?;
+    Ok(())
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4365,17 +4735,74 @@ fn finalize_async_delegate_spawn_failure_with_recovery(
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
     error: String,
 ) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure_with_recovery(
+    let recovery_label = label.clone();
+    match finalize_async_delegate_spawn_failure(
         memory_config,
         child_session_id,
         parent_session_id,
         label,
+        profile,
         execution,
-        error,
-    )
+        error.clone(),
+    ) {
+        Ok(()) => Ok(()),
+        Err(finalize_error) => {
+            let repo = SessionRepository::new(memory_config)?;
+            let recovery_error = format!(
+                "delegate_async_spawn_failure_persist_failed: {finalize_error}; original spawn error: {error}"
+            );
+            match repo.transition_session_with_event_if_current(
+                child_session_id,
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Ready,
+                    next_state: SessionState::Failed,
+                    last_error: Some(recovery_error.clone()),
+                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                    actor_session_id: Some(parent_session_id.to_owned()),
+                    event_payload_json: build_async_spawn_failure_recovery_payload(
+                        recovery_label.as_deref(),
+                        &error,
+                        &recovery_error,
+                    ),
+                },
+            ) {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => {
+                    let current_state = repo
+                        .load_session(child_session_id)?
+                        .map(|session| session.state.as_str().to_owned())
+                        .unwrap_or_else(|| "missing".to_owned());
+                    Err(format!(
+                        "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
+                    ))
+                }
+                Err(recovery_event_error) => match repo.update_session_state_if_current(
+                    child_session_id,
+                    SessionState::Ready,
+                    SessionState::Failed,
+                    Some(recovery_error.clone()),
+                ) {
+                    Ok(Some(_)) => Ok(()),
+                    Ok(None) => {
+                        let current_state = repo
+                            .load_session(child_session_id)?
+                            .map(|session| session.state.as_str().to_owned())
+                            .unwrap_or_else(|| "missing".to_owned());
+                        Err(format!(
+                            "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
+                        ))
+                    }
+                    Err(mark_error) => Err(format!(
+                        "{recovery_error}; delegate_async_spawn_recovery_failed: {mark_error}; delegate_async_spawn_recovery_event_failed: {recovery_event_error}"
+                    )),
+                },
+            }
+        }
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -4400,6 +4827,7 @@ fn spawn_async_delegate_detached(
     let child_session_id = request.child_session_id.clone();
     let parent_session_id = request.parent_session_id.clone();
     let label = request.label.clone();
+    let profile = request.profile;
     let execution = request.execution.clone();
     runtime_handle.spawn(async move {
         let spawn_failure = match AssertUnwindSafe(spawner.spawn(request))
@@ -4416,6 +4844,7 @@ fn spawn_async_delegate_detached(
                 &child_session_id,
                 &parent_session_id,
                 label,
+                profile,
                 &execution,
                 error,
             );
@@ -4423,7 +4852,6 @@ fn spawn_async_delegate_detached(
     });
 }
 
-#[cfg(feature = "memory-sqlite")]
 fn next_delegate_child_depth_for_delegate(
     config: &LoongClawConfig,
     repo: &SessionRepository,
@@ -4511,11 +4939,89 @@ fn finalize_delegate_child_terminal_with_recovery(
     child_session_id: &str,
     request: FinalizeSessionTerminalRequest,
 ) -> Result<(), String> {
-    crate::operator::delegate_runtime::finalize_delegate_child_terminal_with_recovery(
+    let recovery_request = request.clone();
+    match finalize_terminal_if_current_allowing_stale_state(
         repo,
         child_session_id,
+        SessionState::Running,
         request,
-    )
+    ) {
+        Ok(()) => Ok(()),
+        Err(finalize_error) => {
+            let recovery_error = format!("delegate_terminal_finalize_failed: {finalize_error}");
+            match repo.transition_session_with_event_if_current(
+                child_session_id,
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Running,
+                    next_state: SessionState::Failed,
+                    last_error: Some(recovery_error.clone()),
+                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                    actor_session_id: recovery_request.actor_session_id.clone(),
+                    event_payload_json: build_terminal_finalize_recovery_payload(
+                        &recovery_request,
+                        &recovery_error,
+                    ),
+                },
+            ) {
+                Ok(Some(_)) => Err(recovery_error),
+                Ok(None) => {
+                    delegate_terminal_recovery_skipped_error(repo, child_session_id, recovery_error)
+                }
+                Err(recovery_event_error) => match repo.update_session_state_if_current(
+                    child_session_id,
+                    SessionState::Running,
+                    SessionState::Failed,
+                    Some(recovery_error.clone()),
+                ) {
+                    Ok(Some(_)) => Err(format!(
+                        "{recovery_error}; delegate_terminal_recovery_event_failed: {recovery_event_error}"
+                    )),
+                    Ok(None) => delegate_terminal_recovery_skipped_error(
+                        repo,
+                        child_session_id,
+                        recovery_error,
+                    ),
+                    Err(mark_error) => Err(format!(
+                        "{recovery_error}; delegate_terminal_recovery_failed: {mark_error}"
+                    )),
+                },
+            }
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_terminal_if_current_allowing_stale_state(
+    repo: &SessionRepository,
+    session_id: &str,
+    expected_state: SessionState,
+    request: FinalizeSessionTerminalRequest,
+) -> Result<(), String> {
+    match repo.finalize_session_terminal_if_current(session_id, expected_state, request)? {
+        Some(_) => Ok(()),
+        None => {
+            if repo.load_session(session_id)?.is_some() {
+                Ok(())
+            } else {
+                Err(format!("session `{session_id}` not found"))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn delegate_terminal_recovery_skipped_error(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    recovery_error: String,
+) -> Result<(), String> {
+    let current_state = repo
+        .load_session(child_session_id)?
+        .map(|session| session.state.as_str().to_owned())
+        .unwrap_or_else(|| "missing".to_owned());
+    Err(format!(
+        "{recovery_error}; delegate_terminal_recovery_skipped_from_state: {current_state}"
+    ))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -7539,6 +8045,7 @@ mod tests {
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
+            isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7550,6 +8057,7 @@ mod tests {
                 "file.write".to_owned(),
                 "file.edit".to_owned(),
             ],
+            workspace_root: None,
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
             identity: None,
@@ -7581,6 +8089,7 @@ mod tests {
             "child-session",
             "root-session",
             Some("Child".to_owned()),
+            None,
             &execution,
             "spawn unavailable".to_owned(),
         )
@@ -7657,6 +8166,7 @@ mod tests {
         let repo = SessionRepository::new(&memory_config).expect("session repository");
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
+            isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
             depth: 1,
             max_depth: 1,
             active_children: 0,
@@ -7668,6 +8178,7 @@ mod tests {
                 "file.write".to_owned(),
                 "file.edit".to_owned(),
             ],
+            workspace_root: None,
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
             identity: None,
@@ -7687,6 +8198,7 @@ mod tests {
             "child-session",
             "root-session",
             Some("Child".to_owned()),
+            None,
             &execution,
             "spawn unavailable".to_owned(),
         )

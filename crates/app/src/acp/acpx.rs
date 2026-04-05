@@ -478,8 +478,10 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         ]);
         let injectable_mcp_server_count = match injectable_mcp_server_count(config) {
             Ok(count) => {
-                diagnostics.insert("mcp_server_count".to_owned(), count.to_string());
-                count
+                let count_value: usize = count;
+                let count_text = count_value.to_string();
+                diagnostics.insert("mcp_server_count".to_owned(), count_text);
+                count_value
             }
             Err(error) => {
                 diagnostics.insert("status".to_owned(), "invalid_config".to_owned());

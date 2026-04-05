@@ -574,6 +574,13 @@ impl SessionRepository {
     pub fn load_session(&self, session_id: &str) -> Result<Option<SessionRecord>, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
+        Self::load_session_with_conn(&conn, &session_id)
+    }
+
+    fn load_session_with_conn(
+        conn: &Connection,
+        session_id: &str,
+    ) -> Result<Option<SessionRecord>, String> {
         let raw = conn
             .query_row(
                 "SELECT session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error
@@ -757,12 +764,86 @@ impl SessionRepository {
         )
         .map_err(|error| format!("insert session transition event failed: {error}"))?;
         let event_id = tx.last_insert_rowid();
+        let session = Self::load_session_with_conn(&tx, &session_id)?.ok_or_else(|| {
+            format!("session `{session_id}` missing after conditional transition")
+        })?;
         tx.commit()
             .map_err(|error| format!("commit session transition failed: {error}"))?;
 
-        let session = self.load_session(&session_id)?.ok_or_else(|| {
+        Ok(Some(TransitionSessionWithEventResult {
+            session,
+            event: SessionEventRecord {
+                id: event_id,
+                session_id,
+                event_kind,
+                actor_session_id,
+                payload_json: event_payload_json,
+                ts,
+            },
+        }))
+    }
+
+    pub fn transition_session_with_event_and_clear_terminal_outcome_if_current(
+        &self,
+        session_id: &str,
+        request: TransitionSessionWithEventIfCurrentRequest,
+    ) -> Result<Option<TransitionSessionWithEventResult>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let event_kind = normalize_required_text(&request.event_kind, "event_kind")?;
+        let actor_session_id = normalize_optional_text(request.actor_session_id);
+        let last_error = normalize_optional_text(request.last_error);
+        let event_payload_json = request.event_payload_json;
+        let encoded_event_payload = serde_json::to_string(&event_payload_json)
+            .map_err(|error| format!("encode session transition event payload failed: {error}"))?;
+        let ts = unix_ts_now();
+
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction()
+            .map_err(|error| format!("open session transition transaction failed: {error}"))?;
+        let affected = tx
+            .execute(
+                "UPDATE sessions
+                 SET state = ?3, updated_at = ?4, last_error = ?5
+                 WHERE session_id = ?1 AND state = ?2",
+                params![
+                    session_id,
+                    request.expected_state.as_str(),
+                    request.next_state.as_str(),
+                    ts,
+                    last_error.as_deref(),
+                ],
+            )
+            .map_err(|error| {
+                format!("conditionally update session state in transition failed: {error}")
+            })?;
+        if affected == 0 {
+            return Ok(None);
+        }
+        tx.execute(
+            "DELETE FROM session_terminal_outcomes WHERE session_id = ?1",
+            params![session_id],
+        )
+        .map_err(|error| format!("clear session terminal outcome failed: {error}"))?;
+        tx.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id,
+                event_kind,
+                actor_session_id.as_deref(),
+                encoded_event_payload,
+                ts
+            ],
+        )
+        .map_err(|error| format!("insert session transition event failed: {error}"))?;
+        let event_id = tx.last_insert_rowid();
+        let session = Self::load_session_with_conn(&tx, &session_id)?.ok_or_else(|| {
             format!("session `{session_id}` missing after conditional transition")
         })?;
+        tx.commit()
+            .map_err(|error| format!("commit session transition failed: {error}"))?;
 
         Ok(Some(TransitionSessionWithEventResult {
             session,
@@ -3815,6 +3896,61 @@ mod tests {
             .list_recent_events("child-session", 10)
             .expect_err("list events should fail after dropping table");
         assert!(events_error.contains("prepare session event query failed"));
+    }
+
+    #[test]
+    fn transition_session_with_event_and_clear_terminal_outcome_clears_existing_terminal_row() {
+        let config = isolated_memory_config("transition-session-clear-terminal");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create child");
+        repo.upsert_terminal_outcome(
+            "child-session",
+            "ok",
+            json!({
+                "child_session_id": "child-session",
+                "final_output": "old"
+            }),
+        )
+        .expect("upsert terminal outcome");
+
+        let transitioned = repo
+            .transition_session_with_event_and_clear_terminal_outcome_if_current(
+                "child-session",
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Completed,
+                    next_state: SessionState::Running,
+                    last_error: None,
+                    event_kind: "delegate_started".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "task": "continued child task",
+                        "timeout_seconds": 60
+                    }),
+                },
+            )
+            .expect("transition should succeed")
+            .expect("transition result");
+
+        assert_eq!(transitioned.session.state, SessionState::Running);
+        assert!(
+            repo.load_terminal_outcome("child-session")
+                .expect("load cleared terminal outcome")
+                .is_none(),
+            "terminal outcome should be cleared before the next continued run"
+        );
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list events");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_kind, "delegate_started");
     }
 
     #[test]
