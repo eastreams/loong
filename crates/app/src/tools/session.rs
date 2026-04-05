@@ -1500,10 +1500,7 @@ fn resolve_subagent_contract_for_session(
 
     let depth = match repo.session_lineage_depth(&session.session_id) {
         Ok(depth) => depth,
-        Err(error)
-            if error.starts_with("session_lineage_broken:")
-                || error.starts_with("session_lineage_cycle_detected:") =>
-        {
+        Err(error) if is_expected_lineage_gap_error(&error) => {
             return Ok(None);
         }
         Err(error) => {
@@ -1695,16 +1692,6 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         "workflow": session_workflow_json(snapshot.workflow),
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
-        "subagent_profile": snapshot
-            .subagent_contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_profile),
-        "subagent_identity": snapshot
-            .subagent_contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_identity),
-        "subagent_contract": snapshot.subagent_contract,
-        "subagent": subagent_handle,
         "delegate_lifecycle": delegate_lifecycle
             .map(|lifecycle| session_delegate_lifecycle_json(
                 lifecycle,
