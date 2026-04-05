@@ -105,6 +105,10 @@ fn write_runtime_restore_config(root: &Path) -> (PathBuf, mvp::config::LoongClaw
     config.external_skills.auto_expose_installed = true;
     config.external_skills.allowed_domains = vec!["skills.sh".to_owned()];
     config.external_skills.install_root = Some(root.join("managed-skills").display().to_string());
+    let runtime_plugin_root = root.join("runtime-plugins");
+    fs::create_dir_all(&runtime_plugin_root).expect("create runtime plugin root");
+    config.runtime_plugins.enabled = true;
+    config.runtime_plugins.roots = vec![runtime_plugin_root.display().to_string()];
 
     config.acp.enabled = true;
     config.acp.dispatch.enabled = true;
@@ -241,6 +245,9 @@ fn mutate_runtime_restore_config(config_path: &Path, root: &Path) {
     config.external_skills.require_download_approval = true;
     config.external_skills.auto_expose_installed = false;
     config.external_skills.allowed_domains.clear();
+    config.runtime_plugins.enabled = false;
+    config.runtime_plugins.roots =
+        vec![root.join("disabled-runtime-plugins").display().to_string()];
 
     config.acp.enabled = false;
     config.acp.dispatch.enabled = false;
@@ -308,6 +315,12 @@ fn runtime_snapshot_artifact_json_includes_lineage_and_restore_spec() {
     assert_eq!(
         payload["restore_spec"]["managed_skills"]["skills"][0]["source_kind"],
         "directory"
+    );
+    assert_eq!(payload["restore_spec"]["runtime_plugins"]["enabled"], true);
+    assert!(
+        payload["runtime_plugins"]["enabled"]
+            .as_bool()
+            .expect("runtime_plugins.enabled should be boolean")
     );
 }
 
@@ -439,6 +452,13 @@ fn runtime_restore_dry_run_reports_pending_mutations_and_leaves_config_unchanged
             .changed_surfaces
             .iter()
             .any(|surface| surface == "external_skills")
+    );
+    assert!(
+        execution
+            .plan
+            .changed_surfaces
+            .iter()
+            .any(|surface| surface == "runtime_plugins")
     );
     assert!(
         execution
@@ -682,6 +702,7 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         .expect("reload restored config");
     assert_eq!(reloaded.active_provider_id(), Some("deepseek-lab"));
     assert!(reloaded.external_skills.enabled);
+    assert!(reloaded.runtime_plugins.enabled);
     assert_eq!(
         reloaded.memory.profile,
         mvp::config::MemoryProfile::WindowPlusSummary
@@ -704,6 +725,15 @@ fn runtime_restore_apply_replays_snapshot_state_and_verifies_post_apply_match() 
         payload["external_skills"]["policy"]["enabled"]
             .as_bool()
             .expect("enabled should be boolean")
+    );
+    assert!(
+        snapshot.restore_spec.runtime_plugins.enabled,
+        "restored snapshot should preserve runtime_plugins restore spec"
+    );
+    assert!(
+        payload["runtime_plugins"]["enabled"]
+            .as_bool()
+            .expect("runtime_plugins.enabled should be boolean")
     );
     assert!(
         payload["external_skills"]["inventory"]["skills"]

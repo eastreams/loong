@@ -1881,6 +1881,7 @@ pub struct RuntimeSnapshotRestoreSpec {
     pub acp: mvp::config::AcpConfig,
     pub tools: mvp::config::ToolConfig,
     pub external_skills: mvp::config::ExternalSkillsConfig,
+    pub runtime_plugins: mvp::config::RuntimePluginsConfig,
     pub managed_skills: RuntimeSnapshotRestoreManagedSkillsSpec,
     pub warnings: Vec<String>,
 }
@@ -1927,6 +1928,8 @@ pub struct RuntimeSnapshotArtifactDocument {
     pub tool_runtime: Value,
     pub tools: Value,
     pub external_skills: Value,
+    #[serde(default)]
+    pub runtime_plugins: Value,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
 
@@ -2565,6 +2568,7 @@ fn build_runtime_snapshot_restore_spec(
         acp: config.acp.clone(),
         tools: config.tools.clone(),
         external_skills: config.external_skills.clone(),
+        runtime_plugins: config.runtime_plugins.clone(),
         managed_skills: build_runtime_snapshot_restore_managed_skills_spec(
             external_skills,
             &mut warnings,
@@ -3166,6 +3170,10 @@ pub fn build_runtime_snapshot_artifact_json_payload(
         tools: base_payload.get("tools").cloned().unwrap_or(Value::Null),
         external_skills: base_payload
             .get("external_skills")
+            .cloned()
+            .unwrap_or(Value::Null),
+        runtime_plugins: base_payload
+            .get("runtime_plugins")
             .cloned()
             .unwrap_or(Value::Null),
         restore_spec: snapshot.restore_spec.clone(),
