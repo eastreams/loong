@@ -48,7 +48,9 @@ mod install;
 mod onboarding;
 mod serve;
 
-use abilities::{abilities_channels, abilities_personalization, abilities_skills};
+use abilities::{
+    abilities_channels, abilities_personalization, abilities_personalization_save, abilities_skills,
+};
 use auth::{
     build_clear_pairing_cookie, build_clear_same_origin_session_cookie, build_pairing_cookie,
     build_same_origin_session_cookie, extract_allowed_local_origin, extract_request_token,
@@ -323,6 +325,18 @@ struct AbilitiesPersonalizationPayload {
     standing_boundaries: Option<String>,
     locale: Option<String>,
     timezone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesPersonalizationWriteRequest {
+    preferred_name: Option<String>,
+    response_density: Option<String>,
+    initiative_level: Option<String>,
+    standing_boundaries: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
+    prompt_state: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

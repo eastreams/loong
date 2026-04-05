@@ -6,47 +6,80 @@ pub(super) async fn abilities_personalization(
     State(state): State<Arc<WebApiState>>,
 ) -> Result<Json<ApiEnvelope<AbilitiesPersonalizationPayload>>, WebApiError> {
     let snapshot = load_web_snapshot(state.as_ref())?;
-    let personalization = snapshot.config.memory.trimmed_personalization();
+    let payload = build_personalization_payload(&snapshot.config);
 
-    let payload = match personalization {
-        Some(personalization) => AbilitiesPersonalizationPayload {
-            configured: true,
-            has_operator_preferences: personalization.has_operator_preferences(),
-            suppressed: personalization.suppresses_suggestions(),
-            prompt_state: match personalization.prompt_state {
-                mvp::config::PersonalizationPromptState::Pending => "pending",
-                mvp::config::PersonalizationPromptState::Deferred => "deferred",
-                mvp::config::PersonalizationPromptState::Suppressed => "suppressed",
-                mvp::config::PersonalizationPromptState::Configured => "configured",
-            },
-            updated_at: personalization
-                .updated_at_epoch_seconds
-                .map(|value| format_timestamp(value as i64)),
-            preferred_name: personalization.preferred_name,
-            response_density: personalization
-                .response_density
-                .map(mvp::config::ResponseDensity::as_str),
-            initiative_level: personalization
-                .initiative_level
-                .map(mvp::config::InitiativeLevel::as_str),
-            standing_boundaries: personalization.standing_boundaries,
-            locale: personalization.locale,
-            timezone: personalization.timezone,
-        },
-        None => AbilitiesPersonalizationPayload {
-            configured: false,
-            has_operator_preferences: false,
-            suppressed: false,
-            prompt_state: "pending",
-            updated_at: None,
-            preferred_name: None,
-            response_density: None,
-            initiative_level: None,
-            standing_boundaries: None,
-            locale: None,
-            timezone: None,
-        },
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: payload,
+    }))
+}
+
+pub(super) async fn abilities_personalization_save(
+    State(state): State<Arc<WebApiState>>,
+    Json(request): Json<AbilitiesPersonalizationWriteRequest>,
+) -> Result<Json<ApiEnvelope<AbilitiesPersonalizationPayload>>, WebApiError> {
+    let config_path = resolve_web_config_path(state.as_ref());
+    let mut config = if config_path.is_file() {
+        let (_, loaded) = mvp::config::load(state.config_path.as_deref()).map_err(|error| {
+            WebApiError::bad_request(format!("local config could not be loaded: {error}"))
+        })?;
+        loaded
+    } else {
+        mvp::config::LoongClawConfig::default()
     };
+
+    let existing_personalization = config.memory.trimmed_personalization();
+    let default_personalization = mvp::config::PersonalizationConfig::default();
+    let prompt_state =
+        parse_personalization_prompt_state(request.prompt_state.as_deref().unwrap_or("pending"))?;
+    let updated_at_epoch_seconds = u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).ok();
+
+    let personalization = mvp::config::PersonalizationConfig {
+        preferred_name: normalize_optional_text(request.preferred_name.as_deref()),
+        response_density: parse_response_density(request.response_density.as_deref())?,
+        initiative_level: parse_initiative_level(request.initiative_level.as_deref())?,
+        standing_boundaries: normalize_optional_text(request.standing_boundaries.as_deref()),
+        timezone: normalize_optional_text(request.timezone.as_deref()),
+        locale: normalize_optional_text(request.locale.as_deref()),
+        prompt_state,
+        schema_version: existing_personalization
+            .as_ref()
+            .map(|value| value.schema_version)
+            .unwrap_or(default_personalization.schema_version),
+        updated_at_epoch_seconds,
+    }
+    .normalized();
+
+    config.memory.personalization = personalization;
+
+    let path_string = config_path.display().to_string();
+    mvp::config::write(Some(path_string.as_str()), &config, true).map_err(WebApiError::internal)?;
+
+    let payload = build_personalization_payload(&config);
+    let state_label = payload.prompt_state;
+    record_debug_operation(
+        &state,
+        "abilities_personalization",
+        format!(
+            "{} personalization updated",
+            format_timestamp(OffsetDateTime::now_utc().unix_timestamp())
+        ),
+        vec![
+            format!(
+                "preferred_name={}",
+                payload.preferred_name.as_deref().unwrap_or("empty")
+            ),
+            format!(
+                "response_density={}",
+                payload.response_density.unwrap_or("unset")
+            ),
+            format!(
+                "initiative_level={}",
+                payload.initiative_level.unwrap_or("unset")
+            ),
+            format!("prompt_state={state_label}"),
+        ],
+    );
 
     Ok(Json(ApiEnvelope {
         ok: true,
@@ -229,6 +262,98 @@ fn collect_runtime_snapshot(
     let snapshot = crate::collect_runtime_snapshot_cli_state(Some(path_string.as_str()))
         .map_err(WebApiError::internal)?;
     Ok(crate::gateway::read_models::build_runtime_snapshot_read_model(&snapshot))
+}
+
+fn build_personalization_payload(
+    config: &mvp::config::LoongClawConfig,
+) -> AbilitiesPersonalizationPayload {
+    match config.memory.trimmed_personalization() {
+        Some(personalization) => AbilitiesPersonalizationPayload {
+            configured: true,
+            has_operator_preferences: personalization.has_operator_preferences(),
+            suppressed: personalization.suppresses_suggestions(),
+            prompt_state: match personalization.prompt_state {
+                mvp::config::PersonalizationPromptState::Pending => "pending",
+                mvp::config::PersonalizationPromptState::Deferred => "deferred",
+                mvp::config::PersonalizationPromptState::Suppressed => "suppressed",
+                mvp::config::PersonalizationPromptState::Configured => "configured",
+            },
+            updated_at: personalization
+                .updated_at_epoch_seconds
+                .map(|value| format_timestamp(value as i64)),
+            preferred_name: personalization.preferred_name,
+            response_density: personalization
+                .response_density
+                .map(mvp::config::ResponseDensity::as_str),
+            initiative_level: personalization
+                .initiative_level
+                .map(mvp::config::InitiativeLevel::as_str),
+            standing_boundaries: personalization.standing_boundaries,
+            locale: personalization.locale,
+            timezone: personalization.timezone,
+        },
+        None => AbilitiesPersonalizationPayload {
+            configured: false,
+            has_operator_preferences: false,
+            suppressed: false,
+            prompt_state: "pending",
+            updated_at: None,
+            preferred_name: None,
+            response_density: None,
+            initiative_level: None,
+            standing_boundaries: None,
+            locale: None,
+            timezone: None,
+        },
+    }
+}
+
+fn normalize_optional_text(raw: Option<&str>) -> Option<String> {
+    raw.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn parse_response_density(
+    raw: Option<&str>,
+) -> Result<Option<mvp::config::ResponseDensity>, WebApiError> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("concise") => Ok(Some(mvp::config::ResponseDensity::Concise)),
+        Some("balanced") => Ok(Some(mvp::config::ResponseDensity::Balanced)),
+        Some("thorough") => Ok(Some(mvp::config::ResponseDensity::Thorough)),
+        Some(other) => Err(WebApiError::bad_request(format!(
+            "unknown response density `{other}`"
+        ))),
+        None => Ok(None),
+    }
+}
+
+fn parse_initiative_level(
+    raw: Option<&str>,
+) -> Result<Option<mvp::config::InitiativeLevel>, WebApiError> {
+    match raw.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("ask_before_acting") => Ok(Some(mvp::config::InitiativeLevel::AskBeforeActing)),
+        Some("balanced") => Ok(Some(mvp::config::InitiativeLevel::Balanced)),
+        Some("high_initiative") => Ok(Some(mvp::config::InitiativeLevel::HighInitiative)),
+        Some(other) => Err(WebApiError::bad_request(format!(
+            "unknown initiative level `{other}`"
+        ))),
+        None => Ok(None),
+    }
+}
+
+fn parse_personalization_prompt_state(
+    raw: &str,
+) -> Result<mvp::config::PersonalizationPromptState, WebApiError> {
+    match raw.trim() {
+        "pending" => Ok(mvp::config::PersonalizationPromptState::Pending),
+        "deferred" => Ok(mvp::config::PersonalizationPromptState::Deferred),
+        "suppressed" => Ok(mvp::config::PersonalizationPromptState::Suppressed),
+        "configured" => Ok(mvp::config::PersonalizationPromptState::Configured),
+        other => Err(WebApiError::bad_request(format!(
+            "unknown prompt state `{other}`"
+        ))),
+    }
 }
 
 fn json_object_field<'a>(value: &'a Value, key: &str) -> &'a Value {

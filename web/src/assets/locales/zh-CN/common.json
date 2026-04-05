@@ -26,7 +26,7 @@
                                        "personalization":  {
                                                                "title":  "Personalization",
                                                                "summary":  "操作员偏好与长期风格默认值。",
-                                                               "description":  "这里展示 daemon 当前真实的个性化状态，以及它是已配置、延后还是抑制。"
+                                                                "description":  "这里展示 daemon 当前真实的个性化偏好与长期风格默认值。"
                                                            },
                                        "channels":  {
                                                         "title":  "Channels",
@@ -43,7 +43,8 @@
                                               "introTitle":  "Personalization",
                                               "snapshotTitle":  "当前个性化",
                                               "statusTitle":  "提示与画像状态",
-                                              "fields":  {
+                                             "fields":  {
+                                                             "currentState":  "当前状态",
                                                              "preferredName":  "偏好称呼",
                                                              "responseDensity":  "回答密度",
                                                              "initiativeLevel":  "主动程度",
@@ -56,7 +57,19 @@
                                                              "suggestions":  "建议提示",
                                                              "updatedAt":  "最近更新时间"
                                                          },
-                                              "values":  {
+                                             "actions":  {
+                                                             "edit":  "编辑",
+                                                             "cancel":  "返回",
+                                                             "save":  "保存",
+                                                             "savePending":  "保存中...",
+                                                             "saved":  "个性化已保存。",
+                                                             "saveFailed":  "个性化保存失败。"
+                                                         },
+                                             "values":  {
+                                                             "stateConfigured":  "已配置",
+                                                             "stateDeferred":  "已延后",
+                                                             "stateSuppressed":  "已抑制",
+                                                             "statePending":  "待提示",
                                                              "profileConfigured":  "已配置",
                                                              "profilePending":  "待补全",
                                                              "preferencesPresent":  "已存在",
@@ -72,9 +85,10 @@
                                                              "responseDensityThorough":  "详细",
                                                              "initiativeAskBeforeActing":  "先询问再行动",
                                                              "initiativeBalanced":  "平衡",
-                                                             "initiativeHigh":  "高主动"
+                                                             "initiativeHigh":  "高主动",
+                                                             "unset":  "留空不设"
                                                          }
-                                          },
+                                         },
                       "channels":  {
                                        "introTitle":  "Channels",
                                        "summaryTitle":  "Channel 摘要",

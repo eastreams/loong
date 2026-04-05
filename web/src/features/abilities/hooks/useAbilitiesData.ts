@@ -208,10 +208,20 @@ export function useAbilitiesData({
     setSkills(idleState());
   }
 
+  function replacePersonalization(data: PersonalizationSnapshot) {
+    setPersonalization({
+      data,
+      error: null,
+      loading: false,
+      loaded: true,
+    });
+  }
+
   return {
     personalization,
     channels,
     skills,
     reloadSection,
+    replacePersonalization,
   };
 }

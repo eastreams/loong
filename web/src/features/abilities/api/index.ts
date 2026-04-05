@@ -1,4 +1,8 @@
-import { apiGetData, type ApiRequestOptions } from "../../../lib/api/client";
+import {
+  apiGetData,
+  apiPostData,
+  type ApiRequestOptions,
+} from "../../../lib/api/client";
 
 const ABILITIES_READ_TIMEOUT_MS = 15_000;
 
@@ -14,6 +18,16 @@ export interface PersonalizationSnapshot {
   standingBoundaries: string | null;
   locale: string | null;
   timezone: string | null;
+}
+
+export interface PersonalizationWriteRequest {
+  preferredName: string;
+  responseDensity: string;
+  initiativeLevel: string;
+  standingBoundaries: string;
+  locale: string;
+  timezone: string;
+  promptState?: string;
 }
 
 export interface ChannelSurfaceSnapshot {
@@ -83,6 +97,17 @@ export const abilitiesApi = {
   async loadPersonalization(request?: ApiRequestOptions): Promise<PersonalizationSnapshot> {
     return apiGetData<PersonalizationSnapshot>(
       "/api/abilities/personalization",
+      withDefaultTimeout(request),
+    );
+  },
+
+  async savePersonalization(
+    body: PersonalizationWriteRequest,
+    request?: ApiRequestOptions,
+  ): Promise<PersonalizationSnapshot> {
+    return apiPostData<PersonalizationSnapshot, PersonalizationWriteRequest>(
+      "/api/abilities/personalization",
+      body,
       withDefaultTimeout(request),
     );
   },

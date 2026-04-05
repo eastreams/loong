@@ -26,7 +26,7 @@
       "personalization": {
         "title": "Personalization",
         "summary": "Operator preferences and long-running style defaults.",
-        "description": "Current operator preference values and whether suggestions are configured, deferred, or suppressed."
+        "description": "Current operator preference values and long-running style defaults."
       },
       "channels": {
         "title": "Channels",
@@ -44,6 +44,7 @@
       "snapshotTitle": "Current personalization",
       "statusTitle": "Prompt and profile state",
       "fields": {
+        "currentState": "Current state",
         "preferredName": "Preferred name",
         "responseDensity": "Response density",
         "initiativeLevel": "Initiative level",
@@ -56,7 +57,19 @@
         "suggestions": "Suggestions",
         "updatedAt": "Last updated"
       },
+      "actions": {
+        "edit": "Edit",
+        "cancel": "Return",
+        "save": "Save",
+        "savePending": "Saving...",
+        "saved": "Personalization saved.",
+        "saveFailed": "Personalization could not be saved."
+      },
       "values": {
+        "stateConfigured": "Configured",
+        "stateDeferred": "Deferred",
+        "stateSuppressed": "Suppressed",
+        "statePending": "Pending",
         "profileConfigured": "Configured",
         "profilePending": "Pending",
         "preferencesPresent": "Present",
@@ -72,7 +85,8 @@
         "responseDensityThorough": "Thorough",
         "initiativeAskBeforeActing": "Ask before acting",
         "initiativeBalanced": "Balanced",
-        "initiativeHigh": "High initiative"
+        "initiativeHigh": "High initiative",
+        "unset": "Leave unset"
       }
     },
     "channels": {

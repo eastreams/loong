@@ -11,12 +11,13 @@ export default function AbilitiesPage() {
   const connection = useWebConnection();
   const { canAccessProtectedApi, authRevision, markUnauthorized } = connection;
   const [activeSection, setActiveSection] = useState<AbilitiesSection>("personalization");
-  const { personalization, channels, skills, reloadSection } = useAbilitiesData({
+  const { personalization, channels, skills, reloadSection, replacePersonalization } =
+    useAbilitiesData({
     activeSection,
     canAccessProtectedApi,
     authRevision,
     markUnauthorized,
-  });
+    });
 
   const renderSection = () => {
     if (activeSection === "personalization") {
@@ -26,6 +27,7 @@ export default function AbilitiesPage() {
           loading={personalization.loading}
           error={personalization.error}
           onRetry={() => reloadSection("personalization")}
+          onSaved={replacePersonalization}
         />
       );
     }

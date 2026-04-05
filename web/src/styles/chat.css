@@ -167,6 +167,7 @@
   gap: 0.4rem;
   width: 100%;
   min-width: 0;
+  min-height: 3.2rem;
   text-align: left;
   padding: 0.45rem 0.5rem;
   border: 0;
@@ -174,12 +175,52 @@
   color: inherit;
 }
 
-.session-select span:first-child {
+.session-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.session-title-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
 }
 
+.session-live-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.14rem 0.42rem;
+  border: 1px solid color-mix(in srgb, var(--color-success) 24%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-success) 10%, transparent);
+  color: var(--color-text-secondary);
+  font-size: 0.68rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.session-live-dot {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--color-success);
+  box-shadow: 0 0 0 0.08rem color-mix(in srgb, var(--color-success) 16%, transparent);
+  flex-shrink: 0;
+}
+
+.session-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.session-action-btn,
 .session-delete {
   display: inline-flex;
   align-items: center;
@@ -191,6 +232,13 @@
   background: transparent;
   color: var(--color-text-secondary);
   flex-shrink: 0;
+}
+
+.session-action-btn:hover:not(:disabled),
+.session-delete:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+  background: var(--color-bg-surface-hover);
 }
 
 .session-delete:hover:not(:disabled) {
@@ -207,6 +255,22 @@
 .session-meta {
   font-size: 0.75rem;
   color: var(--color-text-secondary);
+}
+
+.session-rename-input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.28rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--color-border-medium);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  outline: none;
+}
+
+.session-rename-input:focus {
+  border-bottom-color: var(--color-text-primary);
 }
 /* #endregion */
 

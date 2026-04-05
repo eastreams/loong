@@ -116,6 +116,13 @@
   padding: 0.9rem 0 0.7rem;
 }
 
+.abilities-section-head-with-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
 .abilities-section-body {
   padding: 0.1rem 0 0;
 }
@@ -130,14 +137,13 @@
   display: grid;
   grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr);
   gap: 1.2rem;
-  align-items: baseline;
+  align-items: start;
   padding: 0.82rem 0;
   border-bottom: 1px solid var(--color-border-light);
 }
 
 .abilities-kv-row:last-child {
   border-bottom: 0;
-  padding-bottom: 0;
 }
 
 .abilities-kv-row span {
@@ -149,6 +155,31 @@
   font-size: 0.98rem;
   font-weight: 600;
   line-height: 1.55;
+}
+
+.abilities-meta-divider {
+  margin-top: 0.7rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.abilities-meta-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+  padding: 0.82rem 0 0;
+}
+
+.abilities-meta-row span {
+  color: var(--color-text-secondary);
+  font-size: 0.94rem;
+}
+
+.abilities-meta-row strong {
+  font-size: 0.94rem;
+  font-weight: 500;
+  line-height: 1.55;
+  color: var(--color-text-secondary);
 }
 
 .abilities-bullets {
@@ -239,6 +270,206 @@
   gap: 0.65rem;
 }
 
+.abilities-form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.4rem;
+}
+
+.abilities-form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.abilities-form-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+  padding: 0;
+}
+
+.abilities-select-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 14rem) minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+  width: 100%;
+}
+
+.abilities-form-label {
+  color: var(--color-text-secondary);
+  font-size: 0.94rem;
+  line-height: 1.55;
+  padding-top: 0.65rem;
+}
+
+.abilities-form-input,
+.abilities-form-textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--color-bg-surface-soft) 58%, transparent);
+  color: var(--color-text-primary);
+  font: inherit;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.abilities-form-input {
+  min-height: 2.5rem;
+  padding: 0.58rem 0.78rem;
+}
+
+.abilities-form-textarea {
+  min-height: 6.8rem;
+  padding: 0.72rem 0.78rem;
+  resize: vertical;
+}
+
+.abilities-form-input:focus,
+.abilities-form-textarea:focus {
+  outline: none;
+  border-color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-bg-surface-soft) 78%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 12%, transparent);
+}
+
+.abilities-select-shell {
+  position: relative;
+}
+
+.abilities-select-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 2.7rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 0.62rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--color-bg-surface-soft) 72%, var(--color-bg-surface));
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+.abilities-select-trigger:hover,
+.abilities-select-shell.is-open .abilities-select-trigger {
+  border-color: color-mix(in srgb, var(--color-text-primary) 22%, var(--color-border));
+  background: color-mix(in srgb, var(--color-bg-surface-soft) 88%, var(--color-bg-surface));
+}
+
+.abilities-select-trigger:focus-visible {
+  outline: none;
+  border-color: var(--color-text-primary);
+  background: color-mix(in srgb, var(--color-bg-surface-soft) 90%, var(--color-bg-surface));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+}
+
+.abilities-select-value {
+  min-width: 0;
+  flex: 1;
+  line-height: 1.45;
+}
+
+.abilities-select-icon {
+  flex: none;
+  color: var(--color-text-secondary);
+  transition: transform 180ms ease;
+}
+
+.abilities-select-shell.is-open .abilities-select-icon {
+  transform: rotate(180deg);
+}
+
+.abilities-select-menu {
+  position: fixed;
+  z-index: 9999;
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 10%, var(--color-border));
+  border-radius: 0;
+  background-color: var(--color-bg-surface-soft);
+  opacity: 1;
+  box-shadow:
+    0 20px 34px color-mix(in srgb, var(--color-text-primary) 11%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.abilities-select-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.75rem;
+  min-height: 2.8rem;
+  padding: 0.76rem 0.9rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-border-light) 78%, transparent);
+  background-color: var(--color-bg-surface-soft);
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.abilities-select-option:first-child {
+  border-top: 0;
+}
+
+.abilities-select-option:hover {
+  background-color: color-mix(in srgb, var(--color-bg-surface-active) 88%, var(--color-bg-surface-soft));
+}
+
+.abilities-select-option.is-selected {
+  background-color: var(--color-bg-surface-active);
+  box-shadow: inset 2px 0 0 var(--color-text-primary);
+}
+
+.abilities-action-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.abilities-action-button {
+  padding: 0.38rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.abilities-action-button:hover {
+  background: var(--color-bg-surface-soft);
+}
+
+.abilities-action-button.is-primary {
+  border-color: var(--color-text-primary);
+}
+
+.abilities-action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .abilities-inline-action {
   padding: 0;
   border: 0;
@@ -293,6 +524,21 @@
   .abilities-kv-row {
     grid-template-columns: 1fr;
     gap: 0.3rem;
+  }
+
+  .abilities-meta-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .abilities-form-row,
+  .abilities-select-row {
+    grid-template-columns: 1fr;
+    gap: 0.48rem;
+  }
+
+  .abilities-form-label {
+    padding-top: 0;
   }
 
   .abilities-entity-head {
