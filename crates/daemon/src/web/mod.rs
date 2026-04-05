@@ -39,6 +39,7 @@ use tokio::{
 
 use crate::{CliResult, mvp, with_graceful_shutdown};
 
+mod abilities;
 mod auth;
 mod chat;
 mod dashboard;
@@ -47,6 +48,7 @@ mod install;
 mod onboarding;
 mod serve;
 
+use abilities::{abilities_channels, abilities_personalization, abilities_skills};
 use auth::{
     build_clear_pairing_cookie, build_clear_same_origin_session_cookie, build_pairing_cookie,
     build_same_origin_session_cookie, extract_allowed_local_origin, extract_request_token,
@@ -305,6 +307,88 @@ struct DashboardToolsPayload {
     shell_allow_count: usize,
     shell_deny_count: usize,
     items: Vec<DashboardToolItemPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesPersonalizationPayload {
+    configured: bool,
+    has_operator_preferences: bool,
+    suppressed: bool,
+    prompt_state: &'static str,
+    updated_at: Option<String>,
+    preferred_name: Option<String>,
+    response_density: Option<&'static str>,
+    initiative_level: Option<&'static str>,
+    standing_boundaries: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesChannelsPayload {
+    catalog_channel_count: usize,
+    configured_channel_count: usize,
+    configured_account_count: usize,
+    enabled_account_count: usize,
+    misconfigured_account_count: usize,
+    runtime_backed_channel_count: usize,
+    enabled_service_channel_count: usize,
+    ready_service_channel_count: usize,
+    surfaces: Vec<AbilitiesChannelSurfacePayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesChannelSurfacePayload {
+    id: String,
+    label: String,
+    source: &'static str,
+    configured_account_count: usize,
+    enabled_account_count: usize,
+    misconfigured_account_count: usize,
+    ready_send_account_count: usize,
+    ready_serve_account_count: usize,
+    default_configured_account_id: Option<String>,
+    service_enabled: bool,
+    service_ready: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesSkillsPayload {
+    visible_runtime_tool_count: usize,
+    visible_runtime_tools: Vec<String>,
+    browser_companion: AbilitiesBrowserCompanionPayload,
+    external_skills: AbilitiesExternalSkillsPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesBrowserCompanionPayload {
+    enabled: bool,
+    ready: bool,
+    command_configured: bool,
+    expected_version: Option<String>,
+    execution_tier: String,
+    timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesExternalSkillsPayload {
+    enabled: bool,
+    override_active: bool,
+    inventory_status: String,
+    inventory_error: Option<String>,
+    require_download_approval: bool,
+    auto_expose_installed: bool,
+    install_root: Option<String>,
+    allowed_domain_count: usize,
+    blocked_domain_count: usize,
+    resolved_skill_count: usize,
+    shadowed_skill_count: usize,
 }
 
 #[derive(Debug, Serialize)]

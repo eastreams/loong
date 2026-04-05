@@ -1,0 +1,279 @@
+use serde_json::Value;
+
+use super::*;
+
+pub(super) async fn abilities_personalization(
+    State(state): State<Arc<WebApiState>>,
+) -> Result<Json<ApiEnvelope<AbilitiesPersonalizationPayload>>, WebApiError> {
+    let snapshot = load_web_snapshot(state.as_ref())?;
+    let personalization = snapshot.config.memory.trimmed_personalization();
+
+    let payload = match personalization {
+        Some(personalization) => AbilitiesPersonalizationPayload {
+            configured: true,
+            has_operator_preferences: personalization.has_operator_preferences(),
+            suppressed: personalization.suppresses_suggestions(),
+            prompt_state: match personalization.prompt_state {
+                mvp::config::PersonalizationPromptState::Pending => "pending",
+                mvp::config::PersonalizationPromptState::Deferred => "deferred",
+                mvp::config::PersonalizationPromptState::Suppressed => "suppressed",
+                mvp::config::PersonalizationPromptState::Configured => "configured",
+            },
+            updated_at: personalization
+                .updated_at_epoch_seconds
+                .map(|value| format_timestamp(value as i64)),
+            preferred_name: personalization.preferred_name,
+            response_density: personalization
+                .response_density
+                .map(mvp::config::ResponseDensity::as_str),
+            initiative_level: personalization
+                .initiative_level
+                .map(mvp::config::InitiativeLevel::as_str),
+            standing_boundaries: personalization.standing_boundaries,
+            locale: personalization.locale,
+            timezone: personalization.timezone,
+        },
+        None => AbilitiesPersonalizationPayload {
+            configured: false,
+            has_operator_preferences: false,
+            suppressed: false,
+            prompt_state: "pending",
+            updated_at: None,
+            preferred_name: None,
+            response_density: None,
+            initiative_level: None,
+            standing_boundaries: None,
+            locale: None,
+            timezone: None,
+        },
+    };
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: payload,
+    }))
+}
+
+pub(super) async fn abilities_channels(
+    State(state): State<Arc<WebApiState>>,
+) -> Result<Json<ApiEnvelope<AbilitiesChannelsPayload>>, WebApiError> {
+    let snapshot = load_web_snapshot(state.as_ref())?;
+    let runtime_snapshot = collect_runtime_snapshot(snapshot.resolved_path.as_path())?;
+    let inventory = &runtime_snapshot.channels.inventory;
+    let enabled_service_channel_ids = &runtime_snapshot.channels.enabled_service_channel_ids;
+
+    let surfaces = inventory
+        .channel_surfaces
+        .iter()
+        .map(|surface| {
+            let channel_id = surface.surface.catalog.id.to_owned();
+            let service_enabled = enabled_service_channel_ids.contains(&channel_id);
+            let ready_send_account_count = surface
+                .surface
+                .configured_accounts
+                .iter()
+                .filter(|account| {
+                    channel_account_operation_is_ready(
+                        account,
+                        mvp::channel::CHANNEL_OPERATION_SEND_ID,
+                    )
+                })
+                .count();
+            let ready_serve_account_count = surface
+                .surface
+                .configured_accounts
+                .iter()
+                .filter(|account| {
+                    channel_account_operation_is_ready(
+                        account,
+                        mvp::channel::CHANNEL_OPERATION_SERVE_ID,
+                    )
+                })
+                .count();
+
+            AbilitiesChannelSurfacePayload {
+                id: channel_id,
+                label: surface.surface.catalog.label.to_owned(),
+                source: surface.surface.catalog.implementation_status.as_str(),
+                configured_account_count: surface.surface.configured_accounts.len(),
+                enabled_account_count: surface
+                    .surface
+                    .configured_accounts
+                    .iter()
+                    .filter(|account| account.enabled)
+                    .count(),
+                misconfigured_account_count: surface
+                    .surface
+                    .configured_accounts
+                    .iter()
+                    .filter(|account| channel_account_is_misconfigured(account))
+                    .count(),
+                ready_send_account_count,
+                ready_serve_account_count,
+                default_configured_account_id: surface
+                    .surface
+                    .default_configured_account_id
+                    .clone(),
+                service_enabled,
+                service_ready: service_enabled && ready_serve_account_count > 0,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: AbilitiesChannelsPayload {
+            catalog_channel_count: inventory.channel_catalog.len(),
+            configured_channel_count: inventory
+                .channel_surfaces
+                .iter()
+                .filter(|surface| !surface.surface.configured_accounts.is_empty())
+                .count(),
+            configured_account_count: inventory.channels.len(),
+            enabled_account_count: inventory
+                .channels
+                .iter()
+                .filter(|account| account.enabled)
+                .count(),
+            misconfigured_account_count: inventory
+                .channels
+                .iter()
+                .filter(|account| channel_account_is_misconfigured(account))
+                .count(),
+            runtime_backed_channel_count: inventory
+                .channel_catalog
+                .iter()
+                .filter(|channel| {
+                    channel.implementation_status
+                        == mvp::channel::ChannelCatalogImplementationStatus::RuntimeBacked
+                })
+                .count(),
+            enabled_service_channel_count: enabled_service_channel_ids.len(),
+            ready_service_channel_count: surfaces
+                .iter()
+                .filter(|surface| surface.service_ready)
+                .count(),
+            surfaces,
+        },
+    }))
+}
+
+pub(super) async fn abilities_skills(
+    State(state): State<Arc<WebApiState>>,
+) -> Result<Json<ApiEnvelope<AbilitiesSkillsPayload>>, WebApiError> {
+    let snapshot = load_web_snapshot(state.as_ref())?;
+    let runtime_snapshot = collect_runtime_snapshot(snapshot.resolved_path.as_path())?;
+
+    let browser_companion = json_object_field(&runtime_snapshot.tool_runtime, "browser_companion");
+    let external_skills = json_object_field(&runtime_snapshot.external_skills, "policy");
+
+    Ok(Json(ApiEnvelope {
+        ok: true,
+        data: AbilitiesSkillsPayload {
+            visible_runtime_tool_count: runtime_snapshot.tools.visible_tool_count,
+            visible_runtime_tools: runtime_snapshot.tools.visible_tool_names.clone(),
+            browser_companion: AbilitiesBrowserCompanionPayload {
+                enabled: json_bool_field(browser_companion, "enabled"),
+                ready: json_bool_field(browser_companion, "ready"),
+                command_configured: json_string_option_field(browser_companion, "command")
+                    .is_some(),
+                expected_version: json_string_option_field(browser_companion, "expected_version"),
+                execution_tier: json_string_field(browser_companion, "execution_tier")
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                timeout_seconds: json_u64_field(browser_companion, "timeout_seconds").unwrap_or(0),
+            },
+            external_skills: AbilitiesExternalSkillsPayload {
+                enabled: json_bool_field(external_skills, "enabled"),
+                override_active: json_bool_field(
+                    &runtime_snapshot.external_skills,
+                    "override_active",
+                ),
+                inventory_status: json_string_field(
+                    &runtime_snapshot.external_skills,
+                    "inventory_status",
+                )
+                .unwrap_or("unknown")
+                .to_owned(),
+                inventory_error: json_string_option_field(
+                    &runtime_snapshot.external_skills,
+                    "inventory_error",
+                ),
+                require_download_approval: json_bool_field(
+                    external_skills,
+                    "require_download_approval",
+                ),
+                auto_expose_installed: json_bool_field(external_skills, "auto_expose_installed"),
+                install_root: json_string_option_field(external_skills, "install_root"),
+                allowed_domain_count: json_array_len(external_skills, "allowed_domains"),
+                blocked_domain_count: json_array_len(external_skills, "blocked_domains"),
+                resolved_skill_count: json_usize_field(
+                    &runtime_snapshot.external_skills,
+                    "resolved_skill_count",
+                )
+                .unwrap_or(0),
+                shadowed_skill_count: json_usize_field(
+                    &runtime_snapshot.external_skills,
+                    "shadowed_skill_count",
+                )
+                .unwrap_or(0),
+            },
+        },
+    }))
+}
+
+fn collect_runtime_snapshot(
+    resolved_path: &FsPath,
+) -> Result<crate::gateway::read_models::GatewayRuntimeSnapshotReadModel, WebApiError> {
+    let path_string = resolved_path.display().to_string();
+    let snapshot = crate::collect_runtime_snapshot_cli_state(Some(path_string.as_str()))
+        .map_err(WebApiError::internal)?;
+    Ok(crate::gateway::read_models::build_runtime_snapshot_read_model(&snapshot))
+}
+
+fn json_object_field<'a>(value: &'a Value, key: &str) -> &'a Value {
+    value.get(key).unwrap_or(&Value::Null)
+}
+
+fn json_bool_field(value: &Value, key: &str) -> bool {
+    value.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn json_string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(Value::as_str)
+}
+
+fn json_string_option_field(value: &Value, key: &str) -> Option<String> {
+    json_string_field(value, key).map(ToOwned::to_owned)
+}
+
+fn json_u64_field(value: &Value, key: &str) -> Option<u64> {
+    value.get(key).and_then(Value::as_u64)
+}
+
+fn json_usize_field(value: &Value, key: &str) -> Option<usize> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|raw| raw as usize)
+}
+
+fn json_array_len(value: &Value, key: &str) -> usize {
+    value.get(key).and_then(Value::as_array).map_or(0, Vec::len)
+}
+
+fn channel_account_is_misconfigured(account: &mvp::channel::ChannelStatusSnapshot) -> bool {
+    account
+        .operations
+        .iter()
+        .any(|operation| operation.health == mvp::channel::ChannelOperationHealth::Misconfigured)
+}
+
+fn channel_account_operation_is_ready(
+    account: &mvp::channel::ChannelStatusSnapshot,
+    operation_id: &str,
+) -> bool {
+    account
+        .operation(operation_id)
+        .is_some_and(|operation| operation.health == mvp::channel::ChannelOperationHealth::Ready)
+}

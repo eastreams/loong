@@ -188,13 +188,13 @@ function buildToolMeta(
   item: DashboardToolItem,
   t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  return [
+  const segments = [
     formatToolSource(item.source, t),
     formatToolCapabilityState(item.capabilityState, t),
     item.detail,
-  ]
-    .filter((part) => part && part.trim().length > 0)
-    .join(" ? ");
+  ].filter((part) => part && part.trim().length > 0);
+
+  return segments.join(" · ");
 }
 
 function buildConnectivityCopy(

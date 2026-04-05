@@ -9,10 +9,144 @@
     "restartOnboarding": "Return to onboarding"
   },
   "abilities": {
-    "eyebrow": "Abilities",
-    "title": "Abilities",
-    "subtitle": "A home for personalization, channel snapshots, and skills.",
-    "placeholder": "This page is ready. We can start dropping capabilities here next."
+    "navLabel": "Abilities sections",
+    "common": {
+      "loading": "Loading current data...",
+      "loadFailed": "This section could not be loaded right now.",
+      "retry": "Retry",
+      "noData": "No data available yet.",
+      "notConfigured": "Not configured yet",
+      "notAvailable": "Not available",
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "yes": "Yes",
+      "no": "No"
+    },
+    "sections": {
+      "personalization": {
+        "title": "Personalization",
+        "summary": "Operator preferences and long-running style defaults.",
+        "description": "Current operator preference values and whether suggestions are configured, deferred, or suppressed."
+      },
+      "channels": {
+        "title": "Channels",
+        "summary": "Channel surfaces, bridge sources, and readiness.",
+        "description": "A read-only snapshot of channel surfaces, configured accounts, and service readiness."
+      },
+      "skills": {
+        "title": "Skills",
+        "summary": "Skills, external skills, and capability sources.",
+        "description": "Visible runtime tools, browser companion status, and external skill policy are summarized here."
+      }
+    },
+    "personalization": {
+      "introTitle": "Personalization",
+      "snapshotTitle": "Current personalization",
+      "statusTitle": "Prompt and profile state",
+      "fields": {
+        "preferredName": "Preferred name",
+        "responseDensity": "Response density",
+        "initiativeLevel": "Initiative level",
+        "standingBoundaries": "Standing boundaries",
+        "locale": "Locale",
+        "timezone": "Timezone",
+        "profileState": "Profile state",
+        "operatorPreferences": "Operator preferences",
+        "promptState": "Prompt state",
+        "suggestions": "Suggestions",
+        "updatedAt": "Last updated"
+      },
+      "values": {
+        "profileConfigured": "Configured",
+        "profilePending": "Pending",
+        "preferencesPresent": "Present",
+        "preferencesAbsent": "Not captured",
+        "suggestionsActive": "Active",
+        "suggestionsSuppressed": "Suppressed",
+        "promptConfigured": "Configured",
+        "promptSuppressed": "Suppressed",
+        "promptDeferred": "Deferred",
+        "promptPending": "Pending",
+        "responseDensityConcise": "Concise",
+        "responseDensityBalanced": "Balanced",
+        "responseDensityThorough": "Thorough",
+        "initiativeAskBeforeActing": "Ask before acting",
+        "initiativeBalanced": "Balanced",
+        "initiativeHigh": "High initiative"
+      }
+    },
+    "channels": {
+      "introTitle": "Channels",
+      "summaryTitle": "Channel summary",
+      "surfacesTitle": "Channel surfaces",
+      "defaultAccount": "Default account: {{accountId}}",
+      "noSurfaces": "No channel surfaces were discovered.",
+      "fields": {
+        "catalogChannels": "Catalog channels",
+        "configuredChannels": "Configured channels",
+        "configuredAccounts": "Configured accounts",
+        "enabledAccounts": "Enabled accounts",
+        "misconfiguredAccounts": "Misconfigured accounts",
+        "runtimeBackedChannels": "Runtime-backed channels",
+        "serviceEnabledChannels": "Service-enabled channels",
+        "serviceReadyChannels": "Service-ready channels"
+      },
+      "values": {
+        "runtimeBacked": "Runtime-backed",
+        "pluginBacked": "Plugin-backed",
+        "stub": "Stub"
+      },
+      "surfaceFacts": {
+        "accounts": "{{count}} accounts",
+        "enabled": "{{count}} enabled",
+        "sendReady": "{{count}} send-ready",
+        "serveReady": "{{count}} serve-ready",
+        "misconfigured": "{{count}} misconfigured",
+        "clean": "No misconfiguration",
+        "serviceReady": "Service ready",
+        "serviceEnabled": "Service enabled",
+        "serviceDisabled": "Service disabled"
+      }
+    },
+    "skills": {
+      "introTitle": "Skills",
+      "runtimeTitle": "Runtime skills",
+      "externalTitle": "External skills",
+      "visibleToolsTitle": "Visible runtime tools",
+      "noVisibleTools": "No visible runtime tools were reported.",
+      "fields": {
+        "visibleRuntimeTools": "Visible runtime tools",
+        "browserCompanionEnabled": "Browser companion enabled",
+        "browserCompanionReady": "Browser companion ready",
+        "commandConfigured": "Command configured",
+        "executionTier": "Execution tier",
+        "expectedVersion": "Expected version",
+        "timeoutSeconds": "Timeout",
+        "externalSkillsEnabled": "External skills enabled",
+        "inventoryStatus": "Inventory status",
+        "resolvedSkillCount": "Resolved skills",
+        "shadowedSkillCount": "Shadowed skills",
+        "requireDownloadApproval": "Download approval required",
+        "autoExposeInstalled": "Auto-expose installed",
+        "overrideActive": "Override active",
+        "allowedDomainCount": "Allowed domains",
+        "blockedDomainCount": "Blocked domains",
+        "installRoot": "Install root",
+        "inventoryError": "Inventory error"
+      },
+      "values": {
+        "ready": "Ready",
+        "notReady": "Not ready",
+        "executionLocal": "Local runtime",
+        "executionBrowserCompanion": "Browser companion",
+        "inventoryOk": "Healthy",
+        "inventoryMissing": "Missing",
+        "inventoryError": "Error",
+        "inventoryDisabled": "Disabled",
+        "timeoutSeconds_one": "{{count}} second",
+        "timeoutSeconds_other": "{{count}} seconds"
+      }
+    }
   },
   "status": {
     "connected": "Connected",

@@ -1373,7 +1373,6 @@ impl Commands {
             Self::SlackSend { .. } => "slack_send",
             Self::LineSend { .. } => "line_send",
             Self::WhatsappSend { .. } => "whatsapp_send",
-            Self::WhatsappServe { .. } => "whatsapp_serve",
             Self::EmailSend { .. } => "email_send",
             Self::WebhookSend { .. } => "webhook_send",
             Self::GoogleChatSend { .. } => "google_chat_send",
