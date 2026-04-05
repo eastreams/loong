@@ -60,6 +60,12 @@ impl ImportEnvironmentGuard {
     fn set(pairs: &[(&str, Option<&str>)]) -> Self {
         let lock = super::lock_daemon_test_environment();
         let mut saved = Vec::new();
+        let home_override = pairs
+            .iter()
+            .find_map(|(key, value)| (*key == "HOME").then_some(*value))
+            .flatten()
+            .map(std::path::PathBuf::from);
+        let explicit_loongclaw_home = pairs.iter().any(|(key, _)| *key == "LOONGCLAW_HOME");
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
             match value {
@@ -68,6 +74,20 @@ impl ImportEnvironmentGuard {
                 },
                 None => unsafe {
                     std::env::remove_var(key);
+                },
+            }
+        }
+        if !explicit_loongclaw_home {
+            saved.push((
+                "LOONGCLAW_HOME".to_owned(),
+                std::env::var_os("LOONGCLAW_HOME"),
+            ));
+            match home_override {
+                Some(home) => unsafe {
+                    std::env::set_var("LOONGCLAW_HOME", home.join(".loongclaw"))
+                },
+                None => unsafe {
+                    std::env::remove_var("LOONGCLAW_HOME");
                 },
             }
         }
@@ -2268,7 +2288,11 @@ fn import_cli_provider_selection_unknown_selector_lists_accepted_selectors() {
 async fn import_cli_apply_recommended_import_retains_multiple_same_kind_provider_profiles() {
     let temp_root = unique_temp_dir("same-kind-provider-profiles");
     std::fs::create_dir_all(&temp_root).expect("create temp dir");
+    let home = temp_root.join("home");
+    std::fs::create_dir_all(&home).expect("create fake home dir");
     let output_path = temp_root.join("config.toml");
+    let home_text = home.to_string_lossy().to_string();
+    let _env_guard = ImportEnvironmentGuard::set(&[("HOME", Some(home_text.as_str()))]);
 
     let mut recommended = sample_import_candidate();
     recommended.source_kind = loongclaw_daemon::migration::types::ImportSourceKind::RecommendedPlan;
@@ -2368,7 +2392,11 @@ async fn import_cli_apply_supplements_existing_provider_profiles_without_replaci
 {
     let temp_root = unique_temp_dir("provider-profile-supplement");
     std::fs::create_dir_all(&temp_root).expect("create temp dir");
+    let home = temp_root.join("home");
+    std::fs::create_dir_all(&home).expect("create fake home dir");
     let output_path = temp_root.join("config.toml");
+    let home_text = home.to_string_lossy().to_string();
+    let _env_guard = ImportEnvironmentGuard::set(&[("HOME", Some(home_text.as_str()))]);
 
     let mut base = mvp::config::LoongClawConfig::default();
     base.provider.kind = mvp::config::ProviderKind::Openai;

@@ -113,6 +113,16 @@ struct DetectedEnvironmentGuard {
     saved: Vec<(String, Option<OsString>)>,
 }
 
+fn isolated_loongclaw_home(label: &str) -> PathBuf {
+    let home = unique_temp_path(label);
+    std::fs::create_dir_all(&home).expect("create isolated loongclaw home");
+    home
+}
+
+fn isolated_sqlite_path(label: &str) -> PathBuf {
+    unique_temp_path(label).with_extension("sqlite3")
+}
+
 impl DetectedEnvironmentGuard {
     fn without_detected_environment() -> Self {
         let lock = super::lock_daemon_test_environment();
@@ -147,6 +157,7 @@ impl DetectedEnvironmentGuard {
                 keys.insert((*env_name).to_owned());
             }
         }
+        keys.insert("LOONGCLAW_SQLITE_PATH".to_owned());
 
         let saved = keys
             .into_iter()
@@ -157,7 +168,23 @@ impl DetectedEnvironmentGuard {
                 }
                 (key, value)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let isolated_home = isolated_loongclaw_home("detected-env-home");
+        let saved_loongclaw_home = std::env::var_os("LOONGCLAW_HOME");
+        unsafe {
+            std::env::set_var("LOONGCLAW_HOME", &isolated_home);
+        }
+        let isolated_sqlite = isolated_sqlite_path("detected-env-memory");
+        let saved_loongclaw_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH");
+        unsafe {
+            std::env::set_var("LOONGCLAW_SQLITE_PATH", &isolated_sqlite);
+        }
+        let mut saved = saved;
+        saved.push(("LOONGCLAW_HOME".to_owned(), saved_loongclaw_home));
+        saved.push((
+            "LOONGCLAW_SQLITE_PATH".to_owned(),
+            saved_loongclaw_sqlite_path,
+        ));
 
         Self { _lock: lock, saved }
     }
@@ -427,8 +454,24 @@ async fn run_scripted_onboard_flow_with_context(
     inputs: impl IntoIterator<Item = impl Into<String>>,
     context: loongclaw_daemon::onboard_cli::OnboardRuntimeContext,
 ) -> loongclaw_daemon::CliResult<Vec<String>> {
+    let sqlite_override_guard = if std::env::var_os("LOONGCLAW_SQLITE_PATH").is_some() {
+        None
+    } else {
+        let sqlite_path = options
+            .output
+            .as_deref()
+            .map(PathBuf::from)
+            .map(|path| path.with_extension("sqlite3"))
+            .unwrap_or_else(|| isolated_sqlite_path("scripted-onboard-memory"));
+        let sqlite_path_text = sqlite_path.display().to_string();
+        Some(EnvVarGuard::set(
+            "LOONGCLAW_SQLITE_PATH",
+            sqlite_path_text.as_str(),
+        ))
+    };
     let mut ui = ScriptedOnboardUi::new(inputs);
     loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context).await?;
+    drop(sqlite_override_guard);
     Ok(ui.transcript())
 }
 
