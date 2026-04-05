@@ -96,3 +96,53 @@ async fn execute_spec_suppresses_audit_snapshot_when_not_requested() {
         "audit snapshots should stay opt-in for spec execution reports"
     );
 }
+
+#[tokio::test]
+async fn execute_spec_task_reports_supervisor_terminal_state() {
+    let spec = make_runner_spec(OperationSpec::Task {
+        task_id: "spec-supervisor-task".to_owned(),
+        objective: "exercise task supervisor in spec execution".to_owned(),
+        required_capabilities: BTreeSet::new(),
+        payload: json!({"kind": "supervisor-contract-check"}),
+    });
+
+    let report = execute_spec(&spec, false).await;
+
+    assert_eq!(report.operation_kind, "task");
+    assert_eq!(
+        report.outcome["supervisor_state"]["Completed"]["status"],
+        "ok"
+    );
+    assert_eq!(
+        report.outcome["supervisor_state"]["Completed"]["output"]["task"],
+        "spec-supervisor-task"
+    );
+    assert!(report.outcome["error"].is_null());
+}
+
+#[tokio::test]
+async fn execute_spec_task_preserves_faulted_supervisor_terminal_state() {
+    let spec = make_runner_spec(OperationSpec::Task {
+        task_id: "spec-faulted-task".to_owned(),
+        objective: "exercise faulted task supervisor in spec execution".to_owned(),
+        required_capabilities: BTreeSet::from([Capability::MemoryRead]),
+        payload: json!({"kind": "supervisor-contract-check"}),
+    });
+
+    let report = execute_spec(&spec, false).await;
+
+    assert_eq!(report.operation_kind, "task");
+    assert!(report.blocked_reason.is_none());
+    assert!(report.outcome["route"].is_null());
+    assert!(report.outcome["outcome"].is_null());
+    assert!(
+        report.outcome["supervisor_state"].get("Faulted").is_some(),
+        "spec task execution should preserve the faulted supervisor state",
+    );
+    assert!(
+        report.outcome["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("task execution from spec failed")),
+        "spec task execution should preserve a structured error summary",
+    );
+}

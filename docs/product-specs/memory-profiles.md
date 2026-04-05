@@ -25,6 +25,9 @@ how continuity is preserved without manually wiring different memory systems.
       LoongClaw can bootstrap advisory durable recall from `MEMORY.md`,
       `memory/MEMORY.md`, and recent daily logs without overriding runtime
       identity.
+- [ ] Canonical session-history recall is exposed through a separate
+      `session_search` surface instead of overloading durable workspace-memory
+      search.
 - [ ] Legacy imported identity can still be recovered from `profile_note`, but
       it is resolved into a separate runtime identity lane rather than being
       projected back into the session profile block.

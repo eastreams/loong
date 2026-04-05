@@ -2214,7 +2214,9 @@ exit 0
 
     #[tokio::test]
     #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_uses_agent_proxy_when_mcp_servers_requested() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let temp_dir = unique_temp_dir("loongclaw-acpx-mcp-proxy");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2389,7 +2391,9 @@ exit 0
 
     #[tokio::test]
     #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_executes_session_turn_and_controls() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let temp_dir = unique_temp_dir("loongclaw-acpx-runtime");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2573,7 +2577,9 @@ exit 0
 
     #[tokio::test]
     #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
     async fn runtime_backend_supports_local_abort_for_running_prompt() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let temp_dir = unique_temp_dir("loongclaw-acpx-abort");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(
@@ -2674,7 +2680,9 @@ exit 0
 
     #[tokio::test]
     #[cfg(unix)]
+    #[allow(clippy::await_holding_lock)]
     async fn ensure_session_falls_back_to_sessions_new_when_ensure_has_no_identifiers() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let temp_dir = unique_temp_dir("loongclaw-acpx-fallback");
         let log_path = temp_dir.join("calls.log");
         let script_path = write_fake_acpx_script(

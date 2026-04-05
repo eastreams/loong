@@ -57,6 +57,8 @@ mod process_exec;
 mod provider_switch;
 pub mod runtime_config;
 mod session;
+#[cfg(feature = "memory-sqlite")]
+mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
@@ -325,6 +327,7 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "session_tool_policy_clear"
         | "session_status"
         | "session_events"
+        | "session_search"
         | "session_archive"
         | "session_cancel"
         | "session_recover" => session::execute_session_tool_with_policies(
@@ -487,6 +490,15 @@ fn required_capabilities_for_tool_name_and_payload(
         "memory_search" | "memory_get" => {
             caps.insert(Capability::FilesystemRead);
         }
+        "sessions_list"
+        | "sessions_history"
+        | "session_status"
+        | "session_events"
+        | "session_wait"
+        | "session_search"
+        | "session_tool_policy_status" => {
+            caps.insert(Capability::MemoryRead);
+        }
         "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
@@ -626,11 +638,6 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-        request.tool_name.as_str(),
-        &request.payload,
-        "payload",
-    )?;
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
@@ -1957,6 +1964,7 @@ mod tests {
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -1999,6 +2007,7 @@ mod tests {
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -2069,6 +2078,7 @@ mod tests {
             "delegate_async",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -2520,6 +2530,42 @@ mod tests {
         assert_eq!(
             required_capabilities_for_request(&direct_memory_get),
             BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
+        );
+
+        let direct_session_search = ToolCoreRequest {
+            tool_name: "session_search".to_owned(),
+            payload: json!({"query": "deploy freeze"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_session_search),
+            BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead])
+        );
+
+        let direct_sessions_list = ToolCoreRequest {
+            tool_name: "sessions_list".to_owned(),
+            payload: json!({"limit": 5}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_sessions_list),
+            BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead])
+        );
+
+        let direct_session_wait = ToolCoreRequest {
+            tool_name: "session_wait".to_owned(),
+            payload: json!({"session_id": "child-session"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_session_wait),
+            BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead])
+        );
+
+        let direct_session_policy_status = ToolCoreRequest {
+            tool_name: "session_tool_policy_status".to_owned(),
+            payload: json!({"session_id": "root-session"}),
+        };
+        assert_eq!(
+            required_capabilities_for_request(&direct_session_policy_status),
+            BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead])
         );
 
         let direct_web_fetch = ToolCoreRequest {
@@ -3886,6 +3932,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_start_issues_managed_session_id_and_records_request() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-start");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
@@ -3973,6 +4020,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_surfaces_invalid_json_from_command() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-invalid-json");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
@@ -4032,6 +4080,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_app_tool_click_uses_current_session_scope() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");

@@ -778,6 +778,19 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: session_tool_policy_clear_definition,
         },
         ToolDescriptor {
+            name: "session_search",
+            provider_name: "session_search",
+            aliases: &[],
+            description: "Search visible canonical session history across transcript turns and session events",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_search_definition,
+        },
+        ToolDescriptor {
             name: "session_recover",
             provider_name: "session_recover",
             aliases: &[],
@@ -2953,6 +2966,49 @@ fn session_events_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn session_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language search query over visible canonical session history."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session id to narrow the search scope."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Optional maximum number of ranked hits to return. Defaults to 5."
+                    },
+                    "include_archived": {
+                        "type": "boolean",
+                        "description": "Include archived visible sessions when true. Defaults to false."
+                    },
+                    "include_turns": {
+                        "type": "boolean",
+                        "description": "Include transcript turn matches. Defaults to true."
+                    },
+                    "include_events": {
+                        "type": "boolean",
+                        "description": "Include session event matches. Defaults to true."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3556,6 +3612,9 @@ fn tool_argument_hint(name: &str) -> &'static str {
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
+        "session_search" => {
+            "query:string,session_id?:string,max_results?:integer,include_archived?:boolean,include_turns?:boolean,include_events?:boolean"
+        }
         "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
@@ -3983,6 +4042,14 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("offset", "integer"),
             ("state", "string"),
         ],
+        "session_search" => &[
+            ("query", "string"),
+            ("session_id", "string"),
+            ("max_results", "integer"),
+            ("include_archived", "boolean"),
+            ("include_turns", "boolean"),
+            ("include_events", "boolean"),
+        ],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         "web.search" => &[
             ("query", "string"),
@@ -4058,6 +4125,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
+        "session_search" => &["query"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -4141,6 +4209,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
             &["session", "history", "runtime"]
         }
+        "session_search" => &["session", "search", "history", "memory", "canonical"],
         "sessions_send" => &["session", "message", "channel"],
         "web.search" => &["web", "search", "discover", "external"],
         _ => &[],
@@ -4562,6 +4631,13 @@ mod tests {
         );
         assert_eq!(
             catalog
+                .descriptor("session_search")
+                .expect("session_search descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        assert_eq!(
+            catalog
                 .descriptor("delegate_async")
                 .expect("delegate_async descriptor")
                 .scheduling_class(),
@@ -4722,6 +4798,7 @@ mod tests {
                 "session_tool_policy_clear",
                 CapabilityActionClass::PolicyMutation,
             ),
+            ("session_search", CapabilityActionClass::ExecuteExisting),
             ("session_recover", CapabilityActionClass::SessionMutation),
         ];
 

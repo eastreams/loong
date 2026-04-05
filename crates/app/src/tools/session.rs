@@ -327,6 +327,12 @@ pub fn execute_session_tool_with_policies(
             "session_tool_policy_clear" => {
                 execute_session_tool_policy_clear(payload, current_session_id, config, tool_config)
             }
+            "session_search" => super::session_search::execute_session_search_with_policies(
+                payload,
+                current_session_id,
+                config,
+                tool_config,
+            ),
             "session_status" => {
                 execute_session_status(payload, current_session_id, config, tool_config)
             }

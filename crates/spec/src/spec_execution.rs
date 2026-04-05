@@ -17,8 +17,8 @@ use kernel::{
     PluginCompatibility, PluginCompatibilityShimSupport, PluginDescriptor, PluginScanReport,
     PluginScanner, PluginSetup, PluginSetupReadinessContext, PluginSlotClaim,
     PluginTranslationReport, PluginTranslator, ProvisionPlan, RuntimeCoreRequest,
-    RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, ToolCoreRequest,
-    ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
+    RuntimeExtensionRequest, StaticPolicyEngine, SystemClock, TaskIntent, TaskSupervisor,
+    ToolCoreRequest, ToolExtensionRequest, plugin_bridge_is_high_risk_auto_apply,
     plugin_provenance_summary_for_descriptor,
 };
 use serde_json::{Value, json};
@@ -2291,26 +2291,31 @@ async fn execute_spec_operation(
             required_capabilities,
             payload,
         } => {
-            let dispatch = kernel
-                .execute_task(
-                    pack_id,
-                    token,
-                    TaskIntent {
-                        task_id: task_id.clone(),
-                        objective: objective.clone(),
-                        required_capabilities: required_capabilities.clone(),
-                        payload: payload.clone(),
-                    },
-                )
-                .await
-                .map_err(|error| format!("task execution from spec failed: {error}"))?;
-            Ok((
-                "task",
-                json!({
+            let mut supervisor = TaskSupervisor::new(TaskIntent {
+                task_id: task_id.clone(),
+                objective: objective.clone(),
+                required_capabilities: required_capabilities.clone(),
+                payload: payload.clone(),
+            });
+            let dispatch_result = supervisor.execute(kernel, pack_id, token).await;
+            let outcome = match dispatch_result {
+                Ok(dispatch) => json!({
                     "route": dispatch.adapter_route,
                     "outcome": dispatch.outcome,
+                    "supervisor_state": supervisor.state(),
+                    "error": Value::Null,
                 }),
-            ))
+                Err(error) => {
+                    let error_message = format!("task execution from spec failed: {error}");
+                    json!({
+                        "route": Value::Null,
+                        "outcome": Value::Null,
+                        "supervisor_state": supervisor.state(),
+                        "error": error_message,
+                    })
+                }
+            };
+            Ok(("task", outcome))
         }
         OperationSpec::ConnectorLegacy {
             connector_name,

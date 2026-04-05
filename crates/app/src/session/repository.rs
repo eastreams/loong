@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{
+    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
+};
 use serde_json::Value;
 
 use crate::config::ToolConsentMode;
@@ -268,6 +270,32 @@ pub struct SessionObservationRecord {
     pub terminal_outcome: Option<SessionTerminalOutcomeRecord>,
     pub recent_events: Vec<SessionEventRecord>,
     pub tail_events: Vec<SessionEventRecord>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionSearchSourceKind {
+    Turn,
+    Event,
+}
+
+impl SessionSearchSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Turn => "turn",
+            Self::Event => "event",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSearchRecord {
+    pub session_id: String,
+    pub source_kind: SessionSearchSourceKind,
+    pub source_id: i64,
+    pub role: Option<String>,
+    pub event_kind: Option<String>,
+    pub content_text: String,
+    pub ts: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -919,6 +947,18 @@ impl SessionRepository {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let conn = self.open_connection()?;
         Self::list_delegate_lifecycle_events_with_conn(&conn, &session_id)
+    }
+
+    pub fn search_session_content(
+        &self,
+        session_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSearchRecord>, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let normalized_query = normalize_required_text(query, "query")?.to_ascii_lowercase();
+        let conn = self.open_connection()?;
+        Self::search_session_content_with_conn(&conn, &session_id, &normalized_query, limit)
     }
 
     pub fn load_terminal_outcome(
@@ -2153,6 +2193,145 @@ impl SessionRepository {
         Ok(events)
     }
 
+    fn search_session_content_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        normalized_query: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionSearchRecord>, String> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let patterns = build_search_like_patterns(normalized_query);
+        if patterns.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut hits = Vec::new();
+        hits.extend(Self::search_session_turns_with_conn(
+            conn,
+            session_id,
+            patterns.as_slice(),
+            limit,
+        )?);
+        hits.extend(Self::search_session_events_with_conn(
+            conn,
+            session_id,
+            patterns.as_slice(),
+            limit,
+        )?);
+        Ok(hits)
+    }
+
+    fn search_session_turns_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        patterns: &[String],
+        limit: usize,
+    ) -> Result<Vec<SessionSearchRecord>, String> {
+        let where_clause = build_search_where_clause("lower(content)", patterns.len(), 2);
+        let sql = format!(
+            "SELECT id, session_id, role, content, ts
+             FROM turns
+             WHERE session_id = ?1
+               AND ({where_clause})
+             ORDER BY id DESC
+             LIMIT {limit}"
+        );
+
+        let mut stmt = conn
+            .prepare(sql.as_str())
+            .map_err(|error| format!("prepare session search turns query failed: {error}"))?;
+        let mut bindings = Vec::with_capacity(patterns.len().saturating_add(1));
+        bindings.push(session_id.to_owned());
+        bindings.extend(patterns.iter().cloned());
+
+        let rows = stmt
+            .query_map(params_from_iter(bindings.iter()), |row| {
+                Ok(RawSessionSearchTurnRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    role: row.get(2)?,
+                    content: row.get(3)?,
+                    ts: row.get(4)?,
+                })
+            })
+            .map_err(|error| format!("query session search turns failed: {error}"))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let raw =
+                row.map_err(|error| format!("decode session search turn row failed: {error}"))?;
+            results.push(SessionSearchRecord {
+                session_id: raw.session_id,
+                source_kind: SessionSearchSourceKind::Turn,
+                source_id: raw.id,
+                role: Some(raw.role),
+                event_kind: None,
+                content_text: raw.content,
+                ts: raw.ts,
+            });
+        }
+        Ok(results)
+    }
+
+    fn search_session_events_with_conn(
+        conn: &Connection,
+        session_id: &str,
+        patterns: &[String],
+        limit: usize,
+    ) -> Result<Vec<SessionSearchRecord>, String> {
+        let where_clause = build_search_where_clause(
+            "lower(event_kind || ' ' || payload_json)",
+            patterns.len(),
+            2,
+        );
+        let sql = format!(
+            "SELECT id, session_id, event_kind, payload_json, ts
+             FROM session_events
+             WHERE session_id = ?1
+               AND ({where_clause})
+             ORDER BY id DESC
+             LIMIT {limit}"
+        );
+
+        let mut stmt = conn
+            .prepare(sql.as_str())
+            .map_err(|error| format!("prepare session search events query failed: {error}"))?;
+        let mut bindings = Vec::with_capacity(patterns.len().saturating_add(1));
+        bindings.push(session_id.to_owned());
+        bindings.extend(patterns.iter().cloned());
+
+        let rows = stmt
+            .query_map(params_from_iter(bindings.iter()), |row| {
+                Ok(RawSessionSearchEventRecord {
+                    id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    event_kind: row.get(2)?,
+                    payload_json: row.get(3)?,
+                    ts: row.get(4)?,
+                })
+            })
+            .map_err(|error| format!("query session search events failed: {error}"))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            let raw =
+                row.map_err(|error| format!("decode session search event row failed: {error}"))?;
+            results.push(SessionSearchRecord {
+                session_id: raw.session_id,
+                source_kind: SessionSearchSourceKind::Event,
+                source_id: raw.id,
+                role: None,
+                event_kind: Some(raw.event_kind.clone()),
+                content_text: format!("event_kind={}\n{}", raw.event_kind, raw.payload_json),
+                ts: raw.ts,
+            });
+        }
+        Ok(results)
+    }
+
     fn load_terminal_outcome_with_conn(
         conn: &Connection,
         session_id: &str,
@@ -2318,6 +2497,24 @@ struct RawSessionEventRecord {
     session_id: String,
     event_kind: String,
     actor_session_id: Option<String>,
+    payload_json: String,
+    ts: i64,
+}
+
+#[derive(Debug)]
+struct RawSessionSearchTurnRecord {
+    id: i64,
+    session_id: String,
+    role: String,
+    content: String,
+    ts: i64,
+}
+
+#[derive(Debug)]
+struct RawSessionSearchEventRecord {
+    id: i64,
+    session_id: String,
+    event_kind: String,
     payload_json: String,
     ts: i64,
 }
@@ -2571,6 +2768,59 @@ fn sort_session_summaries(sessions: &mut [SessionSummaryRecord]) {
             .cmp(&left.updated_at)
             .then_with(|| left.session_id.cmp(&right.session_id))
     });
+}
+
+fn build_search_where_clause(
+    expression: &str,
+    pattern_count: usize,
+    first_placeholder_index: usize,
+) -> String {
+    let mut clauses = Vec::with_capacity(pattern_count);
+    for offset in 0..pattern_count {
+        let placeholder = first_placeholder_index.saturating_add(offset);
+        clauses.push(format!("{expression} LIKE ?{placeholder} ESCAPE '\\'"));
+    }
+    clauses.join(" OR ")
+}
+
+fn build_search_like_patterns(normalized_query: &str) -> Vec<String> {
+    let mut patterns = Vec::new();
+    patterns.push(like_pattern(normalized_query));
+
+    for token in tokenize_search_query(normalized_query) {
+        let pattern = like_pattern(token.as_str());
+        if patterns.iter().any(|existing| existing == &pattern) {
+            continue;
+        }
+        patterns.push(pattern);
+    }
+
+    patterns
+}
+
+fn tokenize_search_query(query: &str) -> Vec<String> {
+    query
+        .split(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_' && ch != '-')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn like_pattern(raw: &str) -> String {
+    let mut escaped = String::with_capacity(raw.len().saturating_add(4));
+    escaped.push('%');
+    for ch in raw.chars() {
+        match ch {
+            '%' | '_' | '\\' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            _ => escaped.push(ch),
+        }
+    }
+    escaped.push('%');
+    escaped
 }
 
 #[cfg(test)]

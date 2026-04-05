@@ -1,5 +1,5 @@
 use std::fmt::Debug;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -79,11 +79,16 @@ pub fn init_tracing() {
         .with_span_events(FmtSpan::CLOSE)
         .with_ansi(use_ansi);
 
-    let _ = match log_format {
+    let init_result = match log_format {
         LogFormat::Compact => base.compact().finish().try_init(),
         LogFormat::Pretty => base.pretty().finish().try_init(),
         LogFormat::Json => base.json().flatten_event(true).finish().try_init(),
     };
+
+    if let Err(error) = init_result {
+        let mut stderr = io::stderr();
+        let _ = writeln!(stderr, "loongclaw.daemon tracing init failed: {error}");
+    }
 }
 
 #[cfg(test)]

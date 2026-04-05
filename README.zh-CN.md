@@ -110,6 +110,11 @@ LoongClaw 的目标不只是个人助手。
 
 这个方向也不只停留在软件工作流里。再往后看，我们也关心硬件、机器人以及具身智能相关的延展空间。对我们来说，LoongClaw 的价值不单单是把模型接进聊天界面，而是逐步长成一个能够连接数字世界与真实行动的基础层。
 
+补充一点：围绕长期上下文，LoongClaw 现在已经把回忆能力真实暴露到运行时工具面里。
+`session_search` 用来检索 canonical session history，也就是有序、权威的 session turns 和 events；
+`memory_search` 与 `memory_get` 则分别负责检索和读取 workspace durable memory。
+这样后续工作不必再靠人工翻 transcript，同时也能保持不同 recall surface 的边界清晰。
+
 <a id="why-teams-build-on-loongclaw"></a>
 
 ## 为什么团队会选择 LoongClaw

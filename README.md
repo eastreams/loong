@@ -816,7 +816,8 @@ Pack ids are first-class for operator workflows now:
   lifecycle hooks
 - ACP acts as a separate control plane for backend, binding, registry, runtime, and related
   coordination work
-- profiles, summaries, migration, and canonical history together support long-lived context
+- profiles, summaries, migration, canonical history, and runtime-visible recall tools such as
+  `session_search`, `memory_search`, and `memory_get` together support long-lived context
 
 ### Delivery Surfaces
 
@@ -880,7 +881,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | [SDK Docs](docs/sdk/index.md)                               | Capability authoring, internal integration seams, validator meaning, and promotion-oriented SDK references  |
 | [Roadmap](docs/ROADMAP.md)                                  | Stage-based milestones and direction                                                                        |
 | [Product Sense](docs/PRODUCT_SENSE.md)                      | Current product contract and user journey                                                                   |
-| [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, and memory                                  |
+| [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, memory, and session recall                  |
 | [Contribution Areas](docs/references/contribution-areas.md) | The kinds of design, engineering, docs, and community help that would make the biggest difference right now |
 | [Reliability](docs/RELIABILITY.md)                          | Build and kernel invariants                                                                                 |
 | [Security](SECURITY.md)                                     | Security policy and disclosure path                                                                         |
