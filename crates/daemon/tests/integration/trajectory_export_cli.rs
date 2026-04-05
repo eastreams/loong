@@ -10,6 +10,7 @@ use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -18,7 +19,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    let process_id = process::id();
+    std::env::temp_dir().join(format!("{prefix}-{process_id}-{nanos}"))
 }
 
 fn write_trajectory_export_config(root: &Path) -> PathBuf {
@@ -100,7 +102,6 @@ fn load_trajectory_export_artifact_rejects_wrong_schema_surface() {
                 "purpose": "session_replay_evidence"
             },
             "exported_at": "2026-04-05T00:00:00Z",
-            "config": "/tmp/loongclaw.toml",
             "session": {
                 "session_id": "root-session",
                 "kind": "root",
@@ -157,28 +158,20 @@ fn load_trajectory_export_artifact_round_trips_written_json() {
     mvp::memory::append_turn_direct("root-session", "user", "hello", &memory_config)
         .expect("append user turn");
 
-    let (_resolved_path, artifact) = collect_trajectory_export_artifact(
+    let artifact_path = root.join("artifacts").join("trajectory.json");
+    let artifact_path_str = artifact_path
+        .to_str()
+        .expect("artifact path should be valid utf-8");
+    run_trajectory_export_cli(
         Some(config_path.to_string_lossy().as_ref()),
         Some("root-session"),
+        Some(artifact_path_str),
+        false,
     )
-    .expect("collect trajectory artifact");
+    .expect("run trajectory export cli");
 
-    let artifact_path = root.join("artifacts").join("trajectory.json");
-    let encoded = serde_json::to_string_pretty(&artifact).expect("encode trajectory artifact");
-    fs::create_dir_all(
-        artifact_path
-            .parent()
-            .expect("artifact path should have parent"),
-    )
-    .expect("create artifact directory");
-    fs::write(&artifact_path, encoded).expect("write artifact");
-
-    let loaded = load_trajectory_export_artifact(
-        artifact_path
-            .to_str()
-            .expect("artifact path should be valid utf-8"),
-    )
-    .expect("load trajectory artifact");
+    let loaded =
+        load_trajectory_export_artifact(artifact_path_str).expect("load trajectory artifact");
     assert_eq!(loaded.session.session_id, "root-session");
     assert_eq!(loaded.turns.len(), 1);
 }

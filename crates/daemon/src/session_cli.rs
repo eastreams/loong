@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{CliResult, mvp, persist_runtime_snapshot_artifact};
+use crate::{CliResult, mvp, persist_json_artifact};
 
 pub const SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 
@@ -47,7 +47,6 @@ pub struct SessionSearchArtifactHit {
 pub struct SessionSearchArtifactDocument {
     pub schema: SessionSearchArtifactSchema,
     pub exported_at: String,
-    pub config: String,
     pub scope_session_id: String,
     pub query: String,
     pub limit: usize,
@@ -83,7 +82,7 @@ pub fn run_session_search_cli(
         .map_err(|error| format!("serialize session-search artifact failed: {error}"))?;
 
     if let Some(output_path) = output_path {
-        persist_runtime_snapshot_artifact(output_path, &payload)?;
+        persist_json_artifact(output_path, &payload, "session-search artifact")?;
     }
 
     if as_json {
@@ -134,29 +133,36 @@ pub fn collect_session_search_artifact(
     )?
     .payload;
 
-    let visibility = payload
+    let filters = payload
         .get("filters")
         .and_then(Value::as_object)
-        .and_then(|filters| filters.get("visibility"))
+        .ok_or_else(|| "session-search tool payload is missing `filters`".to_owned())?;
+    let visibility = filters
+        .get("visibility")
         .and_then(Value::as_str)
-        .unwrap_or("children")
-        .to_owned();
+        .ok_or_else(|| "session-search tool payload is missing `filters.visibility`".to_owned())?;
+    validate_session_search_visibility(visibility)?;
 
     let returned_count = payload
         .get("returned_count")
         .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+        .ok_or_else(|| "session-search tool payload is missing `returned_count`".to_owned())?
+        as usize;
 
     let hits_value = payload
         .get("hits")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| "session-search tool payload is missing `hits`".to_owned())?;
 
-    let mut hits = Vec::new();
-    for hit_value in hits_value {
-        let hit = parse_session_search_hit(&hit_value)?;
-        hits.push(hit);
+    let hits = hits_value
+        .iter()
+        .map(parse_session_search_hit)
+        .collect::<CliResult<Vec<_>>>()?;
+    let hit_count = hits.len();
+    if returned_count != hit_count {
+        return Err(format!(
+            "session-search tool payload returned_count={returned_count} but parsed {hit_count} hit(s)"
+        ));
     }
 
     let exported_at = OffsetDateTime::now_utc()
@@ -170,12 +176,11 @@ pub fn collect_session_search_artifact(
             purpose: "session_recall_evidence".to_owned(),
         },
         exported_at,
-        config: resolved_path.display().to_string(),
         scope_session_id,
         query: query.to_owned(),
         limit,
         include_archived,
-        visibility,
+        visibility: visibility.to_owned(),
         returned_count,
         hits,
     };
@@ -404,7 +409,28 @@ pub fn load_session_search_artifact(
         ));
     }
 
+    validate_session_search_visibility(&artifact.visibility)
+        .map_err(|error| format!("session-search artifact {} {error}", raw_path.display()))?;
+    let hit_count = artifact.hits.len();
+    if artifact.returned_count != hit_count {
+        return Err(format!(
+            "session-search artifact {} says returned_count={} but contains {} hit(s)",
+            raw_path.display(),
+            artifact.returned_count,
+            hit_count
+        ));
+    }
+
     Ok(artifact)
+}
+
+fn validate_session_search_visibility(visibility: &str) -> CliResult<()> {
+    let supported_visibility = matches!(visibility, "self" | "children");
+    if supported_visibility {
+        return Ok(());
+    }
+
+    Err(format!("uses unsupported visibility {visibility}"))
 }
 
 pub fn format_session_search_inspect_text(

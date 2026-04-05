@@ -8,9 +8,12 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     future::Future,
+    io::Write,
     path::{Path, PathBuf},
     pin::Pin,
+    process,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
@@ -2446,7 +2449,7 @@ pub fn run_runtime_snapshot_cli(
     let artifact_payload = build_runtime_snapshot_artifact_json_payload(&snapshot, &metadata)?;
 
     if let Some(output_path) = output_path {
-        persist_runtime_snapshot_artifact(output_path, &artifact_payload)?;
+        persist_json_artifact(output_path, &artifact_payload, "runtime snapshot artifact")?;
     }
 
     if as_json {
@@ -3367,29 +3370,69 @@ fn runtime_snapshot_optional_arg(raw: Option<&str>) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(crate) fn persist_runtime_snapshot_artifact(
+pub(crate) fn persist_json_artifact(
     output_path: &str,
     payload: &Value,
+    artifact_label: &str,
 ) -> CliResult<()> {
     let output_path = PathBuf::from(output_path);
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            format!(
-                "create runtime snapshot artifact directory {} failed: {error}",
-                parent.display()
-            )
-        })?;
-    }
-    let encoded = serde_json::to_string_pretty(payload)
-        .map_err(|error| format!("serialize runtime snapshot artifact failed: {error}"))?;
-    fs::write(&output_path, encoded).map_err(|error| {
+    let parent_path = output_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&parent_path).map_err(|error| {
         format!(
-            "write runtime snapshot artifact {} failed: {error}",
-            output_path.display()
+            "create {artifact_label} directory {} failed: {error}",
+            parent_path.display()
         )
     })?;
+    let encoded = serde_json::to_string_pretty(payload)
+        .map_err(|error| format!("serialize {artifact_label} failed: {error}"))?;
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("artifact");
+    let process_id = process::id();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("build {artifact_label} temp path failed: {error}"))?
+        .as_nanos();
+    let temp_file_name = format!(".{file_name}.{process_id}.{timestamp}.tmp");
+    let temp_path = parent_path.join(temp_file_name);
+
+    let open_result = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path);
+    let mut temp_file = open_result.map_err(|error| {
+        format!(
+            "create {artifact_label} temp file {} failed: {error}",
+            temp_path.display()
+        )
+    })?;
+    temp_file.write_all(encoded.as_bytes()).map_err(|error| {
+        format!(
+            "write {artifact_label} temp file {} failed: {error}",
+            temp_path.display()
+        )
+    })?;
+    temp_file.sync_all().map_err(|error| {
+        format!(
+            "sync {artifact_label} temp file {} failed: {error}",
+            temp_path.display()
+        )
+    })?;
+    drop(temp_file);
+
+    let rename_result = fs::rename(&temp_path, &output_path);
+    if let Err(error) = rename_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(format!(
+            "replace {artifact_label} {} failed: {error}",
+            output_path.display()
+        ));
+    }
     Ok(())
 }
 

@@ -96,7 +96,7 @@ mod tests {
             Commands::ValidateConfig {
                 config: None,
                 output: None,
-                locale: None,
+                locale: "en".to_owned(),
                 json: false,
                 fail_on_diagnostics: false,
             }

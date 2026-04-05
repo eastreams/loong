@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{CliResult, mvp, persist_runtime_snapshot_artifact};
+use crate::{CliResult, mvp, persist_json_artifact};
 
 pub const TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION: u32 = 1;
 
@@ -51,7 +51,6 @@ pub struct TrajectoryExportEvent {
 pub struct TrajectoryExportArtifactDocument {
     pub schema: TrajectoryExportArtifactSchema,
     pub exported_at: String,
-    pub config: String,
     pub session: TrajectoryExportSessionSummary,
     pub turns: Vec<TrajectoryExportTurn>,
     pub events: Vec<TrajectoryExportEvent>,
@@ -68,7 +67,7 @@ pub fn run_trajectory_export_cli(
         .map_err(|error| format!("serialize trajectory export artifact failed: {error}"))?;
 
     if let Some(output_path) = output_path {
-        persist_runtime_snapshot_artifact(output_path, &payload)?;
+        persist_json_artifact(output_path, &payload, "trajectory export artifact")?;
     }
 
     if as_json {
@@ -115,7 +114,6 @@ pub fn collect_trajectory_export_artifact(
             purpose: "session_replay_evidence".to_owned(),
         },
         exported_at,
-        config: resolved_path.display().to_string(),
         session: TrajectoryExportSessionSummary {
             session_id: session_summary.session_id,
             kind: session_summary.kind.as_str().to_owned(),

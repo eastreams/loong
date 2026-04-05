@@ -442,7 +442,6 @@ fn format_session_search_text_includes_hit_summary() {
                 purpose: "session_recall_evidence".to_owned(),
             },
             exported_at: "2026-04-05T00:00:00Z".to_owned(),
-            config: "/tmp/loongclaw.toml".to_owned(),
             scope_session_id: "root-session".to_owned(),
             query: "deploy freeze".to_owned(),
             limit: 5,
@@ -493,7 +492,6 @@ fn format_session_search_inspect_text_summarizes_first_hit() {
                 purpose: "session_recall_evidence".to_owned(),
             },
             exported_at: "2026-04-05T00:00:00Z".to_owned(),
-            config: "/tmp/loongclaw.toml".to_owned(),
             scope_session_id: "root-session".to_owned(),
             query: "deploy freeze".to_owned(),
             limit: 5,
@@ -573,7 +571,6 @@ fn format_trajectory_export_text_summarizes_counts() {
                 purpose: "session_replay_evidence".to_owned(),
             },
             exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            config: "/tmp/loongclaw.toml".to_owned(),
             session: TrajectoryExportSessionSummary {
                 session_id: "root-session".to_owned(),
                 kind: "root".to_owned(),
@@ -648,7 +645,6 @@ fn format_trajectory_inspect_text_summarizes_counts() {
                 purpose: "session_replay_evidence".to_owned(),
             },
             exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            config: "/tmp/loongclaw.toml".to_owned(),
             session: TrajectoryExportSessionSummary {
                 session_id: "root-session".to_owned(),
                 kind: "root".to_owned(),
@@ -706,7 +702,6 @@ fn format_trajectory_inspect_text_summarizes_roles_and_events() {
                 purpose: "session_replay_evidence".to_owned(),
             },
             exported_at: "2026-04-04T00:00:00Z".to_owned(),
-            config: "/tmp/loongclaw.toml".to_owned(),
             session: TrajectoryExportSessionSummary {
                 session_id: "root-session".to_owned(),
                 kind: "root".to_owned(),

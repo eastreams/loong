@@ -6,9 +6,11 @@
 )]
 
 use super::*;
+use serde_json::json;
 use std::{
     fs,
     path::{Path, PathBuf},
+    process,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,7 +19,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    let process_id = process::id();
+    std::env::temp_dir().join(format!("{prefix}-{process_id}-{nanos}"))
 }
 
 fn write_session_search_config(root: &Path) -> PathBuf {
@@ -148,32 +151,82 @@ fn load_session_search_artifact_round_trips_written_json() {
     )
     .expect("append root turn");
 
-    let config_path_lossy = config_path.to_string_lossy();
-    let config_path_arg = config_path_lossy.as_ref();
-    let (_resolved_path, artifact) = collect_session_search_artifact(
-        Some(config_path_arg),
-        Some("root-session"),
-        "deploy freeze",
-        5,
-        false,
-    )
-    .expect("collect session-search artifact");
-
     let artifact_path = root.join("artifacts").join("session-search.json");
-    let encoded = serde_json::to_string_pretty(&artifact).expect("encode session-search artifact");
-    let artifact_parent = artifact_path
-        .parent()
-        .expect("artifact path should have parent");
-    fs::create_dir_all(artifact_parent).expect("create artifact directory");
-    fs::write(&artifact_path, encoded).expect("write artifact");
-
     let artifact_path_str = artifact_path
         .to_str()
         .expect("artifact path should be valid utf-8");
+    run_session_search_cli(
+        Some(config_path_str),
+        Some("root-session"),
+        "deploy freeze",
+        5,
+        Some(artifact_path_str),
+        false,
+        false,
+    )
+    .expect("run session-search cli");
+
     let loaded_artifact = load_session_search_artifact(artifact_path_str);
     let loaded = loaded_artifact.expect("load session-search artifact");
 
     assert_eq!(loaded.scope_session_id, "root-session");
     assert_eq!(loaded.returned_count, 1);
     assert_eq!(loaded.hits.len(), 1);
+}
+
+#[test]
+fn load_session_search_artifact_rejects_inconsistent_counts() {
+    let root = unique_temp_dir("loongclaw-session-search-invalid-counts");
+    fs::create_dir_all(&root).expect("create fixture root");
+    let artifact_path = root.join("session-search.json");
+    fs::write(
+        &artifact_path,
+        serde_json::to_string_pretty(&json!({
+            "schema": {
+                "version": SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION,
+                "surface": "session_search",
+                "purpose": "session_recall_evidence"
+            },
+            "exported_at": "2026-04-05T00:00:00Z",
+            "scope_session_id": "root-session",
+            "query": "deploy freeze",
+            "limit": 5,
+            "include_archived": false,
+            "visibility": "children",
+            "returned_count": 2,
+            "hits": [{
+                "session": {
+                    "session_id": "child-session",
+                    "kind": "delegate_child",
+                    "parent_session_id": "root-session",
+                    "label": "Child",
+                    "state": "running",
+                    "created_at": 1,
+                    "updated_at": 2,
+                    "archived": false,
+                    "archived_at": null,
+                    "turn_count": 1,
+                    "last_turn_at": 2,
+                    "last_error": null
+                },
+                "turn_id": 12,
+                "session_turn_index": 2,
+                "role": "assistant",
+                "ts": 123,
+                "snippet": "deploy freeze checklist updated",
+                "content_chars": 32
+            }]
+        }))
+        .expect("encode invalid artifact"),
+    )
+    .expect("write invalid artifact");
+
+    let artifact_path_str = artifact_path
+        .to_str()
+        .expect("artifact path should be valid utf-8");
+    let error = load_session_search_artifact(artifact_path_str)
+        .expect_err("inconsistent returned_count should fail");
+
+    assert!(error.contains("returned_count=2"));
+    assert!(error.contains("contains 1 hit"));
 }
