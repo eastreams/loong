@@ -2146,8 +2146,7 @@ exit 0
 
             let inner = &trimmed[1..trimmed.len() - 1];
             let unescaped_backslashes = inner.replace("\\\\", "\\");
-            let unescaped_quotes = unescaped_backslashes.replace("\\\"", "\"");
-            unescaped_quotes
+            unescaped_backslashes.replace("\\\"", "\"")
         }
 
         let server = AcpxMcpServerEntry {
