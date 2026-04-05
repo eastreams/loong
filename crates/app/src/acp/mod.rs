@@ -1,4 +1,5 @@
 mod acpx;
+mod acpx_mcp;
 mod analytics;
 mod backend;
 mod binding;
