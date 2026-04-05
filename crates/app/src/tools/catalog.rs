@@ -3893,7 +3893,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
         "session_continue" => "session_id:string,input:string,timeout_seconds?:integer",
-        "sessions_list" => "limit?:integer,state?:string",
+        "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",

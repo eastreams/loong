@@ -473,6 +473,30 @@ impl SqliteRuntime {
     }
 }
 
+fn revalidate_cached_sqlite_runtime(runtime: &SqliteRuntime) -> Result<(), String> {
+    runtime.with_connection_mut("memory.cached_runtime_revalidate", |conn| {
+        ensure_turn_session_index_and_state_metadata(conn)?;
+        ensure_approval_lifecycle_tables(conn)?;
+        ensure_session_tool_consent_storage(conn)?;
+        ensure_session_tool_policy_storage(conn)?;
+        ensure_summary_checkpoint_storage_layout(conn)?;
+        ensure_canonical_record_storage(conn)?;
+        ensure_control_plane_pairing_tables(conn)?;
+        write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+        Ok(())
+    })
+}
+
+fn cached_runtime_schema_current(runtime: &SqliteRuntime) -> Result<bool, String> {
+    runtime.with_connection("memory.cached_runtime_schema_probe", |conn| {
+        let user_version = read_sqlite_user_version(conn)?;
+        if user_version != SQLITE_MEMORY_SCHEMA_VERSION {
+            return Ok(false);
+        }
+        sqlite_current_schema_objects_ready(conn)
+    })
+}
+
 fn elapsed_ms(started_at: StdInstant) -> f64 {
     started_at.elapsed().as_secs_f64() * 1000.0
 }
@@ -826,10 +850,12 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
     config: &MemoryRuntimeConfig,
 ) -> Result<(PathBuf, SqliteBootstrapDiagnostics), String> {
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
-    let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
-    runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
-        ensure_sqlite_runtime_schema_ready(conn)
-    })?;
+    let (runtime, mut diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
+    if diagnostics.cache_hit && !cached_runtime_schema_current(runtime.as_ref())? {
+        let schema_revalidate_started_at = StdInstant::now();
+        revalidate_cached_sqlite_runtime(runtime.as_ref())?;
+        diagnostics.schema_upgrade_ms = elapsed_ms(schema_revalidate_started_at);
+    }
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
 
@@ -1396,10 +1422,11 @@ fn open_sqlite_connection_with_diagnostics(
     diagnostics.configure_connection_ms = elapsed_ms(configure_started_at);
 
     let schema_upgrade_started_at = StdInstant::now();
-    let schema_probe = probe_sqlite_schema(&conn)?;
-    let requires_current_schema_setup = schema_probe.requires_current_schema_setup();
+    let user_version = read_sqlite_user_version(&conn)?;
+    let current_schema_ready =
+        user_version == SQLITE_MEMORY_SCHEMA_VERSION && sqlite_current_schema_objects_ready(&conn)?;
 
-    if requires_current_schema_setup {
+    if !current_schema_ready {
         let schema_init_started_at = StdInstant::now();
         #[cfg(test)]
         test_support::record_sqlite_schema_init(path);
@@ -1593,7 +1620,16 @@ fn open_sqlite_connection_with_diagnostics(
         diagnostics.schema_init_ms = elapsed_ms(schema_init_started_at);
     }
 
-    ensure_sqlite_runtime_schema_ready(&mut conn)?;
+    if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
+        ensure_turn_session_index_and_state_metadata(&conn)?;
+        ensure_approval_lifecycle_tables(&conn)?;
+        ensure_session_tool_consent_storage(&mut conn)?;
+        ensure_session_tool_policy_storage(&conn)?;
+        ensure_summary_checkpoint_storage_layout(&conn)?;
+        ensure_canonical_record_storage(&conn)?;
+        write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+    }
+    ensure_control_plane_pairing_tables(&conn)?;
     diagnostics.schema_upgrade_ms = elapsed_ms(schema_upgrade_started_at);
 
     #[cfg(test)]
@@ -1620,65 +1656,9 @@ fn read_sqlite_user_version(conn: &Connection) -> Result<i64, String> {
         .map_err(|error| format!("read sqlite user_version failed: {error}"))
 }
 
-#[derive(Debug, Clone, Copy)]
-struct SqliteSchemaProbe {
-    user_version: i64,
-    current_schema_ready: bool,
-}
-
-impl SqliteSchemaProbe {
-    fn requires_current_schema_setup(self) -> bool {
-        if self.user_version > SQLITE_MEMORY_SCHEMA_VERSION {
-            return false;
-        }
-        if self.user_version < SQLITE_MEMORY_SCHEMA_VERSION {
-            return true;
-        }
-        !self.current_schema_ready
-    }
-
-    fn requires_repairs(self) -> bool {
-        self.requires_current_schema_setup()
-    }
-}
-
 fn write_sqlite_user_version(conn: &Connection, version: i64) -> Result<(), String> {
     conn.pragma_update(None, "user_version", version)
         .map_err(|error| format!("set sqlite user_version={version} failed: {error}"))
-}
-
-fn probe_sqlite_schema(conn: &Connection) -> Result<SqliteSchemaProbe, String> {
-    let user_version = read_sqlite_user_version(conn)?;
-    let current_schema_ready =
-        user_version == SQLITE_MEMORY_SCHEMA_VERSION && sqlite_current_schema_objects_ready(conn)?;
-
-    Ok(SqliteSchemaProbe {
-        user_version,
-        current_schema_ready,
-    })
-}
-
-fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), String> {
-    let schema_probe = probe_sqlite_schema(conn)?;
-    if !schema_probe.requires_repairs() {
-        return Ok(());
-    }
-
-    ensure_turn_session_index_and_state_metadata(conn)?;
-    ensure_approval_lifecycle_tables(conn)?;
-    ensure_session_tool_consent_storage(conn)?;
-    ensure_session_tool_policy_storage(conn)?;
-    ensure_summary_checkpoint_storage_layout(conn)?;
-    ensure_canonical_record_storage(conn)?;
-    write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
-
-    Ok(())
-}
-
-fn ensure_sqlite_runtime_schema_ready(conn: &mut Connection) -> Result<(), String> {
-    ensure_sqlite_schema_repairs_if_needed(conn)?;
-    ensure_control_plane_pairing_tables(conn)?;
-    Ok(())
 }
 
 fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String> {
@@ -2041,10 +2021,8 @@ fn ensure_canonical_record_storage(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("ensure canonical memory storage failed: {error}"))?;
 
-    let needs_canonical_fts_rebuild = canonical_record_fts_needs_rebuild(conn)?;
-    if needs_canonical_fts_rebuild {
-        rebuild_canonical_record_storage(conn)?;
-        return Ok(());
+    if canonical_record_fts_needs_rebuild(conn)? {
+        recreate_canonical_record_fts_index(conn)?;
     }
 
     rebuild_canonical_record_storage_if_needed(conn)?;
@@ -2075,23 +2053,13 @@ fn canonical_record_fts_needs_rebuild(conn: &Connection) -> Result<bool, String>
     Ok(!has_all_required_columns)
 }
 
-fn drop_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
+fn recreate_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
         DROP TRIGGER IF EXISTS memory_canonical_records_ai;
         DROP TRIGGER IF EXISTS memory_canonical_records_ad;
         DROP TRIGGER IF EXISTS memory_canonical_records_au;
         DROP TABLE IF EXISTS memory_canonical_records_fts;
-        ",
-    )
-    .map_err(|error| format!("drop canonical memory FTS index failed: {error}"))?;
-
-    Ok(())
-}
-
-fn create_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "
         CREATE VIRTUAL TABLE memory_canonical_records_fts
           USING fts5(
             content,
@@ -2191,39 +2159,11 @@ fn create_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
             new.metadata_json
           );
         END;
+        INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts)
+        VALUES ('rebuild');
         ",
     )
     .map_err(|error| format!("recreate canonical memory FTS index failed: {error}"))?;
-
-    Ok(())
-}
-
-fn rebuild_canonical_record_fts_index_contents(conn: &Connection) -> Result<(), String> {
-    conn.execute(
-        "
-        INSERT INTO memory_canonical_records_fts(
-          rowid,
-          content,
-          session_id,
-          scope,
-          kind,
-          role,
-          metadata_json
-        )
-        SELECT
-          record_id,
-          content,
-          session_id,
-          scope,
-          kind,
-          COALESCE(role, ''),
-          metadata_json
-        FROM memory_canonical_records
-        ",
-        [],
-    )
-    .map(|_| ())
-    .map_err(|error| format!("rebuild canonical memory FTS index contents failed: {error}"))?;
 
     Ok(())
 }
@@ -3578,7 +3518,21 @@ fn delete_canonical_records_for_session(conn: &Connection, session_id: &str) -> 
         .map_err(|error| format!("delete canonical records failed: {error}"))
 }
 
-fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
+fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), String> {
+    let turn_count = conn
+        .query_row(SQL_COUNT_TURNS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count persisted turns for canonical rebuild failed: {error}"))?;
+    let canonical_count = conn
+        .query_row(SQL_COUNT_CANONICAL_RECORDS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical records failed: {error}"))?;
+    let canonical_fts_count = conn
+        .query_row(SQL_COUNT_CANONICAL_FTS_ROWS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical FTS rows failed: {error}"))?;
+
+    if canonical_count == turn_count && canonical_fts_count == canonical_count {
+        return Ok(());
+    }
+
     #[derive(Debug)]
     struct PersistedTurnRow {
         turn_id: i64,
@@ -3593,7 +3547,6 @@ fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
         .map_err(|error| format!("begin canonical rebuild savepoint failed: {error}"))?;
 
     let rebuild_result = (|| {
-        drop_canonical_record_fts_index(conn)?;
         conn.execute("DELETE FROM memory_canonical_records", [])
             .map_err(|error| format!("clear canonical records before rebuild failed: {error}"))?;
         let mut last_turn_id = 0_i64;
@@ -3643,9 +3596,6 @@ fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
             }
         }
 
-        create_canonical_record_fts_index(conn)?;
-        rebuild_canonical_record_fts_index_contents(conn)?;
-
         Ok(())
     })();
 
@@ -3661,24 +3611,6 @@ fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
             Err(error)
         }
     }
-}
-
-fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), String> {
-    let turn_count = conn
-        .query_row(SQL_COUNT_TURNS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count persisted turns for canonical rebuild failed: {error}"))?;
-    let canonical_count = conn
-        .query_row(SQL_COUNT_CANONICAL_RECORDS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count canonical records failed: {error}"))?;
-    let canonical_fts_count = conn
-        .query_row(SQL_COUNT_CANONICAL_FTS_ROWS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count canonical FTS rows failed: {error}"))?;
-
-    if canonical_count == turn_count && canonical_fts_count == canonical_count {
-        return Ok(());
-    }
-
-    rebuild_canonical_record_storage(conn)
 }
 
 fn build_canonical_fts_query(query: &str) -> Option<String> {
@@ -8663,239 +8595,6 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.metadata["source"], "workspace-import");
-
-        let _ = fs::remove_file(&db_path);
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn cached_runtime_repair_path_recovers_stale_canonical_fts_metadata_schema() {
-        let _guard = sqlite_runtime_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        reset_sqlite_runtime_test_state();
-
-        let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-cached-runtime-stale-fts-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).expect("create temp dir");
-        let db_path = tmp.join("cached-runtime-stale-fts.sqlite3");
-        let _ = fs::remove_file(&db_path);
-
-        let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..MemoryRuntimeConfig::default()
-        };
-        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
-
-        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
-        runtime
-            .with_connection_mut("test.degrade_cached_runtime_canonical_fts", |conn| {
-                conn.execute_batch(
-                    "
-                    DROP TRIGGER IF EXISTS memory_canonical_records_ai;
-                    DROP TRIGGER IF EXISTS memory_canonical_records_ad;
-                    DROP TRIGGER IF EXISTS memory_canonical_records_au;
-                    DROP TABLE IF EXISTS memory_canonical_records_fts;
-                    CREATE VIRTUAL TABLE memory_canonical_records_fts
-                      USING fts5(content, content='memory_canonical_records', content_rowid='record_id');
-                    CREATE TRIGGER memory_canonical_records_ai
-                      AFTER INSERT ON memory_canonical_records
-                    BEGIN
-                      INSERT INTO memory_canonical_records_fts(rowid, content)
-                      VALUES (new.record_id, new.content);
-                    END;
-                    CREATE TRIGGER memory_canonical_records_ad
-                      AFTER DELETE ON memory_canonical_records
-                    BEGIN
-                      INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
-                      VALUES ('delete', old.record_id, old.content);
-                    END;
-                    CREATE TRIGGER memory_canonical_records_au
-                      AFTER UPDATE ON memory_canonical_records
-                    BEGIN
-                      INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
-                      VALUES ('delete', old.record_id, old.content);
-                      INSERT INTO memory_canonical_records_fts(rowid, content)
-                      VALUES (new.record_id, new.content);
-                    END;
-                    PRAGMA user_version = 8;
-                    ",
-                )
-                .map_err(|error| format!("degrade cached canonical FTS schema failed: {error}"))?;
-                Ok(())
-            })
-            .expect("degrade cached canonical FTS schema");
-
-        let payload = json!({
-            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
-            "_loongclaw_internal": true,
-            "scope": "workspace",
-            "kind": "imported_profile",
-            "content": "release checklist",
-            "metadata": {
-                "source": "workspace-import"
-            },
-        })
-        .to_string();
-        append_turn_direct("workspace-session", "assistant", &payload, &config)
-            .expect("append structured canonical payload");
-
-        reset_sqlite_schema_repair_metrics_for_tests();
-        ensure_memory_db_ready_with_diagnostics(None, &config)
-            .expect("repair cached stale canonical FTS schema");
-
-        let canonical_record_repair_count =
-            sqlite_schema_repair_count_for_tests("canonical_records");
-        assert!(
-            canonical_record_repair_count >= 1,
-            "expected cached runtime repair path to trigger canonical record repair, got: {canonical_record_repair_count}"
-        );
-
-        let hits = search_canonical_records_for_recall("release checklist", 5, None, &config)
-            .expect("search canonical memory after cached runtime repair");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].record.scope, MemoryScope::Workspace);
-        assert_eq!(hits[0].record.kind, CanonicalMemoryKind::ImportedProfile);
-
-        let _ = fs::remove_file(&db_path);
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn cached_runtime_repair_path_restores_control_plane_pairing_tables() {
-        let _guard = sqlite_runtime_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        reset_sqlite_runtime_test_state();
-
-        let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-cached-runtime-pairing-schema-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).expect("create temp dir");
-        let db_path = tmp.join("cached-runtime-pairing-schema.sqlite3");
-        let _ = fs::remove_file(&db_path);
-
-        let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..MemoryRuntimeConfig::default()
-        };
-        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
-
-        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
-        runtime
-            .with_connection_mut("test.drop_cached_pairing_tables", |conn| {
-                conn.execute_batch(
-                    "
-                    DROP INDEX IF EXISTS idx_control_plane_pairing_requests_status_requested_at;
-                    DROP INDEX IF EXISTS idx_control_plane_device_tokens_device_id;
-                    DROP TABLE IF EXISTS control_plane_pairing_requests;
-                    DROP TABLE IF EXISTS control_plane_device_tokens;
-                    ",
-                )
-                .map_err(|error| format!("drop cached pairing tables failed: {error}"))?;
-                Ok(())
-            })
-            .expect("drop cached pairing tables");
-
-        ensure_memory_db_ready_with_diagnostics(None, &config)
-            .expect("repair cached control-plane pairing schema");
-
-        let pairing_requests_table_exists = runtime
-            .with_connection("test.verify_cached_pairing_requests_table", |conn| {
-                conn.query_row(
-                    "SELECT COUNT(*)
-                     FROM sqlite_master
-                     WHERE type = 'table' AND name = 'control_plane_pairing_requests'",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map(|count| count == 1)
-                .map_err(|error| format!("query cached pairing requests table failed: {error}"))
-            })
-            .expect("query cached pairing requests table");
-        let device_tokens_table_exists = runtime
-            .with_connection("test.verify_cached_device_tokens_table", |conn| {
-                conn.query_row(
-                    "SELECT COUNT(*)
-                     FROM sqlite_master
-                     WHERE type = 'table' AND name = 'control_plane_device_tokens'",
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-                .map(|count| count == 1)
-                .map_err(|error| format!("query cached device tokens table failed: {error}"))
-            })
-            .expect("query cached device tokens table");
-
-        assert!(pairing_requests_table_exists);
-        assert!(device_tokens_table_exists);
-
-        let _ = fs::remove_file(&db_path);
-        let _ = fs::remove_dir_all(&tmp);
-    }
-
-    #[test]
-    fn ensure_memory_db_ready_preserves_newer_schema_versions_without_current_repairs() {
-        let _guard = sqlite_runtime_test_lock()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        reset_sqlite_runtime_test_state();
-
-        let tmp = std::env::temp_dir().join(format!(
-            "loongclaw-future-sqlite-schema-version-{}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).expect("create temp dir");
-        let db_path = tmp.join("future-schema-version.sqlite3");
-        let _ = fs::remove_file(&db_path);
-
-        let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
-            ..MemoryRuntimeConfig::default()
-        };
-        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
-
-        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
-        let future_schema_version = SQLITE_MEMORY_SCHEMA_VERSION + 1;
-        runtime
-            .with_connection_mut("test.bump_sqlite_user_version", |conn| {
-                write_sqlite_user_version(conn, future_schema_version)
-            })
-            .expect("bump sqlite user_version");
-
-        reset_sqlite_schema_repair_metrics_for_tests();
-        ensure_memory_db_ready_with_diagnostics(None, &config)
-            .expect("recheck cached newer sqlite schema");
-
-        let cached_user_version = runtime
-            .with_connection("test.read_cached_future_user_version", |conn| {
-                read_sqlite_user_version(conn)
-            })
-            .expect("read cached future sqlite user_version");
-        assert_eq!(cached_user_version, future_schema_version);
-        drop(runtime);
-
-        reset_sqlite_runtime_test_state();
-        ensure_memory_db_ready_with_diagnostics(Some(db_path.clone()), &config)
-            .expect("reopen newer sqlite schema");
-
-        let reopened_runtime =
-            acquire_memory_runtime(&config).expect("reopen cached sqlite runtime");
-        let reopened_user_version = reopened_runtime
-            .with_connection("test.read_future_user_version", |conn| {
-                read_sqlite_user_version(conn)
-            })
-            .expect("read future sqlite user_version");
-        let schema_init_count = sqlite_schema_init_count_for_tests(&db_path);
-
-        assert_eq!(reopened_user_version, future_schema_version);
-        assert_eq!(schema_init_count, 0);
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

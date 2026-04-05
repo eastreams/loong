@@ -2973,11 +2973,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn write_browser_companion_script(script_path: &Path, body: &str) {
-        crate::test_support::write_executable_script_atomically(script_path, body);
-    }
-
-    #[cfg(unix)]
     struct BrowserCompanionEnvGuard {
         _lock: MutexGuard<'static, ()>,
         saved_ready: Option<OsString>,
