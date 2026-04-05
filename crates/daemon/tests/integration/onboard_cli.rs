@@ -48,6 +48,12 @@ fn unique_temp_path(label: &str) -> PathBuf {
     ))
 }
 
+fn isolated_output_path(label: &str) -> PathBuf {
+    let output_root = unique_temp_path("output-root");
+    std::fs::create_dir_all(&output_root).expect("create isolated output root");
+    output_root.join(label)
+}
+
 fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
     let mut options = mvp::config::ProviderKind::all_sorted()
         .iter()
@@ -6363,7 +6369,7 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_current_setup_shortcut_can_install_selected_bundled_skills() {
-    let output_path = unique_temp_path("current-shortcut-preinstall-config.toml");
+    let output_path = isolated_output_path("current-shortcut-preinstall-config.toml");
     let mut existing = mvp::config::LoongClawConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
@@ -6432,7 +6438,7 @@ async fn onboard_current_setup_shortcut_can_install_selected_bundled_skills() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
-    let output_path = unique_temp_path("current-shortcut-minimax-office-config.toml");
+    let output_path = isolated_output_path("current-shortcut-minimax-office-config.toml");
     let mut existing = mvp::config::LoongClawConfig::default();
     existing.provider.model = "gpt-4.1".to_owned();
     existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
