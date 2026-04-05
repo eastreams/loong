@@ -2137,18 +2137,6 @@ exit 0
 
     #[test]
     fn build_mcp_proxy_agent_command_preserves_server_cwd() {
-        fn decode_quoted_command_part(value: &str) -> String {
-            let trimmed = value.trim();
-            let quoted = trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2;
-            if !quoted {
-                return trimmed.to_owned();
-            }
-
-            let inner = &trimmed[1..trimmed.len() - 1];
-            let unescaped_backslashes = inner.replace("\\\\", "\\");
-            unescaped_backslashes.replace("\\\"", "\"")
-        }
-
         let server = AcpxMcpServerEntry {
             name: "docs".to_owned(),
             command: "uvx".to_owned(),
@@ -2164,15 +2152,38 @@ exit 0
             .expect("proxy command");
         let payload_marker = "--payload-file ";
         let payload_index = command.find(payload_marker).expect("payload marker");
-        let payload_path = &command[payload_index + payload_marker.len()..];
-        let payload_path = decode_quoted_command_part(payload_path);
-        let payload_bytes = std::fs::read(payload_path).expect("read payload file");
+        let payload_argument = &command[payload_index + payload_marker.len()..];
+        let payload_path = decode_test_command_argument(payload_argument);
+        let payload_bytes = std::fs::read(&payload_path).expect("read payload file");
         let payload: Value = serde_json::from_slice(&payload_bytes).expect("parse payload");
 
         assert_eq!(
             payload["mcpServers"][0]["cwd"],
             Value::String("/workspace/docs".to_owned())
         );
+    }
+
+    fn decode_test_command_argument(argument: &str) -> String {
+        let trimmed_argument = argument.trim();
+        let is_quoted = trimmed_argument.starts_with('"') && trimmed_argument.ends_with('"');
+        if !is_quoted {
+            return trimmed_argument.to_owned();
+        }
+
+        let quoted_argument = &trimmed_argument[1..trimmed_argument.len() - 1];
+        let mut decoded = String::new();
+        let mut chars = quoted_argument.chars();
+        while let Some(character) = chars.next() {
+            if character == '\\' {
+                match chars.next() {
+                    Some(escaped_character) => decoded.push(escaped_character),
+                    None => decoded.push('\\'),
+                }
+                continue;
+            }
+            decoded.push(character);
+        }
+        decoded
     }
 
     #[tokio::test]
