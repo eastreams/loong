@@ -402,34 +402,71 @@ fn split_flag_assignment(argument: &str) -> Option<(&str, &str)> {
     argument.split_once('=')
 }
 
+fn normalized_argument_key(argument: &str) -> String {
+    let trimmed = argument.trim_start_matches('-');
+    let mut normalized = String::new();
+
+    for (index, character) in trimmed.chars().enumerate() {
+        let is_separator = matches!(character, '_' | '.');
+        if is_separator {
+            normalized.push('-');
+            continue;
+        }
+
+        let is_uppercase = character.is_ascii_uppercase();
+        let should_insert_separator = is_uppercase && index > 0;
+        if should_insert_separator {
+            normalized.push('-');
+        }
+
+        let lowercased = character.to_ascii_lowercase();
+        normalized.push(lowercased);
+    }
+
+    normalized
+}
+
 fn argument_key_looks_sensitive(argument: &str) -> bool {
     if !argument.starts_with('-') {
         return false;
     }
 
-    let trimmed = argument.trim_start_matches('-');
-    let normalized = trimmed.replace(['_', '.'], "-").to_ascii_lowercase();
+    let normalized = normalized_argument_key(argument);
+    let is_header_flag = matches!(normalized.as_str(), "h" | "header" | "headers");
+    if is_header_flag {
+        return true;
+    }
+
+    let compact = normalized.replace('-', "");
+    let sensitive_keywords = [
+        "token",
+        "secret",
+        "password",
+        "passwd",
+        "authorization",
+        "cookie",
+        "bearer",
+    ];
+    let contains_sensitive_keyword = sensitive_keywords
+        .iter()
+        .any(|keyword| compact.contains(keyword));
+    if contains_sensitive_keyword {
+        return true;
+    }
+
     let parts = normalized
         .split('-')
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>();
-
-    let contains_secret_label = parts.iter().any(|part| {
-        matches!(
-            *part,
-            "token" | "secret" | "password" | "passwd" | "authorization" | "cookie" | "bearer"
-        )
-    });
-    if contains_secret_label {
+    if parts.contains(&"auth") {
         return true;
     }
 
-    let contains_key = parts.contains(&"key");
-    let contains_sensitive_scope = parts
-        .iter()
-        .any(|part| matches!(*part, "api" | "access" | "client" | "private" | "session"));
+    let key_scopes = ["api", "access", "client", "private", "session", "auth"];
+    let contains_key = compact.contains("key");
+    let contains_key_scope = key_scopes.iter().any(|scope| compact.contains(scope));
 
-    contains_key && contains_sensitive_scope
+    contains_key && contains_key_scope
 }
 
 fn redact_transport_value(value: &str) -> String {
@@ -444,7 +481,7 @@ fn redact_transport_value(value: &str) -> String {
 fn redact_transport_url(raw: &str) -> String {
     let parsed = reqwest::Url::parse(raw);
     let Ok(mut parsed) = parsed else {
-        return raw.to_owned();
+        return "<redacted-invalid-url>".to_owned();
     };
 
     let has_username = !parsed.username().is_empty();
@@ -881,6 +918,64 @@ mod tests {
     }
 
     #[test]
+    fn transport_snapshot_redacts_camel_case_and_header_stdio_arguments() {
+        let transport = McpServerTransportConfig::Stdio {
+            command: "uvx".to_owned(),
+            args: vec![
+                "--apiKey=secret".to_owned(),
+                "--accessToken".to_owned(),
+                "token-value".to_owned(),
+                "-H".to_owned(),
+                "Authorization: Bearer secret".to_owned(),
+                "--header=Cookie: session=secret".to_owned(),
+            ],
+            env: BTreeMap::new(),
+            cwd: Some(PathBuf::from("/workspace/repo")),
+        };
+
+        let snapshot = transport_snapshot(&transport);
+
+        assert_eq!(
+            snapshot,
+            McpTransportSnapshot::Stdio {
+                command: "uvx".to_owned(),
+                args: vec![
+                    "--apiKey=<redacted>".to_owned(),
+                    "--accessToken".to_owned(),
+                    "<redacted>".to_owned(),
+                    "-H".to_owned(),
+                    "<redacted>".to_owned(),
+                    "--header=<redacted>".to_owned(),
+                ],
+                cwd: Some("/workspace/repo".to_owned()),
+                env_var_names: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn transport_snapshot_preserves_non_sensitive_author_argument() {
+        let transport = McpServerTransportConfig::Stdio {
+            command: "uvx".to_owned(),
+            args: vec!["--author=alice".to_owned()],
+            env: BTreeMap::new(),
+            cwd: None,
+        };
+
+        let snapshot = transport_snapshot(&transport);
+
+        assert_eq!(
+            snapshot,
+            McpTransportSnapshot::Stdio {
+                command: "uvx".to_owned(),
+                args: vec!["--author=alice".to_owned()],
+                cwd: None,
+                env_var_names: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
     fn transport_snapshot_redacts_sensitive_http_url_components() {
         let transport = McpServerTransportConfig::StreamableHttp {
             url: "https://alice:secret@mcp.example.com/path?token=secret&mode=read#frag".to_owned(),
@@ -895,6 +990,28 @@ mod tests {
             snapshot,
             McpTransportSnapshot::StreamableHttp {
                 url: "https://%3Credacted%3E:%3Credacted%3E@mcp.example.com/path?token=%3Credacted%3E&mode=%3Credacted%3E#%3Credacted%3E".to_owned(),
+                bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
+                http_header_names: Vec::new(),
+                env_http_header_names: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn transport_snapshot_redacts_invalid_http_urls() {
+        let transport = McpServerTransportConfig::StreamableHttp {
+            url: "https://mcp.example.com/path?token=secret%ZZ".to_owned(),
+            bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
+            http_headers: BTreeMap::new(),
+            env_http_headers: BTreeMap::new(),
+        };
+
+        let snapshot = transport_snapshot(&transport);
+
+        assert_eq!(
+            snapshot,
+            McpTransportSnapshot::StreamableHttp {
+                url: "<redacted-invalid-url>".to_owned(),
                 bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
                 http_header_names: Vec::new(),
                 env_http_header_names: Vec::new(),
