@@ -148,8 +148,6 @@ pub use loongclaw_spec::programmatic::{
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
 use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
-pub use tlon_cli::TLON_SEND_CLI_SPEC;
-use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
     SessionSearchArtifactHit, SessionSearchArtifactHitSession, SessionSearchArtifactSchema,
@@ -157,6 +155,8 @@ pub use session_cli::{
     format_session_search_text, load_session_search_artifact, run_session_search_cli,
     run_session_search_inspect_cli,
 };
+pub use tlon_cli::TLON_SEND_CLI_SPEC;
+use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -1460,6 +1460,10 @@ impl Commands {
             Self::Ask { .. } => "ask",
             Self::Chat { .. } => "chat",
             Self::SafeLaneSummary { .. } => "safe_lane_summary",
+            Self::SessionSearch { .. } => "session_search",
+            Self::SessionSearchInspect { .. } => "session_search_inspect",
+            Self::TrajectoryExport { .. } => "trajectory_export",
+            Self::TrajectoryInspect { .. } => "trajectory_inspect",
             Self::TelegramSend { .. } => "telegram_send",
             Self::TelegramServe { .. } => "telegram_serve",
             Self::FeishuSend { .. } => "feishu_send",
