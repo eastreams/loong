@@ -21,6 +21,10 @@ fn route_parser_covers_standard_methods() {
         ProtocolRoute::ControlConnect
     );
     assert_eq!(
+        ProtocolRoute::from_method("control/subscribe"),
+        ProtocolRoute::ControlSubscribe
+    );
+    assert_eq!(
         ProtocolRoute::from_method("approval/resolve"),
         ProtocolRoute::ApprovalResolve
     );
@@ -238,6 +242,44 @@ fn presence_read_requires_authenticated_control_read_capability() {
         )
         .expect("authenticated control.read should authorize");
     assert_eq!(decision, RouteAuthorizationDecision::Allow);
+}
+
+#[test]
+fn control_subscribe_requires_authenticated_control_read_capability() {
+    let router = ProtocolRouter::default();
+    let resolved = router
+        .resolve("control/subscribe")
+        .expect("control/subscribe should resolve");
+    assert!(!resolved.policy.allow_anonymous);
+    assert_eq!(
+        resolved.policy.required_capability.as_deref(),
+        Some("control.read")
+    );
+
+    let unauthenticated = router
+        .authorize(
+            &resolved,
+            &RouteAuthorizationRequest {
+                authenticated: false,
+                capabilities: BTreeSet::from(["control.read".to_owned()]),
+            },
+        )
+        .expect_err("control/subscribe should reject unauthenticated requests");
+    assert!(matches!(
+        unauthenticated,
+        RouteAuthorizationError::Unauthenticated { method } if method == "control/subscribe"
+    ));
+
+    let authorized = router
+        .authorize(
+            &resolved,
+            &RouteAuthorizationRequest {
+                authenticated: true,
+                capabilities: BTreeSet::from(["control.read".to_owned()]),
+            },
+        )
+        .expect("authenticated control.read should authorize");
+    assert_eq!(authorized, RouteAuthorizationDecision::Allow);
 }
 
 #[test]

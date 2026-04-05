@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -7,13 +9,15 @@ use axum::Router;
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use futures_util::stream::{self, Stream};
 use kernel::{
-    Capability, CapabilityToken, ExecutionPlane, LoongClawKernel, PlaneTier, StaticPolicyEngine,
-    VerticalPackManifest,
+    Capability, CapabilityToken, ExecutionPlane, InMemoryAuditSink, LoongClawKernel, PlaneTier,
+    StaticPolicyEngine, VerticalPackManifest,
 };
 use loongclaw_protocol::{
     CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
@@ -59,9 +63,11 @@ const CONTROL_PLANE_PACK_ID: &str = "control-plane";
 const CONTROL_PLANE_PACK_DOMAIN: &str = "control";
 const CONTROL_PLANE_PACK_VERSION: &str = "1.0.0";
 const CONTROL_PLANE_PRIMARY_ADAPTER: &str = "control-plane";
+const CONTROL_PLANE_KEEPALIVE_TEXT: &str = "keep-alive";
 
 struct ControlPlaneKernelAuthority {
     kernel: LoongClawKernel<StaticPolicyEngine>,
+    _audit: Arc<InMemoryAuditSink>,
     token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
 }
 
@@ -139,15 +145,35 @@ struct PairingListQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SubscribeQuery {
+    #[serde(default)]
+    after_seq: Option<u64>,
+    #[serde(default)]
+    include_targeted: bool,
+}
+
+struct ControlPlaneSubscribeStreamState {
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    pending_events: VecDeque<mvp::control_plane::ControlPlaneEventRecord>,
+    receiver: tokio::sync::broadcast::Receiver<mvp::control_plane::ControlPlaneEventRecord>,
+    last_seq: u64,
+    include_targeted: bool,
+}
+
 impl ControlPlaneKernelAuthority {
     fn new() -> Result<Self, String> {
-        let mut kernel = LoongClawKernel::new_without_audit(StaticPolicyEngine::default());
+        let kernel_with_audit =
+            LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+        let mut kernel = kernel_with_audit.0;
+        let audit = kernel_with_audit.1;
         let pack = control_plane_pack();
         let register_result = kernel.register_pack(pack);
         register_result
             .map_err(|error| format!("control-plane pack registration failed: {error}"))?;
         Ok(Self {
             kernel,
+            _audit: audit,
             token_bindings: std::sync::RwLock::new(std::collections::BTreeMap::new()),
         })
     }
@@ -652,6 +678,104 @@ fn parse_pairing_status(
     }
 }
 
+fn initial_subscribe_state(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    after_seq: u64,
+    include_targeted: bool,
+) -> ControlPlaneSubscribeStreamState {
+    let receiver = manager.subscribe();
+    let pending_events = manager.recent_events_after(
+        after_seq,
+        CONTROL_PLANE_DEFAULT_EVENT_LIMIT,
+        include_targeted,
+    );
+    let pending_events = VecDeque::from(pending_events);
+    ControlPlaneSubscribeStreamState {
+        manager,
+        pending_events,
+        receiver,
+        last_seq: after_seq,
+        include_targeted,
+    }
+}
+
+fn sse_event_from_control_plane_record(
+    record: mvp::control_plane::ControlPlaneEventRecord,
+) -> Result<Event, String> {
+    let seq = record.seq;
+    let envelope = map_event(record);
+    let event_name = envelope.event.as_str();
+    let event_id = seq.to_string();
+    let event_builder = Event::default();
+    let event_builder = event_builder.event(event_name);
+    let event_builder = event_builder.id(event_id);
+    event_builder
+        .json_data(&envelope)
+        .map_err(|error| format!("control-plane SSE event encoding failed: {error}"))
+}
+
+fn fallback_sse_error_event(message: &str) -> Event {
+    let error_message = format!("{{\"error\":\"{message}\"}}");
+    let base_event = Event::default();
+    let named_event = base_event.event("control.error");
+    named_event.data(error_message)
+}
+
+async fn next_control_plane_sse_item(
+    mut state: ControlPlaneSubscribeStreamState,
+) -> Option<(Result<Event, Infallible>, ControlPlaneSubscribeStreamState)> {
+    loop {
+        let pending_event = state.pending_events.pop_front();
+        if let Some(record) = pending_event {
+            state.last_seq = record.seq;
+            let sse_event_result = sse_event_from_control_plane_record(record);
+            let sse_event = match sse_event_result {
+                Ok(event) => event,
+                Err(error) => fallback_sse_error_event(error.as_str()),
+            };
+            return Some((Ok(sse_event), state));
+        }
+
+        let receive_result = state.receiver.recv().await;
+        match receive_result {
+            Ok(record) => {
+                let include_targeted = state.include_targeted;
+                let targeted = record.targeted;
+                let already_seen = record.seq <= state.last_seq;
+                if (!include_targeted && targeted) || already_seen {
+                    continue;
+                }
+                state.last_seq = record.seq;
+                let sse_event_result = sse_event_from_control_plane_record(record);
+                let sse_event = match sse_event_result {
+                    Ok(event) => event,
+                    Err(error) => fallback_sse_error_event(error.as_str()),
+                };
+                return Some((Ok(sse_event), state));
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let refill = state.manager.recent_events_after(
+                    state.last_seq,
+                    CONTROL_PLANE_DEFAULT_EVENT_LIMIT,
+                    state.include_targeted,
+                );
+                state.pending_events = VecDeque::from(refill);
+                continue;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+        }
+    }
+}
+
+fn control_plane_subscribe_stream(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    after_seq: u64,
+    include_targeted: bool,
+) -> impl Stream<Item = Result<Event, Infallible>> {
+    let initial_state = initial_subscribe_state(manager, after_seq, include_targeted);
+    stream::unfold(initial_state, next_control_plane_sse_item)
+}
+
 fn connection_principal_from_connect(
     request: &ControlPlaneConnectRequest,
     connection_id: String,
@@ -1043,6 +1167,27 @@ async fn control_events(
     };
     let events = events.into_iter().map(map_event).collect::<Vec<_>>();
     Json(ControlPlaneRecentEventsResponse { events }).into_response()
+}
+
+async fn control_subscribe(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<SubscribeQuery>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "control/subscribe", &headers) {
+        return *response;
+    }
+    let after_seq = query.after_seq.unwrap_or(0);
+    let include_targeted = query.include_targeted;
+    let manager = state.manager;
+    let stream = control_plane_subscribe_stream(manager, after_seq, include_targeted);
+    let keep_alive = KeepAlive::new()
+        .interval(std::time::Duration::from_millis(
+            CONTROL_PLANE_TICK_INTERVAL_MS,
+        ))
+        .text(CONTROL_PLANE_KEEPALIVE_TEXT);
+    let sse = Sse::new(stream).keep_alive(keep_alive);
+    sse.into_response()
 }
 
 async fn control_ping(headers: HeaderMap, State(state): State<ControlPlaneHttpState>) -> Response {
@@ -1509,6 +1654,7 @@ fn build_control_plane_router_with_runtime(
         .route("/control/challenge", get(control_challenge))
         .route("/control/ping", get(control_ping))
         .route("/control/connect", post(control_connect))
+        .route("/control/subscribe", get(control_subscribe))
         .route("/control/snapshot", get(control_snapshot))
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
@@ -1552,6 +1698,7 @@ fn build_control_plane_router_without_repository(
         .route("/control/challenge", get(control_challenge))
         .route("/control/ping", get(control_ping))
         .route("/control/connect", post(control_connect))
+        .route("/control/subscribe", get(control_subscribe))
         .route("/control/snapshot", get(control_snapshot))
         .route("/control/events", get(control_events))
         .route("/session/list", get(session_list))
@@ -1655,6 +1802,7 @@ pub async fn run_control_plane_serve_cli(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_util::StreamExt;
 
     fn build_control_plane_router(manager: Arc<mvp::control_plane::ControlPlaneManager>) -> Router {
         super::build_control_plane_router(manager).expect("router")
@@ -2670,6 +2818,81 @@ mod tests {
         let events: ControlPlaneRecentEventsResponse =
             serde_json::from_slice(&body).expect("events json");
         assert!(events.events.is_empty());
+    }
+
+    #[tokio::test]
+    async fn control_subscribe_rejects_missing_token() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/subscribe")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("subscribe response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn control_subscribe_returns_sse_content_type() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/control/subscribe?after_seq=0",
+                &token,
+            ))
+            .await
+            .expect("subscribe response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let content_type = response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_owned();
+        assert!(content_type.starts_with("text/event-stream"));
+    }
+
+    #[tokio::test]
+    async fn control_subscribe_stream_yields_backlog_event() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let _ = manager.record_health_changed(true, serde_json::json!({ "idx": 2 }));
+        let stream = control_plane_subscribe_stream(manager, 1, true);
+        let mut stream = Box::pin(stream);
+        let next = stream.next().await.expect("stream item");
+        let event = next.expect("event");
+        let event_debug = format!("{event:?}");
+        assert!(!event_debug.is_empty());
+    }
+
+    #[tokio::test]
+    async fn control_subscribe_stream_yields_live_event_after_wait() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let stream = control_plane_subscribe_stream(manager.clone(), 1, true);
+        let mut stream = Box::pin(stream);
+
+        let waiter = tokio::spawn(async move { stream.next().await });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let _ = manager.record_health_changed(true, serde_json::json!({ "idx": 2 }));
+
+        let next = waiter.await.expect("join").expect("stream item");
+        let event = next.expect("event");
+        let event_debug = format!("{event:?}");
+        assert!(!event_debug.is_empty());
     }
 
     #[cfg(feature = "memory-sqlite")]

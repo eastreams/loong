@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, broadcast};
 use tokio::time::{Duration, Instant, timeout};
 
 #[cfg(feature = "memory-sqlite")]
@@ -31,6 +31,7 @@ const DEFAULT_RECENT_EVENT_LIMIT: usize = 256;
 const CONTROL_PLANE_CONNECTION_TTL_MS: u64 = 15 * 60 * 1000;
 const CONTROL_PLANE_CHALLENGE_TTL_MS: u64 = 60 * 1000;
 const CONTROL_PLANE_MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
+const CONTROL_PLANE_EVENT_CHANNEL_CAPACITY: usize = 256;
 #[cfg(feature = "memory-sqlite")]
 const DEFAULT_CONTROL_PLANE_SESSION_ID: &str = "default";
 #[cfg(feature = "memory-sqlite")]
@@ -130,7 +131,6 @@ impl Default for ControlPlaneRetentionState {
     }
 }
 
-#[derive(Debug, Default)]
 pub struct ControlPlaneManager {
     seq: AtomicU64,
     presence_version: AtomicU64,
@@ -142,6 +142,37 @@ pub struct ControlPlaneManager {
     snapshot_state: RwLock<ControlPlaneSnapshotState>,
     retention_state: RwLock<ControlPlaneRetentionState>,
     event_notify: Notify,
+    event_sender: broadcast::Sender<ControlPlaneEventRecord>,
+}
+
+impl Default for ControlPlaneManager {
+    fn default() -> Self {
+        let channel = broadcast::channel(CONTROL_PLANE_EVENT_CHANNEL_CAPACITY);
+        let event_sender = channel.0;
+        let seq = AtomicU64::new(0);
+        let presence_version = AtomicU64::new(0);
+        let health_version = AtomicU64::new(0);
+        let sessions_version = AtomicU64::new(0);
+        let approvals_version = AtomicU64::new(0);
+        let acp_version = AtomicU64::new(0);
+        let runtime_ready = AtomicBool::new(false);
+        let snapshot_state = RwLock::new(ControlPlaneSnapshotState::default());
+        let retention_state = RwLock::new(ControlPlaneRetentionState::default());
+        let event_notify = Notify::new();
+        Self {
+            seq,
+            presence_version,
+            health_version,
+            sessions_version,
+            approvals_version,
+            acp_version,
+            runtime_ready,
+            snapshot_state,
+            retention_state,
+            event_notify,
+            event_sender,
+        }
+    }
 }
 
 impl ControlPlaneManager {
@@ -201,6 +232,10 @@ impl ControlPlaneManager {
             events.drain(0..start);
         }
         events
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<ControlPlaneEventRecord> {
+        self.event_sender.subscribe()
     }
 
     pub async fn wait_for_recent_events(
@@ -467,10 +502,12 @@ impl ControlPlaneManager {
             .retention_state
             .write()
             .unwrap_or_else(|error| error.into_inner());
-        retention.recent_events.push_back(event);
+        retention.recent_events.push_back(event.clone());
         while retention.recent_events.len() > DEFAULT_RECENT_EVENT_LIMIT {
             retention.recent_events.pop_front();
         }
+        let send_result = self.event_sender.send(event);
+        let _ = send_result;
         self.event_notify.notify_waiters();
     }
 }
@@ -1609,6 +1646,18 @@ mod tests {
         let events = waiter.await.expect("waiter join");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].payload["idx"], 2);
+    }
+
+    #[tokio::test]
+    async fn subscribe_receives_new_event_broadcast() {
+        let manager = ControlPlaneManager::new();
+        let mut receiver = manager.subscribe();
+
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+
+        let received = receiver.recv().await.expect("receive broadcast");
+        assert_eq!(received.seq, 1);
+        assert_eq!(received.payload["idx"], 1);
     }
 
     #[test]
