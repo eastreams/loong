@@ -351,3 +351,86 @@ pub fn format_session_search_text(
 
     lines.join("\n") + "\n"
 }
+
+pub fn run_session_search_inspect_cli(artifact_path: &str, as_json: bool) -> CliResult<()> {
+    let artifact = load_session_search_artifact(artifact_path)?;
+
+    if as_json {
+        let pretty_result = serde_json::to_string_pretty(&artifact);
+        let pretty = pretty_result
+            .map_err(|error| format!("serialize session-search inspect output failed: {error}"))?;
+        println!("{pretty}");
+        return Ok(());
+    }
+
+    let rendered = format_session_search_inspect_text(artifact_path, &artifact);
+    print!("{rendered}");
+    Ok(())
+}
+
+pub fn load_session_search_artifact(
+    artifact_path: &str,
+) -> CliResult<SessionSearchArtifactDocument> {
+    let raw_path = PathBuf::from(artifact_path);
+    let raw = std::fs::read_to_string(&raw_path).map_err(|error| {
+        format!(
+            "read session-search artifact {} failed: {error}",
+            raw_path.display()
+        )
+    })?;
+
+    let decoded = serde_json::from_str::<SessionSearchArtifactDocument>(&raw);
+    let artifact = decoded.map_err(|error| {
+        format!(
+            "decode session-search artifact {} failed: {error}",
+            raw_path.display()
+        )
+    })?;
+
+    if artifact.schema.version != SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION {
+        return Err(format!(
+            "session-search artifact {} uses unsupported schema version {}; expected {}",
+            raw_path.display(),
+            artifact.schema.version,
+            SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION
+        ));
+    }
+
+    if artifact.schema.surface != "session_search" {
+        return Err(format!(
+            "session-search artifact {} uses unsupported schema surface {}",
+            raw_path.display(),
+            artifact.schema.surface
+        ));
+    }
+
+    Ok(artifact)
+}
+
+pub fn format_session_search_inspect_text(
+    artifact_path: &str,
+    artifact: &SessionSearchArtifactDocument,
+) -> String {
+    let first_hit = artifact.hits.first();
+    let first_hit_session_id = match first_hit {
+        Some(hit) => hit.session.session_id.as_str(),
+        None => "-",
+    };
+    let first_hit_role = match first_hit {
+        Some(hit) => hit.role.as_str(),
+        None => "-",
+    };
+
+    let lines = [
+        format!("schema.version={}", artifact.schema.version),
+        format!("artifact={artifact_path}"),
+        format!("scope_session_id={}", artifact.scope_session_id),
+        format!("query={}", artifact.query),
+        format!("returned_count={}", artifact.returned_count),
+        format!("visibility={}", artifact.visibility),
+        format!("first_hit_session_id={first_hit_session_id}"),
+        format!("first_hit_role={first_hit_role}"),
+    ];
+    let rendered = lines.join("\n");
+    rendered + "\n"
+}
