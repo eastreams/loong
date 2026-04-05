@@ -131,6 +131,8 @@ impl SessionContext {
                 && !existing_contract.runtime_narrowing.is_empty()
             {
                 let runtime_narrowing = existing_contract.runtime_narrowing;
+                subagent_execution.runtime_narrowing = runtime_narrowing.clone();
+                self.runtime_narrowing = Some(runtime_narrowing.clone());
                 merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
             }
         }

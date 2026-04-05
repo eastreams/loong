@@ -2007,9 +2007,8 @@ fn ensure_canonical_record_storage(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("ensure canonical memory storage failed: {error}"))?;
 
-    let canonical_fts_recreated = canonical_record_fts_needs_rebuild(conn)?;
-    if canonical_fts_recreated {
-        recreate_canonical_record_fts_index(conn)?;
+    let needs_canonical_fts_rebuild = canonical_record_fts_needs_rebuild(conn)?;
+    if needs_canonical_fts_rebuild {
         rebuild_canonical_record_storage(conn)?;
         return Ok(());
     }
@@ -2040,13 +2039,6 @@ fn canonical_record_fts_needs_rebuild(conn: &Connection) -> Result<bool, String>
     });
 
     Ok(!has_all_required_columns)
-}
-
-fn recreate_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
-    drop_canonical_record_fts_index(conn)?;
-    create_canonical_record_fts_index(conn)?;
-    rebuild_canonical_record_fts_index_contents(conn)?;
-    Ok(())
 }
 
 fn drop_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
