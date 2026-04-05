@@ -64,6 +64,7 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: None,
             tool_view,
+            runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
             runtime_self_continuity: None,
@@ -79,6 +80,7 @@ impl SessionContext {
             session_id: normalize_session_id(session_id.into()),
             parent_session_id: Some(normalize_session_id(parent_session_id.into())),
             tool_view,
+            runtime_narrowing: None,
             subagent_execution: None,
             subagent_contract: None,
             runtime_self_continuity: None,
@@ -236,18 +238,6 @@ fn load_delegate_execution(
         })
         .flatten()
     }))
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn load_delegate_runtime_narrowing(
-    repo: &SessionRepository,
-    session_id: &str,
-) -> Result<Option<ToolRuntimeNarrowing>, String> {
-    Ok(
-        load_delegate_execution(repo, session_id)?.and_then(|execution| {
-            (!execution.runtime_narrowing.is_empty()).then_some(execution.runtime_narrowing)
-        }),
-    )
 }
 
 #[cfg(feature = "memory-sqlite")]
