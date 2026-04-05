@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
@@ -60,9 +61,30 @@ function splitCommandLine(value) {
 }
 
 function decodePayload(argv) {
+  const payloadFileIndex = argv.indexOf("--payload-file");
+  if (payloadFileIndex >= 0) {
+    const payloadFilePath = argv[payloadFileIndex + 1];
+    if (!payloadFilePath) {
+      throw new Error("Missing MCP proxy payload file path");
+    }
+    const payloadSource = fs.readFileSync(payloadFilePath, "utf8");
+    fs.rmSync(payloadFilePath, { force: true });
+    const parsed = JSON.parse(payloadSource);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Invalid MCP proxy payload");
+    }
+    if (typeof parsed.targetCommand !== "string" || parsed.targetCommand.trim() === "") {
+      throw new Error("MCP proxy payload missing targetCommand");
+    }
+    const mcpServers = Array.isArray(parsed.mcpServers) ? parsed.mcpServers : [];
+    return {
+      targetCommand: parsed.targetCommand,
+      mcpServers,
+    };
+  }
   const payloadIndex = argv.indexOf("--payload");
   if (payloadIndex < 0) {
-    throw new Error("Missing --payload");
+    throw new Error("Missing MCP proxy payload");
   }
   const encoded = argv[payloadIndex + 1];
   if (!encoded) {
@@ -114,6 +136,11 @@ function rewriteLine(line, mcpServers) {
   } catch {
     return line;
   }
+}
+
+if (process.argv.includes("--version")) {
+  process.stdout.write("loongclaw-acpx-mcp-proxy 1\n");
+  process.exit(0);
 }
 
 const { targetCommand, mcpServers } = decodePayload(process.argv.slice(2));

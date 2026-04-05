@@ -2152,13 +2152,11 @@ exit 0
 
         let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
             .expect("proxy command");
-        let payload_marker = "--payload ";
+        let payload_marker = "--payload-file ";
         let payload_index = command.find(payload_marker).expect("payload marker");
-        let encoded_payload = &command[payload_index + payload_marker.len()..];
-        let decoded_payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(encoded_payload)
-            .expect("decode payload");
-        let payload: Value = serde_json::from_slice(&decoded_payload).expect("parse payload");
+        let payload_path = &command[payload_index + payload_marker.len()..];
+        let payload_bytes = std::fs::read(payload_path).expect("read payload file");
+        let payload: Value = serde_json::from_slice(&payload_bytes).expect("parse payload");
 
         assert_eq!(
             payload["mcpServers"][0]["cwd"],
@@ -2286,8 +2284,8 @@ exit 0
             "expected --agent proxy flag in log: {log}"
         );
         assert!(
-            log.contains("--payload"),
-            "expected MCP proxy payload flag in log: {log}"
+            log.contains("--payload-file"),
+            "expected MCP proxy payload file flag in log: {log}"
         );
         assert!(
             log.contains("sessions ensure --name session-proxy"),

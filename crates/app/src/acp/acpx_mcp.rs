@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 use std::sync::OnceLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::process::Command;
@@ -79,18 +79,19 @@ pub(crate) fn build_mcp_proxy_agent_command(
         "mcpServers": mcp_servers,
     }))
     .map_err(|error| format!("serialize ACPX MCP proxy payload failed: {error}"))?;
-    let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload);
+    let payload_path = materialize_mcp_proxy_payload_path(payload.as_slice())?;
     Ok(join_command_line(&[
         ACPX_MCP_PROXY_NODE_COMMAND.to_owned(),
         script_path,
-        "--payload".to_owned(),
-        encoded,
+        "--payload-file".to_owned(),
+        payload_path,
     ]))
 }
 
 pub(crate) async fn probe_mcp_proxy_support(cwd: Option<&str>) -> CliResult<(String, String)> {
     let script_path = ensure_mcp_proxy_script_path()?;
     let mut probe = Command::new(ACPX_MCP_PROXY_NODE_COMMAND);
+    probe.arg(script_path.as_str());
     probe.arg("--version");
     if let Some(cwd) = cwd {
         probe.current_dir(cwd);
@@ -184,6 +185,39 @@ fn materialize_mcp_proxy_script() -> Result<String, String> {
             .map_err(|error| format!("chmod ACPX MCP proxy script failed: {error}"))?;
     }
     Ok(path.display().to_string())
+}
+
+fn materialize_mcp_proxy_payload_path(payload: &[u8]) -> CliResult<String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("read system time for ACPX MCP payload failed: {error}"))?;
+    let payload_file_name = format!(
+        "acpx-mcp-payload-{}-{}.json",
+        std::process::id(),
+        timestamp.as_nanos()
+    );
+    let payload_path = std::env::temp_dir()
+        .join("loongclaw")
+        .join("acpx-mcp-payloads")
+        .join(payload_file_name);
+    if let Some(parent) = payload_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create ACPX MCP payload directory failed: {error}"))?;
+    }
+    std::fs::write(&payload_path, payload)
+        .map_err(|error| format!("write ACPX MCP payload failed: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(&payload_path)
+            .map_err(|error| format!("stat ACPX MCP payload failed: {error}"))?
+            .permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&payload_path, permissions)
+            .map_err(|error| format!("chmod ACPX MCP payload failed: {error}"))?;
+    }
+    Ok(payload_path.display().to_string())
 }
 
 fn join_command_line(parts: &[String]) -> String {
