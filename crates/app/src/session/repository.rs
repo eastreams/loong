@@ -3445,6 +3445,13 @@ fn unix_ts_now() -> i64 {
         .unwrap_or_default()
 }
 
+fn unix_time_ms_now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default()
+}
+
 fn infer_legacy_session_kind(session_id: &str) -> SessionKind {
     if session_id.starts_with("delegate:") {
         SessionKind::DelegateChild

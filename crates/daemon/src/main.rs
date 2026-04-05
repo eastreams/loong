@@ -51,12 +51,8 @@ fn error_code(error: &str) -> String {
     "unclassified".to_owned()
 }
 
-fn redacted_command_name(command: &Commands) -> String {
-    let rendered = format!("{command:?}");
-    let end = rendered
-        .find([' ', '{', '('])
-        .unwrap_or(rendered.len());
-    rendered[..end].to_owned()
+fn redacted_command_name(command: &Commands) -> &'static str {
+    command.command_kind_for_logging()
 }
 
 #[tokio::main]
@@ -71,6 +67,7 @@ async fn main() {
         "default"
     };
     let command = cli.command.unwrap_or_else(resolve_default_entry_command);
+    let command_kind = command.command_kind_for_logging();
     let redacted_command = redacted_command_name(&command);
     tracing::debug!(
         target: "loongclaw.daemon",
@@ -1112,13 +1109,13 @@ mod tests {
 
         let redacted = redacted_command_name(&command);
 
-        assert_eq!(redacted, "RunTask");
+        assert_eq!(redacted, "run_task");
     }
 
     #[test]
     fn redacted_command_name_handles_unit_variants() {
         let redacted = redacted_command_name(&Commands::Welcome);
 
-        assert_eq!(redacted, "Welcome");
+        assert_eq!(redacted, "welcome");
     }
 }

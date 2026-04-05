@@ -103,9 +103,9 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 10;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 9;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 22;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
@@ -204,8 +204,6 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_canonical_records_fts',
                         'approval_requests',
                         'approval_grants',
-                        'control_plane_pairing_requests',
-                        'control_plane_device_tokens',
                         'session_tool_consent',
                         'session_tool_policies'
                     ))
@@ -214,9 +212,7 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'idx_turns_session_turn_index',
                         'idx_memory_canonical_records_scope_kind_ts',
                         'idx_memory_canonical_records_session_turn',
-                        'idx_approval_requests_session_status_requested_at',
-                        'idx_control_plane_pairing_requests_status_requested_at',
-                        'idx_control_plane_device_tokens_device_id'
+                        'idx_approval_requests_session_status_requested_at'
                     ))
                 OR (type = 'trigger' AND name IN (
                         'memory_canonical_records_ai',
@@ -1598,13 +1594,13 @@ fn open_sqlite_connection_with_diagnostics(
     if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
         ensure_turn_session_index_and_state_metadata(&conn)?;
         ensure_approval_lifecycle_tables(&conn)?;
-        ensure_control_plane_pairing_tables(&conn)?;
         ensure_session_tool_consent_storage(&mut conn)?;
         ensure_session_tool_policy_storage(&conn)?;
         ensure_summary_checkpoint_storage_layout(&conn)?;
         ensure_canonical_record_storage(&conn)?;
         write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
     }
+    ensure_control_plane_pairing_tables(&conn)?;
     diagnostics.schema_upgrade_ms = elapsed_ms(schema_upgrade_started_at);
 
     #[cfg(test)]
