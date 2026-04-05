@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-05T13:21:51Z
+- Generated at: 2026-04-05T13:22:24Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -17,7 +17,7 @@
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 376 | 1000 | 624 | 10 | 20 | 10 | 50.0% | HEALTHY | 375 | 0.3% | PASS | 10 |
 | memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 355 | 650 | 295 | 14 | 16 | 2 | 87.5% | WATCH | 356 | -0.3% | PASS | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3391 | 3600 | 209 | 8 | 12 | 4 | 94.2% | WATCH | 3383 | 0.2% | PASS | 8 |
-| acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2773 | 2800 | 27 | 48 | 65 | 17 | 99.0% | TIGHT | 2698 | 2.8% | PASS | 56 |
+| acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2771 | 2800 | 29 | 48 | 65 | 17 | 99.0% | TIGHT | 2698 | 2.7% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10222 | 10500 | 278 | 72 | 90 | 18 | 97.4% | TIGHT | 9922 | 3.0% | PASS | 88 |
 | channel_config | `structural_size` | `crates/app/src/config/channels.rs` | 9716 | 9800 | 84 | 90 | 90 | 0 | 100.0% | TIGHT | 9796 | -0.8% | PASS | 90 |
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6976 | 7300 | 324 | 147 | 160 | 13 | 95.6% | TIGHT | 6936 | 0.6% | PASS | 146 |
@@ -63,7 +63,7 @@
 <!-- arch-hotspot key=provider_mod lines=376 functions=10 -->
 <!-- arch-hotspot key=memory_mod lines=355 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3391 functions=8 -->
-<!-- arch-hotspot key=acpx_runtime lines=2773 functions=48 -->
+<!-- arch-hotspot key=acpx_runtime lines=2771 functions=48 -->
 <!-- arch-hotspot key=channel_registry lines=10222 functions=72 -->
 <!-- arch-hotspot key=channel_config lines=9716 functions=90 -->
 <!-- arch-hotspot key=chat_runtime lines=6976 functions=147 -->

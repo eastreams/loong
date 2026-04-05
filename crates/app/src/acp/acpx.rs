@@ -1599,8 +1599,6 @@ mod tests {
     #[cfg(unix)]
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    use base64::Engine;
-
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
     #[cfg(unix)]
