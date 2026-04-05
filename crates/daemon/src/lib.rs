@@ -1633,6 +1633,7 @@ mod first_run_entry_tests {
         let home = unique_temp_dir(prefix);
         fs::create_dir_all(&home).expect("create isolated home");
         env.set("HOME", &home);
+        env.remove("LOONGCLAW_HOME");
         env.remove("LOONGCLAW_CONFIG_PATH");
         (env, home)
     }

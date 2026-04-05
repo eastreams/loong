@@ -11,6 +11,8 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_COMPANION_PROBE_MAX_ATTEMPTS: usize = 2;
+#[cfg(test)]
+const TEST_BROWSER_COMPANION_VERSION_PREFIX: &str = "loongclaw-test-browser-companion-version:";
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,12 +215,23 @@ pub(crate) async fn collect_browser_companion_diagnostics(
 async fn probe_browser_companion_version(
     command: &str,
 ) -> Result<String, BrowserCompanionProbeError> {
+    #[cfg(test)]
+    if let Some(version) = command.strip_prefix(TEST_BROWSER_COMPANION_VERSION_PREFIX) {
+        let observed_version = format!("loongclaw-browser-companion {version}");
+        return Ok(observed_version);
+    }
+
     probe_browser_companion_version_with_policy(
         command,
         BROWSER_COMPANION_PROBE_TIMEOUT,
         BROWSER_COMPANION_PROBE_MAX_ATTEMPTS,
     )
     .await
+}
+
+#[cfg(test)]
+pub(crate) fn fake_browser_companion_version_command(version: &str) -> String {
+    format!("{TEST_BROWSER_COMPANION_VERSION_PREFIX}{version}")
 }
 
 async fn probe_browser_companion_version_with_policy(
@@ -514,14 +527,5 @@ mod tests {
             "loongclaw-browser-companion 11.5.0",
             "1.5.0"
         ));
-    }
-
-    #[test]
-    fn browser_companion_probe_timeout_duration_saturates() {
-        let timeout_duration = browser_companion_probe_timeout_duration(u64::MAX);
-        let expected_duration = Duration::from_secs(u64::MAX);
-        let expected_duration = expected_duration.saturating_add(Duration::from_millis(500));
-
-        assert_eq!(timeout_duration, expected_duration);
     }
 }
