@@ -90,6 +90,7 @@ impl SessionContext {
     #[must_use]
     pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
         if !runtime_narrowing.is_empty() {
+            self.runtime_narrowing = Some(runtime_narrowing.clone());
             if let Some(subagent_execution) = self.subagent_execution.as_mut() {
                 subagent_execution.runtime_narrowing = runtime_narrowing.clone();
             }
@@ -104,17 +105,36 @@ impl SessionContext {
         mut self,
         subagent_execution: ConstrainedSubagentExecution,
     ) -> Self {
+        let existing_contract = self.subagent_contract.take();
         let mut subagent_execution = subagent_execution.with_resolved_profile();
         if subagent_execution.identity.is_none()
-            && let Some(identity) = self
-                .subagent_contract
+            && let Some(identity) = existing_contract
                 .as_ref()
                 .and_then(ConstrainedSubagentContractView::resolved_identity)
                 .cloned()
         {
             subagent_execution.identity = Some(identity);
         }
-        self.subagent_contract = Some(subagent_execution.contract_view());
+        let mut merged_contract = subagent_execution.contract_view();
+        if let Some(existing_contract) = existing_contract {
+            if merged_contract.profile.is_none()
+                && let Some(profile) = existing_contract.profile
+            {
+                merged_contract = merged_contract.with_profile(profile);
+            }
+            if merged_contract.identity.is_none()
+                && let Some(identity) = existing_contract.identity
+            {
+                merged_contract = merged_contract.with_identity(identity);
+            }
+            if merged_contract.runtime_narrowing.is_empty()
+                && !existing_contract.runtime_narrowing.is_empty()
+            {
+                let runtime_narrowing = existing_contract.runtime_narrowing;
+                merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
+            }
+        }
+        self.subagent_contract = Some(merged_contract);
         self.subagent_execution = Some(subagent_execution);
         self
     }
@@ -1156,9 +1176,6 @@ where
                     }
                     None => SessionContext::root_with_tool_view(snapshot.session_id, tool_view),
                 };
-                if let Some(runtime_narrowing) = runtime_narrowing {
-                    session_context = session_context.with_runtime_narrowing(runtime_narrowing);
-                }
                 if snapshot.is_delegate_child {
                     if let Some(label) = snapshot.label {
                         session_context =
@@ -1177,6 +1194,9 @@ where
                     )? {
                         session_context = session_context.with_subagent_profile(subagent_profile);
                     }
+                }
+                if let Some(runtime_narrowing) = runtime_narrowing {
+                    session_context = session_context.with_runtime_narrowing(runtime_narrowing);
                 }
                 if let Some(runtime_self_continuity) = snapshot.runtime_self_continuity {
                     session_context =
@@ -1469,6 +1489,7 @@ fn delegate_child_runtime_contract_prompt_summary(
     session_context: &SessionContext,
 ) -> Option<String> {
     session_context.parent_session_id.as_ref()?;
+    session_context.subagent_runtime_narrowing()?;
     let subagent_contract = session_context.resolved_subagent_contract();
     crate::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(config, None)
         .delegate_child_prompt_summary(subagent_contract.as_ref())
