@@ -3,11 +3,19 @@ use serde_json::Value;
 use crate::config::LoongClawConfig;
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConversationRuntimeBinding,
+    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason,
+    ConversationRuntimeBinding,
 };
+use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
+use crate::session::recovery::{
+    RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
+    build_terminal_finalize_recovery_payload,
+};
 use crate::session::repository::{
-    CreateSessionWithEventRequest, NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    CreateSessionWithEventRequest, CreateSessionWithEventResult, FinalizeSessionTerminalRequest,
+    NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    TransitionSessionWithEventIfCurrentRequest,
 };
 use crate::trust::{
     delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
@@ -241,6 +249,233 @@ fn build_delegate_child_event_payload(
     }
 
     payload_with_trust
+}
+
+pub(crate) fn finalize_async_delegate_spawn_failure(
+    memory_config: &MemoryRuntimeConfig,
+    child_session_id: &str,
+    parent_session_id: &str,
+    label: Option<String>,
+    execution: &ConstrainedSubagentExecution,
+    error: String,
+) -> Result<(), String> {
+    let repo = SessionRepository::new(memory_config)?;
+    let outcome = crate::tools::delegate::delegate_error_outcome(
+        child_session_id.to_owned(),
+        Some(parent_session_id.to_owned()),
+        label,
+        Some(&execution.contract_view()),
+        error.clone(),
+        0,
+    );
+    let request = FinalizeSessionTerminalRequest {
+        state: SessionState::Failed,
+        last_error: Some(error.clone()),
+        event_kind: "delegate_spawn_failed".to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json: execution.terminal_payload(
+            ConstrainedSubagentTerminalReason::SpawnFailed,
+            0,
+            None,
+            Some(error.as_str()),
+        ),
+        outcome_status: outcome.status,
+        outcome_payload_json: outcome.payload,
+    };
+    finalize_terminal_if_current_allowing_stale_state(
+        &repo,
+        child_session_id,
+        SessionState::Ready,
+        request,
+    )?;
+
+    Ok(())
+}
+
+pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
+    memory_config: &MemoryRuntimeConfig,
+    child_session_id: &str,
+    parent_session_id: &str,
+    label: Option<String>,
+    execution: &ConstrainedSubagentExecution,
+    error: String,
+) -> Result<(), String> {
+    let recovery_label = label.clone();
+    let finalize_result = finalize_async_delegate_spawn_failure(
+        memory_config,
+        child_session_id,
+        parent_session_id,
+        label,
+        execution,
+        error.clone(),
+    );
+    match finalize_result {
+        Ok(()) => Ok(()),
+        Err(finalize_error) => {
+            let repo = SessionRepository::new(memory_config)?;
+            let recovery_error = format!(
+                "delegate_async_spawn_failure_persist_failed: {finalize_error}; original spawn error: {error}"
+            );
+            let transition_result = repo.transition_session_with_event_if_current(
+                child_session_id,
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Ready,
+                    next_state: SessionState::Failed,
+                    last_error: Some(recovery_error.clone()),
+                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                    actor_session_id: Some(parent_session_id.to_owned()),
+                    event_payload_json: build_async_spawn_failure_recovery_payload(
+                        recovery_label.as_deref(),
+                        &error,
+                        &recovery_error,
+                    ),
+                },
+            );
+            match transition_result {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => {
+                    let current_state = repo
+                        .load_session(child_session_id)?
+                        .map(|session| session.state.as_str().to_owned())
+                        .unwrap_or_else(|| "missing".to_owned());
+                    let message = format!(
+                        "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
+                    );
+                    Err(message)
+                }
+                Err(recovery_event_error) => {
+                    let state_result = repo.update_session_state_if_current(
+                        child_session_id,
+                        SessionState::Ready,
+                        SessionState::Failed,
+                        Some(recovery_error.clone()),
+                    );
+                    match state_result {
+                        Ok(Some(_)) => Ok(()),
+                        Ok(None) => {
+                            let current_state = repo
+                                .load_session(child_session_id)?
+                                .map(|session| session.state.as_str().to_owned())
+                                .unwrap_or_else(|| "missing".to_owned());
+                            let message = format!(
+                                "{recovery_error}; delegate_async_spawn_recovery_skipped_from_state: {current_state}"
+                            );
+                            Err(message)
+                        }
+                        Err(mark_error) => {
+                            let message = format!(
+                                "{recovery_error}; delegate_async_spawn_recovery_failed: {mark_error}; delegate_async_spawn_recovery_event_failed: {recovery_event_error}"
+                            );
+                            Err(message)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn finalize_delegate_child_terminal_with_recovery(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    request: FinalizeSessionTerminalRequest,
+) -> Result<(), String> {
+    let recovery_request = request.clone();
+    let finalize_result = finalize_terminal_if_current_allowing_stale_state(
+        repo,
+        child_session_id,
+        SessionState::Running,
+        request,
+    );
+    match finalize_result {
+        Ok(()) => Ok(()),
+        Err(finalize_error) => {
+            let recovery_error = format!("delegate_terminal_finalize_failed: {finalize_error}");
+            let transition_result = repo.transition_session_with_event_if_current(
+                child_session_id,
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Running,
+                    next_state: SessionState::Failed,
+                    last_error: Some(recovery_error.clone()),
+                    event_kind: RECOVERY_EVENT_KIND.to_owned(),
+                    actor_session_id: recovery_request.actor_session_id.clone(),
+                    event_payload_json: build_terminal_finalize_recovery_payload(
+                        &recovery_request,
+                        &recovery_error,
+                    ),
+                },
+            );
+            match transition_result {
+                Ok(Some(_)) => Err(recovery_error),
+                Ok(None) => {
+                    delegate_terminal_recovery_skipped_error(repo, child_session_id, recovery_error)
+                }
+                Err(recovery_event_error) => {
+                    let state_result = repo.update_session_state_if_current(
+                        child_session_id,
+                        SessionState::Running,
+                        SessionState::Failed,
+                        Some(recovery_error.clone()),
+                    );
+                    match state_result {
+                        Ok(Some(_)) => {
+                            let message = format!(
+                                "{recovery_error}; delegate_terminal_recovery_event_failed: {recovery_event_error}"
+                            );
+                            Err(message)
+                        }
+                        Ok(None) => delegate_terminal_recovery_skipped_error(
+                            repo,
+                            child_session_id,
+                            recovery_error,
+                        ),
+                        Err(mark_error) => {
+                            let message = format!(
+                                "{recovery_error}; delegate_terminal_recovery_failed: {mark_error}"
+                            );
+                            Err(message)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn finalize_terminal_if_current_allowing_stale_state(
+    repo: &SessionRepository,
+    session_id: &str,
+    expected_state: SessionState,
+    request: FinalizeSessionTerminalRequest,
+) -> Result<(), String> {
+    let finalize_result =
+        repo.finalize_session_terminal_if_current(session_id, expected_state, request)?;
+    match finalize_result {
+        Some(_) => Ok(()),
+        None => {
+            let session = repo.load_session(session_id)?;
+            if session.is_some() {
+                return Ok(());
+            }
+
+            let message = format!("session `{session_id}` not found");
+            Err(message)
+        }
+    }
+}
+
+fn delegate_terminal_recovery_skipped_error(
+    repo: &SessionRepository,
+    child_session_id: &str,
+    recovery_error: String,
+) -> Result<(), String> {
+    let current_state = repo
+        .load_session(child_session_id)?
+        .map(|session| session.state.as_str().to_owned())
+        .unwrap_or_else(|| "missing".to_owned());
+    let message =
+        format!("{recovery_error}; delegate_terminal_recovery_skipped_from_state: {current_state}");
+    Err(message)
 }
 
 #[cfg(test)]
