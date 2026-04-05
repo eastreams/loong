@@ -110,6 +110,12 @@ impl StatusBarView for state::Pane {
     fn session_id(&self) -> &str {
         &self.session_id
     }
+    fn busy_input_mode(&self) -> state::BusyInputMode {
+        self.busy_input_mode()
+    }
+    fn pending_submission_count(&self) -> usize {
+        self.pending_submission_count()
+    }
     fn scroll_offset(&self) -> u16 {
         self.scroll_offset
     }
@@ -125,8 +131,11 @@ impl InputView for state::Pane {
     fn agent_running(&self) -> bool {
         self.agent_running
     }
-    fn has_staged_message(&self) -> bool {
-        self.staged_message.is_some()
+    fn pending_submission_count(&self) -> usize {
+        self.pending_submission_count()
+    }
+    fn busy_input_mode(&self) -> state::BusyInputMode {
+        self.busy_input_mode()
     }
     fn transcript_selection_line_count(&self) -> usize {
         self.transcript_selection_line_count_hint()
@@ -640,6 +649,28 @@ fn parse_model_action(args: &str) -> Result<ModelAction, String> {
             "usage: `/model [selector]` or `/model <selector> <auto|none|minimal|low|medium|high|xhigh>`"
                 .to_owned(),
         ),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusyInputModeAction {
+    Status,
+    Set(state::BusyInputMode),
+    Toggle,
+}
+
+fn parse_busy_input_mode_action(args: &str) -> Result<BusyInputModeAction, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(BusyInputModeAction::Status);
+    }
+
+    let normalized = trimmed.to_ascii_lowercase();
+    match normalized.as_str() {
+        "queue" => Ok(BusyInputModeAction::Set(state::BusyInputMode::Queue)),
+        "steer" => Ok(BusyInputModeAction::Set(state::BusyInputMode::Steer)),
+        "toggle" | "cycle" => Ok(BusyInputModeAction::Toggle),
+        _ => Err("usage: `/mode [queue|steer|toggle]`".to_owned()),
     }
 }
 
@@ -1822,6 +1853,49 @@ fn show_model_surface(shell: &mut state::Shell, args: &str) {
     }
 }
 
+fn busy_input_mode_lines(shell: &state::Shell) -> Vec<String> {
+    let busy_input_mode = shell.pane.busy_input_mode();
+    let mode_label = busy_input_mode.label().to_ascii_lowercase();
+    let pending_submission_count = shell.pane.pending_submission_count();
+    let queue_depth = shell.pane.queued_messages.len();
+    let steer_armed = shell.pane.steer_message.is_some();
+
+    vec![
+        format!("- mode: {mode_label}"),
+        format!("- pending submissions: {pending_submission_count}"),
+        format!("- queued messages: {queue_depth}"),
+        format!("- steer armed: {}", if steer_armed { "yes" } else { "no" }),
+        "- switch with `/mode queue` or `/mode steer`".to_owned(),
+        "- cycle with `Ctrl+G` while composing".to_owned(),
+    ]
+}
+
+fn show_busy_input_mode_surface(shell: &mut state::Shell, args: &str) {
+    match parse_busy_input_mode_action(args) {
+        Ok(BusyInputModeAction::Status) => {
+            let lines = busy_input_mode_lines(shell);
+            append_surface_message(shell, "busy input mode", lines.as_slice());
+            shell
+                .pane
+                .set_status("Busy input mode added to transcript".to_owned());
+        }
+        Ok(BusyInputModeAction::Set(mode)) => {
+            shell.pane.set_busy_input_mode(mode);
+            let label = mode.label().to_ascii_lowercase();
+            shell.pane.set_status(format!("Busy input mode: {label}"));
+        }
+        Ok(BusyInputModeAction::Toggle) => {
+            shell.pane.cycle_busy_input_mode();
+            let next_mode = shell.pane.busy_input_mode();
+            let label = next_mode.label().to_ascii_lowercase();
+            shell.pane.set_status(format!("Busy input mode: {label}"));
+        }
+        Err(error) => {
+            shell.pane.add_system_message(&error);
+        }
+    }
+}
+
 fn open_stats_overlay(shell: &mut state::Shell, args: &str) {
     let options = match stats::parse_stats_open_options(args) {
         Ok(options) => options,
@@ -1870,9 +1944,14 @@ fn show_session_surface(shell: &mut state::Shell) {
     let selected_lines = shell.pane.transcript_selection_line_count(total_lines);
     let tool_calls = shell.pane.tool_call_count();
     let focus_label = focus_layer_label(shell.focus.top());
+    let busy_input_mode = shell.pane.busy_input_mode();
+    let mode_label = busy_input_mode.label().to_ascii_lowercase();
+    let pending_submission_count = shell.pane.pending_submission_count();
     let lines = vec![
         format!("- session: {}", shell.pane.session_id),
         format!("- focus: {focus_label}"),
+        format!("- busy input mode: {mode_label}"),
+        format!("- pending submissions: {pending_submission_count}"),
         format!("- messages: {}", shell.pane.messages.len()),
         format!("- transcript lines: {total_lines}"),
         format!("- selected lines: {selected_lines}"),
@@ -1900,6 +1979,9 @@ fn show_runtime_status_surface(shell: &mut state::Shell) {
     } else {
         "hidden"
     };
+    let busy_input_mode = shell.pane.busy_input_mode();
+    let mode_label = busy_input_mode.label().to_ascii_lowercase();
+    let pending_submission_count = shell.pane.pending_submission_count();
     let lines = vec![
         format!("- session: {}", shell.pane.session_id),
         format!("- model: {model}"),
@@ -1907,6 +1989,8 @@ fn show_runtime_status_surface(shell: &mut state::Shell) {
         format!("- context usage: {context_percent:.1}%"),
         format!("- tool calls: {tool_calls}"),
         format!("- focus: {focus_label}"),
+        format!("- busy input mode: {mode_label}"),
+        format!("- pending submissions: {pending_submission_count}"),
         format!("- thinking blocks: {thinking_label}"),
     ];
 
@@ -2602,7 +2686,7 @@ fn activate_resumed_session(
     shell.pane.loop_action.clear();
     shell.pane.loop_iteration = 0;
     shell.pane.status_message = None;
-    shell.pane.staged_message = None;
+    shell.pane.clear_pending_submissions();
     shell.pane.tool_inspector = None;
     shell.pane.transcript_review.cursor_line = 0;
     shell.pane.transcript_review.anchor_line = None;
@@ -4155,6 +4239,13 @@ fn apply_terminal_event(
             open_transcript_review(shell);
             return;
         }
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            shell.pane.cycle_busy_input_mode();
+            let busy_input_mode = shell.pane.busy_input_mode();
+            let label = busy_input_mode.label().to_ascii_lowercase();
+            shell.pane.set_status(format!("Busy input mode: {label}"));
+            return;
+        }
         _ => {}
     }
 
@@ -4163,9 +4254,10 @@ fn apply_terminal_event(
     }
 
     // --- Escape to clear staged message --------------------------------
-    if key.code == KeyCode::Esc && shell.pane.agent_running && shell.pane.staged_message.is_some() {
-        shell.pane.staged_message = None;
-        shell.pane.set_status("Staged message cleared".into());
+    if key.code == KeyCode::Esc && shell.pane.agent_running && shell.pane.has_pending_submissions()
+    {
+        shell.pane.clear_pending_submissions();
+        shell.pane.set_status("Pending submissions cleared".into());
         return;
     }
 
@@ -4230,10 +4322,7 @@ fn apply_terminal_event(
         textarea.delete_str(usize::MAX);
 
         if shell.pane.agent_running {
-            // Agent is busy — stage the message (depth-1, last-wins).
-            shell.pane.staged_message = Some(trimmed.to_owned());
-            shell.pane.add_user_message(&format!("[queued] {trimmed}"));
-            shell.pane.scroll_offset = 0;
+            queue_busy_submission(shell, trimmed);
         } else {
             // Agent is idle — submit immediately.
             shell.pane.add_user_message(trimmed);
@@ -4469,6 +4558,9 @@ fn handle_slash_command(shell: &mut state::Shell, request: ParsedSlashCommand) {
         }
         SlashCommand::Model => {
             show_model_surface(shell, request.args.as_str());
+        }
+        SlashCommand::Mode => {
+            show_busy_input_mode_surface(shell, request.args.as_str());
         }
         SlashCommand::Stats => {
             open_stats_overlay(shell, request.args.as_str());
@@ -4850,6 +4942,73 @@ fn process_submitted_chat_text(
     Ok(())
 }
 
+fn queue_busy_submission(shell: &mut state::Shell, text: &str) {
+    let queued_text = text.to_owned();
+    let busy_input_mode = shell.pane.busy_input_mode();
+    shell.pane.enqueue_busy_submission(queued_text);
+    let pending_submission_count = shell.pane.pending_submission_count();
+    let status = match busy_input_mode {
+        state::BusyInputMode::Queue => {
+            format!("Queued {pending_submission_count} message(s)")
+        }
+        state::BusyInputMode::Steer => "Steer message armed".to_owned(),
+    };
+    shell.pane.set_status(status);
+}
+
+fn submit_pending_message(shell: &mut state::Shell, submit_text: &mut Option<String>) {
+    let pending_submission = shell.pane.take_next_pending_submission();
+    let Some(pending_submission) = pending_submission else {
+        return;
+    };
+
+    let pending_text = pending_submission.text;
+    let pending_mode = pending_submission.mode;
+    let status = match pending_mode {
+        state::BusyInputMode::Queue => "Sending queued message...".to_owned(),
+        state::BusyInputMode::Steer => "Sending steer message...".to_owned(),
+    };
+
+    shell.pane.add_user_message(pending_text.as_str());
+    shell.pane.scroll_offset = 0;
+    shell.pane.set_status(status);
+    *submit_text = Some(pending_text);
+}
+
+fn interrupt_for_steer_boundary(
+    shell: &mut state::Shell,
+    turn_future: &mut Pin<Box<dyn std::future::Future<Output = ()> + '_>>,
+    turn_active: &mut bool,
+    submit_text: &mut Option<String>,
+) {
+    if !*turn_active {
+        return;
+    }
+
+    let running_tool_call_count = shell.pane.running_tool_call_count();
+    if running_tool_call_count > 0 {
+        return;
+    }
+
+    let steer_submission = shell.pane.take_steer_submission();
+    let Some(steer_submission) = steer_submission else {
+        return;
+    };
+
+    *turn_active = false;
+    *turn_future = Box::pin(std::future::pending());
+    shell.pane.agent_running = false;
+    shell.pane.add_system_message(
+        "Steer mode interrupted the in-flight turn after the latest tool completed.",
+    );
+
+    let steer_text = steer_submission.text;
+    shell.pane.add_user_message(steer_text.as_str());
+    shell.pane.scroll_offset = 0;
+    shell.pane.set_status("Steering conversation...".to_owned());
+    *submit_text = Some(steer_text);
+}
+
 async fn run_inner(
     initial_runtime: Option<super::runtime::TuiRuntime>,
     config_path: Option<&str>,
@@ -4925,8 +5084,17 @@ async fn run_inner(
 
         // Drain observer channel
         while let Ok(event) = rx.try_recv() {
+            let tool_done_boundary = matches!(event, UiEvent::ToolDone { .. });
             apply_ui_event(&mut shell, event);
             shell.dirty = true;
+            if tool_done_boundary {
+                interrupt_for_steer_boundary(
+                    &mut shell,
+                    &mut turn_future,
+                    &mut turn_active,
+                    &mut submit_text,
+                );
+            }
         }
 
         // Drain crossterm terminal events
@@ -4973,13 +5141,7 @@ async fn run_inner(
                 turn_future = Box::pin(std::future::pending());
                 shell.pane.agent_running = false;
                 shell.dirty = true;
-                // Auto-submit staged message if one was queued.
-                if let Some(staged) = shell.pane.staged_message.take() {
-                    shell
-                        .pane
-                        .set_status("Sending queued message...".to_string());
-                    submit_text = Some(staged);
-                }
+                submit_pending_message(&mut shell, &mut submit_text);
             }
         }
 
@@ -5028,8 +5190,17 @@ async fn run_inner(
             biased;
 
             Some(event) = rx.recv() => {
+                let tool_done_boundary = matches!(event, UiEvent::ToolDone { .. });
                 apply_ui_event(&mut shell, event);
                 shell.dirty = true;
+                if tool_done_boundary {
+                    interrupt_for_steer_boundary(
+                        &mut shell,
+                        &mut turn_future,
+                        &mut turn_active,
+                        &mut submit_text,
+                    );
+                }
             }
 
             maybe_event = crossterm_events.next() => {
@@ -5064,11 +5235,7 @@ async fn run_inner(
                 turn_future = Box::pin(std::future::pending());
                 shell.pane.agent_running = false;
                 shell.dirty = true;
-                // Auto-submit staged message if one was queued.
-                if let Some(staged) = shell.pane.staged_message.take() {
-                    shell.pane.set_status("Sending queued message...".to_string());
-                    submit_text = Some(staged);
-                }
+                submit_pending_message(&mut shell, &mut submit_text);
             }
 
             _ = tick.tick() => {
@@ -6123,6 +6290,123 @@ mod tests {
         );
         assert!(shell.stats_overlay.is_none());
         assert_eq!(shell.focus.top(), FocusLayer::Composer);
+    }
+
+    #[test]
+    fn ctrl_g_cycles_busy_input_mode() {
+        let mut shell = state::Shell::new("sess-mode");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(modified_key(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.pane.busy_input_mode(), state::BusyInputMode::Steer);
+    }
+
+    #[test]
+    fn enter_while_running_in_queue_mode_appends_pending_queue() {
+        let mut shell = state::Shell::new("sess-queue");
+        shell.pane.agent_running = true;
+        shell.pane.set_busy_input_mode(state::BusyInputMode::Queue);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        textarea.insert_str("first queued");
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        textarea.insert_str("second queued");
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.pane.pending_submission_count(), 2);
+        assert_eq!(shell.pane.queued_messages.len(), 2);
+        assert!(shell.pane.steer_message.is_none());
+        assert!(submit_text.is_none());
+    }
+
+    #[test]
+    fn enter_while_running_in_steer_mode_replaces_pending_steer() {
+        let mut shell = state::Shell::new("sess-steer");
+        shell.pane.agent_running = true;
+        shell.pane.set_busy_input_mode(state::BusyInputMode::Steer);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        textarea.insert_str("first steer");
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        textarea.insert_str("second steer");
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.pane.pending_submission_count(), 1);
+        assert_eq!(shell.pane.queued_messages.len(), 0);
+        assert_eq!(
+            shell
+                .pane
+                .steer_message
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("second steer")
+        );
+        assert!(submit_text.is_none());
+    }
+
+    #[test]
+    fn steer_boundary_interrupts_after_tool_completion() {
+        let mut shell = state::Shell::new("sess-steer-boundary");
+        shell.pane.agent_running = true;
+        shell.pane.set_busy_input_mode(state::BusyInputMode::Steer);
+        shell.pane.enqueue_busy_submission("follow-up".to_owned());
+        shell.pane.start_tool_call("tool-1", "shell.exec", "ls");
+        shell.pane.complete_tool_call("tool-1", true, "ok", 10);
+
+        let mut turn_future: Pin<Box<dyn std::future::Future<Output = ()>>> =
+            Box::pin(std::future::pending());
+        let mut turn_active = true;
+        let mut submit_text: Option<String> = None;
+
+        interrupt_for_steer_boundary(
+            &mut shell,
+            &mut turn_future,
+            &mut turn_active,
+            &mut submit_text,
+        );
+
+        assert!(!turn_active);
+        assert!(!shell.pane.agent_running);
+        assert_eq!(submit_text.as_deref(), Some("follow-up"));
     }
 
     #[test]

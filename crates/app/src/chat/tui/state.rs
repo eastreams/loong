@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use super::dialog::ClarifyDialog;
@@ -105,6 +106,34 @@ impl StatsOverlayState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BusyInputMode {
+    Queue,
+    Steer,
+}
+
+impl BusyInputMode {
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Queue => "QUEUE",
+            Self::Steer => "STEER",
+        }
+    }
+
+    pub(super) fn next(self) -> Self {
+        match self {
+            Self::Queue => Self::Steer,
+            Self::Steer => Self::Queue,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PendingUserMessage {
+    pub(super) text: String,
+    pub(super) mode: BusyInputMode,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct Pane {
     pub(super) messages: Vec<Message>,
@@ -125,9 +154,9 @@ pub(super) struct Pane {
     pub(super) status_message: Option<(String, Instant)>,
     pub(super) clarify_dialog: Option<ClarifyDialog>,
     pub(super) input_hint_override: Option<String>,
-    /// Depth-1 staged message queue: holds the next user message to submit
-    /// once the current agent turn completes.
-    pub(super) staged_message: Option<String>,
+    pub(super) busy_input_mode: BusyInputMode,
+    pub(super) queued_messages: VecDeque<PendingUserMessage>,
+    pub(super) steer_message: Option<PendingUserMessage>,
     pub(super) tool_inspector: Option<ToolInspectorState>,
     pub(super) transcript_review: TranscriptReviewState,
     pub(super) composer_suggestion_context: ComposerSuggestionContext,
@@ -154,7 +183,9 @@ impl Pane {
             status_message: None,
             clarify_dialog: None,
             input_hint_override: None,
-            staged_message: None,
+            busy_input_mode: BusyInputMode::Queue,
+            queued_messages: VecDeque::new(),
+            steer_message: None,
             tool_inspector: None,
             transcript_review: TranscriptReviewState {
                 cursor_line: 0,
@@ -277,6 +308,68 @@ impl Pane {
         self.input_tokens = self.input_tokens.saturating_add(input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(output_tokens);
         self.agent_running = false;
+    }
+
+    pub(super) fn busy_input_mode(&self) -> BusyInputMode {
+        self.busy_input_mode
+    }
+
+    pub(super) fn set_busy_input_mode(&mut self, mode: BusyInputMode) {
+        self.busy_input_mode = mode;
+    }
+
+    pub(super) fn cycle_busy_input_mode(&mut self) {
+        self.busy_input_mode = self.busy_input_mode.next();
+    }
+
+    pub(super) fn pending_submission_count(&self) -> usize {
+        let queued_count = self.queued_messages.len();
+        let steer_count = usize::from(self.steer_message.is_some());
+        queued_count.saturating_add(steer_count)
+    }
+
+    pub(super) fn has_pending_submissions(&self) -> bool {
+        self.pending_submission_count() > 0
+    }
+
+    pub(super) fn enqueue_busy_submission(&mut self, text: String) {
+        let pending = PendingUserMessage {
+            text,
+            mode: self.busy_input_mode,
+        };
+
+        match self.busy_input_mode {
+            BusyInputMode::Queue => {
+                self.queued_messages.push_back(pending);
+            }
+            BusyInputMode::Steer => {
+                self.steer_message = Some(pending);
+            }
+        }
+    }
+
+    pub(super) fn clear_pending_submissions(&mut self) {
+        self.queued_messages.clear();
+        self.steer_message = None;
+    }
+
+    pub(super) fn take_steer_submission(&mut self) -> Option<PendingUserMessage> {
+        self.steer_message.take()
+    }
+
+    pub(super) fn take_next_pending_submission(&mut self) -> Option<PendingUserMessage> {
+        if let Some(steer_message) = self.steer_message.take() {
+            return Some(steer_message);
+        }
+
+        self.queued_messages.pop_front()
+    }
+
+    pub(super) fn running_tool_call_count(&self) -> usize {
+        self.collect_tool_calls()
+            .into_iter()
+            .filter(|tool_call| matches!(tool_call.status, ToolStatus::Running { .. }))
+            .count()
     }
 
     pub(super) fn add_user_message(&mut self, text: &str) {
@@ -1145,29 +1238,83 @@ mod tests {
         assert!(shell.dirty);
         assert_eq!(shell.focus.top(), super::super::focus::FocusLayer::Composer);
         assert_eq!(shell.pane.session_id, "s1");
+        assert_eq!(shell.pane.busy_input_mode(), BusyInputMode::Queue);
     }
 
     #[test]
-    fn staged_message_defaults_to_none() {
+    fn pending_submissions_default_to_empty() {
         let pane = Pane::new("sess-1");
-        assert!(pane.staged_message.is_none());
+        assert!(!pane.has_pending_submissions());
+        assert!(pane.queued_messages.is_empty());
+        assert!(pane.steer_message.is_none());
     }
 
     #[test]
-    fn staged_message_last_wins() {
+    fn queue_mode_preserves_submission_order() {
         let mut pane = Pane::new("sess-1");
-        pane.staged_message = Some("first".to_string());
-        pane.staged_message = Some("second".to_string());
-        assert_eq!(pane.staged_message.as_deref(), Some("second"));
+        pane.set_busy_input_mode(BusyInputMode::Queue);
+        pane.enqueue_busy_submission("first".to_string());
+        pane.enqueue_busy_submission("second".to_string());
+
+        let first_submission = pane.take_next_pending_submission();
+        let second_submission = pane.take_next_pending_submission();
+
+        assert_eq!(
+            first_submission
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("first")
+        );
+        assert_eq!(
+            second_submission
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("second")
+        );
     }
 
     #[test]
-    fn staged_message_take_clears() {
+    fn steer_mode_replaces_previous_pending_message() {
         let mut pane = Pane::new("sess-1");
-        pane.staged_message = Some("queued".to_string());
-        let taken = pane.staged_message.take();
-        assert_eq!(taken.as_deref(), Some("queued"));
-        assert!(pane.staged_message.is_none());
+        pane.set_busy_input_mode(BusyInputMode::Steer);
+        pane.enqueue_busy_submission("first".to_string());
+        pane.enqueue_busy_submission("second".to_string());
+
+        let steer_submission = pane.take_steer_submission();
+
+        assert_eq!(
+            steer_submission
+                .as_ref()
+                .map(|message| message.text.as_str()),
+            Some("second")
+        );
+        assert!(pane.steer_message.is_none());
+    }
+
+    #[test]
+    fn clear_pending_submissions_resets_queue_and_steer() {
+        let mut pane = Pane::new("sess-1");
+        pane.set_busy_input_mode(BusyInputMode::Queue);
+        pane.enqueue_busy_submission("queued".to_string());
+        pane.set_busy_input_mode(BusyInputMode::Steer);
+        pane.enqueue_busy_submission("steer".to_string());
+
+        pane.clear_pending_submissions();
+
+        assert!(!pane.has_pending_submissions());
+    }
+
+    #[test]
+    fn running_tool_call_count_tracks_open_calls() {
+        let mut pane = Pane::new("sess-1");
+        pane.start_tool_call("t1", "shell.exec", "ls");
+        pane.start_tool_call("t2", "read_file", "src/lib.rs");
+
+        assert_eq!(pane.running_tool_call_count(), 2);
+
+        pane.complete_tool_call("t1", true, "ok", 10);
+
+        assert_eq!(pane.running_tool_call_count(), 1);
     }
 
     #[test]

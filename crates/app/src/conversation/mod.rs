@@ -88,6 +88,8 @@ pub use turn_checkpoint::{
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use turn_coordinator::execute_approval_tool_with_runtime_support;
 pub use turn_coordinator::{ConversationTurnCoordinator, spawn_background_delegate_with_runtime};
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,

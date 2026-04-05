@@ -11,6 +11,7 @@ pub(super) enum SlashCommand {
     Export,
     Diff,
     Model,
+    Mode,
     Stats,
     Session,
     Status,
@@ -131,6 +132,14 @@ const COMMANDS: &[SlashCommandSpec] = &[
         category: "Status",
         aliases: &[],
         argument_hint: Some("[selector] [auto|none|minimal|low|medium|high|xhigh]"),
+        discoverable: true,
+    },
+    SlashCommandSpec {
+        name: "/mode",
+        help: "Show or set busy-turn submit behavior (queue or steer)",
+        category: "View",
+        aliases: &[],
+        argument_hint: Some("[queue|steer|toggle]"),
         discoverable: true,
     },
     SlashCommandSpec {
@@ -300,6 +309,7 @@ pub(super) fn parse(input: &str) -> Option<ParsedSlashCommand> {
         "/export" => SlashCommand::Export,
         "/diff" => SlashCommand::Diff,
         "/model" => SlashCommand::Model,
+        "/mode" => SlashCommand::Mode,
         "/stats" | "/usage" => SlashCommand::Stats,
         "/session" => SlashCommand::Session,
         "/status" => SlashCommand::Status,
@@ -408,6 +418,13 @@ mod tests {
             parse("/model"),
             Some(ParsedSlashCommand {
                 command: SlashCommand::Model,
+                args: String::new(),
+            })
+        );
+        assert_eq!(
+            parse("/mode"),
+            Some(ParsedSlashCommand {
+                command: SlashCommand::Mode,
                 args: String::new(),
             })
         );

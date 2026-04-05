@@ -1065,6 +1065,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
         ("Enter / Shift+Enter", "Send message / new line"),
         ("Up/Down PgUp/Dn", "Scroll transcript"),
         ("Home/End", "Jump top or latest"),
+        ("Ctrl+G", "Cycle queue / steer mode"),
         ("Ctrl+R", "Toggle transcript review"),
         ("Ctrl+O", "Open latest tool details"),
         ("Ctrl+C", "Interrupt / cancel"),
@@ -1396,6 +1397,7 @@ mod tests {
     use crate::chat::tui::commands;
     use crate::chat::tui::dialog::ClarifyDialog;
     use crate::chat::tui::message::{Message, ToolStatus};
+    use crate::chat::tui::state::BusyInputMode;
     use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
 
@@ -1502,14 +1504,20 @@ mod tests {
         fn session_id(&self) -> &str {
             &self.session_id
         }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            BusyInputMode::Queue
+        }
     }
 
     impl InputView for TestPane {
         fn agent_running(&self) -> bool {
             self.agent_running
         }
-        fn has_staged_message(&self) -> bool {
-            false
+        fn pending_submission_count(&self) -> usize {
+            0
+        }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            BusyInputMode::Queue
         }
     }
 

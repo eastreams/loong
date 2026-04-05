@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use super::focus::FocusLayer;
+use super::state::BusyInputMode;
 use super::theme::Palette;
 
 // ---------------------------------------------------------------------------
@@ -15,7 +16,8 @@ use super::theme::Palette;
 
 pub(super) trait InputView {
     fn agent_running(&self) -> bool;
-    fn has_staged_message(&self) -> bool;
+    fn pending_submission_count(&self) -> usize;
+    fn busy_input_mode(&self) -> BusyInputMode;
     fn transcript_selection_line_count(&self) -> usize {
         0
     }
@@ -55,12 +57,29 @@ pub(super) fn render_input(
         | FocusLayer::StatsOverlay
         | FocusLayer::ToolInspector
         | FocusLayer::ClarifyDialog => {
-            if pane.agent_running() && pane.has_staged_message() {
-                " Queued: 1 message | Esc to clear "
+            let pending_submission_count = pane.pending_submission_count();
+            let busy_input_mode = pane.busy_input_mode();
+            if pane.agent_running() && pending_submission_count > 0 {
+                match busy_input_mode {
+                    BusyInputMode::Queue => " Queue mode | Esc clears queue | Ctrl+G steer ",
+                    BusyInputMode::Steer => {
+                        " Steer mode | Esc clears pending steer | Ctrl+G queue "
+                    }
+                }
             } else if pane.agent_running() {
-                " Enter to queue | Esc to cancel queue "
+                match busy_input_mode {
+                    BusyInputMode::Queue => " Enter to queue | Ctrl+G steer | Esc clears pending ",
+                    BusyInputMode::Steer => " Enter to steer at next tool boundary | Ctrl+G queue ",
+                }
             } else {
-                " Enter send | Shift+Enter newline | /help "
+                match busy_input_mode {
+                    BusyInputMode::Queue => {
+                        " Enter send | Shift+Enter newline | Ctrl+G steer | /help "
+                    }
+                    BusyInputMode::Steer => {
+                        " Enter send | Shift+Enter newline | Ctrl+G queue | /help "
+                    }
+                }
             }
         }
     };
@@ -104,15 +123,19 @@ mod tests {
 
     struct TestInput {
         running: bool,
-        staged: bool,
+        pending_submission_count: usize,
+        busy_input_mode: BusyInputMode,
     }
 
     impl InputView for TestInput {
         fn agent_running(&self) -> bool {
             self.running
         }
-        fn has_staged_message(&self) -> bool {
-            self.staged
+        fn pending_submission_count(&self) -> usize {
+            self.pending_submission_count
+        }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            self.busy_input_mode
         }
     }
 
@@ -124,8 +147,11 @@ mod tests {
         fn agent_running(&self) -> bool {
             false
         }
-        fn has_staged_message(&self) -> bool {
-            false
+        fn pending_submission_count(&self) -> usize {
+            0
+        }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            BusyInputMode::Queue
         }
         fn transcript_selection_line_count(&self) -> usize {
             self.selection_count
@@ -138,8 +164,11 @@ mod tests {
         fn agent_running(&self) -> bool {
             false
         }
-        fn has_staged_message(&self) -> bool {
-            false
+        fn pending_submission_count(&self) -> usize {
+            0
+        }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            BusyInputMode::Queue
         }
         fn input_placeholder(&self) -> Option<String> {
             Some("Explain the layered kernel design in this workspace".to_owned())
@@ -166,7 +195,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let pane = TestInput {
             running: false,
-            staged: false,
+            pending_submission_count: 0,
+            busy_input_mode: BusyInputMode::Queue,
         };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();
@@ -197,7 +227,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let pane = TestInput {
             running: true,
-            staged: false,
+            pending_submission_count: 0,
+            busy_input_mode: BusyInputMode::Queue,
         };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();
@@ -228,7 +259,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let pane = TestInput {
             running: true,
-            staged: true,
+            pending_submission_count: 2,
+            busy_input_mode: BusyInputMode::Queue,
         };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();
@@ -248,8 +280,40 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Queued: 1 message"),
-            "staged hint should mention queued message"
+            text.contains("Queue mode"),
+            "hint should mention queue mode"
+        );
+    }
+
+    #[test]
+    fn running_with_steer_mode_shows_steer_hint() {
+        let backend = TestBackend::new(72, 5);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let pane = TestInput {
+            running: true,
+            pending_submission_count: 1,
+            busy_input_mode: BusyInputMode::Steer,
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                render_input(
+                    f,
+                    f.area(),
+                    &textarea,
+                    &pane,
+                    FocusLayer::Composer,
+                    &palette,
+                );
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("Steer mode"),
+            "hint should mention steer mode"
         );
     }
 
@@ -259,7 +323,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let pane = TestInput {
             running: false,
-            staged: false,
+            pending_submission_count: 0,
+            busy_input_mode: BusyInputMode::Queue,
         };
         let palette = Palette::dark();
         let textarea = tui_textarea::TextArea::default();

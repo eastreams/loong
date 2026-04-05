@@ -34,5 +34,9 @@ pub(super) enum UiEvent {
         question: String,
         choices: Vec<String>,
     },
+    Surface {
+        title: String,
+        lines: Vec<String>,
+    },
     TurnError(String),
 }

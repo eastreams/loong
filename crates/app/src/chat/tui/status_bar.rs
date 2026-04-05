@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use super::focus::FocusLayer;
+use super::state::BusyInputMode;
 use super::theme::Palette;
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,10 @@ pub(super) trait StatusBarView {
     fn output_tokens(&self) -> u32;
     fn context_length(&self) -> u32;
     fn session_id(&self) -> &str;
+    fn busy_input_mode(&self) -> BusyInputMode;
+    fn pending_submission_count(&self) -> usize {
+        0
+    }
     fn scroll_offset(&self) -> u16 {
         0
     }
@@ -107,6 +112,27 @@ pub(super) fn render_status_bar(
         Style::default().fg(palette.separator),
     ));
     spans.push(focus_state_span(focus, palette));
+    spans.push(Span::styled(
+        " | ".to_string(),
+        Style::default().fg(palette.separator),
+    ));
+    spans.push(Span::styled(
+        pane.busy_input_mode().label().to_owned(),
+        Style::default().fg(palette.brand),
+    ));
+    let pending_submission_count = pane.pending_submission_count();
+    if pending_submission_count > 0 {
+        spans.push(Span::styled(
+            " | ".to_string(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(
+            format!("PEND {pending_submission_count}"),
+            Style::default()
+                .fg(palette.warning)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     let transcript_selection_line_count = pane.transcript_selection_line_count();
     if focus == FocusLayer::Transcript && transcript_selection_line_count > 0 {
         spans.push(Span::styled(
@@ -206,6 +232,8 @@ mod tests {
         output_tokens: u32,
         context_length: u32,
         session_id: String,
+        busy_input_mode: BusyInputMode,
+        pending_submission_count: usize,
         scroll_offset: u16,
         status_message: Option<(String, Instant)>,
     }
@@ -225,6 +253,12 @@ mod tests {
         }
         fn session_id(&self) -> &str {
             &self.session_id
+        }
+        fn busy_input_mode(&self) -> BusyInputMode {
+            self.busy_input_mode
+        }
+        fn pending_submission_count(&self) -> usize {
+            self.pending_submission_count
         }
         fn scroll_offset(&self) -> u16 {
             self.scroll_offset
@@ -261,6 +295,8 @@ mod tests {
             output_tokens: 234,
             context_length: 10000,
             session_id: "sess-abc123".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 0,
             status_message: None,
         };
@@ -277,6 +313,7 @@ mod tests {
         assert!(text.contains("1234")); // 1000 + 234
         assert!(text.contains("12%")); // 1234/10000 ~= 12%
         assert!(text.contains("sess-abc123"));
+        assert!(text.contains("QUEUE"));
     }
 
     #[test]
@@ -331,6 +368,8 @@ mod tests {
             output_tokens: 100,
             context_length: 0,
             session_id: "s1".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 0,
             status_message: None,
         };
@@ -357,6 +396,8 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-live".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 0,
             status_message: None,
         };
@@ -386,6 +427,8 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-scroll".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 4,
             status_message: None,
         };
@@ -415,6 +458,8 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-input".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 0,
             status_message: None,
         };
@@ -444,6 +489,8 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-output".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
             scroll_offset: 2,
             status_message: None,
         };
@@ -489,6 +536,12 @@ mod tests {
             fn session_id(&self) -> &str {
                 self.inner.session_id()
             }
+            fn busy_input_mode(&self) -> BusyInputMode {
+                self.inner.busy_input_mode()
+            }
+            fn pending_submission_count(&self) -> usize {
+                self.inner.pending_submission_count()
+            }
             fn scroll_offset(&self) -> u16 {
                 self.inner.scroll_offset()
             }
@@ -507,6 +560,8 @@ mod tests {
                 output_tokens: 0,
                 context_length: 0,
                 session_id: "sess-select".into(),
+                busy_input_mode: BusyInputMode::Queue,
+                pending_submission_count: 0,
                 scroll_offset: 2,
                 status_message: None,
             },

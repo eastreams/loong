@@ -120,8 +120,11 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
 
-    fn read_test_http_request(stream: &mut TcpStream) -> Result<(), String> {
-        let read_timeout = Duration::from_millis(250);
+    fn read_test_http_request(
+        stream: &mut TcpStream,
+        deadline: std::time::Instant,
+    ) -> Result<(), String> {
+        let read_timeout = Duration::from_millis(50);
         stream
             .set_read_timeout(Some(read_timeout))
             .map_err(|error| format!("set test server read timeout: {error}"))?;
@@ -153,9 +156,14 @@ mod tests {
                     if error.kind() == std::io::ErrorKind::TimedOut
                         || error.kind() == std::io::ErrorKind::WouldBlock =>
                 {
-                    return Err(
-                        "read test server request timed out before headers completed".to_owned(),
-                    );
+                    let now = std::time::Instant::now();
+                    let deadline_reached = now >= deadline;
+                    if deadline_reached {
+                        return Err(
+                            "read test server request timed out before headers completed"
+                                .to_owned(),
+                        );
+                    }
                 }
                 Err(error) => {
                     return Err(format!("read test server request: {error}"));
@@ -183,7 +191,7 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _peer)) => {
-                        read_test_http_request(&mut stream)?;
+                        read_test_http_request(&mut stream, deadline)?;
                         stream
                             .write_all(response.as_bytes())
                             .map_err(|error| format!("write test server response: {error}"))?;
