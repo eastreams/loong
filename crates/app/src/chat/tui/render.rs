@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use chrono::Datelike;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Margin, Rect},
@@ -413,6 +414,7 @@ fn render_stats_overview_body(
     let total_tokens_label = stats::format_compact_tokens(range_view.total_tokens);
     let total_input_label = stats::format_compact_tokens(range_view.total_input_tokens);
     let total_output_label = stats::format_compact_tokens(range_view.total_output_tokens);
+    let usage_event_label = stats_overlay.snapshot.usage_event_count.to_string();
     let top_model_label = range_view
         .top_model
         .as_ref()
@@ -434,6 +436,22 @@ fn render_stats_overview_body(
         .last_activity_date
         .map(stats::short_date_label)
         .unwrap_or_else(|| "(none)".to_owned());
+    let peak_day_label = range_view
+        .daily_points
+        .iter()
+        .max_by_key(|point| point.total_tokens)
+        .map(|point| stats::short_date_label(point.date))
+        .unwrap_or_else(|| "(none)".to_owned());
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(8), Constraint::Min(6)])
+        .split(area);
+    let [heatmap_area, metrics_area] = sections.as_ref() else {
+        return;
+    };
+
+    render_stats_activity_heatmap(frame, *heatmap_area, &range_view, palette);
 
     let left_lines = vec![
         stats_metric_line(
@@ -462,12 +480,14 @@ fn render_stats_overview_body(
             range_view.current_streak.to_string(),
             palette,
         ),
+        stats_metric_line("Usage events", usage_event_label, palette),
     ];
     let right_lines = vec![
         stats_metric_line("Total tokens", total_tokens_label, palette),
         stats_metric_line("Input tokens", total_input_label, palette),
         stats_metric_line("Output tokens", total_output_label, palette),
         stats_metric_line("Top model", top_model_label, palette),
+        stats_metric_line("Peak day", peak_day_label, palette),
         stats_metric_line("Longest session", longest_session_label, palette),
         stats_metric_line(
             "Activity window",
@@ -479,7 +499,7 @@ fn render_stats_overview_body(
     let body_sections = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(area);
+        .split(*metrics_area);
     let [left_area, right_area] = body_sections.as_ref() else {
         return;
     };
@@ -501,13 +521,119 @@ fn render_stats_overview_body(
             ),
         ]);
         let note_area = Rect::new(
-            area.x,
-            area.y + area.height.saturating_sub(2),
-            area.width,
+            metrics_area.x,
+            metrics_area.y + metrics_area.height.saturating_sub(1),
+            metrics_area.width,
             1,
         );
         frame.render_widget(Paragraph::new(note_line), note_area);
     }
+}
+
+fn render_stats_activity_heatmap(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    range_view: &stats::StatsRangeView,
+    palette: &Palette,
+) {
+    if area.width < 18 || area.height < 6 {
+        return;
+    }
+
+    let heatmap_start_date = range_view
+        .daily_points
+        .last()
+        .map(|point| point.date)
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let heatmap_start_date = heatmap_start_date - chrono::Duration::days(34);
+    let heatmap_start_offset = i64::from(heatmap_start_date.weekday().num_days_from_monday());
+    let grid_start_date = heatmap_start_date - chrono::Duration::days(heatmap_start_offset);
+    let grid_end_date = range_view
+        .daily_points
+        .last()
+        .map(|point| point.date)
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+    let max_tokens = range_view
+        .daily_points
+        .iter()
+        .map(|point| point.total_tokens)
+        .max()
+        .unwrap_or(0);
+    let mut by_date = std::collections::BTreeMap::new();
+
+    for point in &range_view.daily_points {
+        by_date.insert(point.date, point.total_tokens);
+    }
+
+    let mut lines = Vec::new();
+    let title = Line::styled(
+        " Recent activity",
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
+    );
+    lines.push(title);
+
+    let weekday_labels = ["M", "T", "W", "T", "F", "S", "S"];
+
+    for (weekday_index, weekday_label) in weekday_labels.iter().enumerate() {
+        let mut spans = Vec::new();
+        let label_text = format!(" {weekday_label} ");
+        let label_span = Span::styled(label_text, Style::default().fg(palette.dim));
+        spans.push(label_span);
+
+        let mut cell_date = grid_start_date + chrono::Duration::days(weekday_index as i64);
+        while cell_date <= grid_end_date {
+            let token_count = by_date.get(&cell_date).copied().unwrap_or(0);
+            let cell_char = stats_heatmap_char(token_count, max_tokens);
+            let cell_color = stats_heatmap_color(token_count, max_tokens, palette);
+            let cell_span = Span::styled(cell_char.to_string(), Style::default().fg(cell_color));
+            spans.push(cell_span);
+            spans.push(Span::raw(" "));
+            cell_date += chrono::Duration::days(7);
+        }
+
+        let line = Line::from(spans);
+        lines.push(line);
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn stats_heatmap_char(token_count: u64, max_tokens: u64) -> char {
+    if token_count == 0 || max_tokens == 0 {
+        return '·';
+    }
+
+    let ratio = token_count as f64 / max_tokens as f64;
+    if ratio >= 0.75 {
+        return '█';
+    }
+    if ratio >= 0.5 {
+        return '▓';
+    }
+    if ratio >= 0.25 {
+        return '▒';
+    }
+    '░'
+}
+
+fn stats_heatmap_color(token_count: u64, max_tokens: u64, palette: &Palette) -> Color {
+    if token_count == 0 || max_tokens == 0 {
+        return palette.dim;
+    }
+
+    let ratio = token_count as f64 / max_tokens as f64;
+    if ratio >= 0.75 {
+        return palette.brand;
+    }
+    if ratio >= 0.5 {
+        return palette.warning;
+    }
+    if ratio >= 0.25 {
+        return palette.success;
+    }
+    palette.info
 }
 
 fn render_stats_models_body(
