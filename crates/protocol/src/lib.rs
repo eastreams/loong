@@ -66,6 +66,7 @@ pub enum ProtocolRoute {
     ControlChallenge,
     ControlConnect,
     ControlPing,
+    ControlSubscribe,
     ControlSnapshot,
     ControlEvents,
     PresenceRead,
@@ -88,6 +89,7 @@ impl ProtocolRoute {
             "control/challenge" => Self::ControlChallenge,
             "control/connect" => Self::ControlConnect,
             "control/ping" => Self::ControlPing,
+            "control/subscribe" => Self::ControlSubscribe,
             "control/snapshot" => Self::ControlSnapshot,
             "control/events" => Self::ControlEvents,
             "presence/read" => Self::PresenceRead,
@@ -110,6 +112,7 @@ impl ProtocolRoute {
             Self::ControlChallenge => "control/challenge",
             Self::ControlConnect => "control/connect",
             Self::ControlPing => "control/ping",
+            Self::ControlSubscribe => "control/subscribe",
             Self::ControlSnapshot => "control/snapshot",
             Self::ControlEvents => "control/events",
             Self::PresenceRead => "presence/read",
@@ -133,6 +136,7 @@ impl ProtocolRoute {
                 | Self::ControlChallenge
                 | Self::ControlConnect
                 | Self::ControlPing
+                | Self::ControlSubscribe
                 | Self::ControlSnapshot
                 | Self::ControlEvents
                 | Self::PresenceRead
@@ -235,6 +239,7 @@ impl ProtocolRouter {
                 },
             }),
             ProtocolRoute::ControlPing
+            | ProtocolRoute::ControlSubscribe
             | ProtocolRoute::ControlSnapshot
             | ProtocolRoute::ControlEvents
             | ProtocolRoute::PresenceRead
