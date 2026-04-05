@@ -356,6 +356,307 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 }
 
 #[test]
+fn session_search_cli_rejects_zero_limit() {
+    let error = run_session_search_cli(None, Some("session-a"), "deploy freeze", 0, false, false)
+        .expect_err("zero limit must be rejected");
+    assert!(error.contains(">= 1"));
+}
+
+#[test]
+fn session_search_cli_parses_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "session-search",
+        "--session",
+        "root-session",
+        "--query",
+        "deploy freeze",
+        "--limit",
+        "7",
+        "--include-archived",
+        "--json",
+    ])
+    .expect("`session-search` should parse");
+
+    match cli.command {
+        Some(Commands::SessionSearch {
+            config,
+            session,
+            query,
+            limit,
+            include_archived,
+            json,
+        }) => {
+            assert!(config.is_none());
+            assert_eq!(session.as_deref(), Some("root-session"));
+            assert_eq!(query, "deploy freeze");
+            assert_eq!(limit, 7);
+            assert!(include_archived);
+            assert!(json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn format_session_search_text_includes_hit_summary() {
+    let rendered = format_session_search_text(
+        "root-session",
+        "deploy freeze",
+        5,
+        false,
+        &json!({
+            "returned_count": 1,
+            "hits": [{
+                "session": {
+                    "session_id": "child-session",
+                    "kind": "delegate_child",
+                    "parent_session_id": "root-session",
+                    "label": "Child",
+                    "state": "running",
+                    "created_at": 1,
+                    "updated_at": 2,
+                    "archived": false,
+                    "archived_at": null,
+                    "turn_count": 3,
+                    "last_turn_at": 2,
+                    "last_error": null
+                },
+                "turn_id": 12,
+                "session_turn_index": 2,
+                "role": "assistant",
+                "ts": 123,
+                "snippet": "deploy freeze checklist updated",
+                "content_chars": 32
+            }]
+        }),
+    );
+
+    assert!(rendered.contains("session_search session=root-session"));
+    assert!(rendered.contains("returned_count=1"));
+    assert!(rendered.contains("session=child-session"));
+    assert!(rendered.contains("role=assistant"));
+    assert!(rendered.contains("deploy freeze checklist updated"));
+}
+
+#[test]
+fn trajectory_export_cli_parses_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "trajectory-export",
+        "--session",
+        "root-session",
+        "--output",
+        "/tmp/trajectory.json",
+        "--json",
+    ])
+    .expect("`trajectory-export` should parse");
+
+    match cli.command {
+        Some(Commands::TrajectoryExport {
+            config,
+            session,
+            output,
+            json,
+        }) => {
+            assert!(config.is_none());
+            assert_eq!(session.as_deref(), Some("root-session"));
+            assert_eq!(output.as_deref(), Some("/tmp/trajectory.json"));
+            assert!(json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn format_trajectory_export_text_summarizes_counts() {
+    let rendered = format_trajectory_export_text(
+        "/tmp/loongclaw.toml",
+        Some("/tmp/trajectory.json"),
+        &TrajectoryExportArtifactDocument {
+            schema: TrajectoryExportArtifactSchema {
+                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
+                surface: "trajectory_export".to_owned(),
+                purpose: "session_replay_evidence".to_owned(),
+            },
+            exported_at: "2026-04-04T00:00:00Z".to_owned(),
+            config: "/tmp/loongclaw.toml".to_owned(),
+            session: TrajectoryExportSessionSummary {
+                session_id: "root-session".to_owned(),
+                kind: "root".to_owned(),
+                parent_session_id: None,
+                label: Some("Root".to_owned()),
+                state: "completed".to_owned(),
+                created_at: 1,
+                updated_at: 2,
+                archived_at: None,
+                turn_count: 2,
+                last_turn_at: Some(2),
+                last_error: None,
+            },
+            turns: vec![
+                TrajectoryExportTurn {
+                    role: "user".to_owned(),
+                    content: "hello".to_owned(),
+                    ts: 1,
+                },
+                TrajectoryExportTurn {
+                    role: "assistant".to_owned(),
+                    content: "world".to_owned(),
+                    ts: 2,
+                },
+            ],
+            events: vec![TrajectoryExportEvent {
+                id: 7,
+                session_id: "root-session".to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({"mode": "async"}),
+                ts: 2,
+            }],
+        },
+    );
+
+    assert!(rendered.contains("schema.version=1"));
+    assert!(rendered.contains("session_id=root-session"));
+    assert!(rendered.contains("turns=2"));
+    assert!(rendered.contains("events=1"));
+    assert!(rendered.contains("output=/tmp/trajectory.json"));
+}
+
+#[test]
+fn trajectory_inspect_cli_parses_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "trajectory-inspect",
+        "--artifact",
+        "/tmp/trajectory.json",
+        "--json",
+    ])
+    .expect("`trajectory-inspect` should parse");
+
+    match cli.command {
+        Some(Commands::TrajectoryInspect { artifact, json }) => {
+            assert_eq!(artifact, "/tmp/trajectory.json");
+            assert!(json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
+fn format_trajectory_inspect_text_summarizes_counts() {
+    let rendered = format_trajectory_inspect_text(
+        "/tmp/trajectory.json",
+        &TrajectoryExportArtifactDocument {
+            schema: TrajectoryExportArtifactSchema {
+                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
+                surface: "trajectory_export".to_owned(),
+                purpose: "session_replay_evidence".to_owned(),
+            },
+            exported_at: "2026-04-04T00:00:00Z".to_owned(),
+            config: "/tmp/loongclaw.toml".to_owned(),
+            session: TrajectoryExportSessionSummary {
+                session_id: "root-session".to_owned(),
+                kind: "root".to_owned(),
+                parent_session_id: None,
+                label: Some("Root".to_owned()),
+                state: "completed".to_owned(),
+                created_at: 1,
+                updated_at: 2,
+                archived_at: None,
+                turn_count: 2,
+                last_turn_at: Some(2),
+                last_error: None,
+            },
+            turns: vec![
+                TrajectoryExportTurn {
+                    role: "user".to_owned(),
+                    content: "hello".to_owned(),
+                    ts: 1,
+                },
+                TrajectoryExportTurn {
+                    role: "assistant".to_owned(),
+                    content: "world".to_owned(),
+                    ts: 2,
+                },
+            ],
+            events: vec![TrajectoryExportEvent {
+                id: 7,
+                session_id: "root-session".to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({"mode": "async"}),
+                ts: 2,
+            }],
+        },
+    );
+
+    assert!(rendered.contains("schema.version=1"));
+    assert!(rendered.contains("artifact=/tmp/trajectory.json"));
+    assert!(rendered.contains("session_id=root-session"));
+    assert!(rendered.contains("turns=2"));
+    assert!(rendered.contains("events=1"));
+    assert!(rendered.contains("first_turn_role=user"));
+    assert!(rendered.contains("last_turn_role=assistant"));
+    assert!(rendered.contains("latest_event_kind=delegate_started"));
+}
+
+#[test]
+fn format_trajectory_inspect_text_summarizes_roles_and_events() {
+    let rendered = format_trajectory_inspect_text(
+        "/tmp/trajectory.json",
+        &TrajectoryExportArtifactDocument {
+            schema: TrajectoryExportArtifactSchema {
+                version: TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION,
+                surface: "trajectory_export".to_owned(),
+                purpose: "session_replay_evidence".to_owned(),
+            },
+            exported_at: "2026-04-04T00:00:00Z".to_owned(),
+            config: "/tmp/loongclaw.toml".to_owned(),
+            session: TrajectoryExportSessionSummary {
+                session_id: "root-session".to_owned(),
+                kind: "root".to_owned(),
+                parent_session_id: None,
+                label: Some("Root".to_owned()),
+                state: "completed".to_owned(),
+                created_at: 1,
+                updated_at: 2,
+                archived_at: None,
+                turn_count: 2,
+                last_turn_at: Some(2),
+                last_error: None,
+            },
+            turns: vec![
+                TrajectoryExportTurn {
+                    role: "user".to_owned(),
+                    content: "hello".to_owned(),
+                    ts: 1,
+                },
+                TrajectoryExportTurn {
+                    role: "assistant".to_owned(),
+                    content: "world".to_owned(),
+                    ts: 2,
+                },
+            ],
+            events: vec![TrajectoryExportEvent {
+                id: 7,
+                session_id: "root-session".to_owned(),
+                event_kind: "delegate_started".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                payload_json: json!({"mode": "async"}),
+                ts: 2,
+            }],
+        },
+    );
+
+    assert!(rendered.contains("artifact=/tmp/trajectory.json"));
+    assert!(rendered.contains("first_turn_role=user"));
+    assert!(rendered.contains("last_turn_role=assistant"));
+    assert!(rendered.contains("latest_event_kind=delegate_started"));
+}
+
+#[test]
 fn onboard_cli_accepts_generic_api_key_flag() {
     let cli = try_parse_cli([
         "loongclaw",

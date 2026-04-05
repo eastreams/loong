@@ -134,13 +134,14 @@ mod runtime_capability_cli;
 mod runtime_experiment_cli;
 mod runtime_restore_cli;
 mod runtime_snapshot_cli;
+mod session_search_cli;
 mod sessions_cli;
 mod skills_cli;
 mod spec_runtime;
 mod spec_runtime_bridge;
 mod tasks_cli;
-
 pub(crate) use managed_bridge_fixtures::*;
+mod trajectory_export_cli;
 
 #[test]
 fn cli_uses_loong_program_name() {
