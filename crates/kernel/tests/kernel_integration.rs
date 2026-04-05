@@ -1611,6 +1611,7 @@ fn control_plane_pack() -> VerticalPackManifest {
         allowed_connectors: BTreeSet::new(),
         granted_capabilities: BTreeSet::from([
             Capability::ControlRead,
+            Capability::ControlWrite,
             Capability::ControlApprovals,
             Capability::ControlPairing,
             Capability::ControlAcp,
@@ -1646,6 +1647,38 @@ fn issue_scoped_token_limits_capabilities_to_requested_subset() {
             .iter()
             .any(|event| { matches!(event.kind, AuditEventKind::TokenIssued { .. }) })
     );
+}
+
+#[test]
+fn authorize_operation_succeeds_when_scoped_token_has_control_write() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(control_plane_pack())
+        .expect("control-plane pack should register");
+
+    let required_capabilities = BTreeSet::from([Capability::ControlWrite]);
+    let token = kernel
+        .issue_scoped_token(
+            "control-plane",
+            "operator-session",
+            &required_capabilities,
+            120,
+        )
+        .expect("scoped token should issue");
+
+    kernel
+        .authorize_operation(
+            "control-plane",
+            &token,
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            "control-plane",
+            None,
+            "control/write-test",
+            &required_capabilities,
+        )
+        .expect("control-write authorization should succeed");
 }
 
 #[test]
@@ -1697,6 +1730,43 @@ fn authorize_operation_records_plane_invocation_for_control_plane_route() {
                 && required_capabilities == &vec![Capability::ControlRead]
         )
     }));
+}
+
+#[test]
+fn authorize_operation_fails_closed_when_scoped_token_lacks_control_write() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(control_plane_pack())
+        .expect("control-plane pack should register");
+
+    let token = kernel
+        .issue_scoped_token(
+            "control-plane",
+            "operator-session",
+            &BTreeSet::from([Capability::ControlRead]),
+            120,
+        )
+        .expect("scoped token should issue");
+    let required_capabilities = BTreeSet::from([Capability::ControlWrite]);
+    let error = kernel
+        .authorize_operation(
+            "control-plane",
+            &token,
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            "control-plane",
+            None,
+            "control/write-test",
+            &required_capabilities,
+        )
+        .expect_err("missing control-write capability should fail");
+
+    assert!(matches!(
+        error,
+        KernelError::Policy(PolicyError::MissingCapability { capability, .. })
+            if capability == Capability::ControlWrite
+    ));
 }
 
 #[test]

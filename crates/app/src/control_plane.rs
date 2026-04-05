@@ -220,18 +220,14 @@ impl ControlPlaneManager {
     ) -> Vec<ControlPlaneEventRecord> {
         let retention = self.retention_state();
         let bounded_limit = limit.clamp(1, DEFAULT_RECENT_EVENT_LIMIT);
-        let mut events = retention
+        retention
             .recent_events
             .iter()
             .filter(|event| include_targeted || !event.targeted)
             .filter(|event| event.seq > after_seq)
+            .take(bounded_limit)
             .cloned()
-            .collect::<Vec<_>>();
-        let start = events.len().saturating_sub(bounded_limit);
-        if start > 0 {
-            events.drain(0..start);
-        }
-        events
+            .collect::<Vec<_>>()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ControlPlaneEventRecord> {
@@ -248,6 +244,7 @@ impl ControlPlaneManager {
         let clamped_timeout_ms = timeout_ms.clamp(1, CONTROL_PLANE_MAX_WAIT_TIMEOUT_MS);
         let deadline = Instant::now() + Duration::from_millis(clamped_timeout_ms);
         loop {
+            let notified = self.event_notify.notified();
             let events = self.recent_events_after(after_seq, limit, include_targeted);
             if !events.is_empty() {
                 return events;
@@ -259,7 +256,6 @@ impl ControlPlaneManager {
             }
 
             let remaining = deadline.saturating_duration_since(now);
-            let notified = self.event_notify.notified();
             let wait_result = timeout(remaining, notified).await;
             if wait_result.is_err() {
                 return Vec::new();
@@ -854,9 +850,9 @@ impl ControlPlanePairingRegistry {
             issued_token_id: None,
             device_token: None,
         };
-        requests.insert(request_id, request.clone());
         #[cfg(feature = "memory-sqlite")]
         self.persist_request(&request)?;
+        requests.insert(request_id, request.clone());
         Ok(ControlPlanePairingConnectDecision::PairingRequired {
             request: Box::new(request),
             created: true,
@@ -907,34 +903,36 @@ impl ControlPlanePairingRegistry {
             let token_id = self.next_device_token_id();
             let device_token = self.next_device_token();
             let token_hash = hash_control_plane_device_token(device_token.as_str());
+            let approved_device = ControlPlaneApprovedDeviceRecord {
+                device_id: record.device_id.clone(),
+                public_key: record.public_key.clone(),
+                role: record.role.clone(),
+                approved_scopes: record.requested_scopes.clone(),
+                token_id: token_id.clone(),
+                token_hash,
+                approved_at_ms: resolved_at_ms,
+            };
+            let mut updated_record = record.clone();
+            updated_record.status = ControlPlanePairingStatus::Approved;
+            updated_record.resolved_at_ms = Some(resolved_at_ms);
+            updated_record.issued_token_id = Some(token_id.clone());
+            updated_record.device_token = Some(device_token);
+            #[cfg(feature = "memory-sqlite")]
+            self.persist_approved_device(&updated_record, resolved_at_ms, token_id)?;
             self.approved_devices
                 .write()
                 .unwrap_or_else(|error| error.into_inner())
-                .insert(
-                    record.device_id.clone(),
-                    ControlPlaneApprovedDeviceRecord {
-                        device_id: record.device_id.clone(),
-                        public_key: record.public_key.clone(),
-                        role: record.role.clone(),
-                        approved_scopes: record.requested_scopes.clone(),
-                        token_id: token_id.clone(),
-                        token_hash,
-                        approved_at_ms: resolved_at_ms,
-                    },
-                );
-            record.status = ControlPlanePairingStatus::Approved;
-            record.resolved_at_ms = Some(resolved_at_ms);
-            record.issued_token_id = Some(token_id.clone());
-            record.device_token = Some(device_token);
-            #[cfg(feature = "memory-sqlite")]
-            self.persist_approved_device(record, resolved_at_ms, token_id)?;
+                .insert(updated_record.device_id.clone(), approved_device);
+            *record = updated_record;
         } else {
-            record.status = ControlPlanePairingStatus::Rejected;
-            record.resolved_at_ms = Some(resolved_at_ms);
-            record.issued_token_id = None;
-            record.device_token = None;
+            let mut updated_record = record.clone();
+            updated_record.status = ControlPlanePairingStatus::Rejected;
+            updated_record.resolved_at_ms = Some(resolved_at_ms);
+            updated_record.issued_token_id = None;
+            updated_record.device_token = None;
             #[cfg(feature = "memory-sqlite")]
-            self.persist_request(record)?;
+            self.persist_request(&updated_record)?;
+            *record = updated_record;
         }
         Ok(Some(record.clone()))
     }
@@ -995,7 +993,6 @@ impl ControlPlanePairingRegistry {
         resolved_at_ms: u64,
         token_id: String,
     ) -> Result<(), String> {
-        self.persist_request(request)?;
         let Some(memory_config) = self.memory_config.as_ref() else {
             return Ok(());
         };
@@ -1015,7 +1012,15 @@ impl ControlPlanePairingRegistry {
             last_used_at_ms: Some(resolved_at_ms as i64),
             pairing_request_id: Some(request.pairing_request_id.clone()),
         };
-        let _ = repo.upsert_control_plane_device_token(new_token)?;
+        let persisted_request = Self::request_to_persisted(request);
+        let persisted =
+            repo.approve_control_plane_pairing_request(&persisted_request, new_token)?;
+        if persisted.is_none() {
+            return Err(format!(
+                "control-plane pairing request `{}` changed before approval persistence completed",
+                request.pairing_request_id
+            ));
+        }
         Ok(())
     }
 
@@ -1035,6 +1040,29 @@ impl ControlPlanePairingRegistry {
             resolved_at_ms: persisted.resolved_at_ms.map(|value| value as u64),
             issued_token_id: persisted.issued_token_id,
             device_token: None,
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn request_to_persisted(
+        request: &ControlPlanePairingRequestRecord,
+    ) -> PersistedControlPlanePairingRequestRecord {
+        let requested_at_ms = request.requested_at_ms.try_into().unwrap_or(i64::MAX);
+        let resolved_at_ms = request
+            .resolved_at_ms
+            .map(|value| value.try_into().unwrap_or(i64::MAX));
+        PersistedControlPlanePairingRequestRecord {
+            pairing_request_id: request.pairing_request_id.clone(),
+            device_id: request.device_id.clone(),
+            client_id: request.client_id.clone(),
+            public_key: request.public_key.clone(),
+            role: request.role.clone(),
+            requested_scopes: request.requested_scopes.clone(),
+            status: Self::persisted_pairing_status(request.status),
+            requested_at_ms,
+            resolved_at_ms,
+            issued_token_id: request.issued_token_id.clone(),
+            last_error: None,
         }
     }
 
@@ -1638,6 +1666,23 @@ mod tests {
         assert_eq!(events[1].payload["idx"], 3);
     }
 
+    #[test]
+    fn recent_events_after_returns_earliest_unseen_page() {
+        let manager = ControlPlaneManager::new();
+        for idx in 1..=5 {
+            let payload = serde_json::json!({ "idx": idx });
+            let _ = manager.record_session_message(payload, false);
+        }
+
+        let events = manager.recent_events_after(1, 2, true);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].payload["idx"], 2);
+        assert_eq!(events[1].payload["idx"], 3);
+        assert_eq!(events[0].seq, 2);
+        assert_eq!(events[1].seq, 3);
+    }
+
     #[tokio::test]
     async fn wait_for_recent_events_returns_immediately_when_seq_is_available() {
         let manager = ControlPlaneManager::new();
@@ -2021,6 +2066,102 @@ mod tests {
         assert_eq!(upgraded_request.requested_scopes, upgraded_scopes);
     }
 
+    #[test]
+    fn pairing_registry_requires_repairing_for_role_change() {
+        let registry = ControlPlanePairingRegistry::new();
+        let scopes = BTreeSet::from(["operator.read".to_owned()]);
+        let pending = registry
+            .evaluate_connect("device-1", "cli", "pk-1", "operator", &scopes, None)
+            .expect("evaluate connect");
+        let request_id = match pending {
+            ControlPlanePairingConnectDecision::PairingRequired { request, .. } => {
+                request.pairing_request_id.clone()
+            }
+            other @ ControlPlanePairingConnectDecision::Authorized
+            | other @ ControlPlanePairingConnectDecision::DeviceTokenRequired
+            | other @ ControlPlanePairingConnectDecision::DeviceTokenInvalid => {
+                panic!("expected pairing request, got {other:?}")
+            }
+        };
+        let approved = registry
+            .resolve_request(&request_id, true)
+            .expect("resolve request")
+            .expect("approved request");
+        let device_token = approved.device_token.expect("device token");
+
+        let reparing = registry
+            .evaluate_connect(
+                "device-1",
+                "cli",
+                "pk-1",
+                "node",
+                &scopes,
+                Some(&device_token),
+            )
+            .expect("evaluate connect");
+        let reparing_request = match reparing {
+            ControlPlanePairingConnectDecision::PairingRequired { request, .. } => request,
+            other @ ControlPlanePairingConnectDecision::Authorized
+            | other @ ControlPlanePairingConnectDecision::DeviceTokenRequired
+            | other @ ControlPlanePairingConnectDecision::DeviceTokenInvalid => {
+                panic!("expected role-change pairing request, got {other:?}")
+            }
+        };
+
+        assert_eq!(reparing_request.role, "node");
+        assert_eq!(reparing_request.requested_scopes, scopes);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn pairing_registry_does_not_leave_pending_request_when_persistence_fails() {
+        let registry = broken_pairing_registry("pending-persist-failure");
+        let scopes = BTreeSet::from(["operator.read".to_owned()]);
+
+        let error = registry
+            .evaluate_connect("device-1", "cli", "pk-1", "operator", &scopes, None)
+            .expect_err("evaluate_connect should surface persistence failure");
+
+        assert!(!error.trim().is_empty());
+        assert!(registry.list_requests(None, 10).is_empty());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn pairing_registry_does_not_mutate_memory_when_approval_persistence_fails() {
+        let request = ControlPlanePairingRequestRecord {
+            pairing_request_id: "pair-1".to_owned(),
+            device_id: "device-1".to_owned(),
+            client_id: "cli".to_owned(),
+            public_key: "pk-1".to_owned(),
+            role: "operator".to_owned(),
+            requested_scopes: BTreeSet::from(["operator.read".to_owned()]),
+            status: ControlPlanePairingStatus::Pending,
+            requested_at_ms: 1,
+            resolved_at_ms: None,
+            issued_token_id: None,
+            device_token: None,
+        };
+        let registry =
+            broken_pairing_registry_with_request("approve-persist-failure", request.clone());
+
+        let error = registry
+            .resolve_request("pair-1", true)
+            .expect_err("resolve_request should surface persistence failure");
+
+        assert!(!error.trim().is_empty());
+
+        let requests = registry.list_requests(None, 10);
+        assert_eq!(requests, vec![request]);
+        assert!(
+            registry
+                .approved_devices
+                .read()
+                .unwrap_or_else(|lock_error| lock_error.into_inner())
+                .is_empty()
+        );
+    }
+
     #[cfg(feature = "memory-sqlite")]
     fn isolated_memory_config(test_name: &str) -> MemoryRuntimeConfig {
         let base = std::env::temp_dir().join(format!(
@@ -2033,6 +2174,45 @@ mod tests {
         MemoryRuntimeConfig {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn broken_memory_config(test_name: &str) -> MemoryRuntimeConfig {
+        let base = std::env::temp_dir().join(format!(
+            "loongclaw-control-plane-broken-{test_name}-{}",
+            std::process::id()
+        ));
+        let sqlite_path = base.join("sqlite-dir");
+        let _ = fs::create_dir_all(&sqlite_path);
+        MemoryRuntimeConfig {
+            sqlite_path: Some(sqlite_path),
+            ..MemoryRuntimeConfig::default()
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn broken_pairing_registry(test_name: &str) -> ControlPlanePairingRegistry {
+        ControlPlanePairingRegistry {
+            nonce: AtomicU64::new(0),
+            requests: RwLock::new(BTreeMap::new()),
+            approved_devices: RwLock::new(BTreeMap::new()),
+            memory_config: Some(broken_memory_config(test_name)),
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn broken_pairing_registry_with_request(
+        test_name: &str,
+        request: ControlPlanePairingRequestRecord,
+    ) -> ControlPlanePairingRegistry {
+        let mut requests = BTreeMap::new();
+        requests.insert(request.pairing_request_id.clone(), request);
+        ControlPlanePairingRegistry {
+            nonce: AtomicU64::new(0),
+            requests: RwLock::new(requests),
+            approved_devices: RwLock::new(BTreeMap::new()),
+            memory_config: Some(broken_memory_config(test_name)),
         }
     }
 

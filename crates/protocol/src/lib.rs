@@ -11,6 +11,10 @@ use tokio::sync::{Mutex, mpsc};
 mod control_plane;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+const CONTROL_READ_CAPABILITY: &str = "control_read";
+const CONTROL_APPROVALS_CAPABILITY: &str = "control_approvals";
+const CONTROL_PAIRING_CAPABILITY: &str = "control_pairing";
+const CONTROL_ACP_CAPABILITY: &str = "control_acp";
 
 pub use control_plane::{
     CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
@@ -249,28 +253,28 @@ impl ProtocolRouter {
                 route,
                 policy: RoutePolicy {
                     allow_anonymous: false,
-                    required_capability: Some("control.read".to_owned()),
+                    required_capability: Some(CONTROL_READ_CAPABILITY.to_owned()),
                 },
             }),
             ProtocolRoute::ApprovalList | ProtocolRoute::ApprovalResolve => Ok(ResolvedRoute {
                 route,
                 policy: RoutePolicy {
                     allow_anonymous: false,
-                    required_capability: Some("control.approvals".to_owned()),
+                    required_capability: Some(CONTROL_APPROVALS_CAPABILITY.to_owned()),
                 },
             }),
             ProtocolRoute::PairingList | ProtocolRoute::PairingResolve => Ok(ResolvedRoute {
                 route,
                 policy: RoutePolicy {
                     allow_anonymous: false,
-                    required_capability: Some("control.pairing".to_owned()),
+                    required_capability: Some(CONTROL_PAIRING_CAPABILITY.to_owned()),
                 },
             }),
             ProtocolRoute::AcpSessionList | ProtocolRoute::AcpSessionRead => Ok(ResolvedRoute {
                 route,
                 policy: RoutePolicy {
                     allow_anonymous: false,
-                    required_capability: Some("control.acp".to_owned()),
+                    required_capability: Some(CONTROL_ACP_CAPABILITY.to_owned()),
                 },
             }),
             ProtocolRoute::Custom(custom) => {
@@ -393,7 +397,7 @@ pub fn validate_method_name(method: &str) -> Result<(), RouterError> {
 }
 
 fn normalize_capability(raw: &str) -> String {
-    raw.trim().to_ascii_lowercase()
+    raw.trim().to_ascii_lowercase().replace(['.', '-'], "_")
 }
 
 #[async_trait]

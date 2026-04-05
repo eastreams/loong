@@ -1576,6 +1576,75 @@ pub fn resolve_default_entry_command() -> Commands {
     }
 }
 
+pub fn redacted_command_name(command: &Commands) -> &'static str {
+    match command {
+        Commands::Welcome => "welcome",
+        Commands::Demo => "demo",
+        Commands::RunTask { .. } => "run_task",
+        Commands::InvokeConnector { .. } => "invoke_connector",
+        Commands::AuditDemo => "audit_demo",
+        Commands::InitSpec { .. } => "init_spec",
+        Commands::RunSpec { .. } => "run_spec",
+        Commands::BenchmarkProgrammaticPressure { .. } => "benchmark_programmatic_pressure",
+        Commands::BenchmarkProgrammaticPressureLint { .. } => {
+            "benchmark_programmatic_pressure_lint"
+        }
+        Commands::BenchmarkWasmCache { .. } => "benchmark_wasm_cache",
+        Commands::BenchmarkMemoryContext { .. } => "benchmark_memory_context",
+        Commands::ValidateConfig { .. } => "validate_config",
+        Commands::Onboard { .. } => "onboard",
+        Commands::Import { .. } => "import",
+        Commands::Migrate { .. } => "migrate",
+        Commands::Doctor { .. } => "doctor",
+        Commands::Audit { .. } => "audit",
+        Commands::Skills { .. } => "skills",
+        Commands::Channels { .. } => "channels",
+        Commands::ListModels { .. } => "list_models",
+        Commands::RuntimeSnapshot { .. } => "runtime_snapshot",
+        Commands::RuntimeRestore { .. } => "runtime_restore",
+        Commands::RuntimeExperiment { .. } => "runtime_experiment",
+        Commands::RuntimeCapability { .. } => "runtime_capability",
+        Commands::ListContextEngines { .. } => "list_context_engines",
+        Commands::ListMemorySystems { .. } => "list_memory_systems",
+        Commands::ListAcpBackends { .. } => "list_acp_backends",
+        Commands::ListAcpSessions { .. } => "list_acp_sessions",
+        Commands::AcpStatus { .. } => "acp_status",
+        Commands::AcpObservability { .. } => "acp_observability",
+        Commands::AcpEventSummary { .. } => "acp_event_summary",
+        Commands::AcpDispatch { .. } => "acp_dispatch",
+        Commands::AcpDoctor { .. } => "acp_doctor",
+        Commands::ControlPlaneServe { .. } => "control_plane_serve",
+        Commands::Ask { .. } => "ask",
+        Commands::Chat { .. } => "chat",
+        Commands::SafeLaneSummary { .. } => "safe_lane_summary",
+        Commands::TelegramSend { .. } => "telegram_send",
+        Commands::TelegramServe { .. } => "telegram_serve",
+        Commands::FeishuSend { .. } => "feishu_send",
+        Commands::FeishuServe { .. } => "feishu_serve",
+        Commands::MatrixSend { .. } => "matrix_send",
+        Commands::MatrixServe { .. } => "matrix_serve",
+        Commands::WecomSend { .. } => "wecom_send",
+        Commands::WecomServe { .. } => "wecom_serve",
+        Commands::DiscordSend { .. } => "discord_send",
+        Commands::DingtalkSend { .. } => "dingtalk_send",
+        Commands::SlackSend { .. } => "slack_send",
+        Commands::LineSend { .. } => "line_send",
+        Commands::WhatsappSend { .. } => "whatsapp_send",
+        Commands::EmailSend { .. } => "email_send",
+        Commands::WebhookSend { .. } => "webhook_send",
+        Commands::GoogleChatSend { .. } => "google_chat_send",
+        Commands::TeamsSend { .. } => "teams_send",
+        Commands::SignalSend { .. } => "signal_send",
+        Commands::MattermostSend { .. } => "mattermost_send",
+        Commands::NextcloudTalkSend { .. } => "nextcloud_talk_send",
+        Commands::SynologyChatSend { .. } => "synology_chat_send",
+        Commands::ImessageSend { .. } => "imessage_send",
+        Commands::MultiChannelServe { .. } => "multi_channel_serve",
+        Commands::Feishu { .. } => "feishu",
+        Commands::Completions { .. } => "completions",
+    }
+}
+
 fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     let config_path = resolved_default_entry_config_path();
     if config_path.is_file() {
@@ -1713,6 +1782,18 @@ mod first_run_entry_tests {
             matches!(resolve_default_entry_command(), Commands::Onboard { .. }),
             "directory config path should still route to onboard"
         );
+    }
+
+    #[test]
+    fn redacted_command_name_omits_sensitive_command_payloads() {
+        let command = Commands::RunTask {
+            objective: "secret objective".to_owned(),
+            payload: "{\"api_key\":\"secret\"}".to_owned(),
+        };
+
+        let redacted_name = redacted_command_name(&command);
+
+        assert_eq!(redacted_name, "run_task");
     }
 
     #[test]

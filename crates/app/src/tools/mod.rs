@@ -654,7 +654,6 @@ pub fn execute_tool_core_with_config(
             &payload,
             "payload",
         )?;
-
         let request = ToolCoreRequest {
             tool_name: canonical_name.clone(),
             payload,
@@ -685,20 +684,49 @@ pub fn execute_tool_core_with_config(
             );
         }
         Err(error) => {
-            tracing::warn!(
-                target: "loongclaw.tools",
-                requested_tool_name = %requested_tool_name,
-                canonical_tool_name = %canonical_name,
-                payload_kind,
-                payload_keys = ?payload_keys,
-                duration_ms,
-                error = %crate::observability::summarize_error(error),
-                "tool execution failed"
-            );
+            if is_expected_tool_request_error(error) {
+                tracing::debug!(
+                    target: "loongclaw.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution rejected"
+                );
+            } else {
+                tracing::warn!(
+                    target: "loongclaw.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution failed"
+                );
+            }
         }
     }
 
     result
+}
+
+fn is_expected_tool_request_error(error: &str) -> bool {
+    if error.starts_with("tool_not_found:") {
+        return true;
+    }
+    if error.starts_with("app_tool_not_found:") {
+        return true;
+    }
+    if error.starts_with("invalid_tool_lease:") {
+        return true;
+    }
+    if error.starts_with("invalid_internal_runtime_narrowing:") {
+        return true;
+    }
+    error.contains("payload._loongclaw is reserved for trusted internal tool context")
 }
 
 fn trusted_runtime_narrowing_from_payload(

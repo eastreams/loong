@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::PROTOCOL_VERSION;
@@ -23,8 +24,7 @@ impl ControlPlaneRole {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ControlPlaneScope {
     OperatorRead,
     OperatorWrite,
@@ -43,6 +43,59 @@ impl ControlPlaneScope {
             Self::OperatorApprovals => "operator.approvals",
             Self::OperatorPairing => "operator.pairing",
             Self::OperatorAcp => "operator.acp",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        let normalized = raw.trim().to_ascii_lowercase().replace('_', ".");
+        match normalized.as_str() {
+            "operator.read" => Some(Self::OperatorRead),
+            "operator.write" => Some(Self::OperatorWrite),
+            "operator.admin" => Some(Self::OperatorAdmin),
+            "operator.approvals" => Some(Self::OperatorApprovals),
+            "operator.pairing" => Some(Self::OperatorPairing),
+            "operator.acp" => Some(Self::OperatorAcp),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for ControlPlaneScope {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ControlPlaneScope {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        ControlPlaneScope::parse(raw.as_str())
+            .ok_or_else(|| serde::de::Error::custom(format!("unknown control-plane scope `{raw}`")))
+    }
+}
+
+struct RedactedSecretDebug;
+
+impl fmt::Debug for RedactedSecretDebug {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+struct RedactedSecretOptionDebug(bool);
+
+impl fmt::Debug for RedactedSecretOptionDebug {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0 {
+            formatter.write_str("Some(<redacted>)")
+        } else {
+            formatter.write_str("None")
         }
     }
 }
@@ -66,7 +119,7 @@ pub struct ControlPlaneDeviceIdentity {
     pub nonce: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ControlPlaneAuthClaims {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -76,6 +129,22 @@ pub struct ControlPlaneAuthClaims {
     pub bootstrap_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+}
+
+impl fmt::Debug for ControlPlaneAuthClaims {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let token = RedactedSecretOptionDebug(self.token.is_some());
+        let device_token = RedactedSecretOptionDebug(self.device_token.is_some());
+        let bootstrap_token = RedactedSecretOptionDebug(self.bootstrap_token.is_some());
+        let password = RedactedSecretOptionDebug(self.password.is_some());
+        formatter
+            .debug_struct("ControlPlaneAuthClaims")
+            .field("token", &token)
+            .field("device_token", &device_token)
+            .field("bootstrap_token", &bootstrap_token)
+            .field("password", &password)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -134,7 +203,7 @@ pub struct ControlPlaneConnectRequest {
     pub device: Option<ControlPlaneDeviceIdentity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlaneConnectResponse {
     pub protocol: u32,
     pub principal: ControlPlanePrincipal,
@@ -142,6 +211,23 @@ pub struct ControlPlaneConnectResponse {
     pub connection_token_expires_at_ms: u64,
     pub snapshot: ControlPlaneSnapshot,
     pub policy: ControlPlanePolicy,
+}
+
+impl fmt::Debug for ControlPlaneConnectResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ControlPlaneConnectResponse")
+            .field("protocol", &self.protocol)
+            .field("principal", &self.principal)
+            .field("connection_token", &RedactedSecretDebug)
+            .field(
+                "connection_token_expires_at_ms",
+                &self.connection_token_expires_at_ms,
+            )
+            .field("snapshot", &self.snapshot)
+            .field("policy", &self.policy)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,11 +288,22 @@ pub struct ControlPlanePairingResolveRequest {
     pub approve: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ControlPlanePairingResolveResponse {
     pub request: ControlPlanePairingRequestSummary,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_token: Option<String>,
+}
+
+impl fmt::Debug for ControlPlanePairingResolveResponse {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let device_token = RedactedSecretOptionDebug(self.device_token.is_some());
+        formatter
+            .debug_struct("ControlPlanePairingResolveResponse")
+            .field("request", &self.request)
+            .field("device_token", &device_token)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

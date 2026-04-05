@@ -215,7 +215,7 @@ fn presence_read_requires_authenticated_control_read_capability() {
     assert!(!resolved.policy.allow_anonymous);
     assert_eq!(
         resolved.policy.required_capability.as_deref(),
-        Some("control.read")
+        Some("control_read")
     );
 
     let unauthenticated_error = router
@@ -253,7 +253,7 @@ fn control_subscribe_requires_authenticated_control_read_capability() {
     assert!(!resolved.policy.allow_anonymous);
     assert_eq!(
         resolved.policy.required_capability.as_deref(),
-        Some("control.read")
+        Some("control_read")
     );
 
     let unauthenticated = router
@@ -290,7 +290,7 @@ fn approval_resolve_requires_control_approvals_capability() {
         .expect("approval/resolve should resolve");
     assert_eq!(
         resolved.policy.required_capability.as_deref(),
-        Some("control.approvals")
+        Some("control_approvals")
     );
 
     let error = router
@@ -307,7 +307,7 @@ fn approval_resolve_requires_control_approvals_capability() {
         RouteAuthorizationError::MissingCapability {
             method,
             required_capability
-        } if method == "approval/resolve" && required_capability == "control.approvals"
+        } if method == "approval/resolve" && required_capability == "control_approvals"
     ));
 }
 
@@ -319,7 +319,7 @@ fn pairing_resolve_requires_control_pairing_capability() {
         .expect("pairing/resolve should resolve");
     assert_eq!(
         resolved.policy.required_capability.as_deref(),
-        Some("control.pairing")
+        Some("control_pairing")
     );
 
     let error = router
@@ -336,8 +336,99 @@ fn pairing_resolve_requires_control_pairing_capability() {
         RouteAuthorizationError::MissingCapability {
             method,
             required_capability
-        } if method == "pairing/resolve" && required_capability == "control.pairing"
+        } if method == "pairing/resolve" && required_capability == "control_pairing"
     ));
+}
+
+#[test]
+fn control_plane_scope_serializes_with_dot_notation() {
+    let encoded =
+        serde_json::to_string(&ControlPlaneScope::OperatorRead).expect("scope should serialize");
+
+    assert_eq!(encoded, "\"operator.read\"");
+}
+
+#[test]
+fn control_plane_scope_deserializes_legacy_snake_case() {
+    let decoded: ControlPlaneScope =
+        serde_json::from_str("\"operator_read\"").expect("scope should deserialize");
+
+    assert_eq!(decoded, ControlPlaneScope::OperatorRead);
+}
+
+#[test]
+fn control_plane_auth_claims_debug_redacts_secret_values() {
+    let claims = ControlPlaneAuthClaims {
+        token: Some("shared-token".to_owned()),
+        device_token: Some("device-secret".to_owned()),
+        bootstrap_token: Some("bootstrap-secret".to_owned()),
+        password: Some("super-secret".to_owned()),
+    };
+
+    let debug = format!("{claims:?}");
+
+    assert!(!debug.contains("shared-token"));
+    assert!(!debug.contains("device-secret"));
+    assert!(!debug.contains("bootstrap-secret"));
+    assert!(!debug.contains("super-secret"));
+    assert!(debug.contains("Some(<redacted>)"));
+}
+
+#[test]
+fn control_plane_connect_response_debug_redacts_connection_token() {
+    let response = ControlPlaneConnectResponse {
+        protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+        principal: ControlPlanePrincipal {
+            connection_id: "cp-0001".to_owned(),
+            client_id: "cli".to_owned(),
+            role: ControlPlaneRole::Operator,
+            scopes: BTreeSet::from([ControlPlaneScope::OperatorRead]),
+            device_id: Some("device-1".to_owned()),
+        },
+        connection_token: "cpt-secret-token".to_owned(),
+        connection_token_expires_at_ms: 1_700_000_000_000,
+        snapshot: ControlPlaneSnapshot {
+            state_version: ControlPlaneStateVersion::default(),
+            presence_count: 1,
+            session_count: 2,
+            pending_approval_count: 3,
+            acp_session_count: 4,
+            runtime_ready: true,
+        },
+        policy: ControlPlanePolicy {
+            max_payload_bytes: 1024,
+            max_buffered_bytes: 2048,
+            tick_interval_ms: 15_000,
+        },
+    };
+
+    let debug = format!("{response:?}");
+
+    assert!(!debug.contains("cpt-secret-token"));
+    assert!(debug.contains("<redacted>"));
+}
+
+#[test]
+fn control_plane_pairing_resolve_response_debug_redacts_device_token() {
+    let response = ControlPlanePairingResolveResponse {
+        request: ControlPlanePairingRequestSummary {
+            pairing_request_id: "pair-1".to_owned(),
+            device_id: "device-1".to_owned(),
+            client_id: "cli".to_owned(),
+            public_key: "base64-key".to_owned(),
+            role: ControlPlaneRole::Operator,
+            requested_scopes: BTreeSet::from([ControlPlaneScope::OperatorRead]),
+            status: ControlPlanePairingStatus::Approved,
+            requested_at_ms: 1_700_000_000_000,
+            resolved_at_ms: Some(1_700_000_000_123),
+        },
+        device_token: Some("device-token-secret".to_owned()),
+    };
+
+    let debug = format!("{response:?}");
+
+    assert!(!debug.contains("device-token-secret"));
+    assert!(debug.contains("Some(<redacted>)"));
 }
 
 #[test]
@@ -348,7 +439,7 @@ fn acp_session_list_requires_control_acp_capability() {
         .expect("acp/session/list should resolve");
     assert_eq!(
         resolved.policy.required_capability.as_deref(),
-        Some("control.acp")
+        Some("control_acp")
     );
 }
 
@@ -388,6 +479,8 @@ fn control_plane_connect_request_roundtrips_through_json() {
     };
 
     let encoded = serde_json::to_string(&request).expect("request should serialize");
+    assert!(encoded.contains("\"operator.read\""));
+    assert!(encoded.contains("\"operator.approvals\""));
     let decoded: ControlPlaneConnectRequest =
         serde_json::from_str(&encoded).expect("request should deserialize");
     assert_eq!(decoded, request);

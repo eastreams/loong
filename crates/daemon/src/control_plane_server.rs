@@ -712,15 +712,7 @@ fn map_pairing_request(
         requested_scopes: request
             .requested_scopes
             .into_iter()
-            .filter_map(|scope| match scope.as_str() {
-                "operator.read" => Some(ControlPlaneScope::OperatorRead),
-                "operator.write" => Some(ControlPlaneScope::OperatorWrite),
-                "operator.admin" => Some(ControlPlaneScope::OperatorAdmin),
-                "operator.approvals" => Some(ControlPlaneScope::OperatorApprovals),
-                "operator.pairing" => Some(ControlPlaneScope::OperatorPairing),
-                "operator.acp" => Some(ControlPlaneScope::OperatorAcp),
-                _ => None,
-            })
+            .filter_map(|scope| ControlPlaneScope::parse(scope.as_str()))
             .collect::<std::collections::BTreeSet<_>>(),
         status: map_pairing_status(request.status),
         requested_at_ms: request.requested_at_ms,
@@ -913,31 +905,33 @@ fn connection_scoped_capabilities(
     lease: &mvp::control_plane::ControlPlaneConnectionLease,
 ) -> std::collections::BTreeSet<Capability> {
     let mut capabilities = std::collections::BTreeSet::new();
-    for scope in &lease.principal.scopes {
-        match scope.as_str() {
-            "operator.read" => {
+    for raw_scope in &lease.principal.scopes {
+        let Some(scope) = ControlPlaneScope::parse(raw_scope.as_str()) else {
+            continue;
+        };
+        match scope {
+            ControlPlaneScope::OperatorRead => {
                 capabilities.insert(Capability::ControlRead);
             }
-            "operator.write" => {
+            ControlPlaneScope::OperatorWrite => {
                 capabilities.insert(Capability::ControlWrite);
             }
-            "operator.approvals" => {
+            ControlPlaneScope::OperatorApprovals => {
                 capabilities.insert(Capability::ControlApprovals);
             }
-            "operator.pairing" => {
+            ControlPlaneScope::OperatorPairing => {
                 capabilities.insert(Capability::ControlPairing);
             }
-            "operator.acp" => {
+            ControlPlaneScope::OperatorAcp => {
                 capabilities.insert(Capability::ControlAcp);
             }
-            "operator.admin" => {
+            ControlPlaneScope::OperatorAdmin => {
                 capabilities.insert(Capability::ControlRead);
                 capabilities.insert(Capability::ControlWrite);
                 capabilities.insert(Capability::ControlApprovals);
                 capabilities.insert(Capability::ControlPairing);
                 capabilities.insert(Capability::ControlAcp);
             }
-            _ => {}
         }
     }
     capabilities
@@ -948,25 +942,27 @@ fn required_capabilities_for_route(
 ) -> Result<std::collections::BTreeSet<Capability>, String> {
     let mut capabilities = std::collections::BTreeSet::new();
     if let Some(required_capability) = resolved.policy.required_capability.as_deref() {
-        match required_capability {
-            "control.read" => {
-                capabilities.insert(Capability::ControlRead);
-            }
-            "control.approvals" => {
-                capabilities.insert(Capability::ControlApprovals);
-            }
-            "control.pairing" => {
-                capabilities.insert(Capability::ControlPairing);
-            }
-            "control.acp" => {
-                capabilities.insert(Capability::ControlAcp);
-            }
-            other => {
-                return Err(format!(
-                    "unsupported control-plane required capability mapping `{other}`"
-                ));
-            }
+        let normalized_required = required_capability.replace('.', "_");
+        let Some(capability) = Capability::parse(normalized_required.as_str()) else {
+            return Err(format!(
+                "unsupported control-plane required capability mapping `{required_capability}`"
+            ));
+        };
+        let is_control_plane_capability = matches!(
+            capability,
+            Capability::ControlRead
+                | Capability::ControlWrite
+                | Capability::ControlApprovals
+                | Capability::ControlPairing
+                | Capability::ControlAcp
+        );
+        if !is_control_plane_capability {
+            return Err(format!(
+                "unsupported control-plane required capability mapping `{}`",
+                capability.as_str()
+            ));
         }
+        capabilities.insert(capability);
     }
     Ok(capabilities)
 }
