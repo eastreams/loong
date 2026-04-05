@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::process;
 use std::{
     collections::BTreeMap,
     env,
@@ -525,28 +523,6 @@ fn resolve_loongclaw_home(
 
 pub(super) fn default_loongclaw_home() -> PathBuf {
     get_loongclaw_home()
-}
-
-#[cfg(test)]
-fn test_default_loongclaw_home() -> PathBuf {
-    let test_label = std::thread::current()
-        .name()
-        .map(sanitize_test_home_segment)
-        .filter(|label| !label.is_empty())
-        .unwrap_or_else(|| format!("pid-{}", process::id()));
-    let path = env::temp_dir().join("loongclaw-test-home").join(test_label);
-    let _ = std::fs::create_dir_all(&path);
-    path
-}
-
-#[cfg(test)]
-fn sanitize_test_home_segment(raw: &str) -> String {
-    raw.chars()
-        .map(|ch| match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' => ch,
-            _ => '-',
-        })
-        .collect()
 }
 
 pub fn expand_path(raw: &str) -> PathBuf {
