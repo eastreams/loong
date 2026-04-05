@@ -135,8 +135,6 @@ pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
-pub use tlon_cli::TLON_SEND_CLI_SPEC;
-use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
     SessionSearchArtifactHit, SessionSearchArtifactHitSession, SessionSearchArtifactSchema,
@@ -144,6 +142,8 @@ pub use session_cli::{
     format_session_search_text, load_session_search_artifact, run_session_search_cli,
     run_session_search_inspect_cli,
 };
+pub use tlon_cli::TLON_SEND_CLI_SPEC;
+use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -1410,6 +1410,10 @@ impl Commands {
             Self::Ask { .. } => "ask",
             Self::Chat { .. } => "chat",
             Self::SafeLaneSummary { .. } => "safe_lane_summary",
+            Self::SessionSearch { .. } => "session_search",
+            Self::SessionSearchInspect { .. } => "session_search_inspect",
+            Self::TrajectoryExport { .. } => "trajectory_export",
+            Self::TrajectoryInspect { .. } => "trajectory_inspect",
             Self::TelegramSend { .. } => "telegram_send",
             Self::TelegramServe { .. } => "telegram_serve",
             Self::FeishuSend { .. } => "feishu_send",
@@ -1424,7 +1428,6 @@ impl Commands {
             Self::SlackSend { .. } => "slack_send",
             Self::LineSend { .. } => "line_send",
             Self::WhatsappSend { .. } => "whatsapp_send",
-            Self::WhatsappServe { .. } => "whatsapp_serve",
             Self::EmailSend { .. } => "email_send",
             Self::WebhookSend { .. } => "webhook_send",
             Self::GoogleChatSend { .. } => "google_chat_send",
