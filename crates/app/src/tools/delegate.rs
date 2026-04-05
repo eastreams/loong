@@ -43,7 +43,7 @@ pub(crate) struct ResolvedDelegatePolicy {
 
 #[cfg(test)]
 pub(crate) fn parse_delegate_request(payload: &Value) -> Result<DelegateRequest, String> {
-    parse_delegate_request_with_default_timeout(payload, DEFAULT_TIMEOUT_SECONDS)
+    parse_delegate_request_with_default_timeout(payload, 0)
 }
 
 pub(crate) fn parse_delegate_request_with_default_timeout(
@@ -101,6 +101,12 @@ pub(crate) fn normalize_delegate_request(
         && let Some(payload_object) = payload.as_object_mut()
     {
         payload_object.insert("timeout_seconds".to_owned(), json!(timeout_seconds));
+    }
+    if timeout_seconds.is_none()
+        && default_timeout_seconds > 0
+        && let Some(payload_object) = payload.as_object_mut()
+    {
+        payload_object.insert("timeout_seconds".to_owned(), json!(default_timeout_seconds));
     }
     parse_delegate_request_with_default_timeout(&payload, default_timeout_seconds)
 }

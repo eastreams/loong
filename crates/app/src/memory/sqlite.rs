@@ -473,6 +473,30 @@ impl SqliteRuntime {
     }
 }
 
+fn revalidate_cached_sqlite_runtime(runtime: &SqliteRuntime) -> Result<(), String> {
+    runtime.with_connection_mut("memory.cached_runtime_revalidate", |conn| {
+        ensure_turn_session_index_and_state_metadata(conn)?;
+        ensure_approval_lifecycle_tables(conn)?;
+        ensure_session_tool_consent_storage(conn)?;
+        ensure_session_tool_policy_storage(conn)?;
+        ensure_summary_checkpoint_storage_layout(conn)?;
+        ensure_canonical_record_storage(conn)?;
+        ensure_control_plane_pairing_tables(conn)?;
+        write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+        Ok(())
+    })
+}
+
+fn cached_runtime_schema_current(runtime: &SqliteRuntime) -> Result<bool, String> {
+    runtime.with_connection("memory.cached_runtime_schema_probe", |conn| {
+        let user_version = read_sqlite_user_version(conn)?;
+        if user_version != SQLITE_MEMORY_SCHEMA_VERSION {
+            return Ok(false);
+        }
+        sqlite_current_schema_objects_ready(conn)
+    })
+}
+
 fn elapsed_ms(started_at: StdInstant) -> f64 {
     started_at.elapsed().as_secs_f64() * 1000.0
 }
@@ -826,10 +850,12 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
     config: &MemoryRuntimeConfig,
 ) -> Result<(PathBuf, SqliteBootstrapDiagnostics), String> {
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
-    let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
-    runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
-        ensure_sqlite_runtime_schema_ready(conn)
-    })?;
+    let (runtime, mut diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
+    if diagnostics.cache_hit && !cached_runtime_schema_current(runtime.as_ref())? {
+        let schema_revalidate_started_at = StdInstant::now();
+        revalidate_cached_sqlite_runtime(runtime.as_ref())?;
+        diagnostics.schema_upgrade_ms = elapsed_ms(schema_revalidate_started_at);
+    }
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
 
@@ -2191,6 +2217,8 @@ fn create_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
             new.metadata_json
           );
         END;
+        INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts)
+        VALUES ('rebuild');
         ",
     )
     .map_err(|error| format!("recreate canonical memory FTS index failed: {error}"))?;

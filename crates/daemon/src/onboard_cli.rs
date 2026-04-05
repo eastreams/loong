@@ -6333,39 +6333,6 @@ mod tests {
         format!("{first}-{second}-{third}-{fourth}-{fifth}")
     }
 
-    fn browser_companion_script_path(temp_dir: &Path) -> PathBuf {
-        #[cfg(windows)]
-        {
-            temp_dir.join("browser-companion.cmd")
-        }
-        #[cfg(not(windows))]
-        {
-            temp_dir.join("browser-companion")
-        }
-    }
-
-    fn write_browser_companion_version_script(temp_dir: &Path, version: &str) -> PathBuf {
-        let script_path = browser_companion_script_path(temp_dir);
-
-        #[cfg(windows)]
-        {
-            let script_body = format!(
-                "@echo off\r\nif \"%~1\"==\"--version\" (\r\n  echo loongclaw-browser-companion {version}\r\n  exit /b 0\r\n)\r\necho unexpected arguments 1>&2\r\nexit /b 1\r\n"
-            );
-            std::fs::write(&script_path, script_body).expect("write browser companion script");
-        }
-
-        #[cfg(unix)]
-        {
-            let script_body = format!(
-                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'loongclaw-browser-companion {version}'\n  exit 0\nfi\necho 'unexpected arguments' >&2\nexit 1\n"
-            );
-            crate::test_support::write_executable_script_atomically(&script_path, &script_body);
-        }
-
-        script_path
-    }
-
     impl OnboardUi for TestOnboardUi {
         fn print_line(&mut self, _line: &str) -> CliResult<()> {
             Ok(())

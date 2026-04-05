@@ -521,6 +521,16 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 diagnostics,
             }));
         }
+        if config.acp.allow_mcp_server_injection
+            && let Err(error) = crate::mcp::McpRegistry::from_config(config)
+        {
+            diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
+            diagnostics.insert("error".to_owned(), error);
+            return Ok(Some(AcpDoctorReport {
+                healthy: false,
+                diagnostics,
+            }));
+        }
 
         let mut mcp_proxy_ready = true;
         if raw_profile.mcp_servers.is_empty() {
@@ -1849,7 +1859,7 @@ mod tests {
     ) -> PathBuf {
         let script_path = temp_dir.join(script_name);
         let script_source = format!(
-            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
+            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  case \"$1\" in\n    *\"$2\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  if [ ! -t 0 ]; then\n    cat >/dev/null\n  fi\n}}\n{}\n",
             log_path.display(),
             body
         );
