@@ -215,6 +215,27 @@ fn install_demo_runtime_plugin_package(root: &Path, config_path: &Path) {
         .expect("rewrite config fixture with runtime plugin roots");
 }
 
+fn configure_runtime_plugin_support_policy(
+    config_path: &Path,
+    supported_bridges: Vec<&str>,
+    supported_adapter_families: Vec<&str>,
+) {
+    let (path_string, mut reloaded) = mvp::config::load(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("reload config");
+
+    reloaded.runtime_plugins.supported_bridges =
+        supported_bridges.into_iter().map(str::to_owned).collect();
+    reloaded.runtime_plugins.supported_adapter_families = supported_adapter_families
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+
+    mvp::config::write(Some(&path_string.display().to_string()), &reloaded, true)
+        .expect("rewrite config fixture with runtime plugin bridge policy");
+}
+
 fn array_contains_string(array: &Value, needle: &str) -> bool {
     array.as_array().is_some_and(|items| {
         items
@@ -372,6 +393,50 @@ fn runtime_snapshot_json_payload_marks_x_api_key_profiles_as_credential_resolved
     )
     .expect("anthropic provider profile should be present");
     assert_eq!(anthropic_profile["credential_resolved"], true);
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn runtime_snapshot_json_payload_respects_configured_runtime_plugin_bridge_policy() {
+    let root = unique_temp_dir("loongclaw-runtime-snapshot-bridge-policy");
+    let root_env = root.display().to_string();
+    let _env = RuntimeSnapshotEnvGuard::set(&[
+        ("RUNTIME_SNAPSHOT_DEEPSEEK_KEY", Some("demo-token")),
+        ("RUNTIME_PLUGIN_DEMO_KEY", Some("runtime-plugin-token")),
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("HOME", Some(&root_env)),
+        ("USERPROFILE", Some(&root_env)),
+    ]);
+    let (config_path, _config) = write_runtime_snapshot_config(&root);
+    install_demo_runtime_plugin_package(&root, &config_path);
+    configure_runtime_plugin_support_policy(&config_path, vec!["process_stdio"], Vec::new());
+
+    let snapshot = collect_runtime_snapshot_cli_state(Some(
+        config_path.to_str().expect("config path should be utf-8"),
+    ))
+    .expect("collect runtime snapshot");
+    let payload = build_runtime_snapshot_cli_json_payload(&snapshot);
+    let plugin = array_object_with_string_field(
+        &payload["runtime_plugins"]["plugins"],
+        "plugin_id",
+        "demo-search-plugin",
+    )
+    .expect("runtime plugin should be present");
+
+    assert_eq!(
+        payload["runtime_plugins"]["readiness_evaluation"],
+        "configured_bridge_support_matrix"
+    );
+    assert_eq!(payload["runtime_plugins"]["ready_plugin_count"], 0);
+    assert_eq!(payload["runtime_plugins"]["blocked_plugin_count"], 1);
+    assert_eq!(plugin["status"], "blocked_unsupported_bridge");
+    assert!(
+        plugin["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("not supported by current runtime matrix")),
+        "blocked plugin should explain the configured bridge policy mismatch"
+    );
 
     fs::remove_dir_all(&root).ok();
 }

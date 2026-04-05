@@ -25,6 +25,22 @@ pub enum PluginBridgeKind {
 
 impl PluginBridgeKind {
     #[must_use]
+    pub fn parse_label(raw: &str) -> Option<Self> {
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "http_json" | "http" => Some(Self::HttpJson),
+            "process_stdio" | "stdio" => Some(Self::ProcessStdio),
+            "native_ffi" | "ffi" => Some(Self::NativeFfi),
+            "wasm_component" | "wasm" => Some(Self::WasmComponent),
+            "mcp_server" | "mcp" => Some(Self::McpServer),
+            "acp_bridge" | "acp" => Some(Self::AcpBridge),
+            "acp_runtime" | "acpx" => Some(Self::AcpRuntime),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HttpJson => "http_json",

@@ -114,6 +114,7 @@ mod tests {
     use std::path::PathBuf;
 
     use loongclaw_contracts::SecretRef;
+    use loongclaw_kernel::PluginBridgeKind;
 
     use super::*;
     use std::collections::BTreeSet;
@@ -2738,6 +2739,47 @@ thread_routing = "thread_only"
         );
         assert_eq!(config.dispatch.bootstrap_mcp_server_names(), Ok(Vec::new()));
         assert_eq!(config.dispatch.resolved_working_directory(), None);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn runtime_plugins_fields_parse_and_normalize() {
+        let raw = r#"
+[runtime_plugins]
+enabled = true
+roots = ["~/runtime-plugins"]
+supported_bridges = [" http ", "acpx"]
+supported_adapter_families = [" web-search ", "python-stdio-adapter"]
+"#;
+
+        let parsed = toml::from_str::<LoongClawConfig>(raw).expect("parse runtime_plugins config");
+        let matrix = parsed
+            .runtime_plugins
+            .resolved_bridge_support_matrix()
+            .expect("runtime plugin bridge support matrix should resolve");
+
+        assert!(parsed.runtime_plugins.enabled);
+        assert_eq!(
+            parsed.runtime_plugins.readiness_evaluation_label(),
+            "configured_bridge_support_matrix"
+        );
+        assert_eq!(parsed.runtime_plugins.resolved_roots().len(), 1);
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::HttpJson)
+        );
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::AcpRuntime)
+        );
+        assert!(
+            matrix
+                .supported_adapter_families
+                .contains("python-stdio-adapter")
+        );
+        assert!(matrix.supported_adapter_families.contains("web-search"));
     }
 
     #[test]

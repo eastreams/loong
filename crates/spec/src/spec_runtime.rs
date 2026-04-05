@@ -2362,17 +2362,7 @@ pub fn detect_provider_bridge_kind(
 }
 
 pub fn parse_bridge_kind_label(raw: &str) -> Option<PluginBridgeKind> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "http_json" | "http" => Some(PluginBridgeKind::HttpJson),
-        "process_stdio" | "stdio" => Some(PluginBridgeKind::ProcessStdio),
-        "native_ffi" | "ffi" => Some(PluginBridgeKind::NativeFfi),
-        "wasm_component" | "wasm" => Some(PluginBridgeKind::WasmComponent),
-        "mcp_server" | "mcp" => Some(PluginBridgeKind::McpServer),
-        "acp_bridge" | "acp" => Some(PluginBridgeKind::AcpBridge),
-        "acp_runtime" | "acpx" => Some(PluginBridgeKind::AcpRuntime),
-        "unknown" => Some(PluginBridgeKind::Unknown),
-        _ => None,
-    }
+    PluginBridgeKind::parse_label(raw)
 }
 
 pub fn default_bridge_adapter_family(bridge_kind: PluginBridgeKind) -> String {

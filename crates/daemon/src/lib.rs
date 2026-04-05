@@ -15,9 +15,9 @@ use std::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 use kernel::{
-    BridgeSupportMatrix, Capability, ConnectorCommand, FixedClock, InMemoryAuditSink,
-    PluginActivationStatus, PluginScanner, PluginSetupReadinessContext, PluginTranslator,
-    TaskIntent, ToolCoreOutcome, ToolCoreRequest,
+    Capability, ConnectorCommand, FixedClock, InMemoryAuditSink, PluginActivationStatus,
+    PluginScanner, PluginSetupReadinessContext, PluginTranslator, TaskIntent, ToolCoreOutcome,
+    ToolCoreRequest,
 };
 use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
@@ -2222,6 +2222,10 @@ pub(crate) fn collect_runtime_snapshot_external_skills_state(
 pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
     config: &mvp::config::LoongClawConfig,
 ) -> RuntimeSnapshotRuntimePluginsState {
+    let readiness_evaluation = config
+        .runtime_plugins
+        .readiness_evaluation_label()
+        .to_owned();
     let roots = config
         .runtime_plugins
         .resolved_roots()
@@ -2235,7 +2239,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             roots,
             inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
             inventory_error: None,
-            readiness_evaluation: "default_bridge_support_matrix".to_owned(),
+            readiness_evaluation,
             scanned_root_count: 0,
             scanned_file_count: 0,
             discovered_plugin_count: 0,
@@ -2257,7 +2261,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 "runtime_plugins.enabled=true but no runtime plugin roots are configured"
                     .to_owned(),
             ),
-            readiness_evaluation: "default_bridge_support_matrix".to_owned(),
+            readiness_evaluation,
             scanned_root_count: 0,
             scanned_file_count: 0,
             discovered_plugin_count: 0,
@@ -2284,7 +2288,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                         "runtime plugin scan failed for {}: {error}",
                         root.display()
                     )),
-                    readiness_evaluation: "default_bridge_support_matrix".to_owned(),
+                    readiness_evaluation,
                     scanned_root_count: 0,
                     scanned_file_count: 0,
                     discovered_plugin_count: 0,
@@ -2302,14 +2306,30 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
     }
     combined.descriptors = descriptors;
 
+    let bridge_matrix = match config.runtime_plugins.resolved_bridge_support_matrix() {
+        Ok(matrix) => matrix,
+        Err(error) => {
+            return RuntimeSnapshotRuntimePluginsState {
+                enabled: true,
+                roots,
+                inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                inventory_error: Some(error),
+                readiness_evaluation,
+                scanned_root_count: resolved_roots.len(),
+                scanned_file_count: combined.scanned_files,
+                discovered_plugin_count: combined.matched_plugins,
+                translated_plugin_count: 0,
+                ready_plugin_count: 0,
+                setup_incomplete_plugin_count: 0,
+                blocked_plugin_count: 0,
+                plugins: Vec::new(),
+            };
+        }
+    };
     let translator = PluginTranslator::new();
     let translation = translator.translate_scan_report(&combined);
     let readiness_context = runtime_plugin_setup_readiness_context(config);
-    let activation = translator.plan_activation(
-        &translation,
-        &BridgeSupportMatrix::default(),
-        &readiness_context,
-    );
+    let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
 
     let plugins = activation
         .candidates
@@ -2344,7 +2364,7 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         roots,
         inventory_status: RuntimeSnapshotInventoryStatus::Ok,
         inventory_error: None,
-        readiness_evaluation: "default_bridge_support_matrix".to_owned(),
+        readiness_evaluation,
         scanned_root_count: resolved_roots.len(),
         scanned_file_count: combined.scanned_files,
         discovered_plugin_count: combined.matched_plugins,

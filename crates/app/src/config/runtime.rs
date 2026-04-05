@@ -1370,6 +1370,7 @@ impl LoongClawConfig {
         issues.extend(self.feishu_integration.validate());
         issues.extend(self.memory.validate());
         issues.extend(self.tools.validate());
+        issues.extend(self.runtime_plugins.validate());
         issues
     }
 
