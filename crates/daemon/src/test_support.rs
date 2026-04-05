@@ -87,6 +87,38 @@ impl Drop for ScopedEnv {
     }
 }
 
+#[cfg(unix)]
+pub fn write_executable_script_atomically(script_path: &Path, contents: &str) {
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = script_path
+        .parent()
+        .expect("script path should have parent directory");
+    fs::create_dir_all(parent).expect("create script parent directory");
+    let staged_path = parent.join(format!(
+        ".{}.{}.tmp",
+        script_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("script file name"),
+        std::process::id()
+    ));
+
+    let mut file = fs::File::create(&staged_path).expect("create staged executable script");
+    file.write_all(contents.as_bytes())
+        .expect("write staged executable script");
+    file.sync_all().expect("sync staged executable script");
+    drop(file);
+
+    let mut permissions = fs::metadata(&staged_path)
+        .expect("staged script metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&staged_path, permissions).expect("chmod staged executable script");
+    fs::rename(&staged_path, script_path).expect("rename staged executable script");
+}
+
 pub fn catalog_entry(raw: &str) -> mvp::channel::ChannelCatalogEntry {
     mvp::channel::resolve_channel_catalog_entry(raw).expect("channel catalog entry")
 }

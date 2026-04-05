@@ -78,9 +78,7 @@ pub use catalog::{
     ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
     capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
     delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
-    delegate_child_tool_view_for_profile, delegate_child_tool_view_for_runtime_config,
-    delegate_child_tool_view_for_runtime_config_and_contract,
-    delegate_child_tool_view_for_runtime_config_with_delegate, governance_profile_for_descriptor,
+    delegate_child_tool_view_with_constraints, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
     runtime_tool_view, runtime_tool_view_for_config,
     runtime_tool_view_for_config_with_external_skills, runtime_tool_view_for_runtime_config,
@@ -120,6 +118,7 @@ pub(crate) const LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY: &str = "_loongclaw";
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: &str = "tool_search";
 pub(crate) const LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: &str = "visible_tool_ids";
 pub(crate) const LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: &str = "runtime_narrowing";
+pub(crate) const LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: &str = "workspace_root";
 
 pub fn normalize_external_skills_domain_rule(raw: &str) -> Result<String, String> {
     external_skills::normalize_domain_rule(raw)
@@ -393,6 +392,30 @@ pub async fn wait_for_session_with_config(
     }
 }
 
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn continue_session_with_runtime<
+    R: crate::conversation::ConversationRuntime + ?Sized,
+>(
+    payload: Value,
+    current_session_id: &str,
+    memory_config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+    app_config: &crate::config::LoongClawConfig,
+    runtime: &R,
+    binding: crate::conversation::ConversationRuntimeBinding<'_>,
+) -> Result<ToolCoreOutcome, String> {
+    session::continue_session_with_runtime(
+        payload,
+        current_session_id,
+        memory_config,
+        tool_config,
+        app_config,
+        runtime,
+        binding,
+    )
+    .await
+}
+
 /// Normalize a path by resolving `.` and `..` components without filesystem access.
 ///
 /// - `Prefix` and `RootDir` are tracked separately so `..` can never "eat" them.
@@ -635,8 +658,26 @@ pub fn execute_tool_core_with_config(
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
-    let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
+    if !trusted_internal_tool_payload_enabled()
+        && payload_uses_reserved_internal_tool_context(&request.payload)
+    {
+        return Err(format!(
+            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
+            request.tool_name
+        ));
+    }
+    let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let payload = request.payload;
+    let workspace_root = trusted_workspace_root_from_payload(&payload)?;
+    let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
+    let mut effective_config = match workspace_root {
+        Some(workspace_root) => config.with_file_root_override(workspace_root),
+        None => config.clone(),
+    };
+    if let Some(runtime_narrowing) = runtime_narrowing {
+        effective_config = effective_config.narrowed(&runtime_narrowing);
+    }
+    let config = &effective_config;
     let started_at = std::time::Instant::now();
     let result = (|| {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -645,7 +686,7 @@ pub fn execute_tool_core_with_config(
             "payload",
         )?;
         let request = ToolCoreRequest {
-            tool_name: canonical_name.clone(),
+            tool_name: canonical_name.to_owned(),
             payload,
         };
         let request = normalize_shell_request_for_execution(request);
@@ -653,7 +694,7 @@ pub fn execute_tool_core_with_config(
         let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
         let config = effective_config.as_ref().unwrap_or(config);
 
-        match canonical_name.as_str() {
+        match canonical_name {
             "tool.search" => execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
             _ => execute_discoverable_tool_core_with_config(request, config),
@@ -737,6 +778,35 @@ fn trusted_runtime_narrowing_from_payload(
     serde_json::from_value(value)
         .map(Some)
         .map_err(|error| format!("invalid_internal_runtime_narrowing: {error}"))
+}
+
+fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf>, String> {
+    if !trusted_internal_tool_payload_enabled() {
+        return Ok(None);
+    }
+
+    let Some(value) = payload
+        .get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+        .and_then(|body| body.get(LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+
+    let raw_workspace_root = serde_json::from_value::<String>(value)
+        .map_err(|error| format!("invalid_internal_workspace_root: {error}"))?;
+    let trimmed_workspace_root = raw_workspace_root.trim();
+    if trimmed_workspace_root.is_empty() {
+        return Err("invalid_internal_workspace_root: expected a non-empty path".to_owned());
+    }
+    let workspace_root = PathBuf::from(trimmed_workspace_root);
+    if !workspace_root.is_absolute() {
+        return Err("invalid_internal_workspace_root: path must be absolute".to_owned());
+    }
+    let canonical_workspace_root = std::fs::canonicalize(&workspace_root).map_err(|error| {
+        format!("invalid_internal_workspace_root: canonicalize failed: {error}")
+    })?;
+    Ok(Some(canonical_workspace_root))
 }
 
 pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
@@ -2076,6 +2146,7 @@ mod tests {
 
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
+        assert!(names.contains(&"session_continue"));
         assert!(names.contains(&"session_recover"));
         assert!(names.contains(&"session_tool_policy_set"));
         assert!(names.contains(&"session_tool_policy_clear"));
@@ -2140,9 +2211,8 @@ mod tests {
         for tool_name in [
             "session_archive",
             "session_cancel",
+            "session_continue",
             "session_recover",
-            "session_tool_policy_set",
-            "session_tool_policy_clear",
         ] {
             assert!(
                 !view.contains(tool_name),
@@ -2169,6 +2239,7 @@ mod tests {
 
         assert!(view.contains("session_archive"));
         assert!(view.contains("session_cancel"));
+        assert!(view.contains("session_continue"));
         assert!(view.contains("session_recover"));
         assert!(view.contains("session_tool_policy_set"));
         assert!(view.contains("session_tool_policy_clear"));
@@ -4101,6 +4172,79 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn file_read_uses_workspace_root_from_trusted_internal_payload() {
+        let outer_root = std::env::temp_dir().join(format!(
+            "loongclaw-file-read-workspace-root-outer-{}",
+            std::process::id()
+        ));
+        let child_root = std::env::temp_dir().join(format!(
+            "loongclaw-file-read-workspace-root-child-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&outer_root).expect("create outer root");
+        std::fs::create_dir_all(&child_root).expect("create child root");
+        std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
+        std::fs::write(child_root.join("note.txt"), "child").expect("write child note");
+
+        let config = test_tool_runtime_config(outer_root.clone());
+        let outcome = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "file.read".to_owned(),
+                payload: json!({
+                    "path": "note.txt",
+                    "_loongclaw": {
+                        "workspace_root": child_root.display().to_string()
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect("trusted workspace root override should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["content"], "child");
+        let expected_path =
+            std::fs::canonicalize(child_root.join("note.txt")).expect("canonicalize child note");
+        assert_eq!(outcome.payload["path"], expected_path.display().to_string());
+
+        std::fs::remove_dir_all(&outer_root).ok();
+        std::fs::remove_dir_all(&child_root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
+        let outer_root = std::env::temp_dir().join(format!(
+            "loongclaw-file-read-relative-workspace-root-outer-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&outer_root).expect("create outer root");
+        std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
+
+        let config = test_tool_runtime_config(outer_root.clone());
+        let error = execute_tool_core_with_test_context(
+            ToolCoreRequest {
+                tool_name: "file.read".to_owned(),
+                payload: json!({
+                    "path": "note.txt",
+                    "_loongclaw": {
+                        "workspace_root": "relative/path"
+                    }
+                }),
+            },
+            &config,
+        )
+        .expect_err("relative workspace root override should be rejected");
+
+        assert!(
+            error.contains("path must be absolute"),
+            "expected absolute-path rejection, got: {error}"
+        );
+
+        std::fs::remove_dir_all(&outer_root).ok();
+    }
+
     #[cfg(feature = "tool-webfetch")]
     #[test]
     fn web_fetch_denies_disjoint_allowlists_when_runtime_narrowing_intersection_is_empty() {
@@ -4507,6 +4651,59 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution() {
+        let child_root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-invoke-workspace-root-child-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&child_root).expect("create child fixture root");
+        std::fs::write(child_root.join("note.txt"), "child").expect("write child note");
+
+        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
+            "file.read",
+            json!({
+                "path": "note.txt"
+            }),
+            None,
+            None,
+        );
+        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
+        payload_object.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: child_root.display().to_string(),
+                LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {
+                    "web_fetch": {
+                        "allowed_domains": ["docs.example.com"],
+                        "allow_private_hosts": false
+                    }
+                }
+            }),
+        );
+
+        let (_, effective_request) =
+            resolve_tool_invoke_request(&ToolCoreRequest { tool_name, payload })
+                .expect("tool.invoke should preserve trusted internal context");
+
+        let internal_context = effective_request.payload[LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+            .as_object()
+            .expect("inner arguments should keep trusted internal context");
+        assert_eq!(
+            internal_context[LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY],
+            child_root.display().to_string()
+        );
+        assert_eq!(
+            internal_context[LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["web_fetch"]["allowed_domains"]
+                [0],
+            "docs.example.com"
+        );
+        assert_eq!(effective_request.payload["path"], "note.txt");
+
+        std::fs::remove_dir_all(&child_root).ok();
     }
 
     #[test]

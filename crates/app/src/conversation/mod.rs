@@ -30,6 +30,8 @@ mod turn_middleware;
 mod turn_middleware_registry;
 mod turn_observer;
 mod turn_shared;
+pub(crate) mod workspace_isolation;
+pub(crate) mod workspace_isolation;
 
 pub use analytics::{
     ConversationEventRecord, DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary,
@@ -93,10 +95,10 @@ pub use subagent::{
     ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
-    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
-    ConstrainedSubagentProfile, ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
-    ConstrainedSubagentTerminalReason, coordination_actions_for_subagent_handle,
-    subagent_surface_fields,
+    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,
+    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentRole,
+    ConstrainedSubagentRuntimeBinding, ConstrainedSubagentTerminalReason, DelegateBuiltinProfile,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;
@@ -108,6 +110,12 @@ pub use turn_checkpoint::{
 };
 pub use turn_coordinator::{
     ContextCompactionReport, ConversationTurnCoordinator, spawn_background_delegate_with_runtime,
+};
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use turn_coordinator::{
+    run_started_delegate_child_turn_with_runtime,
+    with_prepared_subagent_spawn_cleanup_if_kernel_bound,
+};
 };
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
