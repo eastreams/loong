@@ -329,6 +329,11 @@ fn runtime_snapshot_json_payload_includes_provider_tool_and_external_skill_inven
         payload["runtime_plugins"]["readiness_evaluation"],
         "default_bridge_support_matrix"
     );
+    assert_eq!(payload["runtime_plugins"]["supported_bridges"], json!([]));
+    assert_eq!(
+        payload["runtime_plugins"]["supported_adapter_families"],
+        json!([])
+    );
     assert_eq!(
         payload["runtime_plugins"]["setup_incomplete_plugin_count"],
         1
@@ -427,6 +432,14 @@ fn runtime_snapshot_json_payload_respects_configured_runtime_plugin_bridge_polic
     assert_eq!(
         payload["runtime_plugins"]["readiness_evaluation"],
         "configured_bridge_support_matrix"
+    );
+    assert_eq!(
+        payload["runtime_plugins"]["supported_bridges"],
+        json!(["process_stdio"])
+    );
+    assert_eq!(
+        payload["runtime_plugins"]["supported_adapter_families"],
+        json!([])
     );
     assert_eq!(payload["runtime_plugins"]["ready_plugin_count"], 0);
     assert_eq!(payload["runtime_plugins"]["blocked_plugin_count"], 1);
@@ -581,6 +594,7 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains(
         "runtime_plugins inventory_status=ok enabled=true readiness_evaluation=default_bridge_support_matrix"
     ));
+    assert!(rendered.contains("supported_bridges=- supported_adapter_families=-"));
     assert!(rendered.contains("demo-search-plugin"));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("blocked_skills=0 ineligible_skills=0"));

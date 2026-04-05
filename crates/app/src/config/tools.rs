@@ -882,6 +882,34 @@ impl RuntimePluginsConfig {
         self.roots.iter().map(|root| expand_path(root)).collect()
     }
 
+    pub fn resolved_supported_bridges(&self) -> Result<Vec<PluginBridgeKind>, String> {
+        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
+        if !invalid_bridge_labels.is_empty() {
+            return Err(format!(
+                "runtime_plugins.supported_bridges contains invalid bridge labels: {}",
+                invalid_bridge_labels.join(", ")
+            ));
+        }
+
+        let mut bridge_kinds = BTreeSet::new();
+        for raw_bridge in &self.supported_bridges {
+            let trimmed_bridge = raw_bridge.trim();
+            if trimmed_bridge.is_empty() {
+                continue;
+            }
+
+            let Some(bridge_kind) = PluginBridgeKind::parse_label(trimmed_bridge) else {
+                continue;
+            };
+            if bridge_kind == PluginBridgeKind::Unknown {
+                continue;
+            }
+            bridge_kinds.insert(bridge_kind);
+        }
+
+        Ok(bridge_kinds.into_iter().collect())
+    }
+
     pub fn normalized_supported_adapter_families(&self) -> Vec<String> {
         let mut families = BTreeSet::new();
         for raw_family in &self.supported_adapter_families {
@@ -912,30 +940,11 @@ impl RuntimePluginsConfig {
     }
 
     pub fn resolved_bridge_support_matrix(&self) -> Result<BridgeSupportMatrix, String> {
-        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
-        if !invalid_bridge_labels.is_empty() {
-            return Err(format!(
-                "runtime_plugins.supported_bridges contains invalid bridge labels: {}",
-                invalid_bridge_labels.join(", ")
-            ));
-        }
-
         let default_matrix = BridgeSupportMatrix::default();
-        let mut configured_bridge_kinds = BTreeSet::new();
-        for raw_bridge in &self.supported_bridges {
-            let trimmed_bridge = raw_bridge.trim();
-            if trimmed_bridge.is_empty() {
-                continue;
-            }
-
-            let Some(bridge_kind) = PluginBridgeKind::parse_label(trimmed_bridge) else {
-                continue;
-            };
-            if bridge_kind == PluginBridgeKind::Unknown {
-                continue;
-            }
-            configured_bridge_kinds.insert(bridge_kind);
-        }
+        let configured_bridge_kinds = self
+            .resolved_supported_bridges()?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
 
         let supported_bridges = if configured_bridge_kinds.is_empty() {
             default_matrix.supported_bridges

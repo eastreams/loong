@@ -1823,6 +1823,8 @@ pub struct RuntimeSnapshotExternalSkillsState {
 pub struct RuntimeSnapshotRuntimePluginsState {
     pub enabled: bool,
     pub roots: Vec<String>,
+    pub supported_bridges: Vec<String>,
+    pub supported_adapter_families: Vec<String>,
     pub inventory_status: RuntimeSnapshotInventoryStatus,
     pub inventory_error: Option<String>,
     pub readiness_evaluation: String,
@@ -2232,11 +2234,23 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         .into_iter()
         .map(|root| root.display().to_string())
         .collect::<Vec<_>>();
+    let supported_bridges = config
+        .runtime_plugins
+        .resolved_supported_bridges()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|bridge_kind| bridge_kind.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let supported_adapter_families = config
+        .runtime_plugins
+        .normalized_supported_adapter_families();
 
     if !config.runtime_plugins.enabled {
         return RuntimeSnapshotRuntimePluginsState {
             enabled: false,
             roots,
+            supported_bridges,
+            supported_adapter_families,
             inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
             inventory_error: None,
             readiness_evaluation,
@@ -2256,6 +2270,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
         return RuntimeSnapshotRuntimePluginsState {
             enabled: true,
             roots,
+            supported_bridges,
+            supported_adapter_families,
             inventory_status: RuntimeSnapshotInventoryStatus::Error,
             inventory_error: Some(
                 "runtime_plugins.enabled=true but no runtime plugin roots are configured"
@@ -2283,6 +2299,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 return RuntimeSnapshotRuntimePluginsState {
                     enabled: true,
                     roots,
+                    supported_bridges,
+                    supported_adapter_families,
                     inventory_status: RuntimeSnapshotInventoryStatus::Error,
                     inventory_error: Some(format!(
                         "runtime plugin scan failed for {}: {error}",
@@ -2312,6 +2330,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
             return RuntimeSnapshotRuntimePluginsState {
                 enabled: true,
                 roots,
+                supported_bridges,
+                supported_adapter_families,
                 inventory_status: RuntimeSnapshotInventoryStatus::Error,
                 inventory_error: Some(error),
                 readiness_evaluation,
@@ -2362,6 +2382,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
     RuntimeSnapshotRuntimePluginsState {
         enabled: true,
         roots,
+        supported_bridges,
+        supported_adapter_families,
         inventory_status: RuntimeSnapshotInventoryStatus::Ok,
         inventory_error: None,
         readiness_evaluation,

@@ -242,10 +242,18 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
     ));
     lines.push(format!(
-        "runtime_plugins inventory_status={} enabled={} readiness_evaluation={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
+        "runtime_plugins inventory_status={} enabled={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
         snapshot.runtime_plugins.inventory_status.as_str(),
         snapshot.runtime_plugins.enabled,
         snapshot.runtime_plugins.readiness_evaluation,
+        render_string_list(snapshot.runtime_plugins.supported_bridges.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .runtime_plugins
+                .supported_adapter_families
+                .iter()
+                .map(String::as_str)
+        ),
         render_string_list(snapshot.runtime_plugins.roots.iter().map(String::as_str)),
         snapshot.runtime_plugins.scanned_root_count,
         snapshot.runtime_plugins.scanned_file_count,
@@ -499,6 +507,8 @@ fn runtime_snapshot_runtime_plugins_json(snapshot: &RuntimeSnapshotRuntimePlugin
     json!({
         "enabled": snapshot.enabled,
         "roots": snapshot.roots,
+        "supported_bridges": snapshot.supported_bridges,
+        "supported_adapter_families": snapshot.supported_adapter_families,
         "inventory_status": snapshot.inventory_status.as_str(),
         "inventory_error": snapshot.inventory_error,
         "readiness_evaluation": snapshot.readiness_evaluation,

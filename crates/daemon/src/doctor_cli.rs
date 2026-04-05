@@ -304,8 +304,10 @@ fn collect_runtime_plugins_doctor_checks(
             DoctorCheckLevel::Warn
         },
         detail: format!(
-            "enabled={} roots={} scanned_roots={}",
+            "enabled={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={}",
             state.enabled,
+            doctor_render_string_list(&state.supported_bridges),
+            doctor_render_string_list(&state.supported_adapter_families),
             doctor_render_string_list(&state.roots),
             state.scanned_root_count,
         ),
