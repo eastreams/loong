@@ -469,6 +469,9 @@ async fn main() {
             include_archived,
             json,
         ),
+        Commands::SessionSearchInspect { artifact, json } => {
+            run_session_search_inspect_cli(&artifact, json)
+        }
         Commands::TrajectoryExport {
             config,
             session,

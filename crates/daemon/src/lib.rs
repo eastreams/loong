@@ -140,7 +140,9 @@ use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 pub use session_cli::{
     SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
     SessionSearchArtifactHit, SessionSearchArtifactHitSession, SessionSearchArtifactSchema,
-    collect_session_search_artifact, format_session_search_text, run_session_search_cli,
+    collect_session_search_artifact, format_session_search_inspect_text,
+    format_session_search_text, load_session_search_artifact, run_session_search_cli,
+    run_session_search_inspect_cli,
 };
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
@@ -870,6 +872,13 @@ pub enum Commands {
         output: Option<String>,
         #[arg(long, default_value_t = false)]
         include_archived: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Inspect one exported session-search artifact
+    SessionSearchInspect {
+        #[arg(long)]
+        artifact: String,
         #[arg(long, default_value_t = false)]
         json: bool,
     },

@@ -116,3 +116,64 @@ fn collect_session_search_artifact_includes_visible_hits() {
     assert_eq!(artifact.hits[0].session.session_id, "child-session");
     assert_eq!(artifact.hits[1].session.session_id, "root-session");
 }
+
+#[test]
+fn load_session_search_artifact_round_trips_written_json() {
+    let root = unique_temp_dir("loongclaw-session-search-inspect");
+    let config_path = write_session_search_config(&root);
+    let config_path_str = config_path
+        .to_str()
+        .expect("config path should be valid utf-8");
+    let loaded_config = mvp::config::load(Some(config_path_str));
+    let (_, config) = loaded_config.expect("load config fixture");
+
+    let memory_config =
+        mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = mvp::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+
+    repo.create_session(mvp::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: mvp::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: mvp::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    mvp::memory::append_turn_direct(
+        "root-session",
+        "user",
+        "deploy freeze starts Friday",
+        &memory_config,
+    )
+    .expect("append root turn");
+
+    let config_path_lossy = config_path.to_string_lossy();
+    let config_path_arg = config_path_lossy.as_ref();
+    let (_resolved_path, artifact) = collect_session_search_artifact(
+        Some(config_path_arg),
+        Some("root-session"),
+        "deploy freeze",
+        5,
+        false,
+    )
+    .expect("collect session-search artifact");
+
+    let artifact_path = root.join("artifacts").join("session-search.json");
+    let encoded = serde_json::to_string_pretty(&artifact).expect("encode session-search artifact");
+    let artifact_parent = artifact_path
+        .parent()
+        .expect("artifact path should have parent");
+    fs::create_dir_all(artifact_parent).expect("create artifact directory");
+    fs::write(&artifact_path, encoded).expect("write artifact");
+
+    let artifact_path_str = artifact_path
+        .to_str()
+        .expect("artifact path should be valid utf-8");
+    let loaded_artifact = load_session_search_artifact(artifact_path_str);
+    let loaded = loaded_artifact.expect("load session-search artifact");
+
+    assert_eq!(loaded.scope_session_id, "root-session");
+    assert_eq!(loaded.returned_count, 1);
+    assert_eq!(loaded.hits.len(), 1);
+}
