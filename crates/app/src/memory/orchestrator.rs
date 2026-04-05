@@ -379,6 +379,12 @@ fn build_builtin_retrieval_request(
 
     let query = retrieval_query_from_recent_window(recent_window);
 
+    let budget_items = if recent_window.is_empty() {
+        6
+    } else {
+        config.sliding_window.min(6)
+    };
+
     Some(MemoryRetrievalRequest {
         session_id: session_id.to_owned(),
         query,
@@ -388,7 +394,7 @@ fn build_builtin_retrieval_request(
             MemoryScope::Agent,
             MemoryScope::User,
         ],
-        budget_items: config.sliding_window.min(6),
+        budget_items,
         allowed_kinds: vec![
             DerivedMemoryKind::Profile,
             DerivedMemoryKind::Fact,

@@ -827,6 +827,21 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
 ) -> Result<(PathBuf, SqliteBootstrapDiagnostics), String> {
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
     let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
+    runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
+        let user_version = read_sqlite_user_version(conn)?;
+        let current_schema_ready = user_version == SQLITE_MEMORY_SCHEMA_VERSION
+            && sqlite_current_schema_objects_ready(conn)?;
+        ensure_turn_session_index_and_state_metadata(conn)?;
+        ensure_approval_lifecycle_tables(conn)?;
+        ensure_session_tool_consent_storage(conn)?;
+        ensure_session_tool_policy_storage(conn)?;
+        ensure_summary_checkpoint_storage_layout(conn)?;
+        ensure_canonical_record_storage(conn)?;
+        if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
+            write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+        }
+        Ok(())
+    })?;
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
 
@@ -1992,8 +2007,11 @@ fn ensure_canonical_record_storage(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("ensure canonical memory storage failed: {error}"))?;
 
-    if canonical_record_fts_needs_rebuild(conn)? {
+    let canonical_fts_recreated = canonical_record_fts_needs_rebuild(conn)?;
+    if canonical_fts_recreated {
         recreate_canonical_record_fts_index(conn)?;
+        rebuild_canonical_record_storage(conn)?;
+        return Ok(());
     }
 
     rebuild_canonical_record_storage_if_needed(conn)?;
@@ -2025,12 +2043,29 @@ fn canonical_record_fts_needs_rebuild(conn: &Connection) -> Result<bool, String>
 }
 
 fn recreate_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
+    drop_canonical_record_fts_index(conn)?;
+    create_canonical_record_fts_index(conn)?;
+    rebuild_canonical_record_fts_index_contents(conn)?;
+    Ok(())
+}
+
+fn drop_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "
         DROP TRIGGER IF EXISTS memory_canonical_records_ai;
         DROP TRIGGER IF EXISTS memory_canonical_records_ad;
         DROP TRIGGER IF EXISTS memory_canonical_records_au;
         DROP TABLE IF EXISTS memory_canonical_records_fts;
+        ",
+    )
+    .map_err(|error| format!("drop canonical memory FTS index failed: {error}"))?;
+
+    Ok(())
+}
+
+fn create_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
         CREATE VIRTUAL TABLE memory_canonical_records_fts
           USING fts5(
             content,
@@ -2133,6 +2168,36 @@ fn recreate_canonical_record_fts_index(conn: &Connection) -> Result<(), String> 
         ",
     )
     .map_err(|error| format!("recreate canonical memory FTS index failed: {error}"))?;
+
+    Ok(())
+}
+
+fn rebuild_canonical_record_fts_index_contents(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "
+        INSERT INTO memory_canonical_records_fts(
+          rowid,
+          content,
+          session_id,
+          scope,
+          kind,
+          role,
+          metadata_json
+        )
+        SELECT
+          record_id,
+          content,
+          session_id,
+          scope,
+          kind,
+          COALESCE(role, ''),
+          metadata_json
+        FROM memory_canonical_records
+        ",
+        [],
+    )
+    .map(|_| ())
+    .map_err(|error| format!("rebuild canonical memory FTS index contents failed: {error}"))?;
 
     Ok(())
 }
@@ -3487,21 +3552,7 @@ fn delete_canonical_records_for_session(conn: &Connection, session_id: &str) -> 
         .map_err(|error| format!("delete canonical records failed: {error}"))
 }
 
-fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), String> {
-    let turn_count = conn
-        .query_row(SQL_COUNT_TURNS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count persisted turns for canonical rebuild failed: {error}"))?;
-    let canonical_count = conn
-        .query_row(SQL_COUNT_CANONICAL_RECORDS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count canonical records failed: {error}"))?;
-    let canonical_fts_count = conn
-        .query_row(SQL_COUNT_CANONICAL_FTS_ROWS, [], |row| row.get::<_, i64>(0))
-        .map_err(|error| format!("count canonical FTS rows failed: {error}"))?;
-
-    if canonical_count == turn_count && canonical_fts_count == canonical_count {
-        return Ok(());
-    }
-
+fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
     #[derive(Debug)]
     struct PersistedTurnRow {
         turn_id: i64,
@@ -3516,6 +3567,7 @@ fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), S
         .map_err(|error| format!("begin canonical rebuild savepoint failed: {error}"))?;
 
     let rebuild_result = (|| {
+        drop_canonical_record_fts_index(conn)?;
         conn.execute("DELETE FROM memory_canonical_records", [])
             .map_err(|error| format!("clear canonical records before rebuild failed: {error}"))?;
         let mut last_turn_id = 0_i64;
@@ -3565,6 +3617,9 @@ fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), S
             }
         }
 
+        create_canonical_record_fts_index(conn)?;
+        rebuild_canonical_record_fts_index_contents(conn)?;
+
         Ok(())
     })();
 
@@ -3580,6 +3635,24 @@ fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), S
             Err(error)
         }
     }
+}
+
+fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), String> {
+    let turn_count = conn
+        .query_row(SQL_COUNT_TURNS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count persisted turns for canonical rebuild failed: {error}"))?;
+    let canonical_count = conn
+        .query_row(SQL_COUNT_CANONICAL_RECORDS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical records failed: {error}"))?;
+    let canonical_fts_count = conn
+        .query_row(SQL_COUNT_CANONICAL_FTS_ROWS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical FTS rows failed: {error}"))?;
+
+    if canonical_count == turn_count && canonical_fts_count == canonical_count {
+        return Ok(());
+    }
+
+    rebuild_canonical_record_storage(conn)
 }
 
 fn build_canonical_fts_query(query: &str) -> Option<String> {

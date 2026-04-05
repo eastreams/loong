@@ -17898,7 +17898,7 @@ async fn handle_turn_with_runtime_child_session_injects_runtime_narrowing_into_k
         .execute_turn_in_context(
             &turn,
             &session_context,
-            &DefaultAppToolDispatcher::runtime(),
+            &DefaultAppToolDispatcher::with_config(memory_config.clone(), config.clone()),
             ConversationRuntimeBinding::kernel(&kernel_ctx),
             None,
         )
