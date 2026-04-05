@@ -338,48 +338,62 @@ fn observed_version_matches_expected(observed_version: &str, expected_version: &
         .any(|token| token == expected_version)
 }
 
+// Test helpers - outside tests module so they can be used by other test files
+#[cfg(test)]
+use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) fn browser_companion_temp_dir(label: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
+    let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "loongclaw-browser-companion-diagnostics-{label}-{}-{seed}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create browser companion diagnostics temp dir");
+    temp_dir
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) fn write_browser_companion_script(script_path: &Path, body: &str) {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let mut file = std::fs::File::create(script_path).expect("create browser companion script");
+    file.write_all(body.as_bytes())
+        .expect("write browser companion script");
+    file.sync_all()
+        .expect("sync browser companion script to disk");
+    drop(file);
+    let mut permissions = std::fs::metadata(script_path)
+        .expect("script metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+pub(crate) fn fake_browser_companion_version_command(version: &str) -> String {
+    let temp_dir = browser_companion_temp_dir("fake-command");
+    let script_path = temp_dir.join("browser-companion");
+    let script_body = format!(
+        "#!/bin/sh\necho 'loongclaw-browser-companion {}'\n",
+        version
+    );
+    write_browser_companion_script(&script_path, &script_body);
+    script_path.display().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]
     use std::ffi::OsString;
     #[cfg(unix)]
-    use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
-    #[cfg(unix)]
-    use std::path::{Path, PathBuf};
-    #[cfg(unix)]
     use std::sync::MutexGuard;
-    #[cfg(unix)]
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    #[cfg(unix)]
-    fn browser_companion_temp_dir(label: &str) -> PathBuf {
-        static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
-        let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
-        let temp_dir = std::env::temp_dir().join(format!(
-            "loongclaw-browser-companion-diagnostics-{label}-{}-{seed}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&temp_dir).expect("create browser companion diagnostics temp dir");
-        temp_dir
-    }
-
-    #[cfg(unix)]
-    fn write_browser_companion_script(script_path: &Path, body: &str) {
-        let mut file = std::fs::File::create(script_path).expect("create browser companion script");
-        file.write_all(body.as_bytes())
-            .expect("write browser companion script");
-        file.sync_all()
-            .expect("sync browser companion script to disk");
-        drop(file);
-        let mut permissions = std::fs::metadata(script_path)
-            .expect("script metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
-    }
 
     #[cfg(unix)]
     fn set_browser_companion_env_var(key: &str, value: &str) {
