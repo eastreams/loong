@@ -357,8 +357,16 @@ fn safe_lane_summary_cli_rejects_zero_limit() {
 
 #[test]
 fn session_search_cli_rejects_zero_limit() {
-    let error = run_session_search_cli(None, Some("session-a"), "deploy freeze", 0, false, false)
-        .expect_err("zero limit must be rejected");
+    let error = run_session_search_cli(
+        None,
+        Some("session-a"),
+        "deploy freeze",
+        0,
+        None,
+        false,
+        false,
+    )
+    .expect_err("zero limit must be rejected");
     assert!(error.contains(">= 1"));
 }
 
@@ -373,6 +381,8 @@ fn session_search_cli_parses_flags() {
         "deploy freeze",
         "--limit",
         "7",
+        "--output",
+        "/tmp/session-search.json",
         "--include-archived",
         "--json",
     ])
@@ -384,6 +394,7 @@ fn session_search_cli_parses_flags() {
             session,
             query,
             limit,
+            output,
             include_archived,
             json,
         }) => {
@@ -391,6 +402,7 @@ fn session_search_cli_parses_flags() {
             assert_eq!(session.as_deref(), Some("root-session"));
             assert_eq!(query, "deploy freeze");
             assert_eq!(limit, 7);
+            assert_eq!(output.as_deref(), Some("/tmp/session-search.json"));
             assert!(include_archived);
             assert!(json);
         }
@@ -401,39 +413,50 @@ fn session_search_cli_parses_flags() {
 #[test]
 fn format_session_search_text_includes_hit_summary() {
     let rendered = format_session_search_text(
-        "root-session",
-        "deploy freeze",
-        5,
-        false,
-        &json!({
-            "returned_count": 1,
-            "hits": [{
-                "session": {
-                    "session_id": "child-session",
-                    "kind": "delegate_child",
-                    "parent_session_id": "root-session",
-                    "label": "Child",
-                    "state": "running",
-                    "created_at": 1,
-                    "updated_at": 2,
-                    "archived": false,
-                    "archived_at": null,
-                    "turn_count": 3,
-                    "last_turn_at": 2,
-                    "last_error": null
+        "/tmp/loongclaw.toml",
+        Some("/tmp/session-search.json"),
+        &SessionSearchArtifactDocument {
+            schema: SessionSearchArtifactSchema {
+                version: SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION,
+                surface: "session_search".to_owned(),
+                purpose: "session_recall_evidence".to_owned(),
+            },
+            exported_at: "2026-04-05T00:00:00Z".to_owned(),
+            config: "/tmp/loongclaw.toml".to_owned(),
+            scope_session_id: "root-session".to_owned(),
+            query: "deploy freeze".to_owned(),
+            limit: 5,
+            include_archived: false,
+            visibility: "children".to_owned(),
+            returned_count: 1,
+            hits: vec![SessionSearchArtifactHit {
+                session: SessionSearchArtifactHitSession {
+                    session_id: "child-session".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    parent_session_id: Some("root-session".to_owned()),
+                    label: Some("Child".to_owned()),
+                    state: "running".to_owned(),
+                    created_at: 1,
+                    updated_at: 2,
+                    archived: false,
+                    archived_at: None,
+                    turn_count: 3,
+                    last_turn_at: Some(2),
+                    last_error: None,
                 },
-                "turn_id": 12,
-                "session_turn_index": 2,
-                "role": "assistant",
-                "ts": 123,
-                "snippet": "deploy freeze checklist updated",
-                "content_chars": 32
-            }]
-        }),
+                turn_id: 12,
+                session_turn_index: 2,
+                role: "assistant".to_owned(),
+                ts: 123,
+                snippet: "deploy freeze checklist updated".to_owned(),
+                content_chars: 32,
+            }],
+        },
     );
 
     assert!(rendered.contains("session_search session=root-session"));
     assert!(rendered.contains("returned_count=1"));
+    assert!(rendered.contains("output=/tmp/session-search.json"));
     assert!(rendered.contains("session=child-session"));
     assert!(rendered.contains("role=assistant"));
     assert!(rendered.contains("deploy freeze checklist updated"));

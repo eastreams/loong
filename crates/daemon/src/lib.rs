@@ -124,6 +124,7 @@ mod provider_route_diagnostics;
 pub mod runtime_capability_cli;
 pub mod runtime_experiment_cli;
 pub mod runtime_restore_cli;
+pub mod session_cli;
 pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
@@ -149,6 +150,11 @@ use task_execution::execute_daemon_task_with_supervisor;
 pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
+pub use session_cli::{
+    SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION, SessionSearchArtifactDocument,
+    SessionSearchArtifactHit, SessionSearchArtifactHitSession, SessionSearchArtifactSchema,
+    collect_session_search_artifact, format_session_search_text, run_session_search_cli,
+};
 pub use trajectory_cli::{
     TRAJECTORY_EXPORT_ARTIFACT_JSON_SCHEMA_VERSION, TrajectoryExportArtifactDocument,
     TrajectoryExportArtifactSchema, TrajectoryExportEvent, TrajectoryExportSessionSummary,
@@ -907,6 +913,8 @@ pub enum Commands {
         query: String,
         #[arg(long, default_value_t = 20)]
         limit: usize,
+        #[arg(long)]
+        output: Option<String>,
         #[arg(long, default_value_t = false)]
         include_archived: bool,
         #[arg(long, default_value_t = false)]
@@ -4600,136 +4608,6 @@ pub fn run_safe_lane_summary_cli(
         let _ = (config, session_id, as_json);
         Err("safe-lane-summary requires memory-sqlite feature".to_owned())
     }
-}
-
-pub fn run_session_search_cli(
-    config_path: Option<&str>,
-    session: Option<&str>,
-    query: &str,
-    limit: usize,
-    include_archived: bool,
-    as_json: bool,
-) -> CliResult<()> {
-    if limit == 0 {
-        return Err("session-search limit must be >= 1".to_owned());
-    }
-    let query = query.trim();
-    if query.is_empty() {
-        return Err("session-search requires a non-empty --query value".to_owned());
-    }
-
-    let (_, config) = mvp::config::load(config_path)?;
-    let session_id = session
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("default")
-        .to_owned();
-    let mem_config =
-        mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
-    let outcome = mvp::tools::execute_app_tool_with_config(
-        ToolCoreRequest {
-            tool_name: "session_search".to_owned(),
-            payload: json!({
-                "query": query,
-                "limit": limit,
-                "include_archived": include_archived,
-            }),
-        },
-        &session_id,
-        &mem_config,
-        &config.tools,
-    )?;
-
-    if as_json {
-        let payload = session_search_cli_json(
-            &session_id,
-            query,
-            limit,
-            include_archived,
-            &outcome.payload,
-        );
-        let pretty = serde_json::to_string_pretty(&payload)
-            .map_err(|error| format!("serialize session-search output failed: {error}"))?;
-        println!("{pretty}");
-        return Ok(());
-    }
-
-    print!(
-        "{}",
-        format_session_search_text(
-            &session_id,
-            query,
-            limit,
-            include_archived,
-            &outcome.payload,
-        )
-    );
-    Ok(())
-}
-
-pub fn session_search_cli_json(
-    session_id: &str,
-    query: &str,
-    limit: usize,
-    include_archived: bool,
-    payload: &Value,
-) -> Value {
-    json!({
-        "session": session_id,
-        "query": query,
-        "limit": limit,
-        "include_archived": include_archived,
-        "result": payload,
-    })
-}
-
-pub fn format_session_search_text(
-    session_id: &str,
-    query: &str,
-    limit: usize,
-    include_archived: bool,
-    payload: &Value,
-) -> String {
-    let returned_count = payload
-        .get("returned_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let hits = payload
-        .get("hits")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut lines = vec![format!(
-        "session_search session={} query={} limit={} include_archived={} returned_count={}",
-        session_id, query, limit, include_archived, returned_count
-    )];
-
-    if hits.is_empty() {
-        lines.push("hits: -".to_owned());
-        return lines.join("\n") + "\n";
-    }
-
-    for hit in hits {
-        let session = hit.get("session").cloned().unwrap_or(Value::Null);
-        let hit_session_id = session
-            .get("session_id")
-            .and_then(Value::as_str)
-            .unwrap_or("-");
-        let role = hit.get("role").and_then(Value::as_str).unwrap_or("-");
-        let turn_index = hit
-            .get("session_turn_index")
-            .and_then(Value::as_u64)
-            .map(|value| value.to_string())
-            .unwrap_or_else(|| "-".to_owned());
-        let snippet = hit.get("snippet").and_then(Value::as_str).unwrap_or("");
-        lines.push(format!(
-            "- session={} turn_index={} role={} snippet={}",
-            hit_session_id, turn_index, role, snippet
-        ));
-    }
-
-    lines.join("\n") + "\n"
 }
 
 #[cfg(feature = "memory-sqlite")]
