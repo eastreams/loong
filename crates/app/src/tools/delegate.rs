@@ -4,6 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
+use crate::conversation::{
+    ConstrainedSubagentContractView, ConstrainedSubagentHandle, ConstrainedSubagentIdentity,
+    coordination_actions_for_subagent_handle,
+};
+
 #[cfg(test)]
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 
@@ -11,6 +16,7 @@ pub const DEFAULT_TIMEOUT_SECONDS: u64 = 60;
 pub(crate) struct DelegateRequest {
     pub task: String,
     pub label: Option<String>,
+    pub specialization: Option<String>,
     pub timeout_seconds: u64,
 }
 
@@ -25,11 +31,13 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
 ) -> Result<DelegateRequest, String> {
     let raw_task = payload.get("task").and_then(Value::as_str).unwrap_or("");
     let raw_label = payload.get("label").and_then(Value::as_str);
+    let raw_specialization = payload.get("specialization").and_then(Value::as_str);
     let timeout_seconds = payload.get("timeout_seconds").and_then(Value::as_u64);
 
     normalize_delegate_request(
         raw_task,
         raw_label,
+        raw_specialization,
         timeout_seconds,
         default_timeout_seconds,
     )
@@ -38,16 +46,19 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
 pub(crate) fn normalize_delegate_request(
     task: &str,
     label: Option<&str>,
+    specialization: Option<&str>,
     timeout_seconds: Option<u64>,
     default_timeout_seconds: u64,
 ) -> Result<DelegateRequest, String> {
     let normalized_task = normalize_required_delegate_text(task, "task")?;
     let normalized_label = normalize_optional_delegate_text(label);
+    let normalized_specialization = normalize_optional_delegate_text(specialization);
     let effective_timeout_seconds = timeout_seconds.unwrap_or(default_timeout_seconds);
 
     Ok(DelegateRequest {
         task: normalized_task,
         label: normalized_label,
+        specialization: normalized_specialization,
         timeout_seconds: effective_timeout_seconds,
     })
 }
@@ -69,6 +80,16 @@ fn normalize_optional_delegate_text(value: Option<&str>) -> Option<String> {
     Some(trimmed_value.to_owned())
 }
 
+pub(crate) fn subagent_identity_for_delegate_request(
+    request: &DelegateRequest,
+) -> Option<ConstrainedSubagentIdentity> {
+    let identity = ConstrainedSubagentIdentity {
+        nickname: request.label.clone(),
+        specialization: request.specialization.clone(),
+    };
+    (!identity.is_empty()).then_some(identity)
+}
+
 pub(crate) fn next_delegate_session_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -82,16 +103,29 @@ pub(crate) fn next_delegate_session_id() -> String {
 
 pub(crate) fn delegate_success_outcome(
     child_session_id: String,
+    parent_session_id: Option<String>,
     label: Option<String>,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
     final_output: String,
     turn_count: usize,
     duration_ms: u64,
 ) -> ToolCoreOutcome {
+    let subagent = delegate_subagent_handle(
+        child_session_id.clone(),
+        parent_session_id,
+        label.clone(),
+        Some("completed".to_owned()),
+        Some("completed".to_owned()),
+        subagent_contract,
+    );
     ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "child_session_id": child_session_id,
             "label": label,
+            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
+            "subagent_contract": subagent_contract,
+            "subagent": subagent,
             "final_output": final_output,
             "turn_count": turn_count,
             "duration_ms": duration_ms,
@@ -101,14 +135,27 @@ pub(crate) fn delegate_success_outcome(
 
 pub(crate) fn delegate_async_queued_outcome(
     child_session_id: String,
+    parent_session_id: Option<String>,
     label: Option<String>,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
     timeout_seconds: u64,
 ) -> ToolCoreOutcome {
+    let subagent = delegate_subagent_handle(
+        child_session_id.clone(),
+        parent_session_id,
+        label.clone(),
+        Some("ready".to_owned()),
+        Some("queued".to_owned()),
+        subagent_contract,
+    );
     ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
             "child_session_id": child_session_id,
             "label": label,
+            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
+            "subagent_contract": subagent_contract,
+            "subagent": subagent,
             "mode": "async",
             "state": "queued",
             "timeout_seconds": timeout_seconds,
@@ -118,14 +165,27 @@ pub(crate) fn delegate_async_queued_outcome(
 
 pub(crate) fn delegate_timeout_outcome(
     child_session_id: String,
+    parent_session_id: Option<String>,
     label: Option<String>,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
     duration_ms: u64,
 ) -> ToolCoreOutcome {
+    let subagent = delegate_subagent_handle(
+        child_session_id.clone(),
+        parent_session_id,
+        label.clone(),
+        Some("timed_out".to_owned()),
+        Some("timed_out".to_owned()),
+        subagent_contract,
+    );
     ToolCoreOutcome {
         status: "timeout".to_owned(),
         payload: json!({
             "child_session_id": child_session_id,
             "label": label,
+            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
+            "subagent_contract": subagent_contract,
+            "subagent": subagent,
             "duration_ms": duration_ms,
             "error": "delegate_timeout",
         }),
@@ -134,19 +194,64 @@ pub(crate) fn delegate_timeout_outcome(
 
 pub(crate) fn delegate_error_outcome(
     child_session_id: String,
+    parent_session_id: Option<String>,
     label: Option<String>,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
     error: String,
     duration_ms: u64,
 ) -> ToolCoreOutcome {
+    let subagent = delegate_subagent_handle(
+        child_session_id.clone(),
+        parent_session_id,
+        label.clone(),
+        Some("failed".to_owned()),
+        Some("failed".to_owned()),
+        subagent_contract,
+    );
     ToolCoreOutcome {
         status: "error".to_owned(),
         payload: json!({
             "child_session_id": child_session_id,
             "label": label,
+            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
+            "subagent_contract": subagent_contract,
+            "subagent": subagent,
             "duration_ms": duration_ms,
             "error": error,
         }),
     }
+}
+
+fn delegate_subagent_handle(
+    child_session_id: String,
+    parent_session_id: Option<String>,
+    label: Option<String>,
+    state: Option<String>,
+    phase: Option<String>,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
+) -> ConstrainedSubagentHandle {
+    let terminal = matches!(
+        phase.as_deref().or(state.as_deref()),
+        Some("completed" | "failed" | "timed_out")
+    );
+    let coordination = coordination_actions_for_subagent_handle(
+        terminal,
+        phase.as_deref().or(state.as_deref()),
+        subagent_contract.and_then(|contract| contract.mode),
+        false,
+    );
+    ConstrainedSubagentHandle::new(child_session_id)
+        .with_parent_session_id(parent_session_id)
+        .with_label(label)
+        .with_state(state)
+        .with_phase(phase)
+        .with_identity(
+            subagent_contract
+                .and_then(ConstrainedSubagentContractView::resolved_identity)
+                .cloned(),
+        )
+        .with_contract(subagent_contract.cloned())
+        .with_coordination(coordination)
 }
 
 #[cfg(test)]
@@ -168,6 +273,7 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label, None);
+        assert_eq!(request.specialization, None);
         assert_eq!(request.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
     }
 
@@ -176,13 +282,33 @@ mod tests {
         let request = normalize_delegate_request(
             "  research  ",
             Some("  release-check  "),
+            Some("  reviewer  "),
             None,
             DEFAULT_TIMEOUT_SECONDS,
         )
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label.as_deref(), Some("release-check"));
+        assert_eq!(request.specialization.as_deref(), Some("reviewer"));
         assert_eq!(request.timeout_seconds, DEFAULT_TIMEOUT_SECONDS);
+    }
+
+    #[test]
+    fn parse_delegate_request_includes_optional_specialization() {
+        let request = parse_delegate_request(&json!({
+            "task": "research",
+            "label": "child",
+            "specialization": "reviewer"
+        }))
+        .expect("delegate request");
+        assert_eq!(request.specialization.as_deref(), Some("reviewer"));
+        assert_eq!(
+            subagent_identity_for_delegate_request(&request),
+            Some(ConstrainedSubagentIdentity {
+                nickname: Some("child".to_owned()),
+                specialization: Some("reviewer".to_owned())
+            })
+        );
     }
 
     #[test]

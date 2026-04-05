@@ -14,6 +14,8 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 3;
+#[cfg(test)]
+const TEST_BROWSER_COMPANION_VERSION_PREFIX: &str = "loongclaw-test-browser-companion-version:";
 
 fn browser_companion_probe_timeout_seconds(timeout_seconds: u64) -> u64 {
     timeout_seconds.max(1)
@@ -239,11 +241,21 @@ pub(crate) async fn collect_browser_companion_diagnostics(
     }
 }
 
+#[cfg(test)]
+pub(crate) fn fake_browser_companion_version_command(version: &str) -> String {
+    format!("{TEST_BROWSER_COMPANION_VERSION_PREFIX}{version}")
+}
+
 async fn probe_browser_companion_version(
     command: &str,
     timeout_seconds: u64,
 ) -> Result<String, BrowserCompanionProbeError> {
     let timeout_duration = browser_companion_probe_timeout_duration(timeout_seconds);
+
+    #[cfg(test)]
+    if let Some(version) = command.strip_prefix(TEST_BROWSER_COMPANION_VERSION_PREFIX) {
+        return Ok(format!("loongclaw-browser-companion {version}"));
+    }
 
     for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
         let mut probe = Command::new(command);

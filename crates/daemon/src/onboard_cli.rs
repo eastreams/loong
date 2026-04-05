@@ -6331,6 +6331,7 @@ mod tests {
         OnboardRuntimeContext::new_for_tests(80, None, std::iter::empty::<PathBuf>())
     }
 
+    #[allow(dead_code)]
     fn browser_companion_temp_dir(label: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -6362,6 +6363,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)]
     fn write_browser_companion_version_script(temp_dir: &Path, version: &str) -> PathBuf {
         let script_path = browser_companion_script_path(temp_dir);
 
@@ -6818,13 +6820,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_warns_when_runtime_gate_is_closed() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_closed();
-        let temp_dir = browser_companion_temp_dir("runtime-gate");
-        let script_path = write_browser_companion_version_script(&temp_dir, "1.5.0");
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.command = Some(
+            crate::browser_companion_diagnostics::fake_browser_companion_version_command("1.5.0"),
+        );
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
 
         let checks = run_preflight_checks(&config, true).await;
@@ -6842,13 +6844,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn browser_companion_onboard_preflight_passes_when_runtime_gate_is_open() {
         let _env_guard = BrowserCompanionEnvGuard::runtime_gate_open();
-        let temp_dir = browser_companion_temp_dir("runtime-ready");
-        let script_path = write_browser_companion_version_script(&temp_dir, "1.5.0");
 
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.api_key = Some(SecretRef::Inline("inline-openai-key".to_owned()));
         config.tools.browser_companion.enabled = true;
-        config.tools.browser_companion.command = Some(script_path.display().to_string());
+        config.tools.browser_companion.command = Some(
+            crate::browser_companion_diagnostics::fake_browser_companion_version_command("1.5.0"),
+        );
         config.tools.browser_companion.expected_version = Some("1.5.0".to_owned());
 
         let checks = run_preflight_checks(&config, true).await;

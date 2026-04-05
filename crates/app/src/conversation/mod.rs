@@ -89,7 +89,12 @@ pub use session_history::{
     load_turn_checkpoint_event_summary,
 };
 pub use subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
+    ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
+    ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
+    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
+    ConstrainedSubagentProfile, ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
+    ConstrainedSubagentTerminalReason, coordination_actions_for_subagent_handle,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;

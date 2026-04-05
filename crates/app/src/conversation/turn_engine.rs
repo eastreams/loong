@@ -27,9 +27,8 @@ use crate::session::repository::{
 };
 use crate::tools::{
     ToolApprovalMode, ToolExecutionKind, ToolSchedulingClass, ToolView,
-    delegate_child_tool_view_for_config, delegate_child_tool_view_for_config_with_delegate,
-    governance_profile_for_descriptor, runtime_tool_view, runtime_tool_view_for_config,
-    tool_catalog,
+    delegate_child_tool_view_for_contract, governance_profile_for_descriptor, runtime_tool_view,
+    runtime_tool_view_for_config, tool_catalog,
 };
 #[cfg(feature = "memory-sqlite")]
 use crate::trust::{approval_required_trust_event, embed_trust_event_payload};
@@ -649,21 +648,35 @@ impl DefaultAppToolDispatcher {
         session_context: &SessionContext,
     ) -> Result<ToolView, String> {
         let repo = SessionRepository::new(&self.memory_config)?;
-        let session_graph = OperatorSessionGraph::new(&repo);
         if let Some(session) = repo.load_session(&session_context.session_id)? {
             if session.parent_session_id.is_some() {
-                let depth = session_graph
-                    .lineage_depth(&session_context.session_id)
-                    .map_err(|error| {
-                        format!(
-                            "compute session lineage depth for dispatcher tool view failed: {error}"
+                let subagent_contract = match session_context.resolved_subagent_contract() {
+                    Some(subagent_contract) => Some(subagent_contract),
+                    None => {
+                        let session_graph = OperatorSessionGraph::new(&repo);
+                        let depth = session_graph
+                            .lineage_depth(&session_context.session_id)
+                            .map_err(|error| {
+                                format!(
+                                    "compute session lineage depth for dispatcher tool view failed: {error}"
+                                )
+                            })?;
+                        let subagent_profile =
+                            crate::conversation::ConstrainedSubagentProfile::for_child_depth(
+                                depth,
+                                self.tool_config.delegate.max_depth,
+                            );
+                        Some(
+                            crate::conversation::ConstrainedSubagentContractView::from_profile(
+                                subagent_profile,
+                            ),
                         )
-                    })?;
-                let allow_nested_delegate = depth < self.tool_config.delegate.max_depth;
+                    }
+                };
                 return Ok(with_runtime_ready_browser_companion_tools(
-                    delegate_child_tool_view_for_config_with_delegate(
+                    delegate_child_tool_view_for_contract(
                         &self.tool_config,
-                        allow_nested_delegate,
+                        subagent_contract.as_ref(),
                     ),
                     &session_context.tool_view,
                 ));
@@ -677,8 +690,37 @@ impl DefaultAppToolDispatcher {
             .load_session_summary_with_legacy_fallback(&session_context.session_id)?
             .is_some_and(|session| session.kind == SessionKind::DelegateChild)
         {
+            let session_graph = OperatorSessionGraph::new(&repo);
+            let subagent_contract = match session_graph.lineage_depth(&session_context.session_id) {
+                Ok(depth) => {
+                    let subagent_profile =
+                        crate::conversation::ConstrainedSubagentProfile::for_child_depth(
+                            depth,
+                            self.tool_config.delegate.max_depth,
+                        );
+                    Some(
+                        crate::conversation::ConstrainedSubagentContractView::from_profile(
+                            subagent_profile,
+                        ),
+                    )
+                }
+                Err(error)
+                    if error.starts_with("session_lineage_broken:")
+                        || error.starts_with("session_lineage_cycle_detected:") =>
+                {
+                    None
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "compute session lineage depth for dispatcher tool view failed: {error}"
+                    ));
+                }
+            };
             return Ok(with_runtime_ready_browser_companion_tools(
-                delegate_child_tool_view_for_config(&self.tool_config),
+                delegate_child_tool_view_for_contract(
+                    &self.tool_config,
+                    subagent_contract.as_ref(),
+                ),
                 &session_context.tool_view,
             ));
         }

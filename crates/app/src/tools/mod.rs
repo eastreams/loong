@@ -77,7 +77,9 @@ pub use catalog::{
     ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
     ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
     capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
+    delegate_child_tool_view_for_profile, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_and_contract,
     delegate_child_tool_view_for_runtime_config_with_delegate, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
     runtime_tool_view, runtime_tool_view_for_config,
@@ -2239,6 +2241,37 @@ mod tests {
         let depth_budgeted_child = delegate_child_tool_view_for_config_with_delegate(&config, true);
         assert!(depth_budgeted_child.contains("delegate"));
         assert!(depth_budgeted_child.contains("delegate_async"));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_contract_path_preserves_fail_closed_and_leaf_behavior() {
+        let config = crate::config::ToolConfig::default();
+
+        let no_contract = delegate_child_tool_view_for_contract(&config, None);
+        assert!(!no_contract.contains("delegate"));
+        assert!(!no_contract.contains("delegate_async"));
+
+        let leaf_contract = crate::conversation::ConstrainedSubagentContractView::from_profile(
+            crate::conversation::ConstrainedSubagentProfile {
+                role: crate::conversation::ConstrainedSubagentRole::Leaf,
+                control_scope: crate::conversation::ConstrainedSubagentControlScope::None,
+            },
+        );
+        let leaf_view = delegate_child_tool_view_for_contract(&config, Some(&leaf_contract));
+        assert!(!leaf_view.contains("delegate"));
+        assert!(!leaf_view.contains("delegate_async"));
+
+        let orchestrator_contract =
+            crate::conversation::ConstrainedSubagentContractView::from_profile(
+                crate::conversation::ConstrainedSubagentProfile {
+                    role: crate::conversation::ConstrainedSubagentRole::Orchestrator,
+                    control_scope: crate::conversation::ConstrainedSubagentControlScope::Children,
+                },
+            );
+        let orchestrator_view =
+            delegate_child_tool_view_for_contract(&config, Some(&orchestrator_contract));
+        assert!(orchestrator_view.contains("delegate"));
+        assert!(orchestrator_view.contains("delegate_async"));
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 }
 
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
+    validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
     let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
         "daemon-migrate-cli",
@@ -79,6 +80,38 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
 
     render_migrate_tool_outcome(&options, outcome)
+}
+
+fn validate_migrate_cli_options(options: &MigrateCommandOptions) -> CliResult<()> {
+    let mode = options.mode;
+    match mode {
+        MigrateMode::Apply | MigrateMode::ApplySelected => {
+            require_flag_value(options.input.as_deref(), "input", mode)?;
+            require_flag_value(options.output.as_deref(), "output", mode)?;
+        }
+        MigrateMode::Plan
+        | MigrateMode::Discover
+        | MigrateMode::PlanMany
+        | MigrateMode::RecommendPrimary
+        | MigrateMode::MergeProfiles
+        | MigrateMode::MapExternalSkills => {
+            require_flag_value(options.input.as_deref(), "input", mode)?;
+        }
+        MigrateMode::RollbackLastApply => {
+            require_flag_value(options.output.as_deref(), "output", mode)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_flag_value(value: Option<&str>, flag: &str, mode: MigrateMode) -> CliResult<()> {
+    if value.map(str::trim).filter(|raw| !raw.is_empty()).is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "`--{flag}` is required for `loongclaw migrate --mode {}`",
+        mode.as_id()
+    ))
 }
 
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>

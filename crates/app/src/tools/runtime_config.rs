@@ -10,6 +10,14 @@ use super::{bash_rules, shell_policy_ext::ShellPolicyDefault};
 use crate::config::{AutonomyProfile, LoongClawConfig};
 #[cfg(feature = "feishu-integration")]
 use crate::config::{FeishuChannelConfig, FeishuIntegrationConfig};
+use crate::conversation::{
+    ConstrainedSubagentContractView, ConstrainedSubagentControlScope, ConstrainedSubagentMode,
+    ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
+};
+#[cfg(test)]
+use crate::conversation::{
+    ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
+};
 #[cfg(feature = "feishu-integration")]
 use crate::secrets::has_configured_secret_ref;
 use crate::secrets::{SecretLookup, resolve_secret_lookup};
@@ -1141,18 +1149,104 @@ impl ToolRuntimeConfig {
     #[must_use]
     pub(crate) fn delegate_child_prompt_summary(
         &self,
-        narrowing: &ToolRuntimeNarrowing,
+        subagent_contract: Option<&ConstrainedSubagentContractView>,
     ) -> Option<String> {
-        if narrowing.is_empty() {
-            return None;
-        }
-
+        let subagent_contract = subagent_contract?;
+        let narrowing = &subagent_contract.runtime_narrowing;
         let effective = self.narrowed(narrowing);
         let mut lines = vec![
             "[delegate_child_runtime_contract]".to_owned(),
             "Plan within these child-session runtime limits:".to_owned(),
         ];
         let mut rendered_any = false;
+
+        if let Some(mode) = subagent_contract.mode {
+            rendered_any = true;
+            let mode = match mode {
+                ConstrainedSubagentMode::Async => "async",
+                ConstrainedSubagentMode::Inline => "inline",
+            };
+            lines.push(format!("- subagent mode: {mode}"));
+        }
+
+        if let Some(identity) = subagent_contract.resolved_identity() {
+            if let Some(nickname) = identity.nickname.as_deref() {
+                rendered_any = true;
+                lines.push(format!("- subagent nickname: {nickname}"));
+            }
+            if let Some(specialization) = identity.specialization.as_deref() {
+                rendered_any = true;
+                lines.push(format!("- subagent specialization: {specialization}"));
+            }
+        }
+
+        if let Some(depth_budget) = subagent_contract.depth_budget {
+            rendered_any = true;
+            lines.push(format!(
+                "- subagent depth budget: {}/{}",
+                depth_budget.current, depth_budget.max
+            ));
+        }
+
+        if let Some(active_child_budget) = subagent_contract.active_child_budget {
+            rendered_any = true;
+            lines.push(format!(
+                "- subagent active-child budget snapshot: {}/{}",
+                active_child_budget.current, active_child_budget.max
+            ));
+        }
+
+        if let Some(timeout_seconds) = subagent_contract.timeout_seconds {
+            rendered_any = true;
+            lines.push(format!("- child timeout seconds: {}", timeout_seconds));
+        }
+
+        if let Some(allow_shell_in_child) = subagent_contract.allow_shell_in_child {
+            rendered_any = true;
+            lines.push(format!(
+                "- child shell.exec: {}",
+                if allow_shell_in_child {
+                    "allowed"
+                } else {
+                    "denied"
+                }
+            ));
+        }
+
+        if !subagent_contract.child_tool_allowlist.is_empty() || subagent_contract.mode.is_some() {
+            rendered_any = true;
+            let tool_allowlist = if subagent_contract.child_tool_allowlist.is_empty() {
+                "none".to_owned()
+            } else {
+                subagent_contract.child_tool_allowlist.join(", ")
+            };
+            lines.push(format!("- child tool allowlist: {tool_allowlist}"));
+        }
+
+        if let Some(runtime_binding) = subagent_contract.runtime_binding {
+            rendered_any = true;
+            lines.push(format!(
+                "- child runtime binding: {}",
+                match runtime_binding {
+                    ConstrainedSubagentRuntimeBinding::KernelBound => "kernel-bound",
+                    ConstrainedSubagentRuntimeBinding::Direct => "direct",
+                }
+            ));
+        }
+
+        if let Some(subagent_profile) = subagent_contract.profile {
+            rendered_any = true;
+            let role = match subagent_profile.role {
+                ConstrainedSubagentRole::Orchestrator => "orchestrator",
+                ConstrainedSubagentRole::Leaf => "leaf",
+            };
+            let control_scope = match subagent_profile.control_scope {
+                ConstrainedSubagentControlScope::Children => "children",
+                ConstrainedSubagentControlScope::None => "none",
+            };
+            lines.push(format!("- subagent role: {role}"));
+            lines.push(format!("- subagent control scope: {control_scope}"));
+        }
 
         if effective.web_fetch.enabled {
             if narrowing.web_fetch.allow_private_hosts.is_some() {
@@ -2898,8 +2992,7 @@ mod tests {
     #[test]
     fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
         assert_eq!(
-            ToolRuntimeConfig::default()
-                .delegate_child_prompt_summary(&ToolRuntimeNarrowing::default()),
+            ToolRuntimeConfig::default().delegate_child_prompt_summary(None),
             None
         );
     }
@@ -2941,15 +3034,44 @@ mod tests {
                 max_redirects: Some(2),
             },
         };
+        let execution = ConstrainedSubagentExecution {
+            mode: crate::conversation::ConstrainedSubagentMode::Async,
+            depth: 1,
+            max_depth: 2,
+            active_children: 0,
+            max_active_children: 3,
+            timeout_seconds: 60,
+            allow_shell_in_child: false,
+            child_tool_allowlist: vec!["web.fetch".to_owned()],
+            runtime_narrowing: narrowing,
+            kernel_bound: false,
+            identity: Some(ConstrainedSubagentIdentity {
+                nickname: Some("child-research".to_owned()),
+                specialization: Some("researcher".to_owned()),
+            }),
+            profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 2)),
+        };
 
+        let contract = execution.contract_view();
         let summary = base
-            .delegate_child_prompt_summary(&narrowing)
+            .delegate_child_prompt_summary(Some(&contract))
             .expect("delegate child prompt summary");
 
         assert_eq!(
             summary,
             "[delegate_child_runtime_contract]\n\
 Plan within these child-session runtime limits:\n\
+- subagent mode: async\n\
+- subagent nickname: child-research\n\
+- subagent specialization: researcher\n\
+- subagent depth budget: 1/2\n\
+- subagent active-child budget snapshot: 0/3\n\
+- child timeout seconds: 60\n\
+- child shell.exec: denied\n\
+- child tool allowlist: web.fetch\n\
+- child runtime binding: direct\n\
+- subagent role: orchestrator\n\
+- subagent control scope: children\n\
 - web.fetch private hosts: denied\n\
 - web.fetch allowed domains: none (effective intersection is empty)\n\
 - web.fetch blocked domains: base-block.example.com, deny.example.com\n\
@@ -2996,8 +3118,9 @@ Treat these as enforced limits for this child session."
             },
         };
 
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
         let summary = base
-            .delegate_child_prompt_summary(&narrowing)
+            .delegate_child_prompt_summary(Some(&contract))
             .expect("should still render browser section");
 
         assert!(
@@ -3043,8 +3166,9 @@ Treat these as enforced limits for this child session."
             },
         };
 
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
         let summary = base
-            .delegate_child_prompt_summary(&narrowing)
+            .delegate_child_prompt_summary(Some(&contract))
             .expect("should still render web_fetch section");
 
         assert!(
@@ -3080,11 +3204,31 @@ Treat these as enforced limits for this child session."
                 ..BrowserRuntimeNarrowing::default()
             },
         };
+        let contract = ConstrainedSubagentContractView::from_runtime_narrowing(narrowing);
 
         assert_eq!(
-            base.delegate_child_prompt_summary(&narrowing),
+            base.delegate_child_prompt_summary(Some(&contract)),
             None,
             "should return None when all narrowed tools are disabled"
+        );
+    }
+
+    #[test]
+    fn delegate_child_prompt_summary_renders_profile_even_when_narrowing_is_empty() {
+        let contract = ConstrainedSubagentContractView::from_profile(
+            ConstrainedSubagentProfile::for_child_depth(1, 1),
+        );
+        let summary = ToolRuntimeConfig::default()
+            .delegate_child_prompt_summary(Some(&contract))
+            .expect("profile-only child prompt summary");
+
+        assert_eq!(
+            summary,
+            "[delegate_child_runtime_contract]\n\
+Plan within these child-session runtime limits:\n\
+- subagent role: leaf\n\
+- subagent control scope: none\n\
+Treat these as enforced limits for this child session."
         );
     }
 

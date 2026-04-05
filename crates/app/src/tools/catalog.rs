@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
+use crate::conversation::{ConstrainedSubagentContractView, ConstrainedSubagentProfile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExecutionKind {
@@ -1476,6 +1477,38 @@ pub fn planned_delegate_child_tool_view() -> ToolView {
 
 pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
     delegate_child_tool_view_for_config_with_delegate(config, false)
+}
+
+pub fn delegate_child_tool_view_for_contract(
+    config: &ToolConfig,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let subagent_profile =
+        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
+    delegate_child_tool_view_for_profile(config, subagent_profile)
+}
+
+pub fn delegate_child_tool_view_for_runtime_config_and_contract(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let subagent_profile =
+        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
+    let allow_delegate = subagent_profile
+        .map(ConstrainedSubagentProfile::allows_child_delegation)
+        .unwrap_or(false);
+    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+}
+
+pub fn delegate_child_tool_view_for_profile(
+    config: &ToolConfig,
+    subagent_profile: Option<ConstrainedSubagentProfile>,
+) -> ToolView {
+    let allow_delegate = subagent_profile
+        .map(ConstrainedSubagentProfile::allows_child_delegation)
+        .unwrap_or(false);
+    build_delegate_child_tool_view(config, None, allow_delegate)
 }
 
 pub fn delegate_child_tool_view_for_runtime_config(
@@ -3378,6 +3411,10 @@ fn delegate_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
+                    "specialization": {
+                        "type": "string",
+                        "description": "Optional bounded specialization hint carried on the child handle."
+                    },
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
@@ -3408,6 +3445,10 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
                     "label": {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
+                    },
+                    "specialization": {
+                        "type": "string",
+                        "description": "Optional bounded specialization hint carried on the child handle."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3605,7 +3646,9 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
-        "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
+        "delegate" | "delegate_async" => {
+            "task:string,label?:string,specialization?:string,timeout_seconds?:integer"
+        }
         "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
         "session_tool_policy_set" => {
             "session_id?:string,tool_ids?:string[],runtime_narrowing?:object"
@@ -4027,6 +4070,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         "delegate" | "delegate_async" => &[
             ("task", "string"),
             ("label", "string"),
+            ("specialization", "string"),
             ("timeout_seconds", "integer"),
         ],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[("session_id", "string")],
@@ -4502,6 +4546,28 @@ mod tests {
         let child_view = delegate_child_tool_view_for_config(&config);
 
         assert!(!child_view.contains("web.fetch"));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_for_contract_fails_closed_without_profile() {
+        let config = ToolConfig::default();
+        let child_view = delegate_child_tool_view_for_contract(&config, None);
+
+        assert!(!child_view.contains("delegate"));
+        assert!(!child_view.contains("delegate_async"));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_for_contract_allows_nested_delegate_when_profile_permits() {
+        let config = ToolConfig::default();
+        let contract = ConstrainedSubagentContractView::from_profile(ConstrainedSubagentProfile {
+            role: crate::conversation::ConstrainedSubagentRole::Orchestrator,
+            control_scope: crate::conversation::ConstrainedSubagentControlScope::Children,
+        });
+        let child_view = delegate_child_tool_view_for_contract(&config, Some(&contract));
+
+        assert!(child_view.contains("delegate"));
+        assert!(child_view.contains("delegate_async"));
     }
 
     #[cfg(feature = "tool-shell")]
