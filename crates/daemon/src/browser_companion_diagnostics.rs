@@ -11,6 +11,8 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_COMPANION_PROBE_MAX_ATTEMPTS: usize = 2;
+#[cfg(test)]
+const TEST_BROWSER_COMPANION_VERSION_PREFIX: &str = "loongclaw-test-browser-companion-version:";
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,12 +228,22 @@ async fn probe_browser_companion_version_with_policy(
     timeout: Duration,
     max_attempts: usize,
 ) -> Result<String, BrowserCompanionProbeError> {
+    #[cfg(test)]
+    if let Some(version) = command.strip_prefix(TEST_BROWSER_COMPANION_VERSION_PREFIX) {
+        return Ok(format!("loongclaw-browser-companion {version}"));
+    }
+
     tokio::task::spawn_blocking({
         let command = command.to_owned();
         move || probe_browser_companion_version_blocking(command, timeout, max_attempts)
     })
     .await
     .map_err(|error| BrowserCompanionProbeError::SpawnFailed(error.to_string()))?
+}
+
+#[cfg(test)]
+pub(crate) fn fake_browser_companion_version_command(version: &str) -> String {
+    format!("{TEST_BROWSER_COMPANION_VERSION_PREFIX}{version}")
 }
 
 fn probe_browser_companion_version_blocking(
