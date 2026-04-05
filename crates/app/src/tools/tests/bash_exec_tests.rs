@@ -321,7 +321,7 @@ fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
     let log_path = fallback_root.join("bash-args.log");
     let runtime_path = write_fake_bash_runtime(&fallback_root, "fake-bash", &log_path);
 
-    let mut config = test_tool_runtime_config(fallback_root.clone());
+    let mut config = test_tool_runtime_config(fallback_root);
     config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
     config.bash_exec = runtime_config::BashExecRuntimePolicy {
         available: true,
