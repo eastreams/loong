@@ -2868,6 +2868,49 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
     );
 }
 
+#[test]
+fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
+    let execution = crate::conversation::ConstrainedSubagentExecution {
+        mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        depth: 1,
+        max_depth: 3,
+        active_children: 0,
+        max_active_children: 2,
+        timeout_seconds: 60,
+        allow_shell_in_child: false,
+        child_tool_allowlist: vec!["web.fetch".to_owned()],
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        kernel_bound: false,
+        identity: None,
+        profile: None,
+    };
+    let runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
+        web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
+            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
+    )
+    .with_runtime_narrowing(runtime_narrowing.clone())
+    .with_subagent_execution(execution);
+
+    let execution_runtime_narrowing = session_context
+        .subagent_execution
+        .as_ref()
+        .map(|execution| execution.runtime_narrowing.clone());
+    let session_runtime_narrowing = session_context.runtime_narrowing.clone();
+    let effective_runtime_narrowing = session_context.subagent_runtime_narrowing().cloned();
+
+    assert_eq!(execution_runtime_narrowing, Some(runtime_narrowing.clone()));
+    assert_eq!(session_runtime_narrowing, Some(runtime_narrowing.clone()));
+    assert_eq!(effective_runtime_narrowing, Some(runtime_narrowing));
+}
+
 #[tokio::test]
 async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine_with_kernel() {
     let calls = Arc::new(Mutex::new(Vec::new()));
