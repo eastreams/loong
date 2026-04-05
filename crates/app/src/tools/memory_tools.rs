@@ -547,3 +547,69 @@ fn trim_trailing_line_endings(line: &str) -> &str {
     let without_carriage_return = without_newline.strip_suffix('\r');
     without_carriage_return.unwrap_or(without_newline)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::unique_temp_dir;
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_returns_cross_session_canonical_hits_without_workspace_root() {
+        let root = unique_temp_dir("loongclaw-memory-search-canonical");
+        let db_path = root.join("memory.sqlite3");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        crate::memory::append_turn_direct(
+            "release-session",
+            "assistant",
+            "Deployment cutoff is 17:00 Beijing time and requires a release note.",
+            &memory_config,
+        )
+        .expect("append canonical assistant turn");
+
+        let runtime_config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deployment cutoff release note",
+                    "max_results": 4
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["source"], "canonical_session");
+        assert_eq!(results[0]["session_id"], "release-session");
+        assert_eq!(results[0]["scope"], "session");
+        assert_eq!(results[0]["kind"], "assistant_turn");
+        assert_eq!(results[0]["role"], "assistant");
+        assert!(
+            results[0]["path"].is_null(),
+            "canonical search should not synthesize a file path: {results:?}"
+        );
+        assert!(
+            results[0]["start_line"].is_null() && results[0]["end_line"].is_null(),
+            "canonical search should not report line windows: {results:?}"
+        );
+        assert!(
+            results[0]["snippet"]
+                .as_str()
+                .is_some_and(|value| value.contains("17:00 Beijing time")),
+            "expected canonical snippet in result payload: {results:?}"
+        );
+    }
+}

@@ -4298,6 +4298,34 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn runtime_tool_view_includes_memory_search_for_canonical_memory_without_workspace_files() {
+        let runtime_dir = tempdir().expect("tempdir");
+        let db_path = runtime_dir.path().join("memory.sqlite3");
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        crate::memory::append_turn_direct(
+            "canonical-view-session",
+            "assistant",
+            "Rollback checklist includes smoke tests and release notes.",
+            &memory_config,
+        )
+        .expect("append canonical turn");
+
+        let runtime = ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..ToolRuntimeConfig::default()
+        };
+        let tool_view = runtime_tool_view_for_runtime_config(&runtime);
+
+        assert!(tool_view.contains("memory_search"));
+        assert!(!tool_view.contains("memory_get"));
+    }
+
     #[test]
     fn browser_visibility_gate_is_independent_from_companion_settings() {
         let mut config = ToolRuntimeConfig::default();
