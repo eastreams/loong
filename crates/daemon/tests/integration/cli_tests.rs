@@ -411,6 +411,26 @@ fn session_search_cli_parses_flags() {
 }
 
 #[test]
+fn session_search_inspect_cli_parses_flags() {
+    let cli = try_parse_cli([
+        "loongclaw",
+        "session-search-inspect",
+        "--artifact",
+        "/tmp/session-search.json",
+        "--json",
+    ])
+    .expect("`session-search-inspect` should parse");
+
+    match cli.command {
+        Some(Commands::SessionSearchInspect { artifact, json }) => {
+            assert_eq!(artifact, "/tmp/session-search.json");
+            assert!(json);
+        }
+        other => panic!("unexpected command parsed: {other:?}"),
+    }
+}
+
+#[test]
 fn format_session_search_text_includes_hit_summary() {
     let rendered = format_session_search_text(
         "/tmp/loongclaw.toml",
@@ -460,6 +480,56 @@ fn format_session_search_text_includes_hit_summary() {
     assert!(rendered.contains("session=child-session"));
     assert!(rendered.contains("role=assistant"));
     assert!(rendered.contains("deploy freeze checklist updated"));
+}
+
+#[test]
+fn format_session_search_inspect_text_summarizes_first_hit() {
+    let rendered = format_session_search_inspect_text(
+        "/tmp/session-search.json",
+        &SessionSearchArtifactDocument {
+            schema: SessionSearchArtifactSchema {
+                version: SESSION_SEARCH_ARTIFACT_JSON_SCHEMA_VERSION,
+                surface: "session_search".to_owned(),
+                purpose: "session_recall_evidence".to_owned(),
+            },
+            exported_at: "2026-04-05T00:00:00Z".to_owned(),
+            config: "/tmp/loongclaw.toml".to_owned(),
+            scope_session_id: "root-session".to_owned(),
+            query: "deploy freeze".to_owned(),
+            limit: 5,
+            include_archived: false,
+            visibility: "children".to_owned(),
+            returned_count: 1,
+            hits: vec![SessionSearchArtifactHit {
+                session: SessionSearchArtifactHitSession {
+                    session_id: "child-session".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    parent_session_id: Some("root-session".to_owned()),
+                    label: Some("Child".to_owned()),
+                    state: "running".to_owned(),
+                    created_at: 1,
+                    updated_at: 2,
+                    archived: false,
+                    archived_at: None,
+                    turn_count: 3,
+                    last_turn_at: Some(2),
+                    last_error: None,
+                },
+                turn_id: 12,
+                session_turn_index: 2,
+                role: "assistant".to_owned(),
+                ts: 123,
+                snippet: "deploy freeze checklist updated".to_owned(),
+                content_chars: 32,
+            }],
+        },
+    );
+
+    assert!(rendered.contains("artifact=/tmp/session-search.json"));
+    assert!(rendered.contains("scope_session_id=root-session"));
+    assert!(rendered.contains("query=deploy freeze"));
+    assert!(rendered.contains("first_hit_session_id=child-session"));
+    assert!(rendered.contains("first_hit_role=assistant"));
 }
 
 #[test]
