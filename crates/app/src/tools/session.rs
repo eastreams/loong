@@ -16,7 +16,7 @@ use crate::config::{SessionVisibility, ToolConfig};
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentHandle,
     ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
-    coordination_actions_for_subagent_handle,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -1363,7 +1363,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         snapshot.subagent_contract.as_ref(),
         delegate_lifecycle.as_ref(),
     );
-    json!({
+    let mut payload = json!({
         "session": {
             "session_id": snapshot.session.session_id,
             "kind": snapshot.session.kind.as_str(),
@@ -1378,16 +1378,6 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         },
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
-        "subagent_profile": snapshot
-            .subagent_contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_profile),
-        "subagent_identity": snapshot
-            .subagent_contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_identity),
-        "subagent_contract": snapshot.subagent_contract,
-        "subagent": subagent_handle,
         "delegate_lifecycle": delegate_lifecycle.map(session_delegate_lifecycle_json),
         "recovery": recovery.map(recovery_json),
         "terminal_outcome": snapshot.terminal_outcome.map(session_terminal_outcome_json),
@@ -1396,7 +1386,12 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
             .into_iter()
             .map(session_event_json)
             .collect::<Vec<_>>(),
-    })
+    });
+    let Some(object) = payload.as_object_mut() else {
+        return payload;
+    };
+    object.extend(subagent_surface_fields(subagent_handle.as_ref()));
+    payload
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2677,29 +2672,7 @@ fn session_summary_json_with_delegate_lifecycle(
     );
     let mut payload = session_summary_json(session);
     if include_delegate_lifecycle && let Some(object) = payload.as_object_mut() {
-        object.insert(
-            "subagent_profile".to_owned(),
-            subagent_contract
-                .as_ref()
-                .and_then(ConstrainedSubagentContractView::resolved_profile)
-                .map(|profile| json!(profile))
-                .unwrap_or(Value::Null),
-        );
-        object.insert(
-            "subagent_identity".to_owned(),
-            subagent_contract
-                .as_ref()
-                .and_then(ConstrainedSubagentContractView::resolved_identity)
-                .map(|identity| json!(identity))
-                .unwrap_or(Value::Null),
-        );
-        object.insert(
-            "subagent_contract".to_owned(),
-            subagent_contract
-                .map(|contract| json!(contract))
-                .unwrap_or(Value::Null),
-        );
-        object.insert("subagent".to_owned(), json!(subagent));
+        object.extend(subagent_surface_fields(subagent.as_ref()));
         object.insert(
             "delegate_lifecycle".to_owned(),
             delegate_lifecycle

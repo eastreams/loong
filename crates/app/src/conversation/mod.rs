@@ -84,6 +84,7 @@ pub use subagent::{
     ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
     ConstrainedSubagentProfile, ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
     ConstrainedSubagentTerminalReason, coordination_actions_for_subagent_handle,
+    subagent_surface_fields,
 };
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};
