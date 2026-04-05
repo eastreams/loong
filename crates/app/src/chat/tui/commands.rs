@@ -139,7 +139,7 @@ const COMMANDS: &[SlashCommandSpec] = &[
         help: "Show or set busy-turn submit behavior (queue or steer)",
         category: "View",
         aliases: &[],
-        argument_hint: Some("[queue|steer|toggle]"),
+        argument_hint: Some("[queue|steer|toggle|clear]"),
         discoverable: true,
     },
     SlashCommandSpec {

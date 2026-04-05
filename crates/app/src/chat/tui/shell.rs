@@ -657,6 +657,7 @@ enum BusyInputModeAction {
     Status,
     Set(state::BusyInputMode),
     Toggle,
+    Clear,
 }
 
 fn parse_busy_input_mode_action(args: &str) -> Result<BusyInputModeAction, String> {
@@ -670,7 +671,8 @@ fn parse_busy_input_mode_action(args: &str) -> Result<BusyInputModeAction, Strin
         "queue" => Ok(BusyInputModeAction::Set(state::BusyInputMode::Queue)),
         "steer" => Ok(BusyInputModeAction::Set(state::BusyInputMode::Steer)),
         "toggle" | "cycle" => Ok(BusyInputModeAction::Toggle),
-        _ => Err("usage: `/mode [queue|steer|toggle]`".to_owned()),
+        "clear" => Ok(BusyInputModeAction::Clear),
+        _ => Err("usage: `/mode [queue|steer|toggle|clear]`".to_owned()),
     }
 }
 
@@ -1619,6 +1621,66 @@ fn model_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashP
     }
 }
 
+fn mode_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashPaletteEntry> {
+    let query = args.trim().to_ascii_lowercase();
+    let busy_input_mode = shell.pane.busy_input_mode();
+    let pending_submission_count = shell.pane.pending_submission_count();
+    let can_clear = pending_submission_count > 0;
+    let mode_entries = [
+        (
+            "queue",
+            "Queue",
+            if busy_input_mode == state::BusyInputMode::Queue {
+                "Queue follow-up messages in FIFO order (current)"
+            } else {
+                "Queue follow-up messages in FIFO order"
+            },
+        ),
+        (
+            "steer",
+            "Steer",
+            if busy_input_mode == state::BusyInputMode::Steer {
+                "Replace the pending steer message and interrupt at the next tool boundary (current)"
+            } else {
+                "Replace the pending steer message and interrupt at the next tool boundary"
+            },
+        ),
+        ("toggle", "Mode", "Cycle between queue and steer modes"),
+    ];
+
+    let mut entries = mode_entries
+        .into_iter()
+        .filter(|(command, _meta, detail)| {
+            matches_candidate_query(command, query.as_str())
+                || matches_candidate_query(detail, query.as_str())
+        })
+        .map(|(command, meta, detail)| render::SlashPaletteEntry {
+            replacement: format!("/mode {command}"),
+            label: format!("/mode {command}"),
+            meta: meta.to_owned(),
+            detail: detail.to_owned(),
+            immediate: false,
+            submit_on_select: false,
+        })
+        .collect::<Vec<_>>();
+
+    let clear_matches = matches_candidate_query("clear", query.as_str())
+        || matches_candidate_query("clear pending submissions", query.as_str());
+    if can_clear && clear_matches {
+        let clear_entry = render::SlashPaletteEntry {
+            replacement: "/mode clear".to_owned(),
+            label: "/mode clear".to_owned(),
+            meta: "Mode".to_owned(),
+            detail: format!("Clear {pending_submission_count} pending submission(s)"),
+            immediate: false,
+            submit_on_select: false,
+        };
+        entries.push(clear_entry);
+    }
+
+    entries
+}
+
 fn slash_palette_entries(
     shell: &state::Shell,
     draft_prefix: &str,
@@ -1642,6 +1704,12 @@ fn slash_palette_entries(
         }
         if matches!(parsed.command, SlashCommand::Model) {
             let entries = model_palette_entries(shell, parsed.args.as_str());
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
+        if matches!(parsed.command, SlashCommand::Mode) {
+            let entries = mode_palette_entries(shell, parsed.args.as_str());
             if !entries.is_empty() {
                 return entries;
             }
@@ -1859,15 +1927,54 @@ fn busy_input_mode_lines(shell: &state::Shell) -> Vec<String> {
     let pending_submission_count = shell.pane.pending_submission_count();
     let queue_depth = shell.pane.queued_messages.len();
     let steer_armed = shell.pane.steer_message.is_some();
+    let queued_preview = shell
+        .pane
+        .queued_messages
+        .iter()
+        .take(2)
+        .map(|message| trim_message_preview(message.text.as_str()))
+        .collect::<Vec<_>>();
+    let steer_preview = shell
+        .pane
+        .steer_message
+        .as_ref()
+        .map(|message| trim_message_preview(message.text.as_str()));
 
-    vec![
+    let mut lines = vec![
         format!("- mode: {mode_label}"),
         format!("- pending submissions: {pending_submission_count}"),
         format!("- queued messages: {queue_depth}"),
         format!("- steer armed: {}", if steer_armed { "yes" } else { "no" }),
         "- switch with `/mode queue` or `/mode steer`".to_owned(),
         "- cycle with `Ctrl+G` while composing".to_owned(),
-    ]
+    ];
+
+    if !queued_preview.is_empty() {
+        let queued_preview_label = queued_preview.join(" | ");
+        lines.push(format!("- queue preview: {queued_preview_label}"));
+    }
+
+    if let Some(steer_preview) = steer_preview {
+        lines.push(format!("- steer preview: {steer_preview}"));
+    }
+
+    lines
+}
+
+fn trim_message_preview(text: &str) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let compact = compact.trim().to_owned();
+    let max_chars = 48_usize;
+    let char_count = compact.chars().count();
+    if char_count <= max_chars {
+        return compact;
+    }
+
+    let truncated = compact
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
+    format!("{truncated}…")
 }
 
 fn show_busy_input_mode_surface(shell: &mut state::Shell, args: &str) {
@@ -1889,6 +1996,12 @@ fn show_busy_input_mode_surface(shell: &mut state::Shell, args: &str) {
             let next_mode = shell.pane.busy_input_mode();
             let label = next_mode.label().to_ascii_lowercase();
             shell.pane.set_status(format!("Busy input mode: {label}"));
+        }
+        Ok(BusyInputModeAction::Clear) => {
+            shell.pane.clear_pending_submissions();
+            shell
+                .pane
+                .set_status("Pending submissions cleared".to_owned());
         }
         Err(error) => {
             shell.pane.add_system_message(&error);
@@ -6293,6 +6406,25 @@ mod tests {
     }
 
     #[test]
+    fn mode_palette_suggests_busy_input_modes() {
+        let shell = state::Shell::new("sess-mode");
+        let entries = slash_palette_entries(&shell, "/mode");
+
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.replacement == "/mode queue"),
+            "mode palette should include queue: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|entry| entry.replacement == "/mode steer"),
+            "mode palette should include steer: {entries:?}"
+        );
+    }
+
+    #[test]
     fn ctrl_g_cycles_busy_input_mode() {
         let mut shell = state::Shell::new("sess-mode");
         let mut textarea = tui_textarea::TextArea::default();
@@ -6308,6 +6440,25 @@ mod tests {
         );
 
         assert_eq!(shell.pane.busy_input_mode(), state::BusyInputMode::Steer);
+    }
+
+    #[test]
+    fn mode_clear_command_drops_pending_submissions() {
+        let mut shell = state::Shell::new("sess-mode-clear");
+        shell.pane.set_busy_input_mode(state::BusyInputMode::Queue);
+        shell.pane.enqueue_busy_submission("queued".to_owned());
+        shell.pane.set_busy_input_mode(state::BusyInputMode::Steer);
+        shell.pane.enqueue_busy_submission("steer".to_owned());
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Mode,
+                args: "clear".to_owned(),
+            },
+        );
+
+        assert!(!shell.pane.has_pending_submissions());
     }
 
     #[test]
