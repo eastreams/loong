@@ -654,23 +654,31 @@ impl DefaultAppToolDispatcher {
                     Some(subagent_contract) => Some(subagent_contract),
                     None => {
                         let session_graph = OperatorSessionGraph::new(&repo);
-                        let depth = session_graph
-                            .lineage_depth(&session_context.session_id)
-                            .map_err(|error| {
-                                format!(
-                                    "compute session lineage depth for dispatcher tool view failed: {error}"
+                        match session_graph.lineage_depth(&session_context.session_id) {
+                            Ok(depth) => {
+                                let subagent_profile =
+                                    crate::conversation::ConstrainedSubagentProfile::for_child_depth(
+                                        depth,
+                                        self.tool_config.delegate.max_depth,
+                                    );
+                                Some(
+                                    crate::conversation::ConstrainedSubagentContractView::from_profile(
+                                        subagent_profile,
+                                    ),
                                 )
-                            })?;
-                        let subagent_profile =
-                            crate::conversation::ConstrainedSubagentProfile::for_child_depth(
-                                depth,
-                                self.tool_config.delegate.max_depth,
-                            );
-                        Some(
-                            crate::conversation::ConstrainedSubagentContractView::from_profile(
-                                subagent_profile,
-                            ),
-                        )
+                            }
+                            Err(error)
+                                if error.starts_with("session_lineage_broken:")
+                                    || error.starts_with("session_lineage_cycle_detected:") =>
+                            {
+                                None
+                            }
+                            Err(error) => {
+                                return Err(format!(
+                                    "compute session lineage depth for dispatcher tool view failed: {error}"
+                                ));
+                            }
+                        }
                     }
                 };
                 return Ok(with_runtime_ready_browser_companion_tools(

@@ -108,8 +108,10 @@ fn require_flag_value(value: Option<&str>, flag: &str, mode: MigrateMode) -> Cli
     if value.map(str::trim).filter(|raw| !raw.is_empty()).is_some() {
         return Ok(());
     }
+    let command_name = mvp::config::active_cli_command_name();
     Err(format!(
-        "`--{flag}` is required for `loongclaw migrate --mode {}`",
+        "`--{flag}` is required for `{} migrate --mode {}`",
+        command_name,
         mode.as_id()
     ))
 }

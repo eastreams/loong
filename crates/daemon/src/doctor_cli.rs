@@ -2709,8 +2709,6 @@ mod tests {
     use std::ffi::OsString;
     use std::fs::Permissions;
     #[cfg(unix)]
-    use std::io::Write;
-    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     #[cfg(unix)]
@@ -2728,7 +2726,6 @@ mod tests {
         ChannelStatusSnapshot,
     };
 
-    #[allow(dead_code)]
     fn browser_companion_temp_dir(label: &str) -> PathBuf {
         static NEXT_TEMP_DIR_SEED: AtomicU64 = AtomicU64::new(1);
         let seed = NEXT_TEMP_DIR_SEED.fetch_add(1, Ordering::Relaxed);
@@ -2899,22 +2896,6 @@ mod tests {
         std::fs::create_dir_all(&plugin_directory).expect("create managed bridge plugin directory");
         std::fs::write(&manifest_path, encoded_manifest)
             .expect("write managed bridge plugin manifest");
-    }
-
-    #[cfg(unix)]
-    #[allow(dead_code)]
-    fn write_browser_companion_script(script_path: &Path, body: &str) {
-        let mut file = std::fs::File::create(script_path).expect("create browser companion script");
-        file.write_all(body.as_bytes())
-            .expect("write browser companion script");
-        file.sync_all()
-            .expect("sync browser companion script to disk");
-        drop(file);
-        let mut permissions = std::fs::metadata(script_path)
-            .expect("script metadata")
-            .permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(script_path, permissions).expect("chmod browser companion script");
     }
 
     #[cfg(unix)]

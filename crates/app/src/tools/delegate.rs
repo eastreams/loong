@@ -116,6 +116,7 @@ pub(crate) fn delegate_success_outcome(
         label.clone(),
         Some("completed".to_owned()),
         Some("completed".to_owned()),
+        None,
         subagent_contract,
     );
     let mut payload = Map::new();
@@ -145,6 +146,7 @@ pub(crate) fn delegate_async_queued_outcome(
         label.clone(),
         Some("ready".to_owned()),
         Some("queued".to_owned()),
+        Some(crate::conversation::ConstrainedSubagentMode::Async),
         subagent_contract,
     );
     let mut payload = Map::new();
@@ -174,6 +176,7 @@ pub(crate) fn delegate_timeout_outcome(
         label.clone(),
         Some("timed_out".to_owned()),
         Some("timed_out".to_owned()),
+        None,
         subagent_contract,
     );
     let mut payload = Map::new();
@@ -203,6 +206,7 @@ pub(crate) fn delegate_error_outcome(
         label.clone(),
         Some("failed".to_owned()),
         Some("failed".to_owned()),
+        None,
         subagent_contract,
     );
     let mut payload = Map::new();
@@ -224,8 +228,10 @@ fn delegate_subagent_handle(
     label: Option<String>,
     state: Option<String>,
     phase: Option<String>,
+    explicit_mode: Option<crate::conversation::ConstrainedSubagentMode>,
     subagent_contract: Option<&ConstrainedSubagentContractView>,
 ) -> ConstrainedSubagentHandle {
+    let mode = explicit_mode.or_else(|| subagent_contract.and_then(|contract| contract.mode));
     let terminal = matches!(
         phase.as_deref().or(state.as_deref()),
         Some("completed" | "failed" | "timed_out")
@@ -233,7 +239,7 @@ fn delegate_subagent_handle(
     let coordination = coordination_actions_for_subagent_handle(
         terminal,
         phase.as_deref().or(state.as_deref()),
-        subagent_contract.and_then(|contract| contract.mode),
+        mode,
         false,
     );
     ConstrainedSubagentHandle::new(child_session_id)

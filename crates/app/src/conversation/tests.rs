@@ -20435,6 +20435,7 @@ async fn spawn_background_delegate_with_runtime_creates_missing_root_session_sco
         "task-root",
         "collect repo health",
         Some("health-check".to_owned()),
+        None,
         Some(42),
         ConversationRuntimeBinding::direct(),
     )
@@ -20530,6 +20531,7 @@ async fn spawn_background_delegate_with_runtime_uses_default_timeout_when_omitte
         &runtime,
         "task-root",
         "sync release checklist",
+        None,
         None,
         None,
         ConversationRuntimeBinding::direct(),

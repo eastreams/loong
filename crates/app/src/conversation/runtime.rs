@@ -1210,10 +1210,10 @@ where
             let session_tool_policy = snapshot
                 .as_ref()
                 .and_then(|snapshot| snapshot.session_tool_policy.as_ref());
-            return Ok(apply_session_tool_policy_to_tool_view(
+            Ok(apply_session_tool_policy_to_tool_view(
                 base_tool_view,
                 session_tool_policy,
-            ));
+            ))
         }
 
         #[cfg(not(feature = "memory-sqlite"))]

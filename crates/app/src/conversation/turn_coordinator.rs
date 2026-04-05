@@ -4106,6 +4106,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     session_id: &str,
     task: &str,
     label: Option<String>,
+    specialization: Option<String>,
     timeout_seconds: Option<u64>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
@@ -4113,7 +4114,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     let delegate_request = crate::tools::delegate::normalize_delegate_request(
         task,
         label.as_deref(),
-        None,
+        specialization.as_deref(),
         timeout_seconds,
         config.tools.delegate.timeout_seconds,
     )?;
@@ -4134,6 +4135,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     _session_id: &str,
     _task: &str,
     _label: Option<String>,
+    _specialization: Option<String>,
     _timeout_seconds: Option<u64>,
     _binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {

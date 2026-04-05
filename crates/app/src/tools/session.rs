@@ -19,7 +19,7 @@ use crate::config::{SessionVisibility, ToolConfig};
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentHandle,
     ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
-    coordination_actions_for_subagent_handle,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -3333,33 +3333,10 @@ fn session_summary_json_with_delegate_lifecycle(
 #[cfg(feature = "memory-sqlite")]
 fn insert_subagent_surface_fields(
     object: &mut serde_json::Map<String, Value>,
-    subagent_contract: Option<&ConstrainedSubagentContractView>,
+    _subagent_contract: Option<&ConstrainedSubagentContractView>,
     subagent: Option<&ConstrainedSubagentHandle>,
 ) {
-    object.insert(
-        "subagent_profile".to_owned(),
-        subagent_contract
-            .and_then(ConstrainedSubagentContractView::resolved_profile)
-            .map(|profile| json!(profile))
-            .unwrap_or(Value::Null),
-    );
-    object.insert(
-        "subagent_identity".to_owned(),
-        subagent_contract
-            .and_then(ConstrainedSubagentContractView::resolved_identity)
-            .map(|identity| json!(identity))
-            .unwrap_or(Value::Null),
-    );
-    object.insert(
-        "subagent_contract".to_owned(),
-        subagent_contract
-            .map(|contract| json!(contract))
-            .unwrap_or(Value::Null),
-    );
-    object.insert(
-        "subagent".to_owned(),
-        subagent.map(|handle| json!(handle)).unwrap_or(Value::Null),
-    );
+    object.extend(subagent_surface_fields(subagent));
 }
 
 #[cfg(feature = "memory-sqlite")]
