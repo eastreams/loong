@@ -1677,7 +1677,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         snapshot.subagent_contract.as_ref(),
         delegate_lifecycle.as_ref(),
     );
-    json!({
+    let mut payload = json!({
         "session": {
             "session_id": snapshot.session.session_id,
             "kind": snapshot.session.kind.as_str(),
@@ -1717,7 +1717,12 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
             .into_iter()
             .map(session_event_json)
             .collect::<Vec<_>>(),
-    })
+    });
+    let Some(object) = payload.as_object_mut() else {
+        return payload;
+    };
+    object.extend(subagent_surface_fields(subagent_handle.as_ref()));
+    payload
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -2,11 +2,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use loongclaw_contracts::ToolCoreOutcome;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentHandle, ConstrainedSubagentIdentity,
-    coordination_actions_for_subagent_handle,
+    coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 
 #[cfg(test)]
@@ -118,18 +118,17 @@ pub(crate) fn delegate_success_outcome(
         Some("completed".to_owned()),
         subagent_contract,
     );
+    let mut payload = Map::new();
+    payload.insert("child_session_id".to_owned(), json!(child_session_id));
+    payload.insert("label".to_owned(), json!(label));
+    payload.extend(subagent_surface_fields(Some(&subagent)));
+    payload.insert("final_output".to_owned(), json!(final_output));
+    payload.insert("turn_count".to_owned(), json!(turn_count));
+    payload.insert("duration_ms".to_owned(), json!(duration_ms));
+
     ToolCoreOutcome {
         status: "ok".to_owned(),
-        payload: json!({
-            "child_session_id": child_session_id,
-            "label": label,
-            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
-            "subagent_contract": subagent_contract,
-            "subagent": subagent,
-            "final_output": final_output,
-            "turn_count": turn_count,
-            "duration_ms": duration_ms,
-        }),
+        payload: Value::Object(payload),
     }
 }
 
@@ -148,18 +147,17 @@ pub(crate) fn delegate_async_queued_outcome(
         Some("queued".to_owned()),
         subagent_contract,
     );
+    let mut payload = Map::new();
+    payload.insert("child_session_id".to_owned(), json!(child_session_id));
+    payload.insert("label".to_owned(), json!(label));
+    payload.extend(subagent_surface_fields(Some(&subagent)));
+    payload.insert("mode".to_owned(), json!("async"));
+    payload.insert("state".to_owned(), json!("queued"));
+    payload.insert("timeout_seconds".to_owned(), json!(timeout_seconds));
+
     ToolCoreOutcome {
         status: "ok".to_owned(),
-        payload: json!({
-            "child_session_id": child_session_id,
-            "label": label,
-            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
-            "subagent_contract": subagent_contract,
-            "subagent": subagent,
-            "mode": "async",
-            "state": "queued",
-            "timeout_seconds": timeout_seconds,
-        }),
+        payload: Value::Object(payload),
     }
 }
 
@@ -178,17 +176,16 @@ pub(crate) fn delegate_timeout_outcome(
         Some("timed_out".to_owned()),
         subagent_contract,
     );
+    let mut payload = Map::new();
+    payload.insert("child_session_id".to_owned(), json!(child_session_id));
+    payload.insert("label".to_owned(), json!(label));
+    payload.extend(subagent_surface_fields(Some(&subagent)));
+    payload.insert("duration_ms".to_owned(), json!(duration_ms));
+    payload.insert("error".to_owned(), json!("delegate_timeout"));
+
     ToolCoreOutcome {
         status: "timeout".to_owned(),
-        payload: json!({
-            "child_session_id": child_session_id,
-            "label": label,
-            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
-            "subagent_contract": subagent_contract,
-            "subagent": subagent,
-            "duration_ms": duration_ms,
-            "error": "delegate_timeout",
-        }),
+        payload: Value::Object(payload),
     }
 }
 
@@ -208,17 +205,16 @@ pub(crate) fn delegate_error_outcome(
         Some("failed".to_owned()),
         subagent_contract,
     );
+    let mut payload = Map::new();
+    payload.insert("child_session_id".to_owned(), json!(child_session_id));
+    payload.insert("label".to_owned(), json!(label));
+    payload.extend(subagent_surface_fields(Some(&subagent)));
+    payload.insert("duration_ms".to_owned(), json!(duration_ms));
+    payload.insert("error".to_owned(), json!(error));
+
     ToolCoreOutcome {
         status: "error".to_owned(),
-        payload: json!({
-            "child_session_id": child_session_id,
-            "label": label,
-            "subagent_identity": subagent_contract.and_then(ConstrainedSubagentContractView::resolved_identity),
-            "subagent_contract": subagent_contract,
-            "subagent": subagent,
-            "duration_ms": duration_ms,
-            "error": error,
-        }),
+        payload: Value::Object(payload),
     }
 }
 

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
@@ -132,6 +132,46 @@ impl ConstrainedSubagentHandle {
         self.coordination = coordination;
         self
     }
+
+    pub fn resolved_identity(&self) -> Option<&ConstrainedSubagentIdentity> {
+        self.identity.as_ref().or_else(|| {
+            self.contract
+                .as_ref()
+                .and_then(ConstrainedSubagentContractView::resolved_identity)
+        })
+    }
+
+    pub fn resolved_profile(&self) -> Option<ConstrainedSubagentProfile> {
+        self.contract
+            .as_ref()
+            .and_then(ConstrainedSubagentContractView::resolved_profile)
+    }
+}
+
+pub fn subagent_surface_fields(subagent: Option<&ConstrainedSubagentHandle>) -> Map<String, Value> {
+    let mut fields = Map::new();
+    let subagent_identity = subagent
+        .and_then(ConstrainedSubagentHandle::resolved_identity)
+        .cloned();
+    let subagent_profile = subagent.and_then(ConstrainedSubagentHandle::resolved_profile);
+    let subagent_contract = subagent.and_then(|handle| handle.contract.clone());
+    let subagent_value = subagent.map(|handle| json!(handle)).unwrap_or(Value::Null);
+    let subagent_identity_value = subagent_identity
+        .map(|identity| json!(identity))
+        .unwrap_or(Value::Null);
+    let subagent_profile_value = subagent_profile
+        .map(|profile| json!(profile))
+        .unwrap_or(Value::Null);
+    let subagent_contract_value = subagent_contract
+        .map(|contract| json!(contract))
+        .unwrap_or(Value::Null);
+
+    fields.insert("subagent_identity".to_owned(), subagent_identity_value);
+    fields.insert("subagent_profile".to_owned(), subagent_profile_value);
+    fields.insert("subagent_contract".to_owned(), subagent_contract_value);
+    fields.insert("subagent".to_owned(), subagent_value);
+
+    fields
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -627,5 +667,25 @@ mod tests {
                 runtime_binding: Some(ConstrainedSubagentRuntimeBinding::KernelBound),
             }
         );
+    }
+
+    #[test]
+    fn subagent_surface_fields_derive_identity_and_profile_from_handle_contract() {
+        let handle = ConstrainedSubagentHandle::new("child-session").with_contract(Some(
+            ConstrainedSubagentContractView::from_identity(ConstrainedSubagentIdentity {
+                nickname: Some("child".to_owned()),
+                specialization: Some("reviewer".to_owned()),
+            })
+            .with_profile(ConstrainedSubagentProfile {
+                role: ConstrainedSubagentRole::Leaf,
+                control_scope: ConstrainedSubagentControlScope::None,
+            }),
+        ));
+        let fields = subagent_surface_fields(Some(&handle));
+
+        assert_eq!(fields["subagent_identity"]["nickname"], "child");
+        assert_eq!(fields["subagent_identity"]["specialization"], "reviewer");
+        assert_eq!(fields["subagent_profile"]["role"], "leaf");
+        assert_eq!(fields["subagent"]["session_id"], "child-session");
     }
 }
