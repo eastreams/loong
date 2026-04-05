@@ -358,6 +358,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 
     let mut env = ScopedEnv::new();
     env.set("HOME", &home);
+    env.remove("LOONGCLAW_HOME");
     let _cwd = ScopedCurrentDir::new(&workspace);
 
     let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(

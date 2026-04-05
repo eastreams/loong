@@ -151,9 +151,23 @@ const SQL_SEARCH_CANONICAL_RECORDS: &str = "SELECT record.session_id,
              FROM memory_canonical_records_fts AS fts
              JOIN memory_canonical_records AS record
                ON record.record_id = fts.rowid
+             LEFT JOIN sessions AS session
+               ON session.session_id = record.session_id
+             LEFT JOIN (
+                SELECT session_id, MAX(ts) AS archived_at
+                FROM session_events
+                WHERE event_kind = 'session_archived'
+                GROUP BY session_id
+             ) AS archived
+               ON archived.session_id = record.session_id
              WHERE memory_canonical_records_fts MATCH ?1
                AND (?2 IS NULL OR record.session_id <> ?2)
                AND record.kind <> 'user_turn'
+               AND record.session_id NOT LIKE 'delegate:%'
+               AND (
+                    session.session_id IS NULL
+                    OR (session.kind = 'root' AND archived.archived_at IS NULL)
+               )
              ORDER BY bm25(memory_canonical_records_fts), record.ts DESC
              LIMIT ?3";
 const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_turn_index
@@ -7979,6 +7993,39 @@ mod tests {
             &config,
         )
         .expect("append active session recall candidate");
+        append_turn_direct(
+            "delegate-child",
+            "assistant",
+            "Delegate child turn that should stay out of root-session recall.",
+            &config,
+        )
+        .expect("append delegate child recall candidate");
+        append_turn_direct(
+            "root-archived",
+            "assistant",
+            "Archived root turn that should stay out of resumable recall.",
+            &config,
+        )
+        .expect("append archived root recall candidate");
+
+        let runtime = acquire_memory_runtime(&config).expect("acquire memory runtime");
+        runtime
+            .with_connection_mut("test.seed_canonical_search_session_metadata", |conn| {
+                conn.execute_batch(
+                    "
+                    INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+                    VALUES
+                      ('prior-session', 'root', NULL, NULL, 'ready', 100, 100, NULL),
+                      ('delegate-child', 'delegate_child', 'prior-session', NULL, 'ready', 200, 200, NULL),
+                      ('root-archived', 'root', NULL, NULL, 'ready', 300, 300, NULL);
+                    INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, ts)
+                    VALUES ('root-archived', 'session_archived', NULL, '{}', 400);
+                    ",
+                )
+                .map_err(|error| format!("seed canonical search session metadata failed: {error}"))?;
+                Ok(())
+            })
+            .expect("seed canonical search session metadata");
 
         let hits = search_canonical_records_for_recall(
             "deployment cutoff release note",

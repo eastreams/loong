@@ -1563,6 +1563,7 @@ fn tool_visibility_gate_enabled_for_delegate_child(
         | ToolVisibilityGate::Browser
         | ToolVisibilityGate::BrowserCompanion
         | ToolVisibilityGate::ExternalSkills
+        | ToolVisibilityGate::MemorySearchCorpus
         | ToolVisibilityGate::MemoryFileRoot
         | ToolVisibilityGate::WebFetch
         | ToolVisibilityGate::WebSearch => {

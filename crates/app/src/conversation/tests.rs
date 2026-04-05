@@ -8397,6 +8397,12 @@ async fn handle_turn_with_runtime_safe_lane_plan_persists_runtime_events_when_en
 
 #[tokio::test]
 async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disabled() {
+    let mut env = crate::test_support::ScopedEnv::new();
+    let temp_home = crate::test_support::unique_temp_dir("safe-lane-runtime-events-home");
+    std::fs::create_dir_all(&temp_home).expect("create safe-lane runtime-events home");
+    env.set("HOME", &temp_home);
+    env.remove("LOONGCLAW_HOME");
+
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
         Ok(ProviderTurn {
@@ -8443,14 +8449,9 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
                 return None;
             }
             let event_name = parsed.get("event")?.as_str()?;
-
-            match event_name {
-                "lane_selected"
-                | "plan_round_started"
-                | "plan_round_completed"
-                | "final_status" => Some(event_name.to_owned()),
-                _ => None,
-            }
+            let is_expected_suppressed_event =
+                event_name == "turn_checkpoint" || event_name == "trust_binding_missing";
+            (!is_expected_suppressed_event).then_some(event_name.to_owned())
         })
         .collect::<Vec<_>>();
     assert!(

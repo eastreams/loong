@@ -1,9 +1,10 @@
 use std::io::ErrorKind;
-use std::process::{Command as BlockingCommand, Output, Stdio};
+use std::process::Output;
 use std::time::Duration;
 
 use loongclaw_app as mvp;
-use wait_timeout::ChildExt;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion install";
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
@@ -13,6 +14,15 @@ const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 3;
 
 fn browser_companion_probe_timeout_seconds(timeout_seconds: u64) -> u64 {
     timeout_seconds.max(1)
+}
+
+fn browser_companion_probe_timeout_duration(timeout_seconds: u64) -> Duration {
+    let normalized_seconds = browser_companion_probe_timeout_seconds(timeout_seconds);
+    let base_duration = Duration::from_secs(normalized_seconds);
+    let slack_millis = normalized_seconds.saturating_mul(100);
+    let bounded_slack_millis = slack_millis.min(500);
+    let slack_duration = Duration::from_millis(bounded_slack_millis);
+    base_duration + slack_duration
 }
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.
@@ -230,83 +240,30 @@ async fn probe_browser_companion_version(
     command: &str,
     timeout_seconds: u64,
 ) -> Result<String, BrowserCompanionProbeError> {
-    let command = command.to_owned();
-    let join_result = tokio::task::spawn_blocking(move || {
-        for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
-            let probe_result =
-                probe_browser_companion_version_once(command.as_str(), timeout_seconds);
-            match probe_result {
-                Err(BrowserCompanionProbeError::TimedOut) => {}
-                result => {
-                    return result;
+    let timeout_duration = browser_companion_probe_timeout_duration(timeout_seconds);
+
+    for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
+        let mut probe = Command::new(command);
+        probe.arg(BROWSER_COMPANION_VERSION_ARG);
+        probe.kill_on_drop(true);
+
+        let probe_result = timeout(timeout_duration, probe.output()).await;
+        match probe_result {
+            Ok(Ok(output)) => {
+                return interpret_browser_companion_probe_output(output);
+            }
+            Ok(Err(error)) => {
+                if error.kind() == ErrorKind::NotFound {
+                    return Err(BrowserCompanionProbeError::MissingBinary);
                 }
+
+                let error_message = error.to_string();
+                return Err(BrowserCompanionProbeError::SpawnFailed(error_message));
             }
-        }
-
-        Err(BrowserCompanionProbeError::TimedOut)
-    })
-    .await;
-
-    match join_result {
-        Ok(result) => result,
-        Err(error) => Err(BrowserCompanionProbeError::SpawnFailed(error.to_string())),
-    }
-}
-
-fn probe_browser_companion_version_once(
-    command: &str,
-    timeout_seconds: u64,
-) -> Result<String, BrowserCompanionProbeError> {
-    let child = spawn_browser_companion_probe_process(command)?;
-    let output = wait_for_browser_companion_probe_output(child, timeout_seconds)?;
-    interpret_browser_companion_probe_output(output)
-}
-
-fn spawn_browser_companion_probe_process(
-    command: &str,
-) -> Result<std::process::Child, BrowserCompanionProbeError> {
-    let mut process = BlockingCommand::new(command);
-    process.arg(BROWSER_COMPANION_VERSION_ARG);
-    process.stdin(Stdio::null());
-    process.stdout(Stdio::piped());
-    process.stderr(Stdio::piped());
-
-    let spawn_result = process.spawn();
-    match spawn_result {
-        Ok(child) => Ok(child),
-        Err(error) => {
-            if error.kind() == ErrorKind::NotFound {
-                return Err(BrowserCompanionProbeError::MissingBinary);
-            }
-
-            let error_message = error.to_string();
-            Err(BrowserCompanionProbeError::SpawnFailed(error_message))
+            Err(_) => {}
         }
     }
-}
 
-fn wait_for_browser_companion_probe_output(
-    mut child: std::process::Child,
-    timeout_seconds: u64,
-) -> Result<Output, BrowserCompanionProbeError> {
-    let timeout_seconds = browser_companion_probe_timeout_seconds(timeout_seconds);
-    let timeout_duration = Duration::from_secs(timeout_seconds);
-    let wait_result = child.wait_timeout(timeout_duration);
-    let status_option = wait_result.map_err(|error| {
-        let error_message = error.to_string();
-        BrowserCompanionProbeError::SpawnFailed(error_message)
-    })?;
-
-    if status_option.is_some() {
-        let output_result = child.wait_with_output();
-        return output_result.map_err(|error| {
-            let error_message = error.to_string();
-            BrowserCompanionProbeError::SpawnFailed(error_message)
-        });
-    }
-
-    let _ = child.kill();
-    let _ = child.wait();
     Err(BrowserCompanionProbeError::TimedOut)
 }
 

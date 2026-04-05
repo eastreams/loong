@@ -1818,6 +1818,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut env = ScopedEnv::new();
         env.set("HOME", tempdir.path());
+        env.remove("LOONGCLAW_HOME");
         let config_path = tempdir.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
