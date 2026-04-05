@@ -1053,7 +1053,7 @@ mod tests {
     #[test]
     fn transport_snapshot_redacts_invalid_http_urls() {
         let transport = McpServerTransportConfig::StreamableHttp {
-            url: "https://mcp.example.com/path?token=secret%ZZ".to_owned(),
+            url: "https:// bad.example/path?token=secret".to_owned(),
             bearer_token_env_var: Some("MCP_TOKEN".to_owned()),
             http_headers: BTreeMap::new(),
             env_http_headers: BTreeMap::new(),
