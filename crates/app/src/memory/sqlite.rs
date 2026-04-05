@@ -103,9 +103,9 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 9;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 10;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 22;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
@@ -204,6 +204,8 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_canonical_records_fts',
                         'approval_requests',
                         'approval_grants',
+                        'control_plane_pairing_requests',
+                        'control_plane_device_tokens',
                         'session_tool_consent',
                         'session_tool_policies'
                     ))
@@ -212,7 +214,9 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'idx_turns_session_turn_index',
                         'idx_memory_canonical_records_scope_kind_ts',
                         'idx_memory_canonical_records_session_turn',
-                        'idx_approval_requests_session_status_requested_at'
+                        'idx_approval_requests_session_status_requested_at',
+                        'idx_control_plane_pairing_requests_status_requested_at',
+                        'idx_control_plane_device_tokens_device_id'
                     ))
                 OR (type = 'trigger' AND name IN (
                         'memory_canonical_records_ai',
@@ -1594,6 +1598,7 @@ fn open_sqlite_connection_with_diagnostics(
     if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
         ensure_turn_session_index_and_state_metadata(&conn)?;
         ensure_approval_lifecycle_tables(&conn)?;
+        ensure_control_plane_pairing_tables(&conn)?;
         ensure_session_tool_consent_storage(&mut conn)?;
         ensure_session_tool_policy_storage(&conn)?;
         ensure_summary_checkpoint_storage_layout(&conn)?;
@@ -1772,6 +1777,49 @@ fn ensure_approval_lifecycle_tables(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|error| format!("ensure approval lifecycle storage failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_control_plane_pairing_tables(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("control_plane_pairing");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS control_plane_pairing_requests(
+          pairing_request_id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          client_id TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          requested_scopes_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          requested_at_ms INTEGER NOT NULL,
+          resolved_at_ms INTEGER NULL,
+          issued_token_id TEXT NULL,
+          last_error TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS control_plane_device_tokens(
+          token_id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL UNIQUE,
+          public_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          approved_scopes_json TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          issued_at_ms INTEGER NOT NULL,
+          expires_at_ms INTEGER NULL,
+          revoked_at_ms INTEGER NULL,
+          last_used_at_ms INTEGER NULL,
+          pairing_request_id TEXT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_control_plane_pairing_requests_status_requested_at
+          ON control_plane_pairing_requests(status, requested_at_ms DESC, pairing_request_id);
+        CREATE INDEX IF NOT EXISTS idx_control_plane_device_tokens_device_id
+          ON control_plane_device_tokens(device_id);
+        ",
+    )
+    .map_err(|error| format!("ensure control-plane pairing storage failed: {error}"))?;
 
     Ok(())
 }

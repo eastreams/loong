@@ -58,7 +58,7 @@ libc = "0.2"
 
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["query"] }
 clap.workspace = true
 clap_complete = "4.5"
 dialoguer.workspace = true
@@ -66,9 +66,11 @@ kernel = { package = "loongclaw-kernel", version = "0.1.0-alpha.3", path = "../k
 loongclaw-bench = { version = "0.1.0-alpha.3", path = "../bench" }
 loongclaw-app = { version = "0.1.0-alpha.3", path = "../app", default-features = false }
 loongclaw-contracts = { version = "0.1.0-alpha.3", path = "../contracts" }
+loongclaw-protocol = { version = "0.1.0-alpha.3", path = "../protocol" }
 loongclaw-spec = { version = "0.1.0-alpha.3", path = "../spec" }
 serde.workspace = true
 serde_json.workspace = true
+futures-util.workspace = true
 hex.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true

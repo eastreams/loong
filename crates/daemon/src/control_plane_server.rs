@@ -1,0 +1,2970 @@
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use axum::Json;
+use axum::Router;
+use axum::extract::Query;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use base64::Engine as _;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use kernel::{
+    Capability, CapabilityToken, ExecutionPlane, LoongClawKernel, PlaneTier, StaticPolicyEngine,
+    VerticalPackManifest,
+};
+use loongclaw_protocol::{
+    CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
+    ControlPlaneAcpSessionListResponse, ControlPlaneAcpSessionMetadata, ControlPlaneAcpSessionMode,
+    ControlPlaneAcpSessionReadResponse, ControlPlaneAcpSessionState, ControlPlaneAcpSessionStatus,
+    ControlPlaneApprovalDecision, ControlPlaneApprovalListResponse,
+    ControlPlaneApprovalRequestStatus, ControlPlaneApprovalSummary, ControlPlaneChallengeResponse,
+    ControlPlaneConnectErrorCode, ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest,
+    ControlPlaneConnectResponse, ControlPlaneEventEnvelope, ControlPlaneEventName,
+    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
+    ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
+    ControlPlanePairingStatus, ControlPlanePolicy, ControlPlanePrincipal,
+    ControlPlaneRecentEventsResponse, ControlPlaneScope, ControlPlaneSessionEvent,
+    ControlPlaneSessionKind, ControlPlaneSessionListResponse, ControlPlaneSessionObservation,
+    ControlPlaneSessionReadResponse, ControlPlaneSessionState, ControlPlaneSessionSummary,
+    ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot, ControlPlaneSnapshotResponse,
+    ControlPlaneStateVersion, ProtocolRouter,
+};
+use serde::Deserialize;
+
+use crate::{CliResult, mvp};
+
+#[cfg(test)]
+use axum::body::{Body, to_bytes};
+#[cfg(test)]
+use axum::http::Request;
+#[cfg(test)]
+use ed25519_dalek::{Signer, SigningKey};
+#[cfg(test)]
+use loongclaw_protocol::{ControlPlaneClientIdentity, ControlPlaneRole};
+#[cfg(test)]
+use tower::ServiceExt;
+
+const CONTROL_PLANE_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+const CONTROL_PLANE_MAX_BUFFERED_BYTES: usize = 256 * 1024;
+const CONTROL_PLANE_TICK_INTERVAL_MS: u64 = 15_000;
+const CONTROL_PLANE_DEFAULT_EVENT_LIMIT: usize = 50;
+const CONTROL_PLANE_DEFAULT_LIST_LIMIT: usize = 50;
+const CONTROL_PLANE_DEFAULT_SESSION_RECENT_LIMIT: usize = 20;
+const CONTROL_PLANE_DEFAULT_SESSION_TAIL_LIMIT: usize = 50;
+const CONTROL_PLANE_CHALLENGE_MAX_FUTURE_SKEW_MS: u64 = 10_000;
+const CONTROL_PLANE_PACK_ID: &str = "control-plane";
+const CONTROL_PLANE_PACK_DOMAIN: &str = "control";
+const CONTROL_PLANE_PACK_VERSION: &str = "1.0.0";
+const CONTROL_PLANE_PRIMARY_ADAPTER: &str = "control-plane";
+
+struct ControlPlaneKernelAuthority {
+    kernel: LoongClawKernel<StaticPolicyEngine>,
+    token_bindings: std::sync::RwLock<std::collections::BTreeMap<String, CapabilityToken>>,
+}
+
+#[derive(Clone)]
+struct ControlPlaneHttpState {
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    connection_counter: Arc<AtomicU64>,
+    connection_registry: Arc<mvp::control_plane::ControlPlaneConnectionRegistry>,
+    challenge_registry: Arc<mvp::control_plane::ControlPlaneChallengeRegistry>,
+    pairing_registry: Arc<mvp::control_plane::ControlPlanePairingRegistry>,
+    kernel_authority: Arc<ControlPlaneKernelAuthority>,
+    #[cfg(feature = "memory-sqlite")]
+    repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
+    #[cfg(feature = "memory-sqlite")]
+    acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EventQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    include_targeted: bool,
+    #[serde(default)]
+    after_seq: Option<u64>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionListQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    include_archived: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionReadQuery {
+    session_id: String,
+    #[serde(default)]
+    recent_event_limit: Option<usize>,
+    #[serde(default)]
+    tail_after_id: Option<i64>,
+    #[serde(default)]
+    tail_page_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ApprovalListQuery {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AcpSessionListQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AcpSessionReadQuery {
+    session_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PairingListQuery {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+impl ControlPlaneKernelAuthority {
+    fn new() -> Result<Self, String> {
+        let mut kernel = LoongClawKernel::new_without_audit(StaticPolicyEngine::default());
+        let pack = control_plane_pack();
+        let register_result = kernel.register_pack(pack);
+        register_result
+            .map_err(|error| format!("control-plane pack registration failed: {error}"))?;
+        Ok(Self {
+            kernel,
+            token_bindings: std::sync::RwLock::new(std::collections::BTreeMap::new()),
+        })
+    }
+
+    fn issue_scoped_token(
+        &self,
+        connection_token: &str,
+        agent_id: &str,
+        capabilities: &std::collections::BTreeSet<Capability>,
+    ) -> Result<(), String> {
+        let token = self
+            .kernel
+            .issue_scoped_token(CONTROL_PLANE_PACK_ID, agent_id, capabilities, 15 * 60)
+            .map_err(|error| format!("control-plane kernel token issuance failed: {error}"))?;
+        let mut token_bindings = self
+            .token_bindings
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        token_bindings.insert(connection_token.to_owned(), token);
+        Ok(())
+    }
+
+    fn authorize(
+        &self,
+        connection_token: &str,
+        operation: &str,
+        capabilities: &std::collections::BTreeSet<Capability>,
+    ) -> Result<(), String> {
+        let token_bindings = self
+            .token_bindings
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        let token = token_bindings
+            .get(connection_token)
+            .ok_or_else(|| "missing control-plane kernel token binding".to_owned())?;
+        self.kernel
+            .authorize_operation(
+                CONTROL_PLANE_PACK_ID,
+                token,
+                ExecutionPlane::Runtime,
+                PlaneTier::Core,
+                CONTROL_PLANE_PRIMARY_ADAPTER,
+                None,
+                operation,
+                capabilities,
+            )
+            .map_err(|error| format!("control-plane kernel authorization failed: {error}"))
+    }
+
+    fn remove_binding(&self, connection_token: &str) {
+        let mut token_bindings = self
+            .token_bindings
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        token_bindings.remove(connection_token);
+    }
+}
+
+fn control_plane_pack() -> VerticalPackManifest {
+    let granted_capabilities = std::collections::BTreeSet::from([
+        Capability::ControlRead,
+        Capability::ControlWrite,
+        Capability::ControlApprovals,
+        Capability::ControlPairing,
+        Capability::ControlAcp,
+    ]);
+    let default_route = kernel::ExecutionRoute {
+        harness_kind: kernel::HarnessKind::EmbeddedPi,
+        adapter: None,
+    };
+    let allowed_connectors = std::collections::BTreeSet::new();
+    let metadata = std::collections::BTreeMap::new();
+    VerticalPackManifest {
+        pack_id: CONTROL_PLANE_PACK_ID.to_owned(),
+        domain: CONTROL_PLANE_PACK_DOMAIN.to_owned(),
+        version: CONTROL_PLANE_PACK_VERSION.to_owned(),
+        default_route,
+        allowed_connectors,
+        granted_capabilities,
+        metadata,
+    }
+}
+
+fn default_control_plane_bind_addr(port: u16) -> SocketAddr {
+    SocketAddr::from((Ipv4Addr::LOCALHOST, port))
+}
+
+fn default_policy() -> ControlPlanePolicy {
+    ControlPlanePolicy {
+        max_payload_bytes: CONTROL_PLANE_MAX_PAYLOAD_BYTES,
+        max_buffered_bytes: CONTROL_PLANE_MAX_BUFFERED_BYTES,
+        tick_interval_ms: CONTROL_PLANE_TICK_INTERVAL_MS,
+    }
+}
+
+fn map_snapshot(snapshot: mvp::control_plane::ControlPlaneSnapshotSummary) -> ControlPlaneSnapshot {
+    ControlPlaneSnapshot {
+        state_version: ControlPlaneStateVersion {
+            presence: snapshot.state_version.presence,
+            health: snapshot.state_version.health,
+            sessions: snapshot.state_version.sessions,
+            approvals: snapshot.state_version.approvals,
+            acp: snapshot.state_version.acp,
+        },
+        presence_count: snapshot.presence_count,
+        session_count: snapshot.session_count,
+        pending_approval_count: snapshot.pending_approval_count,
+        acp_session_count: snapshot.acp_session_count,
+        runtime_ready: snapshot.runtime_ready,
+    }
+}
+
+fn map_event_name(kind: mvp::control_plane::ControlPlaneEventKind) -> ControlPlaneEventName {
+    match kind {
+        mvp::control_plane::ControlPlaneEventKind::PresenceChanged => {
+            ControlPlaneEventName::PresenceChanged
+        }
+        mvp::control_plane::ControlPlaneEventKind::HealthChanged => {
+            ControlPlaneEventName::HealthChanged
+        }
+        mvp::control_plane::ControlPlaneEventKind::SessionChanged => {
+            ControlPlaneEventName::SessionChanged
+        }
+        mvp::control_plane::ControlPlaneEventKind::SessionMessage => {
+            ControlPlaneEventName::SessionMessage
+        }
+        mvp::control_plane::ControlPlaneEventKind::ApprovalRequested => {
+            ControlPlaneEventName::ApprovalRequested
+        }
+        mvp::control_plane::ControlPlaneEventKind::ApprovalResolved => {
+            ControlPlaneEventName::ApprovalResolved
+        }
+        mvp::control_plane::ControlPlaneEventKind::PairingRequested => {
+            ControlPlaneEventName::PairingRequested
+        }
+        mvp::control_plane::ControlPlaneEventKind::PairingResolved => {
+            ControlPlaneEventName::PairingResolved
+        }
+        mvp::control_plane::ControlPlaneEventKind::AcpSessionChanged => {
+            ControlPlaneEventName::AcpSessionChanged
+        }
+        mvp::control_plane::ControlPlaneEventKind::AcpTurnEvent => {
+            ControlPlaneEventName::AcpTurnEvent
+        }
+    }
+}
+
+fn map_event(event: mvp::control_plane::ControlPlaneEventRecord) -> ControlPlaneEventEnvelope {
+    ControlPlaneEventEnvelope {
+        event: map_event_name(event.kind),
+        seq: event.seq,
+        state_version: Some(ControlPlaneStateVersion {
+            presence: event.state_version.presence,
+            health: event.state_version.health,
+            sessions: event.state_version.sessions,
+            approvals: event.state_version.approvals,
+            acp: event.state_version.acp,
+        }),
+        payload: event.payload,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_kind(kind: mvp::session::repository::SessionKind) -> ControlPlaneSessionKind {
+    match kind {
+        mvp::session::repository::SessionKind::Root => ControlPlaneSessionKind::Root,
+        mvp::session::repository::SessionKind::DelegateChild => {
+            ControlPlaneSessionKind::DelegateChild
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_state(state: mvp::session::repository::SessionState) -> ControlPlaneSessionState {
+    match state {
+        mvp::session::repository::SessionState::Ready => ControlPlaneSessionState::Ready,
+        mvp::session::repository::SessionState::Running => ControlPlaneSessionState::Running,
+        mvp::session::repository::SessionState::Completed => ControlPlaneSessionState::Completed,
+        mvp::session::repository::SessionState::Failed => ControlPlaneSessionState::Failed,
+        mvp::session::repository::SessionState::TimedOut => ControlPlaneSessionState::TimedOut,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_summary(
+    summary: mvp::session::repository::SessionSummaryRecord,
+) -> ControlPlaneSessionSummary {
+    ControlPlaneSessionSummary {
+        session_id: summary.session_id,
+        kind: map_session_kind(summary.kind),
+        parent_session_id: summary.parent_session_id,
+        label: summary.label,
+        state: map_session_state(summary.state),
+        created_at: summary.created_at,
+        updated_at: summary.updated_at,
+        archived_at: summary.archived_at,
+        turn_count: summary.turn_count,
+        last_turn_at: summary.last_turn_at,
+        last_error: summary.last_error,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_event(
+    event: mvp::session::repository::SessionEventRecord,
+) -> ControlPlaneSessionEvent {
+    ControlPlaneSessionEvent {
+        id: event.id,
+        session_id: event.session_id,
+        event_kind: event.event_kind,
+        actor_session_id: event.actor_session_id,
+        payload: event.payload_json,
+        ts: event.ts,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_terminal_outcome(
+    outcome: mvp::session::repository::SessionTerminalOutcomeRecord,
+) -> ControlPlaneSessionTerminalOutcome {
+    ControlPlaneSessionTerminalOutcome {
+        session_id: outcome.session_id,
+        status: outcome.status,
+        payload: outcome.payload_json,
+        recorded_at: outcome.recorded_at,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_session_observation(
+    observation: mvp::session::repository::SessionObservationRecord,
+) -> ControlPlaneSessionObservation {
+    ControlPlaneSessionObservation {
+        session: map_session_summary(observation.session),
+        terminal_outcome: observation
+            .terminal_outcome
+            .map(map_session_terminal_outcome),
+        recent_events: observation
+            .recent_events
+            .into_iter()
+            .map(map_session_event)
+            .collect::<Vec<_>>(),
+        tail_events: observation
+            .tail_events
+            .into_iter()
+            .map(map_session_event)
+            .collect::<Vec<_>>(),
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_status(
+    status: mvp::session::repository::ApprovalRequestStatus,
+) -> ControlPlaneApprovalRequestStatus {
+    match status {
+        mvp::session::repository::ApprovalRequestStatus::Pending => {
+            ControlPlaneApprovalRequestStatus::Pending
+        }
+        mvp::session::repository::ApprovalRequestStatus::Approved => {
+            ControlPlaneApprovalRequestStatus::Approved
+        }
+        mvp::session::repository::ApprovalRequestStatus::Executing => {
+            ControlPlaneApprovalRequestStatus::Executing
+        }
+        mvp::session::repository::ApprovalRequestStatus::Executed => {
+            ControlPlaneApprovalRequestStatus::Executed
+        }
+        mvp::session::repository::ApprovalRequestStatus::Denied => {
+            ControlPlaneApprovalRequestStatus::Denied
+        }
+        mvp::session::repository::ApprovalRequestStatus::Expired => {
+            ControlPlaneApprovalRequestStatus::Expired
+        }
+        mvp::session::repository::ApprovalRequestStatus::Cancelled => {
+            ControlPlaneApprovalRequestStatus::Cancelled
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_decision(
+    decision: mvp::session::repository::ApprovalDecision,
+) -> ControlPlaneApprovalDecision {
+    match decision {
+        mvp::session::repository::ApprovalDecision::ApproveOnce => {
+            ControlPlaneApprovalDecision::ApproveOnce
+        }
+        mvp::session::repository::ApprovalDecision::ApproveAlways => {
+            ControlPlaneApprovalDecision::ApproveAlways
+        }
+        mvp::session::repository::ApprovalDecision::Deny => ControlPlaneApprovalDecision::Deny,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_approval_summary(
+    approval: mvp::session::repository::ApprovalRequestRecord,
+) -> ControlPlaneApprovalSummary {
+    let reason = approval
+        .governance_snapshot_json
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let rule_id = approval
+        .governance_snapshot_json
+        .get("rule_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned);
+    ControlPlaneApprovalSummary {
+        approval_request_id: approval.approval_request_id,
+        session_id: approval.session_id,
+        turn_id: approval.turn_id,
+        tool_call_id: approval.tool_call_id,
+        tool_name: approval.tool_name,
+        approval_key: approval.approval_key,
+        status: map_approval_status(approval.status),
+        decision: approval.decision.map(map_approval_decision),
+        requested_at: approval.requested_at,
+        resolved_at: approval.resolved_at,
+        resolved_by_session_id: approval.resolved_by_session_id,
+        executed_at: approval.executed_at,
+        last_error: approval.last_error,
+        reason,
+        rule_id,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_binding_scope(binding: mvp::acp::AcpSessionBindingScope) -> ControlPlaneAcpBindingScope {
+    ControlPlaneAcpBindingScope {
+        route_session_id: binding.route_session_id,
+        channel_id: binding.channel_id,
+        account_id: binding.account_id,
+        conversation_id: binding.conversation_id,
+        thread_id: binding.thread_id,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_routing_origin(origin: mvp::acp::AcpRoutingOrigin) -> ControlPlaneAcpRoutingOrigin {
+    match origin {
+        mvp::acp::AcpRoutingOrigin::ExplicitRequest => {
+            ControlPlaneAcpRoutingOrigin::ExplicitRequest
+        }
+        mvp::acp::AcpRoutingOrigin::AutomaticAgentPrefixed => {
+            ControlPlaneAcpRoutingOrigin::AutomaticAgentPrefixed
+        }
+        mvp::acp::AcpRoutingOrigin::AutomaticDispatch => {
+            ControlPlaneAcpRoutingOrigin::AutomaticDispatch
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_session_mode(mode: mvp::acp::AcpSessionMode) -> ControlPlaneAcpSessionMode {
+    match mode {
+        mvp::acp::AcpSessionMode::Interactive => ControlPlaneAcpSessionMode::Interactive,
+        mvp::acp::AcpSessionMode::Background => ControlPlaneAcpSessionMode::Background,
+        mvp::acp::AcpSessionMode::Review => ControlPlaneAcpSessionMode::Review,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_session_state(state: mvp::acp::AcpSessionState) -> ControlPlaneAcpSessionState {
+    match state {
+        mvp::acp::AcpSessionState::Initializing => ControlPlaneAcpSessionState::Initializing,
+        mvp::acp::AcpSessionState::Ready => ControlPlaneAcpSessionState::Ready,
+        mvp::acp::AcpSessionState::Busy => ControlPlaneAcpSessionState::Busy,
+        mvp::acp::AcpSessionState::Cancelling => ControlPlaneAcpSessionState::Cancelling,
+        mvp::acp::AcpSessionState::Error => ControlPlaneAcpSessionState::Error,
+        mvp::acp::AcpSessionState::Closed => ControlPlaneAcpSessionState::Closed,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_session_metadata(
+    metadata: mvp::acp::AcpSessionMetadata,
+) -> ControlPlaneAcpSessionMetadata {
+    ControlPlaneAcpSessionMetadata {
+        session_key: metadata.session_key,
+        conversation_id: metadata.conversation_id,
+        binding: metadata.binding.map(map_acp_binding_scope),
+        activation_origin: metadata.activation_origin.map(map_acp_routing_origin),
+        backend_id: metadata.backend_id,
+        runtime_session_name: metadata.runtime_session_name,
+        working_directory: metadata
+            .working_directory
+            .map(|path| path.display().to_string()),
+        backend_session_id: metadata.backend_session_id,
+        agent_session_id: metadata.agent_session_id,
+        mode: metadata.mode.map(map_acp_session_mode),
+        state: map_acp_session_state(metadata.state),
+        last_activity_ms: metadata.last_activity_ms,
+        last_error: metadata.last_error,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn map_acp_session_status(status: mvp::acp::AcpSessionStatus) -> ControlPlaneAcpSessionStatus {
+    ControlPlaneAcpSessionStatus {
+        session_key: status.session_key,
+        backend_id: status.backend_id,
+        conversation_id: status.conversation_id,
+        binding: status.binding.map(map_acp_binding_scope),
+        activation_origin: status.activation_origin.map(map_acp_routing_origin),
+        state: map_acp_session_state(status.state),
+        mode: status.mode.map(map_acp_session_mode),
+        pending_turns: status.pending_turns,
+        active_turn_id: status.active_turn_id,
+        last_activity_ms: status.last_activity_ms,
+        last_error: status.last_error,
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn parse_approval_request_status(
+    raw: &str,
+) -> Result<mvp::session::repository::ApprovalRequestStatus, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(mvp::session::repository::ApprovalRequestStatus::Pending),
+        "approved" => Ok(mvp::session::repository::ApprovalRequestStatus::Approved),
+        "executing" => Ok(mvp::session::repository::ApprovalRequestStatus::Executing),
+        "executed" => Ok(mvp::session::repository::ApprovalRequestStatus::Executed),
+        "denied" => Ok(mvp::session::repository::ApprovalRequestStatus::Denied),
+        "expired" => Ok(mvp::session::repository::ApprovalRequestStatus::Expired),
+        "cancelled" => Ok(mvp::session::repository::ApprovalRequestStatus::Cancelled),
+        _ => Err(format!("unknown approval status `{raw}`")),
+    }
+}
+
+fn map_pairing_status(
+    status: mvp::control_plane::ControlPlanePairingStatus,
+) -> ControlPlanePairingStatus {
+    match status {
+        mvp::control_plane::ControlPlanePairingStatus::Pending => {
+            ControlPlanePairingStatus::Pending
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Approved => {
+            ControlPlanePairingStatus::Approved
+        }
+        mvp::control_plane::ControlPlanePairingStatus::Rejected => {
+            ControlPlanePairingStatus::Rejected
+        }
+    }
+}
+
+fn map_pairing_request(
+    request: mvp::control_plane::ControlPlanePairingRequestRecord,
+) -> ControlPlanePairingRequestSummary {
+    ControlPlanePairingRequestSummary {
+        pairing_request_id: request.pairing_request_id,
+        device_id: request.device_id,
+        client_id: request.client_id,
+        public_key: request.public_key,
+        role: match request.role.as_str() {
+            "operator" => loongclaw_protocol::ControlPlaneRole::Operator,
+            _ => loongclaw_protocol::ControlPlaneRole::Node,
+        },
+        requested_scopes: request
+            .requested_scopes
+            .into_iter()
+            .filter_map(|scope| match scope.as_str() {
+                "operator.read" => Some(ControlPlaneScope::OperatorRead),
+                "operator.write" => Some(ControlPlaneScope::OperatorWrite),
+                "operator.admin" => Some(ControlPlaneScope::OperatorAdmin),
+                "operator.approvals" => Some(ControlPlaneScope::OperatorApprovals),
+                "operator.pairing" => Some(ControlPlaneScope::OperatorPairing),
+                "operator.acp" => Some(ControlPlaneScope::OperatorAcp),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>(),
+        status: map_pairing_status(request.status),
+        requested_at_ms: request.requested_at_ms,
+        resolved_at_ms: request.resolved_at_ms,
+    }
+}
+
+fn principal_from_connect(
+    request: &ControlPlaneConnectRequest,
+    connection_id: String,
+) -> ControlPlanePrincipal {
+    ControlPlanePrincipal {
+        connection_id,
+        client_id: request.client.id.clone(),
+        role: request.role,
+        scopes: request.scopes.clone(),
+        device_id: request
+            .device
+            .as_ref()
+            .map(|device| device.device_id.clone()),
+    }
+}
+
+fn parse_pairing_status(
+    raw: &str,
+) -> Result<mvp::control_plane::ControlPlanePairingStatus, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "pending" => Ok(mvp::control_plane::ControlPlanePairingStatus::Pending),
+        "approved" => Ok(mvp::control_plane::ControlPlanePairingStatus::Approved),
+        "rejected" => Ok(mvp::control_plane::ControlPlanePairingStatus::Rejected),
+        _ => Err(format!("unknown pairing status `{raw}`")),
+    }
+}
+
+fn connection_principal_from_connect(
+    request: &ControlPlaneConnectRequest,
+    connection_id: String,
+) -> mvp::control_plane::ControlPlaneConnectionPrincipal {
+    mvp::control_plane::ControlPlaneConnectionPrincipal {
+        connection_id,
+        client_id: request.client.id.clone(),
+        role: request.role.as_str().to_owned(),
+        scopes: request
+            .scopes
+            .iter()
+            .map(|scope| scope.as_str().to_owned())
+            .collect::<std::collections::BTreeSet<_>>(),
+        device_id: request
+            .device
+            .as_ref()
+            .map(|device| device.device_id.clone()),
+    }
+}
+
+fn extract_connection_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            headers
+                .get("x-loongclaw-control-token")
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn connection_scoped_capabilities(
+    lease: &mvp::control_plane::ControlPlaneConnectionLease,
+) -> std::collections::BTreeSet<Capability> {
+    let mut capabilities = std::collections::BTreeSet::new();
+    for scope in &lease.principal.scopes {
+        match scope.as_str() {
+            "operator.read" => {
+                capabilities.insert(Capability::ControlRead);
+            }
+            "operator.write" => {
+                capabilities.insert(Capability::ControlWrite);
+            }
+            "operator.approvals" => {
+                capabilities.insert(Capability::ControlApprovals);
+            }
+            "operator.pairing" => {
+                capabilities.insert(Capability::ControlPairing);
+            }
+            "operator.acp" => {
+                capabilities.insert(Capability::ControlAcp);
+            }
+            "operator.admin" => {
+                capabilities.insert(Capability::ControlRead);
+                capabilities.insert(Capability::ControlWrite);
+                capabilities.insert(Capability::ControlApprovals);
+                capabilities.insert(Capability::ControlPairing);
+                capabilities.insert(Capability::ControlAcp);
+            }
+            _ => {}
+        }
+    }
+    capabilities
+}
+
+fn required_capabilities_for_route(
+    resolved: &loongclaw_protocol::ResolvedRoute,
+) -> Result<std::collections::BTreeSet<Capability>, String> {
+    let mut capabilities = std::collections::BTreeSet::new();
+    if let Some(required_capability) = resolved.policy.required_capability.as_deref() {
+        match required_capability {
+            "control.read" => {
+                capabilities.insert(Capability::ControlRead);
+            }
+            "control.approvals" => {
+                capabilities.insert(Capability::ControlApprovals);
+            }
+            "control.pairing" => {
+                capabilities.insert(Capability::ControlPairing);
+            }
+            "control.acp" => {
+                capabilities.insert(Capability::ControlAcp);
+            }
+            other => {
+                return Err(format!(
+                    "unsupported control-plane required capability mapping `{other}`"
+                ));
+            }
+        }
+    }
+    Ok(capabilities)
+}
+
+fn authorize_control_plane_request(
+    state: &ControlPlaneHttpState,
+    method: &str,
+    headers: &HeaderMap,
+) -> Result<mvp::control_plane::ControlPlaneConnectionLease, Box<Response>> {
+    let router = ProtocolRouter::default();
+    let resolved = router.resolve(method).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("control plane route resolution failed for `{method}`: {error}"),
+        ))
+    })?;
+
+    let Some(token) = extract_connection_token(headers) else {
+        return Err(Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            format!("missing control-plane token for `{method}`"),
+        )));
+    };
+    let Some(lease) = state.connection_registry.resolve(&token).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("control plane connection lookup failed: {error}"),
+        ))
+    })?
+    else {
+        state.kernel_authority.remove_binding(&token);
+        return Err(Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            format!("unknown or expired control-plane token for `{method}`"),
+        )));
+    };
+
+    if lease.principal.role != "operator" {
+        return Err(Box::new(error_response(
+            StatusCode::FORBIDDEN,
+            format!(
+                "role `{}` is not allowed to access `{method}`",
+                lease.principal.role
+            ),
+        )));
+    }
+
+    let route_capabilities = required_capabilities_for_route(&resolved)
+        .map_err(|error| Box::new(error_response(StatusCode::INTERNAL_SERVER_ERROR, error)))?;
+    let scoped_capabilities = connection_scoped_capabilities(&lease);
+    let missing_capability = route_capabilities
+        .iter()
+        .find(|capability| !scoped_capabilities.contains(capability))
+        .copied();
+    if let Some(capability) = missing_capability {
+        let reason = format!(
+            "missing control-plane capability `{}` for method `{method}`",
+            capability.as_str()
+        );
+        return Err(Box::new(error_response(StatusCode::FORBIDDEN, reason)));
+    }
+
+    state
+        .kernel_authority
+        .authorize(&lease.token, method, &route_capabilities)
+        .map_err(|error| Box::new(error_response(StatusCode::FORBIDDEN, error)))?;
+
+    Ok(lease)
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn control_plane_device_signature_message(
+    request: &ControlPlaneConnectRequest,
+    device: &loongclaw_protocol::ControlPlaneDeviceIdentity,
+) -> Vec<u8> {
+    let scopes = request
+        .scopes
+        .iter()
+        .map(|scope| scope.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "loongclaw-control-plane-connect-v1\nnonce={}\ndevice_id={}\nclient_id={}\nrole={}\nscopes={}\nsigned_at_ms={}",
+        device.nonce,
+        device.device_id,
+        request.client.id,
+        request.role.as_str(),
+        scopes,
+        device.signed_at_ms
+    )
+    .into_bytes()
+}
+
+fn verify_connect_device_challenge(
+    state: &ControlPlaneHttpState,
+    request: &ControlPlaneConnectRequest,
+) -> Result<(), Box<Response>> {
+    let Some(device) = request.device.as_ref() else {
+        return Ok(());
+    };
+
+    let challenge = state
+        .challenge_registry
+        .consume(&device.nonce)
+        .map_err(|error| Box::new(error_response(StatusCode::INTERNAL_SERVER_ERROR, error)))?
+        .ok_or_else(|| {
+            Box::new(error_response(
+                StatusCode::UNAUTHORIZED,
+                format!(
+                    "unknown or expired control-plane challenge `{}`",
+                    device.nonce
+                ),
+            ))
+        })?;
+
+    let now_ms = current_time_ms();
+    if device.signed_at_ms < challenge.issued_at_ms
+        || device.signed_at_ms
+            > challenge
+                .expires_at_ms
+                .saturating_add(CONTROL_PLANE_CHALLENGE_MAX_FUTURE_SKEW_MS)
+        || device.signed_at_ms > now_ms.saturating_add(CONTROL_PLANE_CHALLENGE_MAX_FUTURE_SKEW_MS)
+    {
+        return Err(Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            format!(
+                "control-plane device signature timestamp is outside the challenge window for `{}`",
+                device.device_id
+            ),
+        )));
+    }
+
+    let public_key_bytes = base64::engine::general_purpose::STANDARD
+        .decode(device.public_key.as_bytes())
+        .map_err(|error| {
+            Box::new(error_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid control-plane device public_key encoding: {error}"),
+            ))
+        })?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(device.signature.as_bytes())
+        .map_err(|error| {
+            Box::new(error_response(
+                StatusCode::BAD_REQUEST,
+                format!("invalid control-plane device signature encoding: {error}"),
+            ))
+        })?;
+
+    let public_key_array: [u8; 32] = public_key_bytes.try_into().map_err(|_error| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            "control-plane device public_key must decode to 32 bytes",
+        ))
+    })?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key_array).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            format!("invalid control-plane device public_key: {error}"),
+        ))
+    })?;
+    let signature = Signature::from_slice(&signature_bytes).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::BAD_REQUEST,
+            format!("invalid control-plane device signature bytes: {error}"),
+        ))
+    })?;
+    let message = control_plane_device_signature_message(request, device);
+    verifying_key.verify(&message, &signature).map_err(|error| {
+        Box::new(error_response(
+            StatusCode::UNAUTHORIZED,
+            format!("control-plane device signature verification failed: {error}"),
+        ))
+    })
+}
+
+fn pairing_required_response(
+    request: &mvp::control_plane::ControlPlanePairingRequestRecord,
+) -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ControlPlaneConnectErrorResponse {
+            code: ControlPlaneConnectErrorCode::PairingRequired,
+            error: format!(
+                "device `{}` requires operator pairing approval before connect can complete",
+                request.device_id
+            ),
+            pairing_request_id: Some(request.pairing_request_id.clone()),
+        }),
+    )
+        .into_response()
+}
+
+fn device_token_error_response(
+    code: ControlPlaneConnectErrorCode,
+    error: impl Into<String>,
+) -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ControlPlaneConnectErrorResponse {
+            code,
+            error: error.into(),
+            pairing_request_id: None,
+        }),
+    )
+        .into_response()
+}
+
+fn error_response(status: StatusCode, error: impl Into<String>) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error.into(),
+        })),
+    )
+        .into_response()
+}
+
+async fn current_snapshot(state: &ControlPlaneHttpState) -> Result<ControlPlaneSnapshot, String> {
+    let mut snapshot = map_snapshot(state.manager.snapshot());
+    #[cfg(feature = "memory-sqlite")]
+    if let Some(repository_view) = state.repository_view.as_ref() {
+        let repository_snapshot = repository_view.snapshot_summary()?;
+        snapshot.session_count = repository_snapshot.session_count;
+        snapshot.pending_approval_count = repository_snapshot.pending_approval_count;
+    }
+    #[cfg(feature = "memory-sqlite")]
+    if let Some(acp_view) = state.acp_view.as_ref() {
+        snapshot.acp_session_count = acp_view.visible_session_count().await?;
+    }
+    Ok(snapshot)
+}
+
+async fn readyz() -> impl IntoResponse {
+    StatusCode::OK
+}
+
+async fn control_challenge(State(state): State<ControlPlaneHttpState>) -> Response {
+    let challenge = state.challenge_registry.issue();
+    Json(ControlPlaneChallengeResponse {
+        nonce: challenge.nonce,
+        issued_at_ms: challenge.issued_at_ms,
+        expires_at_ms: challenge.expires_at_ms,
+    })
+    .into_response()
+}
+
+async fn healthz(State(state): State<ControlPlaneHttpState>) -> Response {
+    match current_snapshot(&state).await {
+        Ok(snapshot) => Json(ControlPlaneSnapshotResponse { snapshot }).into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn control_snapshot(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "control/snapshot", &headers) {
+        return *response;
+    }
+    match current_snapshot(&state).await {
+        Ok(snapshot) => Json(ControlPlaneSnapshotResponse { snapshot }).into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn control_events(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<EventQuery>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "control/events", &headers) {
+        return *response;
+    }
+    let limit = query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_EVENT_LIMIT);
+    let events = if let Some(after_seq) = query.after_seq {
+        let timeout_ms = query.timeout_ms.unwrap_or(CONTROL_PLANE_TICK_INTERVAL_MS);
+        state
+            .manager
+            .wait_for_recent_events(after_seq, limit, query.include_targeted, timeout_ms)
+            .await
+    } else {
+        state.manager.recent_events(limit, query.include_targeted)
+    };
+    let events = events.into_iter().map(map_event).collect::<Vec<_>>();
+    Json(ControlPlaneRecentEventsResponse { events }).into_response()
+}
+
+async fn control_ping(headers: HeaderMap, State(state): State<ControlPlaneHttpState>) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "control/ping", &headers) {
+        return *response;
+    }
+    match current_snapshot(&state).await {
+        Ok(snapshot) => Json(serde_json::json!({
+            "protocol": CONTROL_PLANE_PROTOCOL_VERSION,
+            "state_version": snapshot.state_version,
+        }))
+        .into_response(),
+        Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    }
+}
+
+async fn control_connect(
+    State(state): State<ControlPlaneHttpState>,
+    Json(request): Json<ControlPlaneConnectRequest>,
+) -> Response {
+    if request.max_protocol < CONTROL_PLANE_PROTOCOL_VERSION
+        || request.min_protocol > CONTROL_PLANE_PROTOCOL_VERSION
+    {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            format!("protocol mismatch: expected protocol {CONTROL_PLANE_PROTOCOL_VERSION}"),
+        );
+    }
+    if let Err(response) = verify_connect_device_challenge(&state, &request) {
+        return *response;
+    }
+    if let Some(device) = request.device.as_ref() {
+        let requested_scopes = request
+            .scopes
+            .iter()
+            .map(|scope| scope.as_str().to_owned())
+            .collect::<std::collections::BTreeSet<_>>();
+        let device_token = request
+            .auth
+            .as_ref()
+            .and_then(|auth| auth.device_token.as_deref());
+        let pairing_decision = match state.pairing_registry.evaluate_connect(
+            &device.device_id,
+            &request.client.id,
+            &device.public_key,
+            request.role.as_str(),
+            &requested_scopes,
+            device_token,
+        ) {
+            Ok(decision) => decision,
+            Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+        };
+        match pairing_decision {
+            mvp::control_plane::ControlPlanePairingConnectDecision::Authorized => {}
+            mvp::control_plane::ControlPlanePairingConnectDecision::PairingRequired {
+                request: pairing_request,
+                created,
+            } => {
+                if created {
+                    let _ = state.manager.record_pairing_requested(serde_json::json!({
+                        "pairing_request_id": pairing_request.pairing_request_id,
+                        "device_id": pairing_request.device_id,
+                        "client_id": pairing_request.client_id,
+                        "role": pairing_request.role,
+                    }));
+                }
+                return pairing_required_response(&pairing_request);
+            }
+            mvp::control_plane::ControlPlanePairingConnectDecision::DeviceTokenRequired => {
+                return device_token_error_response(
+                    ControlPlaneConnectErrorCode::DeviceTokenRequired,
+                    format!(
+                        "device `{}` is paired but must present auth.device_token on connect",
+                        device.device_id
+                    ),
+                );
+            }
+            mvp::control_plane::ControlPlanePairingConnectDecision::DeviceTokenInvalid => {
+                return device_token_error_response(
+                    ControlPlaneConnectErrorCode::DeviceTokenInvalid,
+                    format!(
+                        "device `{}` presented an invalid auth.device_token",
+                        device.device_id
+                    ),
+                );
+            }
+        }
+    }
+
+    let connection_id = format!(
+        "cp-{:016x}",
+        state.connection_counter.fetch_add(1, Ordering::Relaxed) + 1
+    );
+    let principal = principal_from_connect(&request, connection_id.clone());
+    let lease = state
+        .connection_registry
+        .issue(connection_principal_from_connect(&request, connection_id));
+    let scoped_capabilities = connection_scoped_capabilities(&lease);
+    let agent_id = lease.principal.client_id.clone();
+    let issue_result =
+        state
+            .kernel_authority
+            .issue_scoped_token(&lease.token, &agent_id, &scoped_capabilities);
+    if let Err(error) = issue_result {
+        let revoked = state.connection_registry.revoke(&lease.token);
+        if revoked {
+            state.kernel_authority.remove_binding(&lease.token);
+        }
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, error);
+    }
+    let snapshot = match current_snapshot(&state).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
+
+    let response = ControlPlaneConnectResponse {
+        protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+        principal,
+        connection_token: lease.token,
+        connection_token_expires_at_ms: lease.expires_at_ms,
+        snapshot,
+        policy: default_policy(),
+    };
+    (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn session_list(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<SessionListQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "session/list requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "session/list", &headers) {
+            return *response;
+        }
+        let Some(repository_view) = state.repository_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session/list requires control-plane-serve --config <path>",
+            );
+        };
+        match repository_view.list_sessions(
+            query.include_archived,
+            query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT),
+        ) {
+            Ok(view) => Json(ControlPlaneSessionListResponse {
+                current_session_id: view.current_session_id,
+                matched_count: view.matched_count,
+                returned_count: view.returned_count,
+                sessions: view
+                    .sessions
+                    .into_iter()
+                    .map(map_session_summary)
+                    .collect::<Vec<_>>(),
+            })
+            .into_response(),
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+async fn session_read(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<SessionReadQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "session/read requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "session/read", &headers) {
+            return *response;
+        }
+        let Some(repository_view) = state.repository_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "session/read requires control-plane-serve --config <path>",
+            );
+        };
+        match repository_view.read_session(
+            &query.session_id,
+            query
+                .recent_event_limit
+                .unwrap_or(CONTROL_PLANE_DEFAULT_SESSION_RECENT_LIMIT),
+            query.tail_after_id,
+            query
+                .tail_page_limit
+                .unwrap_or(CONTROL_PLANE_DEFAULT_SESSION_TAIL_LIMIT),
+        ) {
+            Ok(Some(observation)) => Json(ControlPlaneSessionReadResponse {
+                current_session_id: repository_view.current_session_id().to_owned(),
+                observation: map_session_observation(observation),
+            })
+            .into_response(),
+            Ok(None) => error_response(
+                StatusCode::NOT_FOUND,
+                format!("session `{}` not found", query.session_id.trim()),
+            ),
+            Err(error) if error == "control_plane_session_id_missing" => {
+                error_response(StatusCode::BAD_REQUEST, error)
+            }
+            Err(error) if error.starts_with("visibility_denied:") => {
+                error_response(StatusCode::FORBIDDEN, error)
+            }
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+async fn approval_list(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<ApprovalListQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "approval/list requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "approval/list", &headers) {
+            return *response;
+        }
+        let Some(repository_view) = state.repository_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "approval/list requires control-plane-serve --config <path>",
+            );
+        };
+        let status = match query.status.as_deref() {
+            Some(raw) => match parse_approval_request_status(raw) {
+                Ok(status) => Some(status),
+                Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+            },
+            None => None,
+        };
+        match repository_view.list_approvals(
+            query.session_id.as_deref(),
+            status,
+            query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT),
+        ) {
+            Ok(view) => Json(ControlPlaneApprovalListResponse {
+                current_session_id: view.current_session_id,
+                matched_count: view.matched_count,
+                returned_count: view.returned_count,
+                approvals: view
+                    .approvals
+                    .into_iter()
+                    .map(map_approval_summary)
+                    .collect::<Vec<_>>(),
+            })
+            .into_response(),
+            Err(error) if error == "control_plane_session_id_missing" => {
+                error_response(StatusCode::BAD_REQUEST, error)
+            }
+            Err(error) if error.starts_with("visibility_denied:") => {
+                error_response(StatusCode::FORBIDDEN, error)
+            }
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+async fn pairing_list(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<PairingListQuery>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "pairing/list", &headers) {
+        return *response;
+    }
+    let status = match query.status.as_deref() {
+        Some(raw) => match parse_pairing_status(raw) {
+            Ok(status) => Some(status),
+            Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+        },
+        None => None,
+    };
+    let requests = state.pairing_registry.list_requests(
+        status,
+        query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT),
+    );
+    let matched_count = requests.len();
+    let returned_count = matched_count;
+    Json(ControlPlanePairingListResponse {
+        matched_count,
+        returned_count,
+        requests: requests
+            .into_iter()
+            .map(map_pairing_request)
+            .collect::<Vec<_>>(),
+    })
+    .into_response()
+}
+
+async fn pairing_resolve(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Json(request): Json<ControlPlanePairingResolveRequest>,
+) -> Response {
+    if let Err(response) = authorize_control_plane_request(&state, "pairing/resolve", &headers) {
+        return *response;
+    }
+    match state
+        .pairing_registry
+        .resolve_request(&request.pairing_request_id, request.approve)
+    {
+        Ok(Some(record)) => {
+            let _ = state.manager.record_pairing_resolved(
+                serde_json::json!({
+                    "pairing_request_id": record.pairing_request_id,
+                    "device_id": record.device_id,
+                    "status": record.status.as_str(),
+                }),
+                false,
+            );
+            Json(ControlPlanePairingResolveResponse {
+                request: map_pairing_request(record.clone()),
+                device_token: record.device_token,
+            })
+            .into_response()
+        }
+        Ok(None) => error_response(
+            StatusCode::NOT_FOUND,
+            format!(
+                "pairing request `{}` not found",
+                request.pairing_request_id.trim()
+            ),
+        ),
+        Err(error) => error_response(StatusCode::BAD_REQUEST, error),
+    }
+}
+
+async fn acp_session_list(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<AcpSessionListQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "acp/session/list requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "acp/session/list", &headers)
+        {
+            return *response;
+        }
+        let Some(acp_view) = state.acp_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp/session/list requires control-plane-serve --config <path>",
+            );
+        };
+        match acp_view.list_sessions(query.limit.unwrap_or(CONTROL_PLANE_DEFAULT_LIST_LIMIT)) {
+            Ok(view) => Json(ControlPlaneAcpSessionListResponse {
+                current_session_id: view.current_session_id,
+                matched_count: view.matched_count,
+                returned_count: view.returned_count,
+                sessions: view
+                    .sessions
+                    .into_iter()
+                    .map(map_acp_session_metadata)
+                    .collect::<Vec<_>>(),
+            })
+            .into_response(),
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+async fn acp_session_read(
+    headers: HeaderMap,
+    State(state): State<ControlPlaneHttpState>,
+    Query(query): Query<AcpSessionReadQuery>,
+) -> Response {
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = (state, query);
+        error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "acp/session/read requires daemon memory-sqlite support",
+        )
+    }
+    #[cfg(feature = "memory-sqlite")]
+    {
+        if let Err(response) = authorize_control_plane_request(&state, "acp/session/read", &headers)
+        {
+            return *response;
+        }
+        let Some(acp_view) = state.acp_view.as_ref() else {
+            return error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "acp/session/read requires control-plane-serve --config <path>",
+            );
+        };
+        match acp_view.read_session(&query.session_key).await {
+            Ok(Some(view)) => Json(ControlPlaneAcpSessionReadResponse {
+                current_session_id: view.current_session_id,
+                metadata: map_acp_session_metadata(view.metadata),
+                status: map_acp_session_status(view.status),
+            })
+            .into_response(),
+            Ok(None) => error_response(
+                StatusCode::NOT_FOUND,
+                format!("ACP session `{}` not found", query.session_key.trim()),
+            ),
+            Err(error) if error == "control_plane_acp_session_key_missing" => {
+                error_response(StatusCode::BAD_REQUEST, error)
+            }
+            Err(error) if error.starts_with("visibility_denied:") => {
+                error_response(StatusCode::FORBIDDEN, error)
+            }
+            Err(error) => error_response(StatusCode::INTERNAL_SERVER_ERROR, error),
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_control_plane_router_with_runtime(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
+    acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+    pairing_registry: Arc<mvp::control_plane::ControlPlanePairingRegistry>,
+) -> Result<Router, String> {
+    let kernel_authority = Arc::new(ControlPlaneKernelAuthority::new()?);
+    let state = ControlPlaneHttpState {
+        manager,
+        connection_counter: Arc::new(AtomicU64::new(0)),
+        connection_registry: Arc::new(mvp::control_plane::ControlPlaneConnectionRegistry::new()),
+        challenge_registry: Arc::new(mvp::control_plane::ControlPlaneChallengeRegistry::new()),
+        pairing_registry,
+        kernel_authority,
+        repository_view,
+        acp_view,
+    };
+
+    let router = Router::new()
+        .route("/readyz", get(readyz))
+        .route("/healthz", get(healthz))
+        .route("/control/challenge", get(control_challenge))
+        .route("/control/ping", get(control_ping))
+        .route("/control/connect", post(control_connect))
+        .route("/control/snapshot", get(control_snapshot))
+        .route("/control/events", get(control_events))
+        .route("/session/list", get(session_list))
+        .route("/session/read", get(session_read))
+        .route("/approval/list", get(approval_list))
+        .route("/pairing/list", get(pairing_list))
+        .route("/pairing/resolve", post(pairing_resolve))
+        .route("/acp/session/list", get(acp_session_list))
+        .route("/acp/session/read", get(acp_session_read))
+        .with_state(state);
+    Ok(router)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_control_plane_router_with_views(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+    repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
+    acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+) -> Result<Router, String> {
+    let pairing_registry = Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new());
+    build_control_plane_router_with_runtime(manager, repository_view, acp_view, pairing_registry)
+}
+
+#[cfg(not(feature = "memory-sqlite"))]
+fn build_control_plane_router_without_repository(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+) -> Result<Router, String> {
+    let kernel_authority = Arc::new(ControlPlaneKernelAuthority::new()?);
+    let state = ControlPlaneHttpState {
+        manager,
+        connection_counter: Arc::new(AtomicU64::new(0)),
+        connection_registry: Arc::new(mvp::control_plane::ControlPlaneConnectionRegistry::new()),
+        challenge_registry: Arc::new(mvp::control_plane::ControlPlaneChallengeRegistry::new()),
+        pairing_registry: Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new()),
+        kernel_authority,
+    };
+
+    let router = Router::new()
+        .route("/readyz", get(readyz))
+        .route("/healthz", get(healthz))
+        .route("/control/challenge", get(control_challenge))
+        .route("/control/ping", get(control_ping))
+        .route("/control/connect", post(control_connect))
+        .route("/control/snapshot", get(control_snapshot))
+        .route("/control/events", get(control_events))
+        .route("/session/list", get(session_list))
+        .route("/session/read", get(session_read))
+        .route("/approval/list", get(approval_list))
+        .route("/pairing/list", get(pairing_list))
+        .route("/pairing/resolve", post(pairing_resolve))
+        .route("/acp/session/list", get(acp_session_list))
+        .route("/acp/session/read", get(acp_session_read))
+        .with_state(state);
+    Ok(router)
+}
+
+pub fn build_control_plane_router(
+    manager: Arc<mvp::control_plane::ControlPlaneManager>,
+) -> Result<Router, String> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        build_control_plane_router_with_views(manager, None, None)
+    }
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        build_control_plane_router_without_repository(manager)
+    }
+}
+
+pub async fn run_control_plane_serve_cli(
+    config_path: Option<&str>,
+    current_session_id: Option<&str>,
+    port: u16,
+) -> CliResult<()> {
+    if current_session_id.is_some() && config_path.is_none() {
+        return Err("control-plane-serve --session requires --config".to_owned());
+    }
+    let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+    manager.set_runtime_ready(true);
+    #[cfg(feature = "memory-sqlite")]
+    let (repository_view, acp_view) = match config_path {
+        Some(config_path) => {
+            let (resolved_path, config) = mvp::config::load(Some(config_path))?;
+            let memory_config =
+                mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+                    &config.memory,
+                );
+            let session_id = current_session_id.unwrap_or("default");
+            println!(
+                "loongclaw control plane session view rooted at `{session_id}` from {}",
+                resolved_path.display()
+            );
+            (
+                Some(Arc::new(
+                    mvp::control_plane::ControlPlaneRepositoryView::new(memory_config, session_id),
+                )),
+                Some(Arc::new(mvp::control_plane::ControlPlaneAcpView::new(
+                    config, session_id,
+                ))),
+            )
+        }
+        None => (None, None),
+    };
+    #[cfg(feature = "memory-sqlite")]
+    let pairing_registry = match config_path {
+        Some(config_path) => {
+            let (_, config) = mvp::config::load(Some(config_path))?;
+            let memory_config =
+                mvp::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(
+                    &config.memory,
+                );
+            Arc::new(
+                mvp::control_plane::ControlPlanePairingRegistry::with_memory_config(memory_config)?,
+            )
+        }
+        None => Arc::new(mvp::control_plane::ControlPlanePairingRegistry::new()),
+    };
+    #[cfg(not(feature = "memory-sqlite"))]
+    let _ = (config_path, current_session_id);
+
+    #[cfg(feature = "memory-sqlite")]
+    let router = build_control_plane_router_with_runtime(
+        manager,
+        repository_view,
+        acp_view,
+        pairing_registry,
+    )?;
+    #[cfg(not(feature = "memory-sqlite"))]
+    let router = build_control_plane_router_without_repository(manager)?;
+    let bind_addr = default_control_plane_bind_addr(port);
+    let listener = tokio::net::TcpListener::bind(bind_addr)
+        .await
+        .map_err(|error| format!("bind control-plane listener failed: {error}"))?;
+    let local_addr = listener
+        .local_addr()
+        .map_err(|error| format!("read control-plane local address failed: {error}"))?;
+
+    println!("loongclaw control plane listening on http://{local_addr}");
+    axum::serve(listener, router)
+        .await
+        .map_err(|error| format!("control-plane listener failed: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_control_plane_router(manager: Arc<mvp::control_plane::ControlPlaneManager>) -> Router {
+        super::build_control_plane_router(manager).expect("router")
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn build_control_plane_router_with_views(
+        manager: Arc<mvp::control_plane::ControlPlaneManager>,
+        repository_view: Option<Arc<mvp::control_plane::ControlPlaneRepositoryView>>,
+        acp_view: Option<Arc<mvp::control_plane::ControlPlaneAcpView>>,
+    ) -> Router {
+        super::build_control_plane_router_with_views(manager, repository_view, acp_view)
+            .expect("router")
+    }
+
+    async fn connect_token(
+        router: &Router,
+        scopes: std::collections::BTreeSet<ControlPlaneScope>,
+    ) -> String {
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: None,
+        };
+
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("connect response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let connect: ControlPlaneConnectResponse =
+            serde_json::from_slice(&body).expect("connect json");
+        connect.connection_token
+    }
+
+    fn bearer_request(method: &str, uri: &str, token: &str) -> Request<Body> {
+        Request::builder()
+            .uri(uri)
+            .method(method)
+            .header("authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .expect("request")
+    }
+
+    async fn issue_challenge(router: &Router) -> ControlPlaneChallengeResponse {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/challenge")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("challenge response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        serde_json::from_slice(&body).expect("challenge json")
+    }
+
+    fn signed_device_for_request(
+        client_id: &str,
+        role: ControlPlaneRole,
+        scopes: std::collections::BTreeSet<ControlPlaneScope>,
+        challenge: &ControlPlaneChallengeResponse,
+    ) -> loongclaw_protocol::ControlPlaneDeviceIdentity {
+        let signing_key = SigningKey::from_bytes(&[7_u8; 32]);
+        let device_template = loongclaw_protocol::ControlPlaneDeviceIdentity {
+            device_id: "device-1".to_owned(),
+            public_key: String::new(),
+            signature: String::new(),
+            signed_at_ms: challenge.issued_at_ms,
+            nonce: challenge.nonce.clone(),
+        };
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: client_id.to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device_template.clone()),
+        };
+        let message = control_plane_device_signature_message(&request, &device_template);
+        let signature = signing_key.sign(&message);
+        loongclaw_protocol::ControlPlaneDeviceIdentity {
+            device_id: "device-1".to_owned(),
+            public_key: base64::engine::general_purpose::STANDARD
+                .encode(signing_key.verifying_key().to_bytes()),
+            signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+            signed_at_ms: challenge.issued_at_ms,
+            nonce: challenge.nonce.clone(),
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn isolated_memory_config(test_name: &str) -> mvp::memory::runtime_config::MemoryRuntimeConfig {
+        let base = std::env::temp_dir().join(format!(
+            "loongclaw-control-plane-server-{test_name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&base);
+        let db_path = base.join("memory.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+        mvp::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path),
+            ..mvp::memory::runtime_config::MemoryRuntimeConfig::default()
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn seeded_repository_view(
+        test_name: &str,
+    ) -> Arc<mvp::control_plane::ControlPlaneRepositoryView> {
+        let config = isolated_memory_config(test_name);
+        let repo = mvp::session::repository::SessionRepository::new(&config).expect("repository");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: mvp::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: mvp::session::repository::SessionState::Running,
+        })
+        .expect("create root session");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: mvp::session::repository::SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: mvp::session::repository::SessionState::Running,
+        })
+        .expect("create child session");
+        repo.append_event(mvp::session::repository::NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: serde_json::json!({
+                "status": "started",
+            }),
+        })
+        .expect("append child event");
+        repo.ensure_approval_request(mvp::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-visible".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-visible".to_owned(),
+            tool_call_id: "call-visible".to_owned(),
+            tool_name: "delegate".to_owned(),
+            approval_key: "tool:delegate".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-visible",
+            }),
+        })
+        .expect("create visible approval");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "hidden-root".to_owned(),
+            kind: mvp::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Hidden".to_owned()),
+            state: mvp::session::repository::SessionState::Ready,
+        })
+        .expect("create hidden root");
+        repo.ensure_approval_request(mvp::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-hidden".to_owned(),
+            session_id: "hidden-root".to_owned(),
+            turn_id: "turn-hidden".to_owned(),
+            tool_call_id: "call-hidden".to_owned(),
+            tool_name: "delegate_async".to_owned(),
+            approval_key: "tool:delegate_async".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate_async",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-hidden",
+            }),
+        })
+        .expect("create hidden approval");
+
+        Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
+            config,
+            "root-session",
+        ))
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn seeded_control_plane_views(
+        test_name: &str,
+    ) -> (
+        Arc<mvp::control_plane::ControlPlaneRepositoryView>,
+        Arc<mvp::control_plane::ControlPlaneAcpView>,
+    ) {
+        let memory_config = isolated_memory_config(test_name);
+        let repo =
+            mvp::session::repository::SessionRepository::new(&memory_config).expect("repository");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: mvp::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: mvp::session::repository::SessionState::Running,
+        })
+        .expect("create root session");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: mvp::session::repository::SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: mvp::session::repository::SessionState::Running,
+        })
+        .expect("create child session");
+        repo.append_event(mvp::session::repository::NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: serde_json::json!({
+                "status": "started",
+            }),
+        })
+        .expect("append child event");
+        repo.ensure_approval_request(mvp::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-visible".to_owned(),
+            session_id: "child-session".to_owned(),
+            turn_id: "turn-visible".to_owned(),
+            tool_call_id: "call-visible".to_owned(),
+            tool_name: "delegate".to_owned(),
+            approval_key: "tool:delegate".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-visible",
+            }),
+        })
+        .expect("create visible approval");
+        repo.create_session(mvp::session::repository::NewSessionRecord {
+            session_id: "hidden-root".to_owned(),
+            kind: mvp::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Hidden".to_owned()),
+            state: mvp::session::repository::SessionState::Ready,
+        })
+        .expect("create hidden root");
+        repo.ensure_approval_request(mvp::session::repository::NewApprovalRequestRecord {
+            approval_request_id: "apr-hidden".to_owned(),
+            session_id: "hidden-root".to_owned(),
+            turn_id: "turn-hidden".to_owned(),
+            tool_call_id: "call-hidden".to_owned(),
+            tool_name: "delegate_async".to_owned(),
+            approval_key: "tool:delegate_async".to_owned(),
+            request_payload_json: serde_json::json!({
+                "tool": "delegate_async",
+            }),
+            governance_snapshot_json: serde_json::json!({
+                "reason": "governed_tool_requires_approval",
+                "rule_id": "approval-hidden",
+            }),
+        })
+        .expect("create hidden approval");
+
+        let mut config = mvp::config::LoongClawConfig::default();
+        let sqlite_path = memory_config
+            .sqlite_path
+            .as_ref()
+            .expect("sqlite path")
+            .display()
+            .to_string();
+        config.memory.sqlite_path = sqlite_path;
+        config.acp.enabled = true;
+
+        let store =
+            mvp::acp::AcpSqliteSessionStore::new(Some(config.memory.resolved_sqlite_path()));
+        mvp::acp::AcpSessionStore::upsert(
+            &store,
+            mvp::acp::AcpSessionMetadata {
+                session_key: "agent:codex:child-session".to_owned(),
+                conversation_id: Some("conversation-visible".to_owned()),
+                binding: Some(mvp::acp::AcpSessionBindingScope {
+                    route_session_id: "child-session".to_owned(),
+                    channel_id: Some("feishu".to_owned()),
+                    account_id: Some("lark-prod".to_owned()),
+                    conversation_id: Some("oc-visible".to_owned()),
+                    thread_id: Some("thread-visible".to_owned()),
+                }),
+                activation_origin: Some(mvp::acp::AcpRoutingOrigin::ExplicitRequest),
+                backend_id: "acpx".to_owned(),
+                runtime_session_name: "runtime-visible".to_owned(),
+                working_directory: None,
+                backend_session_id: Some("backend-visible".to_owned()),
+                agent_session_id: Some("agent-visible".to_owned()),
+                mode: Some(mvp::acp::AcpSessionMode::Interactive),
+                state: mvp::acp::AcpSessionState::Ready,
+                last_activity_ms: 100,
+                last_error: None,
+            },
+        )
+        .expect("seed visible ACP session");
+        mvp::acp::AcpSessionStore::upsert(
+            &store,
+            mvp::acp::AcpSessionMetadata {
+                session_key: "agent:codex:hidden-root".to_owned(),
+                conversation_id: Some("conversation-hidden".to_owned()),
+                binding: Some(mvp::acp::AcpSessionBindingScope {
+                    route_session_id: "hidden-root".to_owned(),
+                    channel_id: Some("telegram".to_owned()),
+                    account_id: None,
+                    conversation_id: Some("hidden".to_owned()),
+                    thread_id: None,
+                }),
+                activation_origin: Some(mvp::acp::AcpRoutingOrigin::AutomaticDispatch),
+                backend_id: "acpx".to_owned(),
+                runtime_session_name: "runtime-hidden".to_owned(),
+                working_directory: None,
+                backend_session_id: Some("backend-hidden".to_owned()),
+                agent_session_id: Some("agent-hidden".to_owned()),
+                mode: Some(mvp::acp::AcpSessionMode::Review),
+                state: mvp::acp::AcpSessionState::Busy,
+                last_activity_ms: 200,
+                last_error: Some("hidden".to_owned()),
+            },
+        )
+        .expect("seed hidden ACP session");
+
+        (
+            Arc::new(mvp::control_plane::ControlPlaneRepositoryView::new(
+                memory_config,
+                "root-session",
+            )),
+            Arc::new(mvp::control_plane::ControlPlaneAcpView::new(
+                config,
+                "root-session",
+            )),
+        )
+    }
+
+    #[test]
+    fn default_bind_addr_is_loopback() {
+        let addr = default_control_plane_bind_addr(0);
+        assert_eq!(addr.ip(), Ipv4Addr::LOCALHOST);
+        assert_eq!(addr.port(), 0);
+    }
+
+    #[tokio::test]
+    async fn readyz_returns_ok() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/readyz")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("readyz response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn control_challenge_returns_nonce_payload() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let challenge = issue_challenge(&router).await;
+        assert!(challenge.nonce.starts_with("cpc-"));
+        assert!(challenge.expires_at_ms >= challenge.issued_at_ms);
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_snapshot_json() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        manager.set_presence_count(2);
+        manager.set_session_count(3);
+        manager.set_pending_approval_count(1);
+        manager.set_acp_session_count(4);
+        let router = build_control_plane_router(manager);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("healthz response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let snapshot: ControlPlaneSnapshotResponse =
+            serde_json::from_slice(&body).expect("snapshot json");
+        assert!(snapshot.snapshot.runtime_ready);
+        assert_eq!(snapshot.snapshot.presence_count, 2);
+        assert_eq!(snapshot.snapshot.session_count, 3);
+        assert_eq!(snapshot.snapshot.pending_approval_count, 1);
+        assert_eq!(snapshot.snapshot.acp_session_count, 4);
+    }
+
+    #[tokio::test]
+    async fn control_connect_returns_protocol_response() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes: std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: None,
+        };
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("connect response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let connect: ControlPlaneConnectResponse =
+            serde_json::from_slice(&body).expect("connect json");
+        assert_eq!(connect.protocol, CONTROL_PLANE_PROTOCOL_VERSION);
+        assert_eq!(connect.principal.client_id, "cli");
+        assert_eq!(connect.principal.role, ControlPlaneRole::Operator);
+        assert!(connect.connection_token.starts_with("cpt-"));
+        assert!(connect.connection_token_expires_at_ms > 0);
+        assert!(connect.snapshot.runtime_ready);
+        assert_eq!(
+            connect.policy.tick_interval_ms,
+            CONTROL_PLANE_TICK_INTERVAL_MS
+        );
+    }
+
+    #[tokio::test]
+    async fn control_connect_rejects_protocol_mismatch() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION + 1,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION + 1,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: None,
+            },
+            role: ControlPlaneRole::Operator,
+            scopes: std::collections::BTreeSet::new(),
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: None,
+        };
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("connect response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn control_connect_requires_pairing_before_signed_device_can_connect() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device),
+        };
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("connect response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let error: ControlPlaneConnectErrorResponse =
+            serde_json::from_slice(&body).expect("connect error json");
+        assert_eq!(error.code, ControlPlaneConnectErrorCode::PairingRequired);
+        assert!(error.pairing_request_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn control_connect_rejects_reused_device_challenge() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device),
+        };
+
+        let first = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("first connect response");
+        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+
+        let second = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("second connect response");
+        assert_eq!(second.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn pairing_resolve_approves_device_and_connect_accepts_device_token() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let pairing_request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes: scopes.clone(),
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device.clone()),
+        };
+
+        let pairing_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&pairing_request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("pairing response");
+        assert_eq!(pairing_response.status(), StatusCode::FORBIDDEN);
+        let pairing_body = to_bytes(pairing_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let pairing_error: ControlPlaneConnectErrorResponse =
+            serde_json::from_slice(&pairing_body).expect("pairing error json");
+        let pairing_request_id = pairing_error
+            .pairing_request_id
+            .expect("pairing request id");
+
+        let operator_token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorPairing]),
+        )
+        .await;
+        let resolve_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/pairing/resolve")
+                    .method("POST")
+                    .header("authorization", format!("Bearer {operator_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&ControlPlanePairingResolveRequest {
+                            pairing_request_id,
+                            approve: true,
+                        })
+                        .expect("encode resolve request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("resolve response");
+        assert_eq!(resolve_response.status(), StatusCode::OK);
+        let resolve_body = to_bytes(resolve_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let resolve: ControlPlanePairingResolveResponse =
+            serde_json::from_slice(&resolve_body).expect("resolve json");
+        let device_token = resolve.device_token.expect("device token");
+
+        let reconnect_challenge = issue_challenge(&router).await;
+        let reconnect_device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &reconnect_challenge,
+        );
+        let reconnect_request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: Some(loongclaw_protocol::ControlPlaneAuthClaims {
+                token: None,
+                device_token: Some(device_token),
+                bootstrap_token: None,
+                password: None,
+            }),
+            device: Some(reconnect_device),
+        };
+
+        let reconnect = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&reconnect_request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("reconnect response");
+        assert_eq!(reconnect.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn pairing_list_surfaces_pending_request_for_unpaired_device() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        let router = build_control_plane_router(manager);
+
+        let challenge = issue_challenge(&router).await;
+        let scopes = std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]);
+        let device = signed_device_for_request(
+            "cli",
+            ControlPlaneRole::Operator,
+            scopes.clone(),
+            &challenge,
+        );
+        let request = ControlPlaneConnectRequest {
+            min_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            max_protocol: CONTROL_PLANE_PROTOCOL_VERSION,
+            client: ControlPlaneClientIdentity {
+                id: "cli".to_owned(),
+                version: "1.0.0".to_owned(),
+                mode: "operator_ui".to_owned(),
+                platform: "macos".to_owned(),
+                display_name: Some("LoongClaw CLI".to_owned()),
+            },
+            role: ControlPlaneRole::Operator,
+            scopes,
+            caps: std::collections::BTreeSet::new(),
+            commands: std::collections::BTreeSet::new(),
+            permissions: std::collections::BTreeMap::new(),
+            auth: None,
+            device: Some(device),
+        };
+
+        let pairing_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/control/connect")
+                    .method("POST")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&request).expect("encode request"),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("pairing response");
+        assert_eq!(pairing_response.status(), StatusCode::FORBIDDEN);
+
+        let operator_token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorPairing]),
+        )
+        .await;
+        let list_response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/pairing/list?status=pending&limit=10",
+                &operator_token,
+            ))
+            .await
+            .expect("pairing list response");
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let list: ControlPlanePairingListResponse =
+            serde_json::from_slice(&list_body).expect("pairing list json");
+        assert_eq!(list.matched_count, 1);
+        assert_eq!(list.returned_count, 1);
+        assert_eq!(list.requests[0].status, ControlPlanePairingStatus::Pending);
+        assert_eq!(list.requests[0].device_id, "device-1");
+    }
+
+    #[tokio::test]
+    async fn control_snapshot_returns_snapshot_payload() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        manager.set_session_count(7);
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/control/snapshot", &token))
+            .await
+            .expect("snapshot response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let snapshot: ControlPlaneSnapshotResponse =
+            serde_json::from_slice(&body).expect("snapshot json");
+        assert_eq!(snapshot.snapshot.session_count, 7);
+    }
+
+    #[tokio::test]
+    async fn control_events_returns_recent_events_with_limit() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let _ = manager.record_health_changed(true, serde_json::json!({ "idx": 2 }));
+        let _ = manager.record_session_message(serde_json::json!({ "idx": 3 }), true);
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/control/events?limit=2", &token))
+            .await
+            .expect("events response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let events: ControlPlaneRecentEventsResponse =
+            serde_json::from_slice(&body).expect("events json");
+        assert_eq!(events.events.len(), 2);
+        assert_eq!(events.events[0].seq, 1);
+        assert_eq!(events.events[1].seq, 2);
+        assert_eq!(events.events[0].payload["idx"], 1);
+        assert_eq!(events.events[1].payload["idx"], 2);
+    }
+
+    #[tokio::test]
+    async fn control_events_can_include_targeted_records_when_requested() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_session_message(serde_json::json!({ "kind": "broadcast" }), false);
+        let _ = manager.record_session_message(serde_json::json!({ "kind": "targeted" }), true);
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/control/events?limit=10&include_targeted=true",
+                &token,
+            ))
+            .await
+            .expect("events response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let events: ControlPlaneRecentEventsResponse =
+            serde_json::from_slice(&body).expect("events json");
+        assert_eq!(events.events.len(), 2);
+        assert_eq!(events.events[1].payload["kind"], "targeted");
+    }
+
+    #[tokio::test]
+    async fn control_events_supports_after_seq_long_poll() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let router = build_control_plane_router(manager.clone());
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+
+        let request_future = {
+            let router = router.clone();
+            let token = token.clone();
+            tokio::spawn(async move {
+                router
+                    .oneshot(bearer_request(
+                        "GET",
+                        "/control/events?after_seq=1&timeout_ms=1000",
+                        &token,
+                    ))
+                    .await
+            })
+        };
+
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let _ = manager.record_health_changed(true, serde_json::json!({ "idx": 2 }));
+
+        let response = request_future
+            .await
+            .expect("join")
+            .expect("events response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let events: ControlPlaneRecentEventsResponse =
+            serde_json::from_slice(&body).expect("events json");
+        assert_eq!(events.events.len(), 1);
+        assert_eq!(events.events[0].payload["idx"], 2);
+        assert_eq!(events.events[0].seq, 2);
+    }
+
+    #[tokio::test]
+    async fn control_events_after_seq_returns_empty_on_timeout() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let _ = manager.record_presence_changed(1, serde_json::json!({ "idx": 1 }));
+        let router = build_control_plane_router(manager);
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/control/events?after_seq=1&timeout_ms=20",
+                &token,
+            ))
+            .await
+            .expect("events response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let events: ControlPlaneRecentEventsResponse =
+            serde_json::from_slice(&body).expect("events json");
+        assert!(events.events.is_empty());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn control_snapshot_uses_repository_backed_session_counts_when_available() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        manager.set_runtime_ready(true);
+        manager.set_session_count(99);
+        let (repository_view, acp_view) = seeded_control_plane_views("snapshot-repo");
+        let router =
+            build_control_plane_router_with_views(manager, Some(repository_view), Some(acp_view));
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/control/snapshot", &token))
+            .await
+            .expect("snapshot response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let snapshot: ControlPlaneSnapshotResponse =
+            serde_json::from_slice(&body).expect("snapshot json");
+        assert_eq!(snapshot.snapshot.session_count, 2);
+        assert_eq!(snapshot.snapshot.pending_approval_count, 1);
+        assert_eq!(snapshot.snapshot.acp_session_count, 1);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn session_list_returns_visible_repository_sessions() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("session-list")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/session/list?limit=10", &token))
+            .await
+            .expect("session list response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let sessions: ControlPlaneSessionListResponse =
+            serde_json::from_slice(&body).expect("session list json");
+        assert_eq!(sessions.current_session_id, "root-session");
+        assert_eq!(sessions.matched_count, 2);
+        assert_eq!(sessions.returned_count, 2);
+        assert!(
+            sessions
+                .sessions
+                .iter()
+                .any(|session| session.session_id == "root-session")
+        );
+        assert!(
+            sessions
+                .sessions
+                .iter()
+                .any(|session| session.session_id == "child-session")
+        );
+        assert!(
+            !sessions
+                .sessions
+                .iter()
+                .any(|session| session.session_id == "hidden-root")
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn session_read_returns_repository_observation_for_visible_session() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("session-read")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/session/read?session_id=child-session&recent_event_limit=10",
+                &token,
+            ))
+            .await
+            .expect("session read response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let session: ControlPlaneSessionReadResponse =
+            serde_json::from_slice(&body).expect("session read json");
+        assert_eq!(session.current_session_id, "root-session");
+        assert_eq!(session.observation.session.session_id, "child-session");
+        assert_eq!(session.observation.recent_events.len(), 1);
+        assert_eq!(
+            session.observation.recent_events[0].event_kind,
+            "delegate_started"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_list_returns_only_visible_requests() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("approval-list")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorApprovals]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/approval/list?status=pending&limit=10",
+                &token,
+            ))
+            .await
+            .expect("approval list response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let approvals: ControlPlaneApprovalListResponse =
+            serde_json::from_slice(&body).expect("approval list json");
+        assert_eq!(approvals.current_session_id, "root-session");
+        assert_eq!(approvals.matched_count, 1);
+        assert_eq!(approvals.returned_count, 1);
+        assert_eq!(approvals.approvals[0].approval_request_id, "apr-visible");
+        assert_eq!(
+            approvals.approvals[0].status,
+            ControlPlaneApprovalRequestStatus::Pending
+        );
+        assert_eq!(
+            approvals.approvals[0].reason.as_deref(),
+            Some("governed_tool_requires_approval")
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn acp_session_list_returns_only_visible_sessions() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let (_repository_view, acp_view) = seeded_control_plane_views("acp-list");
+        let router = build_control_plane_router_with_views(manager, None, Some(acp_view));
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAcp]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/acp/session/list?limit=10", &token))
+            .await
+            .expect("ACP session list response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let sessions: ControlPlaneAcpSessionListResponse =
+            serde_json::from_slice(&body).expect("ACP session list json");
+        assert_eq!(sessions.current_session_id, "root-session");
+        assert_eq!(sessions.matched_count, 1);
+        assert_eq!(sessions.returned_count, 1);
+        assert_eq!(
+            sessions.sessions[0].session_key,
+            "agent:codex:child-session"
+        );
+        assert_eq!(
+            sessions.sessions[0]
+                .binding
+                .as_ref()
+                .expect("binding")
+                .route_session_id,
+            "child-session"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn acp_session_read_returns_live_status_for_visible_session() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let (_repository_view, acp_view) = seeded_control_plane_views("acp-read");
+        let router = build_control_plane_router_with_views(manager, None, Some(acp_view));
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorAcp]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/acp/session/read?session_key=agent:codex:child-session",
+                &token,
+            ))
+            .await
+            .expect("ACP session read response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body bytes");
+        let session: ControlPlaneAcpSessionReadResponse =
+            serde_json::from_slice(&body).expect("ACP session read json");
+        assert_eq!(session.current_session_id, "root-session");
+        assert_eq!(session.metadata.session_key, "agent:codex:child-session");
+        assert_eq!(session.status.session_key, "agent:codex:child-session");
+        assert_eq!(session.status.state, ControlPlaneAcpSessionState::Ready);
+        assert_eq!(
+            session.status.mode,
+            Some(ControlPlaneAcpSessionMode::Interactive)
+        );
+        assert!(
+            session
+                .status
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("status_unavailable:")),
+            "expected ACP session read to degrade with status_unavailable when backend is absent"
+        );
+    }
+
+    #[tokio::test]
+    async fn control_snapshot_rejects_missing_token() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router(manager);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/control/snapshot")
+                    .method("GET")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("snapshot response");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_list_rejects_insufficient_scope() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let router = build_control_plane_router_with_views(
+            manager,
+            Some(seeded_repository_view("approval-list-scope")),
+            None,
+        );
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request(
+                "GET",
+                "/approval/list?status=pending&limit=10",
+                &token,
+            ))
+            .await
+            .expect("approval list response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn acp_session_list_rejects_insufficient_scope() {
+        let manager = Arc::new(mvp::control_plane::ControlPlaneManager::new());
+        let (_repository_view, acp_view) = seeded_control_plane_views("acp-list-scope");
+        let router = build_control_plane_router_with_views(manager, None, Some(acp_view));
+        let token = connect_token(
+            &router,
+            std::collections::BTreeSet::from([ControlPlaneScope::OperatorRead]),
+        )
+        .await;
+        let response = router
+            .oneshot(bearer_request("GET", "/acp/session/list?limit=10", &token))
+            .await
+            .expect("ACP session list response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+}

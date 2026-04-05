@@ -1598,3 +1598,140 @@ async fn kernel_is_usable_from_concurrent_tasks() {
         );
     }
 }
+
+fn control_plane_pack() -> VerticalPackManifest {
+    VerticalPackManifest {
+        pack_id: "control-plane".to_owned(),
+        domain: "control".to_owned(),
+        version: "1.0.0".to_owned(),
+        default_route: ExecutionRoute {
+            harness_kind: HarnessKind::EmbeddedPi,
+            adapter: None,
+        },
+        allowed_connectors: BTreeSet::new(),
+        granted_capabilities: BTreeSet::from([
+            Capability::ControlRead,
+            Capability::ControlApprovals,
+            Capability::ControlPairing,
+            Capability::ControlAcp,
+        ]),
+        metadata: BTreeMap::new(),
+    }
+}
+
+#[test]
+fn issue_scoped_token_limits_capabilities_to_requested_subset() {
+    let (mut kernel, audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(control_plane_pack())
+        .expect("control-plane pack should register");
+
+    let allowed_capabilities =
+        BTreeSet::from([Capability::ControlRead, Capability::ControlPairing]);
+    let token = kernel
+        .issue_scoped_token(
+            "control-plane",
+            "operator-session",
+            &allowed_capabilities,
+            120,
+        )
+        .expect("scoped token should issue");
+
+    assert_eq!(token.allowed_capabilities, allowed_capabilities);
+
+    let snapshot = audit.snapshot();
+    assert!(
+        snapshot
+            .iter()
+            .any(|event| { matches!(event.kind, AuditEventKind::TokenIssued { .. }) })
+    );
+}
+
+#[test]
+fn authorize_operation_records_plane_invocation_for_control_plane_route() {
+    let clock: Arc<FixedClock> = Arc::new(FixedClock::new(1_700_000_000));
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let mut kernel =
+        LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit.clone());
+    kernel
+        .register_pack(control_plane_pack())
+        .expect("control-plane pack should register");
+
+    let allowed_capabilities = BTreeSet::from([Capability::ControlRead]);
+    let token = kernel
+        .issue_scoped_token(
+            "control-plane",
+            "operator-session",
+            &allowed_capabilities,
+            120,
+        )
+        .expect("scoped token should issue");
+
+    kernel
+        .authorize_operation(
+            "control-plane",
+            &token,
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            "control-plane",
+            None,
+            "control/snapshot",
+            &allowed_capabilities,
+        )
+        .expect("control-plane authorization should succeed");
+
+    let snapshot = audit.snapshot();
+    assert!(snapshot.iter().any(|event| {
+        matches!(
+            &event.kind,
+            AuditEventKind::PlaneInvoked {
+                plane: ExecutionPlane::Runtime,
+                tier: PlaneTier::Core,
+                primary_adapter,
+                operation,
+                required_capabilities,
+                ..
+            } if primary_adapter == "control-plane"
+                && operation == "control/snapshot"
+                && required_capabilities == &vec![Capability::ControlRead]
+        )
+    }));
+}
+
+#[test]
+fn authorize_operation_fails_closed_when_scoped_token_lacks_capability() {
+    let (mut kernel, _audit) =
+        LoongClawKernel::new_with_in_memory_audit(StaticPolicyEngine::default());
+    kernel
+        .register_pack(control_plane_pack())
+        .expect("control-plane pack should register");
+
+    let token = kernel
+        .issue_scoped_token(
+            "control-plane",
+            "operator-session",
+            &BTreeSet::from([Capability::ControlRead]),
+            120,
+        )
+        .expect("scoped token should issue");
+    let required_capabilities = BTreeSet::from([Capability::ControlPairing]);
+    let error = kernel
+        .authorize_operation(
+            "control-plane",
+            &token,
+            ExecutionPlane::Runtime,
+            PlaneTier::Core,
+            "control-plane",
+            None,
+            "pairing/resolve",
+            &required_capabilities,
+        )
+        .expect_err("missing capability should fail");
+
+    assert!(matches!(
+        error,
+        KernelError::Policy(PolicyError::MissingCapability { capability, .. })
+            if capability == Capability::ControlPairing
+    ));
+}

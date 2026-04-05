@@ -91,6 +91,7 @@ mod cli_json;
 #[cfg(test)]
 mod command_kind_tests;
 pub mod completions_cli;
+mod control_plane_server;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
 mod external_skills_policy_probe;
@@ -211,6 +212,8 @@ pub fn parse_cli() -> Cli {
     let mut matches = build_cli_command(active_cli_command_name()).get_matches();
     Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|error| error.exit())
 }
+
+pub use control_plane_server::{build_control_plane_router, run_control_plane_serve_cli};
 
 pub fn native_spec_tool_executor(
     request: ToolCoreRequest,
@@ -823,6 +826,18 @@ pub enum Commands {
         backend: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    #[command(
+        about = "Run the loopback-only internal control-plane skeleton",
+        long_about = "Run the loopback-only internal control-plane skeleton.\n\nThis Phase 1 control-plane surface binds 127.0.0.1 only and exposes a contract bridge between `crates/protocol`, `crates/app`, and `crates/daemon`. Baseline endpoints are `/readyz`, `/healthz`, `/control/ping`, `POST /control/connect`, `/control/snapshot`, and `/control/events`. When `--config` is provided, repository-backed `/session/list`, `/session/read`, `/approval/list`, `/acp/session/list`, and `/acp/session/read` views become available for the selected session root."
+    )]
+    ControlPlaneServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        port: u16,
     },
     #[command(
         about = "Run one non-interactive assistant turn",

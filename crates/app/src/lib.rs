@@ -4,6 +4,7 @@ pub mod channel;
 pub mod chat;
 pub mod config;
 pub mod context;
+pub mod control_plane;
 pub mod conversation;
 pub mod crypto;
 pub mod mcp;

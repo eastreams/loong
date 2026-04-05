@@ -8,7 +8,28 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, stdin, stdout};
 use tokio::sync::{Mutex, mpsc};
 
+mod control_plane;
+
 pub const PROTOCOL_VERSION: u32 = 1;
+
+pub use control_plane::{
+    CONTROL_PLANE_PROTOCOL_VERSION, ControlPlaneAcpBindingScope, ControlPlaneAcpRoutingOrigin,
+    ControlPlaneAcpSessionListResponse, ControlPlaneAcpSessionMetadata, ControlPlaneAcpSessionMode,
+    ControlPlaneAcpSessionReadResponse, ControlPlaneAcpSessionState, ControlPlaneAcpSessionStatus,
+    ControlPlaneApprovalDecision, ControlPlaneApprovalListResponse,
+    ControlPlaneApprovalRequestStatus, ControlPlaneApprovalSummary, ControlPlaneAuthClaims,
+    ControlPlaneChallengeResponse, ControlPlaneClientIdentity, ControlPlaneConnectErrorCode,
+    ControlPlaneConnectErrorResponse, ControlPlaneConnectRequest, ControlPlaneConnectResponse,
+    ControlPlaneDeviceIdentity, ControlPlaneEventEnvelope, ControlPlaneEventName,
+    ControlPlanePairingListResponse, ControlPlanePairingRequestSummary,
+    ControlPlanePairingResolveRequest, ControlPlanePairingResolveResponse,
+    ControlPlanePairingStatus, ControlPlanePolicy, ControlPlanePrincipal,
+    ControlPlaneRecentEventsResponse, ControlPlaneRole, ControlPlaneScope,
+    ControlPlaneSessionEvent, ControlPlaneSessionKind, ControlPlaneSessionListResponse,
+    ControlPlaneSessionObservation, ControlPlaneSessionReadResponse, ControlPlaneSessionState,
+    ControlPlaneSessionSummary, ControlPlaneSessionTerminalOutcome, ControlPlaneSnapshot,
+    ControlPlaneSnapshotResponse, ControlPlaneStateVersion,
+};
 
 fn default_frame_version() -> u32 {
     PROTOCOL_VERSION
@@ -42,6 +63,21 @@ pub struct OutboundFrame {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProtocolRoute {
     ToolsCall,
+    ControlChallenge,
+    ControlConnect,
+    ControlPing,
+    ControlSnapshot,
+    ControlEvents,
+    PresenceRead,
+    HealthRead,
+    SessionList,
+    SessionRead,
+    ApprovalList,
+    ApprovalResolve,
+    PairingList,
+    PairingResolve,
+    AcpSessionList,
+    AcpSessionRead,
     Custom(String),
 }
 
@@ -49,6 +85,21 @@ impl ProtocolRoute {
     pub fn from_method(method: &str) -> Self {
         match method {
             "tools/call" => Self::ToolsCall,
+            "control/challenge" => Self::ControlChallenge,
+            "control/connect" => Self::ControlConnect,
+            "control/ping" => Self::ControlPing,
+            "control/snapshot" => Self::ControlSnapshot,
+            "control/events" => Self::ControlEvents,
+            "presence/read" => Self::PresenceRead,
+            "health/read" => Self::HealthRead,
+            "session/list" => Self::SessionList,
+            "session/read" => Self::SessionRead,
+            "approval/list" => Self::ApprovalList,
+            "approval/resolve" => Self::ApprovalResolve,
+            "pairing/list" => Self::PairingList,
+            "pairing/resolve" => Self::PairingResolve,
+            "acp/session/list" => Self::AcpSessionList,
+            "acp/session/read" => Self::AcpSessionRead,
             other => Self::Custom(other.to_owned()),
         }
     }
@@ -56,12 +107,45 @@ impl ProtocolRoute {
     pub fn method(&self) -> &str {
         match self {
             Self::ToolsCall => "tools/call",
+            Self::ControlChallenge => "control/challenge",
+            Self::ControlConnect => "control/connect",
+            Self::ControlPing => "control/ping",
+            Self::ControlSnapshot => "control/snapshot",
+            Self::ControlEvents => "control/events",
+            Self::PresenceRead => "presence/read",
+            Self::HealthRead => "health/read",
+            Self::SessionList => "session/list",
+            Self::SessionRead => "session/read",
+            Self::ApprovalList => "approval/list",
+            Self::ApprovalResolve => "approval/resolve",
+            Self::PairingList => "pairing/list",
+            Self::PairingResolve => "pairing/resolve",
+            Self::AcpSessionList => "acp/session/list",
+            Self::AcpSessionRead => "acp/session/read",
             Self::Custom(method) => method,
         }
     }
 
     pub fn is_standard(&self) -> bool {
-        matches!(self, Self::ToolsCall)
+        matches!(
+            self,
+            Self::ToolsCall
+                | Self::ControlChallenge
+                | Self::ControlConnect
+                | Self::ControlPing
+                | Self::ControlSnapshot
+                | Self::ControlEvents
+                | Self::PresenceRead
+                | Self::HealthRead
+                | Self::SessionList
+                | Self::SessionRead
+                | Self::ApprovalList
+                | Self::ApprovalResolve
+                | Self::PairingList
+                | Self::PairingResolve
+                | Self::AcpSessionList
+                | Self::AcpSessionRead
+        )
     }
 }
 
@@ -143,6 +227,47 @@ impl ProtocolRouter {
                     required_capability: Some("invoke".to_owned()),
                 },
             }),
+            ProtocolRoute::ControlChallenge | ProtocolRoute::ControlConnect => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: true,
+                    required_capability: None,
+                },
+            }),
+            ProtocolRoute::ControlPing
+            | ProtocolRoute::ControlSnapshot
+            | ProtocolRoute::ControlEvents
+            | ProtocolRoute::PresenceRead
+            | ProtocolRoute::HealthRead
+            | ProtocolRoute::SessionList
+            | ProtocolRoute::SessionRead => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: false,
+                    required_capability: Some("control.read".to_owned()),
+                },
+            }),
+            ProtocolRoute::ApprovalList | ProtocolRoute::ApprovalResolve => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: false,
+                    required_capability: Some("control.approvals".to_owned()),
+                },
+            }),
+            ProtocolRoute::PairingList | ProtocolRoute::PairingResolve => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: false,
+                    required_capability: Some("control.pairing".to_owned()),
+                },
+            }),
+            ProtocolRoute::AcpSessionList | ProtocolRoute::AcpSessionRead => Ok(ResolvedRoute {
+                route,
+                policy: RoutePolicy {
+                    allow_anonymous: false,
+                    required_capability: Some("control.acp".to_owned()),
+                },
+            }),
             ProtocolRoute::Custom(custom) => {
                 if let Some(policy) = self.custom_routes.get(&custom) {
                     Ok(ResolvedRoute {
@@ -166,6 +291,12 @@ impl ProtocolRouter {
         resolved: &ResolvedRoute,
         request: &RouteAuthorizationRequest,
     ) -> Result<RouteAuthorizationDecision, RouteAuthorizationError> {
+        if !resolved.policy.allow_anonymous && !request.authenticated {
+            return Err(RouteAuthorizationError::Unauthenticated {
+                method: resolved.method().to_owned(),
+            });
+        }
+
         if let Some(required) = &resolved.policy.required_capability {
             let normalized_required = normalize_capability(required);
             let has_required = request.capabilities.iter().any(|capability| {
@@ -194,6 +325,7 @@ pub enum RouterError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteAuthorizationRequest {
+    pub authenticated: bool,
     pub capabilities: BTreeSet<String>,
 }
 
@@ -204,6 +336,8 @@ pub enum RouteAuthorizationDecision {
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum RouteAuthorizationError {
+    #[error("unauthenticated request for method: {method}")]
+    Unauthenticated { method: String },
     #[error("missing capability `{required_capability}` for method: {method}")]
     MissingCapability {
         method: String,
