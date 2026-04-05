@@ -88,6 +88,7 @@ pub(super) struct StatsOverlayState {
     pub(super) snapshot: stats::StatsSnapshot,
     pub(super) active_tab: stats::StatsTab,
     pub(super) date_range: stats::StatsDateRange,
+    pub(super) list_scroll_offset: usize,
     pub(super) copy_status: Option<String>,
 }
 
@@ -101,6 +102,7 @@ impl StatsOverlayState {
             snapshot,
             active_tab,
             date_range,
+            list_scroll_offset: 0,
             copy_status: None,
         }
     }

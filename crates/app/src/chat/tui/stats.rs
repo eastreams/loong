@@ -17,6 +17,7 @@ use crate::session::repository::{
 pub(super) enum StatsTab {
     Overview,
     Models,
+    Sessions,
 }
 
 impl StatsTab {
@@ -24,6 +25,7 @@ impl StatsTab {
         match self {
             Self::Overview => "Overview",
             Self::Models => "Models",
+            Self::Sessions => "Sessions",
         }
     }
 
@@ -32,6 +34,7 @@ impl StatsTab {
         match normalized.as_str() {
             "overview" => Some(Self::Overview),
             "models" => Some(Self::Models),
+            "sessions" => Some(Self::Sessions),
             _ => None,
         }
     }
@@ -39,12 +42,17 @@ impl StatsTab {
     pub(super) fn next(self) -> Self {
         match self {
             Self::Overview => Self::Models,
-            Self::Models => Self::Overview,
+            Self::Models => Self::Sessions,
+            Self::Sessions => Self::Overview,
         }
     }
 
     pub(super) fn previous(self) -> Self {
-        self.next()
+        match self {
+            Self::Overview => Self::Sessions,
+            Self::Models => Self::Overview,
+            Self::Sessions => Self::Models,
+        }
     }
 }
 
@@ -133,6 +141,18 @@ pub(super) struct SessionDurationStat {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StatsSessionRow {
+    pub(super) session_id: String,
+    pub(super) label: Option<String>,
+    pub(super) kind: String,
+    pub(super) state: String,
+    pub(super) turn_count: usize,
+    pub(super) duration_seconds: u64,
+    pub(super) last_activity_date: Option<NaiveDate>,
+    pub(super) current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ModelTokenTotal {
     pub(super) model: String,
     pub(super) input_tokens: u64,
@@ -160,6 +180,7 @@ pub(super) struct StatsSnapshot {
     pub(super) first_activity_date: Option<NaiveDate>,
     pub(super) last_activity_date: Option<NaiveDate>,
     pub(super) longest_session: Option<SessionDurationStat>,
+    pub(super) session_rows: Vec<StatsSessionRow>,
     pub(super) active_dates: Vec<NaiveDate>,
     pub(super) daily_points: Vec<DailyTokenPoint>,
 }
@@ -175,6 +196,7 @@ pub(super) struct StatsRangeView {
     pub(super) longest_streak: usize,
     pub(super) top_model: Option<ModelTokenTotal>,
     pub(super) model_totals: Vec<ModelTokenTotal>,
+    pub(super) session_rows: Vec<StatsSessionRow>,
     pub(super) daily_points: Vec<DailyTokenPoint>,
 }
 
@@ -218,7 +240,7 @@ struct TurnUsageRecord {
 }
 
 impl StatsSnapshot {
-    pub(super) fn range_view(&self, date_range: StatsDateRange) -> StatsRangeView {
+    fn date_bounds(&self, date_range: StatsDateRange) -> (NaiveDate, NaiveDate) {
         let today = Utc::now().date_naive();
         let default_end_date = self.last_activity_date.unwrap_or(today);
         let mut start_date = self.first_activity_date.unwrap_or(default_end_date);
@@ -245,6 +267,12 @@ impl StatsSnapshot {
         if start_date > end_date {
             start_date = end_date;
         }
+
+        (start_date, end_date)
+    }
+
+    pub(super) fn range_view(&self, date_range: StatsDateRange) -> StatsRangeView {
+        let (start_date, end_date) = self.date_bounds(date_range);
 
         let mut by_date: BTreeMap<NaiveDate, DailyTokenPoint> = BTreeMap::new();
         for point in &self.daily_points {
@@ -311,6 +339,19 @@ impl StatsSnapshot {
         let current_streak = current_streak(active_dates.as_slice(), end_date);
         let longest_streak = longest_streak(active_dates.as_slice());
         let top_model = model_totals.first().cloned();
+        let session_rows = self
+            .session_rows
+            .iter()
+            .filter(|session_row| {
+                let session_date = session_row.last_activity_date;
+                let Some(session_date) = session_date else {
+                    return matches!(date_range, StatsDateRange::All);
+                };
+
+                session_date >= start_date && session_date <= end_date
+            })
+            .cloned()
+            .collect::<Vec<_>>();
 
         StatsRangeView {
             date_range,
@@ -322,6 +363,7 @@ impl StatsSnapshot {
             longest_streak,
             top_model,
             model_totals,
+            session_rows,
             daily_points: filtered_points,
         }
     }
@@ -431,6 +473,7 @@ pub(super) fn load_stats_snapshot(
         let mut first_activity_date = None;
         let mut last_activity_date = None;
         let mut longest_session = None;
+        let mut session_rows = Vec::new();
 
         for session in &visible_sessions {
             visible_session_count = visible_session_count.saturating_add(1);
@@ -456,6 +499,8 @@ pub(super) fn load_stats_snapshot(
             pending_approvals = pending_approvals.saturating_add(session_pending_count);
 
             update_longest_session(&mut longest_session, session);
+            let session_row = build_stats_session_row(session, current_session_id);
+            session_rows.push(session_row);
 
             let turn_count = session.turn_count;
             if turn_count == 0 {
@@ -538,9 +583,35 @@ pub(super) fn load_stats_snapshot(
             first_activity_date,
             last_activity_date,
             longest_session,
+            session_rows,
             active_dates,
             daily_points,
         })
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn build_stats_session_row(
+    session: &SessionSummaryRecord,
+    current_session_id: &str,
+) -> StatsSessionRow {
+    let end_ts = session.last_turn_at.unwrap_or(session.updated_at);
+    let raw_duration_seconds = end_ts.saturating_sub(session.created_at);
+    let duration_seconds = u64::try_from(raw_duration_seconds).unwrap_or_default();
+    let last_activity_date = utc_date_from_turn(end_ts);
+    let kind = session.kind.as_str().to_owned();
+    let state = session.state.as_str().to_owned();
+    let current = session.session_id == current_session_id;
+
+    StatsSessionRow {
+        session_id: session.session_id.clone(),
+        label: session.label.clone(),
+        kind,
+        state,
+        turn_count: session.turn_count,
+        duration_seconds,
+        last_activity_date,
+        current,
     }
 }
 
@@ -794,6 +865,18 @@ pub(super) fn render_copy_text(
                 lines.push(line);
             }
         }
+        StatsTab::Sessions => {
+            lines.push(format!("sessions={}", range_view.session_rows.len()));
+
+            for row in range_view.session_rows.iter().take(8) {
+                let duration_label = format_duration_compact(row.duration_seconds);
+                let line = format!(
+                    "{} · {} · {} · {} turns · {}",
+                    row.session_id, row.state, row.kind, row.turn_count, duration_label,
+                );
+                lines.push(line);
+            }
+        }
     }
 
     lines.join("\n")
@@ -960,6 +1043,16 @@ mod tests {
         assert!(output.contains("gpt-5"));
     }
 
+    #[test]
+    fn render_copy_text_formats_sessions_view() {
+        let snapshot = sample_snapshot_for_copy_test();
+        let output = render_copy_text(&snapshot, StatsTab::Sessions, StatsDateRange::All);
+
+        assert!(output.contains("tab=Sessions"));
+        assert!(output.contains("sessions=1"));
+        assert!(output.contains("sess-1"));
+    }
+
     fn sample_snapshot_for_copy_test() -> StatsSnapshot {
         let today = Utc::now().date_naive();
         let mut model_tokens = BTreeMap::new();
@@ -981,6 +1074,16 @@ mod tests {
             first_activity_date: Some(today),
             last_activity_date: Some(today),
             longest_session: None,
+            session_rows: vec![StatsSessionRow {
+                session_id: "sess-1".to_owned(),
+                label: Some("Root".to_owned()),
+                kind: "root".to_owned(),
+                state: "ready".to_owned(),
+                turn_count: 1,
+                duration_seconds: 75,
+                last_activity_date: Some(today),
+                current: true,
+            }],
             active_dates: vec![today],
             daily_points: vec![DailyTokenPoint {
                 date: today,

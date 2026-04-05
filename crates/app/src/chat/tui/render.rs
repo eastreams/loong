@@ -51,6 +51,7 @@ pub(super) struct StatsOverlayView<'a> {
     pub(super) snapshot: &'a stats::StatsSnapshot,
     pub(super) active_tab: stats::StatsTab,
     pub(super) date_range: stats::StatsDateRange,
+    pub(super) list_scroll_offset: usize,
     pub(super) copy_status: Option<&'a str>,
 }
 
@@ -337,6 +338,9 @@ fn render_stats_overlay(
         stats::StatsTab::Models => {
             render_stats_models_body(frame, *body_area, stats_overlay, palette);
         }
+        stats::StatsTab::Sessions => {
+            render_stats_sessions_body(frame, *body_area, stats_overlay, palette);
+        }
     }
 }
 
@@ -346,7 +350,11 @@ fn render_stats_tab_row(
     stats_overlay: StatsOverlayView<'_>,
     palette: &Palette,
 ) {
-    let tabs = [stats::StatsTab::Overview, stats::StatsTab::Models];
+    let tabs = [
+        stats::StatsTab::Overview,
+        stats::StatsTab::Models,
+        stats::StatsTab::Sessions,
+    ];
     let mut spans = Vec::new();
 
     for (index, tab) in tabs.iter().enumerate() {
@@ -643,6 +651,10 @@ fn render_stats_models_body(
     palette: &Palette,
 ) {
     let range_view = stats_overlay.snapshot.range_view(stats_overlay.date_range);
+    let total_models = range_view.model_totals.len();
+    let visible_count = 6_usize;
+    let max_offset = total_models.saturating_sub(visible_count);
+    let scroll_offset = stats_overlay.list_scroll_offset.min(max_offset);
     let body_sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -650,9 +662,10 @@ fn render_stats_models_body(
             Constraint::Length(10),
             Constraint::Length(1),
             Constraint::Min(4),
+            Constraint::Length(1),
         ])
         .split(area);
-    let [title_area, chart_area, legend_area, list_area] = body_sections.as_ref() else {
+    let [title_area, chart_area, legend_area, list_area, hint_area] = body_sections.as_ref() else {
         return;
     };
 
@@ -679,6 +692,7 @@ fn render_stats_models_body(
     let model_lines = range_view
         .model_totals
         .iter()
+        .skip(scroll_offset)
         .take(6)
         .map(|entry| render_stats_model_line(entry, palette))
         .collect::<Vec<_>>();
@@ -693,6 +707,82 @@ fn render_stats_models_body(
     };
 
     frame.render_widget(Paragraph::new(content), *list_area);
+
+    let hint_line = if total_models > visible_count {
+        let start = scroll_offset.saturating_add(1);
+        let end = (scroll_offset + visible_count).min(total_models);
+        Line::styled(
+            format!(" ↑↓ scroll models · showing {start}-{end} of {total_models} "),
+            Style::default().fg(palette.dim),
+        )
+    } else {
+        Line::styled(" top models ".to_owned(), Style::default().fg(palette.dim))
+    };
+    frame.render_widget(Paragraph::new(hint_line), *hint_area);
+}
+
+fn render_stats_sessions_body(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    stats_overlay: StatsOverlayView<'_>,
+    palette: &Palette,
+) {
+    let range_view = stats_overlay.snapshot.range_view(stats_overlay.date_range);
+    let total_sessions = range_view.session_rows.len();
+    let visible_count = 8_usize;
+    let max_offset = total_sessions.saturating_sub(visible_count);
+    let scroll_offset = stats_overlay.list_scroll_offset.min(max_offset);
+    let body_sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(6),
+            Constraint::Length(1),
+        ])
+        .split(area);
+    let [title_area, list_area, hint_area] = body_sections.as_ref() else {
+        return;
+    };
+
+    let title = Line::styled(
+        " Session activity",
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(Paragraph::new(title), *title_area);
+
+    let session_lines = range_view
+        .session_rows
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_count)
+        .map(|row| render_stats_session_line(row, palette))
+        .collect::<Vec<_>>();
+    let content = if session_lines.is_empty() {
+        vec![Line::styled(
+            "No session rows available for this range.",
+            Style::default().fg(palette.dim),
+        )]
+    } else {
+        session_lines
+    };
+    frame.render_widget(Paragraph::new(content), *list_area);
+
+    let hint_line = if total_sessions > visible_count {
+        let start = scroll_offset.saturating_add(1);
+        let end = (scroll_offset + visible_count).min(total_sessions);
+        Line::styled(
+            format!(" ↑↓ scroll sessions · showing {start}-{end} of {total_sessions} "),
+            Style::default().fg(palette.dim),
+        )
+    } else {
+        Line::styled(
+            " visible sessions ".to_owned(),
+            Style::default().fg(palette.dim),
+        )
+    };
+    frame.render_widget(Paragraph::new(hint_line), *hint_area);
 }
 
 fn render_stats_chart(
@@ -809,6 +899,33 @@ fn render_stats_model_line(entry: &stats::ModelTokenTotal, palette: &Palette) ->
         Span::styled(model_label, Style::default().fg(palette.text)),
         Span::styled("· ", Style::default().fg(palette.dim)),
         Span::styled(usage_label, Style::default().fg(palette.dim)),
+    ])
+}
+
+fn render_stats_session_line(row: &stats::StatsSessionRow, palette: &Palette) -> Line<'static> {
+    let session_label = if row.current {
+        format!(" {} (current) ", row.session_id)
+    } else {
+        format!(" {} ", row.session_id)
+    };
+    let duration_label = stats::format_duration_compact(row.duration_seconds);
+    let date_label = row
+        .last_activity_date
+        .map(stats::short_date_label)
+        .unwrap_or_else(|| "(no turns)".to_owned());
+    let label_text = row
+        .label
+        .clone()
+        .unwrap_or_else(|| "(unlabeled)".to_owned());
+    let meta_label = format!(
+        "{} · {} · {} turns · {} · {} · {}",
+        row.state, row.kind, row.turn_count, duration_label, date_label, label_text,
+    );
+
+    Line::from(vec![
+        Span::styled(session_label, Style::default().fg(palette.text)),
+        Span::styled("· ", Style::default().fg(palette.dim)),
+        Span::styled(meta_label, Style::default().fg(palette.dim)),
     ])
 }
 
@@ -1646,6 +1763,16 @@ mod tests {
                 label: Some("Root".to_owned()),
                 duration_seconds: 5400,
             }),
+            session_rows: vec![stats::StatsSessionRow {
+                session_id: "sess-1".to_owned(),
+                label: Some("Root".to_owned()),
+                kind: "root".to_owned(),
+                state: "ready".to_owned(),
+                turn_count: 2,
+                duration_seconds: 5400,
+                last_activity_date: Some(second_date),
+                current: true,
+            }],
             active_dates: vec![first_date, second_date],
             daily_points: vec![
                 stats::DailyTokenPoint {
@@ -1724,6 +1851,7 @@ mod tests {
                 snapshot: Box::leak(Box::new(sample_stats_snapshot())),
                 active_tab: stats::StatsTab::Models,
                 date_range: stats::StatsDateRange::All,
+                list_scroll_offset: 0,
                 copy_status: Some("copied"),
             }),
             ..TestShell::idle()

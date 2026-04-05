@@ -299,6 +299,7 @@ impl ShellView for state::Shell {
             snapshot: &stats_overlay.snapshot,
             active_tab: stats_overlay.active_tab,
             date_range: stats_overlay.date_range,
+            list_scroll_offset: stats_overlay.list_scroll_offset,
             copy_status: stats_overlay.copy_status.as_deref(),
         })
     }
@@ -2049,6 +2050,23 @@ fn close_stats_overlay(shell: &mut state::Shell) {
     shell.stats_overlay = None;
     if shell.focus.top() == FocusLayer::StatsOverlay {
         shell.focus.pop();
+    }
+}
+
+fn stats_overlay_entry_count(stats_overlay: &state::StatsOverlayState) -> usize {
+    let range_view = stats_overlay.snapshot.range_view(stats_overlay.date_range);
+    match stats_overlay.active_tab {
+        stats::StatsTab::Overview => 0,
+        stats::StatsTab::Models => range_view.model_totals.len(),
+        stats::StatsTab::Sessions => range_view.session_rows.len(),
+    }
+}
+
+fn clamp_stats_overlay_list_offset(stats_overlay: &mut state::StatsOverlayState) {
+    let entry_count = stats_overlay_entry_count(stats_overlay);
+    let max_offset = entry_count.saturating_sub(1);
+    if stats_overlay.list_scroll_offset > max_offset {
+        stats_overlay.list_scroll_offset = max_offset;
     }
 }
 
@@ -4065,6 +4083,42 @@ fn copy_transcript_selection(shell: &mut state::Shell, mode: CopyMode) {
     }
 }
 
+fn scroll_stats_overlay_up(shell: &mut state::Shell, amount: usize) {
+    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
+        return;
+    };
+    let current_offset = stats_overlay.list_scroll_offset;
+    let next_offset = current_offset.saturating_sub(amount);
+    stats_overlay.list_scroll_offset = next_offset;
+}
+
+fn scroll_stats_overlay_down(shell: &mut state::Shell, amount: usize) {
+    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
+        return;
+    };
+    let current_offset = stats_overlay.list_scroll_offset;
+    let next_offset = current_offset.saturating_add(amount);
+    stats_overlay.list_scroll_offset = next_offset;
+    clamp_stats_overlay_list_offset(stats_overlay);
+}
+
+fn jump_stats_overlay_top(shell: &mut state::Shell) {
+    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
+        return;
+    };
+    stats_overlay.list_scroll_offset = 0;
+}
+
+fn jump_stats_overlay_bottom(shell: &mut state::Shell) {
+    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
+        return;
+    };
+    let entry_count = stats_overlay_entry_count(stats_overlay);
+    let last_index = entry_count.saturating_sub(1);
+    stats_overlay.list_scroll_offset = last_index;
+    clamp_stats_overlay_list_offset(stats_overlay);
+}
+
 fn apply_terminal_event(
     shell: &mut state::Shell,
     textarea: &mut tui_textarea::TextArea<'_>,
@@ -4141,6 +4195,7 @@ fn apply_terminal_event(
             if key.code == KeyCode::Tab || key.code == KeyCode::Right {
                 if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
                     stats_overlay.active_tab = stats_overlay.active_tab.next();
+                    stats_overlay.list_scroll_offset = 0;
                 }
                 return;
             }
@@ -4148,6 +4203,7 @@ fn apply_terminal_event(
             if key.code == KeyCode::BackTab || key.code == KeyCode::Left {
                 if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
                     stats_overlay.active_tab = stats_overlay.active_tab.previous();
+                    stats_overlay.list_scroll_offset = 0;
                 }
                 return;
             }
@@ -4155,7 +4211,38 @@ fn apply_terminal_event(
             if key.code == KeyCode::Char('r') && key.modifiers.is_empty() {
                 if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
                     stats_overlay.date_range = stats_overlay.date_range.next();
+                    stats_overlay.list_scroll_offset = 0;
                 }
+                return;
+            }
+
+            if key.code == KeyCode::Up {
+                scroll_stats_overlay_up(shell, 1);
+                return;
+            }
+
+            if key.code == KeyCode::Down {
+                scroll_stats_overlay_down(shell, 1);
+                return;
+            }
+
+            if key.code == KeyCode::PageUp {
+                scroll_stats_overlay_up(shell, 5);
+                return;
+            }
+
+            if key.code == KeyCode::PageDown {
+                scroll_stats_overlay_down(shell, 5);
+                return;
+            }
+
+            if key.code == KeyCode::Home {
+                jump_stats_overlay_top(shell);
+                return;
+            }
+
+            if key.code == KeyCode::End {
+                jump_stats_overlay_bottom(shell);
                 return;
             }
 
@@ -5543,6 +5630,16 @@ mod tests {
                 label: Some("Root".to_owned()),
                 duration_seconds: 3600,
             }),
+            session_rows: vec![stats::StatsSessionRow {
+                session_id: "sess-root".to_owned(),
+                label: Some("Root".to_owned()),
+                kind: "root".to_owned(),
+                state: "ready".to_owned(),
+                turn_count: 2,
+                duration_seconds: 3600,
+                last_activity_date: Some(today),
+                current: true,
+            }],
             active_dates: vec![earlier, today],
             daily_points: vec![
                 stats::DailyTokenPoint {
@@ -6403,6 +6500,50 @@ mod tests {
         );
         assert!(shell.stats_overlay.is_none());
         assert_eq!(shell.focus.top(), FocusLayer::Composer);
+    }
+
+    #[test]
+    fn stats_overlay_sessions_tab_scrolls_with_down_key() {
+        let mut shell = state::Shell::new("sess-stats-scroll");
+        let mut snapshot = sample_stats_snapshot_for_test();
+        for index in 0..12 {
+            let session_row = stats::StatsSessionRow {
+                session_id: format!("sess-{index}"),
+                label: Some(format!("Session {index}")),
+                kind: "delegate_child".to_owned(),
+                state: "completed".to_owned(),
+                turn_count: index + 1,
+                duration_seconds: 60,
+                last_activity_date: snapshot.last_activity_date,
+                current: false,
+            };
+            snapshot.session_rows.push(session_row);
+        }
+        shell.stats_overlay = Some(state::StatsOverlayState::new(
+            snapshot,
+            stats::StatsTab::Sessions,
+            stats::StatsDateRange::All,
+        ));
+        shell.focus.push(FocusLayer::StatsOverlay);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Down)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(
+            shell
+                .stats_overlay
+                .as_ref()
+                .map(|stats_overlay| stats_overlay.list_scroll_offset),
+            Some(1)
+        );
     }
 
     #[test]
