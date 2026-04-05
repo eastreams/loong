@@ -67,117 +67,117 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
         source_path: "bundled://github-issues",
         relative_dir: "github-issues",
     },
-    // Pack members are grouped under `skills/packs/<pack-id>/` to mirror the
-    // operator-facing pack registry.
+    // Pack members are grouped under `skills/<pack-id>/` to mirror the
+    // operator-facing pack registry without an extra directory layer.
     BundledExternalSkill {
         skill_id: "docx",
         source_path: "bundled://docx",
-        relative_dir: "packs/anthropic-office/docx",
+        relative_dir: "anthropic-office/docx",
     },
     BundledExternalSkill {
         skill_id: "lark-approval",
         source_path: "bundled://lark-approval",
-        relative_dir: "packs/larksuite-cli/lark-approval",
+        relative_dir: "larksuite-cli/lark-approval",
     },
     BundledExternalSkill {
         skill_id: "lark-base",
         source_path: "bundled://lark-base",
-        relative_dir: "packs/larksuite-cli/lark-base",
+        relative_dir: "larksuite-cli/lark-base",
     },
     BundledExternalSkill {
         skill_id: "lark-calendar",
         source_path: "bundled://lark-calendar",
-        relative_dir: "packs/larksuite-cli/lark-calendar",
+        relative_dir: "larksuite-cli/lark-calendar",
     },
     BundledExternalSkill {
         skill_id: "lark-contact",
         source_path: "bundled://lark-contact",
-        relative_dir: "packs/larksuite-cli/lark-contact",
+        relative_dir: "larksuite-cli/lark-contact",
     },
     BundledExternalSkill {
         skill_id: "lark-doc",
         source_path: "bundled://lark-doc",
-        relative_dir: "packs/larksuite-cli/lark-doc",
+        relative_dir: "larksuite-cli/lark-doc",
     },
     BundledExternalSkill {
         skill_id: "lark-drive",
         source_path: "bundled://lark-drive",
-        relative_dir: "packs/larksuite-cli/lark-drive",
+        relative_dir: "larksuite-cli/lark-drive",
     },
     BundledExternalSkill {
         skill_id: "lark-event",
         source_path: "bundled://lark-event",
-        relative_dir: "packs/larksuite-cli/lark-event",
+        relative_dir: "larksuite-cli/lark-event",
     },
     BundledExternalSkill {
         skill_id: "lark-im",
         source_path: "bundled://lark-im",
-        relative_dir: "packs/larksuite-cli/lark-im",
+        relative_dir: "larksuite-cli/lark-im",
     },
     BundledExternalSkill {
         skill_id: "lark-mail",
         source_path: "bundled://lark-mail",
-        relative_dir: "packs/larksuite-cli/lark-mail",
+        relative_dir: "larksuite-cli/lark-mail",
     },
     BundledExternalSkill {
         skill_id: "lark-minutes",
         source_path: "bundled://lark-minutes",
-        relative_dir: "packs/larksuite-cli/lark-minutes",
+        relative_dir: "larksuite-cli/lark-minutes",
     },
     BundledExternalSkill {
         skill_id: "lark-openapi-explorer",
         source_path: "bundled://lark-openapi-explorer",
-        relative_dir: "packs/larksuite-cli/lark-openapi-explorer",
+        relative_dir: "larksuite-cli/lark-openapi-explorer",
     },
     BundledExternalSkill {
         skill_id: "lark-shared",
         source_path: "bundled://lark-shared",
-        relative_dir: "packs/larksuite-cli/lark-shared",
+        relative_dir: "larksuite-cli/lark-shared",
     },
     BundledExternalSkill {
         skill_id: "lark-sheets",
         source_path: "bundled://lark-sheets",
-        relative_dir: "packs/larksuite-cli/lark-sheets",
+        relative_dir: "larksuite-cli/lark-sheets",
     },
     BundledExternalSkill {
         skill_id: "lark-skill-maker",
         source_path: "bundled://lark-skill-maker",
-        relative_dir: "packs/larksuite-cli/lark-skill-maker",
+        relative_dir: "larksuite-cli/lark-skill-maker",
     },
     BundledExternalSkill {
         skill_id: "lark-task",
         source_path: "bundled://lark-task",
-        relative_dir: "packs/larksuite-cli/lark-task",
+        relative_dir: "larksuite-cli/lark-task",
     },
     BundledExternalSkill {
         skill_id: "lark-vc",
         source_path: "bundled://lark-vc",
-        relative_dir: "packs/larksuite-cli/lark-vc",
+        relative_dir: "larksuite-cli/lark-vc",
     },
     BundledExternalSkill {
         skill_id: "lark-whiteboard",
         source_path: "bundled://lark-whiteboard",
-        relative_dir: "packs/larksuite-cli/lark-whiteboard",
+        relative_dir: "larksuite-cli/lark-whiteboard",
     },
     BundledExternalSkill {
         skill_id: "lark-wiki",
         source_path: "bundled://lark-wiki",
-        relative_dir: "packs/larksuite-cli/lark-wiki",
+        relative_dir: "larksuite-cli/lark-wiki",
     },
     BundledExternalSkill {
         skill_id: "lark-workflow-meeting-summary",
         source_path: "bundled://lark-workflow-meeting-summary",
-        relative_dir: "packs/larksuite-cli/lark-workflow-meeting-summary",
+        relative_dir: "larksuite-cli/lark-workflow-meeting-summary",
     },
     BundledExternalSkill {
         skill_id: "lark-workflow-standup-report",
         source_path: "bundled://lark-workflow-standup-report",
-        relative_dir: "packs/larksuite-cli/lark-workflow-standup-report",
+        relative_dir: "larksuite-cli/lark-workflow-standup-report",
     },
     BundledExternalSkill {
         skill_id: "pdf",
         source_path: "bundled://pdf",
-        relative_dir: "packs/anthropic-office/pdf",
+        relative_dir: "anthropic-office/pdf",
     },
     BundledExternalSkill {
         skill_id: "plan",
@@ -187,7 +187,7 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "pptx",
         source_path: "bundled://pptx",
-        relative_dir: "packs/anthropic-office/pptx",
+        relative_dir: "anthropic-office/pptx",
     },
     BundledExternalSkill {
         skill_id: "skill-creator",
@@ -202,7 +202,7 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "xlsx",
         source_path: "bundled://xlsx",
-        relative_dir: "packs/anthropic-office/xlsx",
+        relative_dir: "anthropic-office/xlsx",
     },
     BundledExternalSkill {
         skill_id: "mcporter",
@@ -212,17 +212,17 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "minimax-docx",
         source_path: "bundled://minimax-docx",
-        relative_dir: "packs/minimax-office/minimax-docx",
+        relative_dir: "minimax-office/minimax-docx",
     },
     BundledExternalSkill {
         skill_id: "minimax-pdf",
         source_path: "bundled://minimax-pdf",
-        relative_dir: "packs/minimax-office/minimax-pdf",
+        relative_dir: "minimax-office/minimax-pdf",
     },
     BundledExternalSkill {
         skill_id: "minimax-xlsx",
         source_path: "bundled://minimax-xlsx",
-        relative_dir: "packs/minimax-office/minimax-xlsx",
+        relative_dir: "minimax-office/minimax-xlsx",
     },
     BundledExternalSkill {
         skill_id: "native-mcp",
