@@ -117,15 +117,14 @@ impl AcpSessionManager {
 
         let selection = resolve_acp_backend_selection(config);
         let binding_scope = AcpSessionBindingScope::from_bootstrap(bootstrap);
-        let redacted_conversation_id =
-            redact_identifier_for_log(bootstrap.conversation_id.as_deref());
-        let redacted_binding_scope = redact_binding_scope_for_log(binding_scope.as_ref());
+        let has_conversation_id = bootstrap.conversation_id.is_some();
+        let binding_present = binding_scope.is_some();
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %selection.id,
+            has_conversation_id,
             mode = ?bootstrap.mode,
-            conversation_id = ?redacted_conversation_id,
-            binding = ?redacted_binding_scope,
+            binding_present,
             "ensuring ACP session"
         );
         if let Some(existing) =
@@ -191,13 +190,13 @@ impl AcpSessionManager {
             .metadata
             .get(ACP_TURN_METADATA_TRACE_ID)
             .map(String::as_str);
-        let redacted_trace_id = redact_identifier_for_log(trace_id);
+        let has_trace_id = trace_id.is_some();
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %metadata.backend_id,
+            has_trace_id,
             input_len = request.input.chars().count(),
             sink_enabled = sink.is_some(),
-            has_trace_id = redacted_trace_id.is_some(),
             "starting ACP turn"
         );
         let backend = resolve_acp_backend(Some(metadata.backend_id.as_str()))?;
@@ -270,7 +269,7 @@ impl AcpSessionManager {
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
-                    has_trace_id = redacted_trace_id.is_some(),
+                    has_trace_id,
                     "ACP turn completed"
                 );
                 Ok(result)
@@ -284,12 +283,9 @@ impl AcpSessionManager {
                 tracing::warn!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
-                    trace_id = ?redacted_trace_id,
-                    end_to_end_duration_ms,
-                    execution_duration_ms,
-                    queue_wait_ms,
+                    has_trace_id,
+                    duration_ms = end_to_end_duration_ms,
                     error = %crate::observability::summarize_error(error.as_str()),
-                    has_trace_id = redacted_trace_id.is_some(),
                     "ACP turn failed"
                 );
                 Err(error)

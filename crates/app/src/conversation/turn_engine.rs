@@ -39,7 +39,7 @@ use super::autonomy_policy::{
     AUTONOMY_POLICY_SOURCE, AutonomyTurnBudgetState, PolicyDecision, PolicyDecisionInput,
     evaluate_policy, render_reason,
 };
-use super::runtime::SessionContext;
+use super::runtime::{DefaultConversationRuntime, SessionContext};
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::tool_result_compaction::compact_tool_search_payload_summary;
 
@@ -61,6 +61,11 @@ pub struct ToolIntent {
     pub session_id: String,
     pub turn_id: String,
     pub tool_call_id: String,
+}
+
+struct AugmentedToolPayload {
+    payload: serde_json::Value,
+    trusted_internal_context: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1682,6 +1687,24 @@ impl AppToolDispatcher for DefaultAppToolDispatcher {
             .await;
         }
         #[cfg(feature = "memory-sqlite")]
+        if canonical_tool_name == "session_continue" {
+            let app_config = self
+                .app_config
+                .as_ref()
+                .ok_or_else(|| "session_continue_not_configured".to_owned())?;
+            let runtime = DefaultConversationRuntime::from_config_or_env(app_config.as_ref())?;
+            return crate::tools::continue_session_with_runtime(
+                request.payload,
+                &session_context.session_id,
+                &self.memory_config,
+                &effective_tool_config,
+                app_config.as_ref(),
+                &runtime,
+                binding,
+            )
+            .await;
+        }
+        #[cfg(feature = "memory-sqlite")]
         if canonical_tool_name == "sessions_send" {
             return self
                 .execute_sessions_send(session_context, request.payload)
@@ -1740,14 +1763,26 @@ fn augment_tool_payload_for_kernel(
     canonical_tool_name: &str,
     payload: serde_json::Value,
     session_context: &SessionContext,
-) -> serde_json::Value {
-    let payload = inject_runtime_narrowing_context(payload, session_context);
-    let payload =
-        inject_tool_search_visibility_context(canonical_tool_name, payload, session_context);
+) -> AugmentedToolPayload {
+    let augmented_runtime_narrowing =
+        inject_runtime_narrowing_context_trusted(payload, session_context, false);
+    let payload_after_runtime_narrowing = augmented_runtime_narrowing.payload;
+    let runtime_narrowing_trusted = augmented_runtime_narrowing.trusted_internal_context;
+    let augmented_workspace_root = inject_workspace_root_context_trusted(
+        payload_after_runtime_narrowing,
+        session_context,
+        runtime_narrowing_trusted,
+    );
+    let mut payload = augmented_workspace_root.payload;
+    let trusted_internal_context = augmented_workspace_root.trusted_internal_context;
 
     // Direct browser tool calls: inject scope at the top level.
     if browser_scope_injection_required(canonical_tool_name) {
-        return inject_browser_scope_field(payload, &session_context.session_id);
+        payload = inject_browser_scope_field(payload, &session_context.session_id);
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context,
+        };
     }
 
     // tool.invoke wrapping a browser tool: inject scope into the nested arguments.
@@ -1764,69 +1799,53 @@ fn augment_tool_payload_for_kernel(
                 inject_browser_scope_field(arguments, &session_context.session_id),
             );
         }
-        return serde_json::Value::Object(outer);
+        payload = serde_json::Value::Object(outer);
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context,
+        };
     }
 
-    payload
-}
-
-fn inject_tool_search_visibility_context(
-    canonical_tool_name: &str,
-    payload: serde_json::Value,
-    session_context: &SessionContext,
-) -> serde_json::Value {
-    if canonical_tool_name != "tool.search" {
-        return payload;
+    AugmentedToolPayload {
+        payload,
+        trusted_internal_context,
     }
-
-    let serde_json::Value::Object(mut object) = payload else {
-        return payload;
-    };
-
-    let mut internal = object
-        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut tool_search_context = internal
-        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY)
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let visible_tool_ids = session_context
-        .tool_view
-        .tool_names()
-        .map(|tool_name| serde_json::Value::String(tool_name.to_owned()))
-        .collect::<Vec<_>>();
-    tool_search_context.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY.to_owned(),
-        serde_json::Value::Array(visible_tool_ids),
-    );
-    internal.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY.to_owned(),
-        serde_json::Value::Object(tool_search_context),
-    );
-    object.insert(
-        crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
-        serde_json::Value::Object(internal),
-    );
-    serde_json::Value::Object(object)
 }
 
-fn inject_runtime_narrowing_context(
+fn inject_runtime_narrowing_context_trusted(
     payload: serde_json::Value,
     session_context: &SessionContext,
-) -> serde_json::Value {
     let resolved_runtime_narrowing = session_context.resolved_runtime_narrowing();
     let Some(runtime_narrowing) = resolved_runtime_narrowing else {
-        return payload;
+    preserve_existing_internal_context: bool,
+) -> AugmentedToolPayload {
+    let Some(runtime_narrowing) = session_context.resolved_runtime_narrowing() else {
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
     };
+    if runtime_narrowing.is_empty() {
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
+    }
 
     let serde_json::Value::Object(mut object) = payload else {
-        return payload;
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
     };
-    let mut internal = object
-        .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
+    let mut internal = if preserve_existing_internal_context {
+        object
+            .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
     internal.insert(
         crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY.to_owned(),
         serde_json::to_value(runtime_narrowing)
@@ -1836,7 +1855,51 @@ fn inject_runtime_narrowing_context(
         crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
         serde_json::Value::Object(internal),
     );
-    serde_json::Value::Object(object)
+    AugmentedToolPayload {
+        payload: serde_json::Value::Object(object),
+        trusted_internal_context: true,
+    }
+}
+
+fn inject_workspace_root_context_trusted(
+    payload: serde_json::Value,
+    session_context: &SessionContext,
+    preserve_existing_internal_context: bool,
+) -> AugmentedToolPayload {
+    let Some(workspace_root) = session_context.workspace_root.as_ref() else {
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
+    };
+
+    let serde_json::Value::Object(mut object) = payload else {
+        return AugmentedToolPayload {
+            payload,
+            trusted_internal_context: preserve_existing_internal_context,
+        };
+    };
+    let mut internal = if preserve_existing_internal_context {
+        object
+            .remove(crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY)
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default()
+    } else {
+        serde_json::Map::new()
+    };
+    let workspace_root_string = workspace_root.display().to_string();
+    internal.insert(
+        crate::tools::LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY.to_owned(),
+        serde_json::Value::String(workspace_root_string),
+    );
+    object.insert(
+        crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+        serde_json::Value::Object(internal),
+    );
+    AugmentedToolPayload {
+        payload: serde_json::Value::Object(object),
+        trusted_internal_context: true,
+    }
 }
 
 fn browser_scope_injection_required(tool_name: &str) -> bool {
@@ -3135,10 +3198,10 @@ impl TurnEngine {
             session_context,
         );
         let augmented_payload_uses_reserved_internal_context =
-            crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload);
+            crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload.payload);
         let request = ToolCoreRequest {
             tool_name: resolved_tool.canonical_name.to_owned(),
-            payload: augmented_payload,
+            payload: augmented_payload.payload,
         };
         let normalized_intent = ToolIntent {
             tool_name: resolved_tool.canonical_name.to_owned(),
@@ -5601,9 +5664,12 @@ mod tests {
         );
         let augmented = augment_tool_payload_for_kernel(&tool_name, payload, &session_context);
 
-        assert_eq!(augmented["tool_id"], "browser.companion.session.start");
         assert_eq!(
-            augmented["arguments"][crate::tools::BROWSER_SESSION_SCOPE_FIELD],
+            augmented.payload["tool_id"],
+            "browser.companion.session.start"
+        );
+        assert_eq!(
+            augmented.payload["arguments"][crate::tools::BROWSER_SESSION_SCOPE_FIELD],
             "root-session"
         );
     }
@@ -5629,13 +5695,13 @@ mod tests {
         let augmented = augment_tool_payload_for_kernel("tool.search", payload, &session_context);
 
         assert_eq!(
-            augmented[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+            augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
                 [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
                 [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
             json!(["file.read", "tool.invoke", "tool.search"])
         );
         assert_eq!(
-            augmented[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+            augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
                 [crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
             1
         );

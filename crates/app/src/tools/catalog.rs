@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
-use crate::conversation::{ConstrainedSubagentContractView, ConstrainedSubagentProfile};
+use crate::conversation::ConstrainedSubagentContractView;
+#[cfg(test)]
+use crate::conversation::ConstrainedSubagentProfile;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExecutionKind {
@@ -860,6 +862,19 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: session_cancel_definition,
         },
         ToolDescriptor {
+            name: "session_continue",
+            provider_name: "session_continue",
+            aliases: &[],
+            description: "Continue a visible delegate child session with a follow-up task",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_continue_definition,
+        },
+        ToolDescriptor {
             name: "session_events",
             provider_name: "session_events",
             aliases: &[],
@@ -1640,41 +1655,15 @@ pub fn planned_delegate_child_tool_view() -> ToolView {
 }
 
 pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
-    delegate_child_tool_view_for_config_with_delegate(config, false)
+    delegate_child_tool_view_with_constraints(
+        config,
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        false,
+    )
 }
 
-pub fn delegate_child_tool_view_for_contract(
-    config: &ToolConfig,
-    subagent_contract: Option<&ConstrainedSubagentContractView>,
-) -> ToolView {
-    let subagent_profile =
-        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
-    delegate_child_tool_view_for_profile(config, subagent_profile)
-}
-
-pub fn delegate_child_tool_view_for_runtime_config_and_contract(
-    config: &ToolConfig,
-    runtime_config: &ToolRuntimeConfig,
-    subagent_contract: Option<&ConstrainedSubagentContractView>,
-) -> ToolView {
-    let subagent_profile =
-        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
-    let allow_delegate = subagent_profile
-        .map(ConstrainedSubagentProfile::allows_child_delegation)
-        .unwrap_or(false);
-    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
-}
-
-pub fn delegate_child_tool_view_for_profile(
-    config: &ToolConfig,
-    subagent_profile: Option<ConstrainedSubagentProfile>,
-) -> ToolView {
-    let allow_delegate = subagent_profile
-        .map(ConstrainedSubagentProfile::allows_child_delegation)
-        .unwrap_or(false);
-    build_delegate_child_tool_view(config, None, allow_delegate)
-}
-
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn delegate_child_tool_view_for_runtime_config(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
@@ -1686,31 +1675,72 @@ pub fn delegate_child_tool_view_for_config_with_delegate(
     config: &ToolConfig,
     allow_delegate: bool,
 ) -> ToolView {
-    build_delegate_child_tool_view(config, None, allow_delegate)
+    build_delegate_child_tool_view(
+        config,
+        None,
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        allow_delegate,
+    )
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn delegate_child_tool_view_for_runtime_config_with_delegate(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
     allow_delegate: bool,
 ) -> ToolView {
-    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+    build_delegate_child_tool_view(
+        config,
+        Some(runtime_config),
+        &config.delegate.child_tool_allowlist,
+        config.delegate.allow_shell_in_child,
+        allow_delegate,
+    )
+}
+
+pub fn delegate_child_tool_view_with_constraints(
+    config: &ToolConfig,
+    child_tool_allowlist: &[String],
+    allow_shell_in_child: bool,
+    allow_delegate: bool,
+) -> ToolView {
+    build_delegate_child_tool_view(
+        config,
+        None,
+        child_tool_allowlist,
+        allow_shell_in_child,
+        allow_delegate,
+    )
+}
+
+pub fn delegate_child_tool_view_for_contract(
+    config: &ToolConfig,
+    contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let Some(contract) = contract else {
+        return delegate_child_tool_view_for_config_with_delegate(config, false);
+    };
+    let allow_delegate = contract.allows_child_delegation();
+    let allow_shell_in_child = contract.allow_shell_in_child.unwrap_or(false);
+    delegate_child_tool_view_with_constraints(
+        config,
+        &contract.child_tool_allowlist,
+        allow_shell_in_child,
+        allow_delegate,
+    )
 }
 
 fn build_delegate_child_tool_view(
     config: &ToolConfig,
     runtime_config: Option<&ToolRuntimeConfig>,
+    child_tool_allowlist: &[String],
+    allow_shell_in_child: bool,
     allow_delegate: bool,
 ) -> ToolView {
     let catalog = tool_catalog();
     let mut names = Vec::new();
-    let allowlist = BTreeSet::<&str>::from_iter(
-        config
-            .delegate
-            .child_tool_allowlist
-            .iter()
-            .map(String::as_str),
-    );
+    let allowlist = BTreeSet::<&str>::from_iter(child_tool_allowlist.iter().map(String::as_str));
 
     for descriptor in catalog.descriptors().iter().filter(|descriptor| {
         descriptor.execution_kind == ToolExecutionKind::Core
@@ -1720,7 +1750,7 @@ fn build_delegate_child_tool_view(
             "shell.exec" =>
             {
                 #[cfg(feature = "tool-shell")]
-                if config.delegate.allow_shell_in_child {
+                if allow_shell_in_child {
                     names.push(descriptor.name);
                 }
             }
@@ -3492,6 +3522,37 @@ fn session_cancel_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn session_continue_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Visible delegate child session identifier to continue."
+                    },
+                    "input": {
+                        "type": "string",
+                        "description": "Follow-up user input to execute inside the target child session."
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Optional bounded timeout override for the continued child turn."
+                    }
+                },
+                "required": ["session_id", "input"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_wait_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3576,9 +3637,15 @@ fn delegate_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
-                    "specialization": {
+                    "profile": {
                         "type": "string",
-                        "description": "Optional bounded specialization hint carried on the child handle."
+                        "enum": ["research", "plan", "verify"],
+                        "description": "Optional builtin child profile preset. `research`, `plan`, and `verify` apply bounded delegate role defaults."
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["shared", "worktree"],
+                        "description": "Optional child workspace isolation mode. `shared` reuses the current workspace root. `worktree` is reserved for a dedicated git worktree-backed child root and currently returns a not-supported error until that runtime lane lands."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3611,9 +3678,15 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
-                    "specialization": {
+                    "profile": {
                         "type": "string",
-                        "description": "Optional bounded specialization hint carried on the child handle."
+                        "enum": ["research", "plan", "verify"],
+                        "description": "Optional builtin child profile preset. `research`, `plan`, and `verify` apply bounded delegate role defaults."
+                    },
+                    "isolation": {
+                        "type": "string",
+                        "enum": ["shared", "worktree"],
+                        "description": "Optional child workspace isolation mode. `shared` reuses the current workspace root. `worktree` is reserved for a dedicated git worktree-backed child root and currently returns a not-supported error until that runtime lane lands."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3815,18 +3888,12 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
         "delegate" | "delegate_async" => {
-            "task:string,label?:string,specialization?:string,timeout_seconds?:integer"
-        }
-        "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
-        "session_tool_policy_set" => {
-            "session_id?:string,tool_ids?:string[],runtime_narrowing?:object"
+            "task:string,label?:string,profile?:string,isolation?:string,timeout_seconds?:integer"
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
-        "session_search" => {
-            "query:string,session_id?:string,max_results?:integer,include_archived?:boolean,include_turns?:boolean,include_events?:boolean"
-        }
-        "sessions_list" => "limit?:integer,offset?:integer,state?:string",
+        "session_continue" => "session_id:string,input:string,timeout_seconds?:integer",
+        "sessions_list" => "limit?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
         _ => "",
@@ -4244,7 +4311,13 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         "delegate" | "delegate_async" => &[
             ("task", "string"),
             ("label", "string"),
-            ("specialization", "string"),
+            ("profile", "string"),
+            ("isolation", "string"),
+            ("timeout_seconds", "integer"),
+        ],
+        "session_continue" => &[
+            ("session_id", "string"),
+            ("input", "string"),
             ("timeout_seconds", "integer"),
         ],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[("session_id", "string")],
@@ -4343,7 +4416,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
-        "session_search" => &["query"],
+        "session_continue" => &["session_id", "input"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -4427,7 +4500,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
             &["session", "history", "runtime"]
         }
-        "session_search" => &["session", "search", "history", "memory", "canonical"],
+        "session_continue" => &["session", "continue", "delegate", "child"],
         "sessions_send" => &["session", "message", "channel"],
         "web.search" => &["web", "search", "discover", "external"],
         _ => &[],
@@ -5114,6 +5187,7 @@ mod tests {
             ),
             ("session_archive", CapabilityActionClass::SessionMutation),
             ("session_cancel", CapabilityActionClass::SessionMutation),
+            ("session_continue", CapabilityActionClass::SessionMutation),
             ("session_events", CapabilityActionClass::ExecuteExisting),
             (
                 "session_tool_policy_status",

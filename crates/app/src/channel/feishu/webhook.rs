@@ -954,9 +954,18 @@ mod tests {
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::Arc;
+    use std::sync::{Arc, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::Mutex;
+
+    fn delayed_update_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    async fn lock_delayed_update_tests() -> tokio::sync::MutexGuard<'static, ()> {
+        delayed_update_test_lock().lock().await
+    }
 
     const MOCK_PROVIDER_MARKDOWN_REPLY: &str = "## structured inbound ack\n\n- rendered";
 
@@ -3125,6 +3134,7 @@ mod tests {
 
     #[tokio::test]
     async fn feishu_webhook_card_callback_delayed_update_waits_for_response_body_consumption() {
+        let _lock = lock_delayed_update_tests().await;
         let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let (provider_base_url, provider_server) =
@@ -3243,6 +3253,7 @@ mod tests {
     #[tokio::test]
     async fn feishu_webhook_card_callback_delayed_update_dispatches_when_response_body_is_dropped()
     {
+        let _lock = lock_delayed_update_tests().await;
         let provider_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let feishu_requests = Arc::new(Mutex::new(Vec::<MockRequest>::new()));
         let (provider_base_url, provider_server) =

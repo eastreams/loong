@@ -24,7 +24,6 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "0BSD",
-    "CC0-1.0",
     "ISC",
     "MPL-2.0",
     "Unicode-3.0",
