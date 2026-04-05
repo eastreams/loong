@@ -23,6 +23,9 @@ fn browser_companion_probe_timeout_seconds(timeout_seconds: u64) -> u64 {
 
 fn browser_companion_probe_timeout_duration(timeout_seconds: u64) -> Duration {
     let normalized_seconds = browser_companion_probe_timeout_seconds(timeout_seconds);
+    if normalized_seconds == u64::MAX {
+        return Duration::MAX;
+    }
     let base_duration = Duration::from_secs(normalized_seconds);
     let slack_millis = normalized_seconds.saturating_mul(100);
     let bounded_slack_millis = slack_millis.min(500);
