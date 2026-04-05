@@ -117,12 +117,14 @@ impl AcpSessionManager {
 
         let selection = resolve_acp_backend_selection(config);
         let binding_scope = AcpSessionBindingScope::from_bootstrap(bootstrap);
+        let has_conversation_id = bootstrap.conversation_id.is_some();
         let redacted_conversation_id =
             redact_identifier_for_log(bootstrap.conversation_id.as_deref());
         let redacted_binding_scope = redact_binding_scope_for_log(binding_scope.as_ref());
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %selection.id,
+            has_conversation_id,
             mode = ?bootstrap.mode,
             conversation_id = ?redacted_conversation_id,
             binding = ?redacted_binding_scope,
@@ -192,9 +194,11 @@ impl AcpSessionManager {
             .get(ACP_TURN_METADATA_TRACE_ID)
             .map(String::as_str);
         let redacted_trace_id = redact_identifier_for_log(trace_id);
+        let has_trace_id = redacted_trace_id.is_some();
         tracing::debug!(
             target: "loongclaw.acp",
             backend_id = %metadata.backend_id,
+            has_trace_id,
             input_len = request.input.chars().count(),
             sink_enabled = sink.is_some(),
             has_trace_id = redacted_trace_id.is_some(),
@@ -262,6 +266,7 @@ impl AcpSessionManager {
                 tracing::debug!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
+                    has_trace_id,
                     state = ?result.state,
                     stop_reason = ?result.stop_reason,
                     reported_event_count,
@@ -285,11 +290,11 @@ impl AcpSessionManager {
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
                     trace_id = ?redacted_trace_id,
+                    has_trace_id,
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
                     error = %crate::observability::summarize_error(error.as_str()),
-                    has_trace_id = redacted_trace_id.is_some(),
                     "ACP turn failed"
                 );
                 Err(error)
