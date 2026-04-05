@@ -339,6 +339,55 @@ fn observed_version_matches_expected(observed_version: &str, expected_version: &
 }
 
 #[cfg(test)]
+pub(crate) fn fake_browser_companion_version_command(version: &str) -> String {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_FAKE_COMMAND_SEED: AtomicU64 = AtomicU64::new(1);
+
+    let seed = NEXT_FAKE_COMMAND_SEED.fetch_add(1, Ordering::Relaxed);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "loongclaw-browser-companion-fake-{}-{seed}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create fake browser companion temp dir");
+
+    if cfg!(windows) {
+        let script_path = temp_dir.join("browser-companion.cmd");
+        let mut file =
+            std::fs::File::create(&script_path).expect("create fake browser companion cmd");
+        writeln!(file, "@echo off").expect("write fake browser companion cmd header");
+        writeln!(file, "echo loongclaw-browser-companion {version}")
+            .expect("write fake browser companion cmd body");
+        file.sync_all().expect("sync fake browser companion cmd");
+        script_path.display().to_string()
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let script_path = temp_dir.join("browser-companion");
+            let mut file =
+                std::fs::File::create(&script_path).expect("create fake browser companion script");
+            writeln!(file, "#!/bin/sh").expect("write fake browser companion shebang");
+            writeln!(file, "echo 'loongclaw-browser-companion {version}'")
+                .expect("write fake browser companion body");
+            file.sync_all().expect("sync fake browser companion script");
+            let mut permissions = std::fs::metadata(&script_path)
+                .expect("fake browser companion metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&script_path, permissions)
+                .expect("chmod fake browser companion script");
+            return script_path.display().to_string();
+        }
+
+        #[allow(unreachable_code)]
+        temp_dir.join("browser-companion").display().to_string()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(unix)]
