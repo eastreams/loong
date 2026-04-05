@@ -23,6 +23,22 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{prefix}-{process_id}-{nanos}"))
 }
 
+fn isolated_memory_env() -> loongclaw_daemon::test_support::ScopedEnv {
+    let mut env = loongclaw_daemon::test_support::ScopedEnv::new();
+    for key in [
+        "LOONGCLAW_CONFIG_PATH",
+        "LOONGCLAW_FILE_ROOT",
+        "LOONGCLAW_MEMORY_BACKEND",
+        "LOONGCLAW_MEMORY_PROFILE",
+        "LOONGCLAW_MEMORY_SUMMARY_MAX_CHARS",
+        "LOONGCLAW_SLIDING_WINDOW",
+        "LOONGCLAW_SQLITE_PATH",
+    ] {
+        env.remove(key);
+    }
+    env
+}
+
 fn write_session_search_config(root: &Path) -> PathBuf {
     fs::create_dir_all(root).expect("create fixture root");
 
@@ -38,6 +54,7 @@ fn write_session_search_config(root: &Path) -> PathBuf {
 
 #[test]
 fn collect_session_search_artifact_includes_visible_hits() {
+    let _env = isolated_memory_env();
     let root = unique_temp_dir("loongclaw-session-search-artifact");
     let config_path = write_session_search_config(&root);
     let (_, config) = mvp::config::load(Some(
@@ -122,6 +139,7 @@ fn collect_session_search_artifact_includes_visible_hits() {
 
 #[test]
 fn load_session_search_artifact_round_trips_written_json() {
+    let _env = isolated_memory_env();
     let root = unique_temp_dir("loongclaw-session-search-inspect");
     let config_path = write_session_search_config(&root);
     let config_path_str = config_path
@@ -176,6 +194,7 @@ fn load_session_search_artifact_round_trips_written_json() {
 
 #[test]
 fn load_session_search_artifact_rejects_inconsistent_counts() {
+    let _env = isolated_memory_env();
     let root = unique_temp_dir("loongclaw-session-search-invalid-counts");
     fs::create_dir_all(&root).expect("create fixture root");
     let artifact_path = root.join("session-search.json");
