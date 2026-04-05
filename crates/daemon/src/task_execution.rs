@@ -102,7 +102,7 @@ pub async fn run_demo() -> CliResult<()> {
 }
 
 pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
-    let payload = crate::parse_json_payload(payload_raw, "run-task payload")?;
+    let payload = crate::cli_json::parse_json_payload(payload_raw, "run-task payload")?;
 
     let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
