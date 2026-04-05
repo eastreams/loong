@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-05T18:21:36Z
+- Generated at: 2026-04-05T18:29:16Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -23,8 +23,8 @@
 | chat_runtime | `structural_size,operational_density` | `crates/app/src/chat.rs` | 6976 | 7300 | 324 | 147 | 160 | 13 | 95.6% | TIGHT | 6936 | 0.6% | PASS | 146 |
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1785 | 6400 | 4615 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.3% | PASS | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10833 | 11200 | 367 | 97 | 120 | 23 | 96.7% | TIGHT | 10831 | 0.0% | PASS | 98 |
-| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14858 | 15000 | 142 | 54 | 70 | 16 | 99.1% | TIGHT | 14472 | 2.7% | PASS | 54 |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6442 | 6500 | 58 | 206 | 210 | 4 | 99.1% | TIGHT | 6324 | 1.9% | PASS | 210 |
+| tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14858 | 15000 | 142 | 53 | 70 | 17 | 99.1% | TIGHT | 14472 | 2.7% | PASS | 54 |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6444 | 6500 | 56 | 206 | 210 | 4 | 99.1% | TIGHT | 6324 | 1.9% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9723 | 9800 | 77 | 235 | 250 | 15 | 99.2% | TIGHT | 9519 | 2.1% | PASS | 228 |
 
 ## Prioritization Signals
@@ -69,8 +69,8 @@
 <!-- arch-hotspot key=chat_runtime lines=6976 functions=147 -->
 <!-- arch-hotspot key=channel_mod lines=1785 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10833 functions=97 -->
-<!-- arch-hotspot key=tools_mod lines=14858 functions=54 -->
-<!-- arch-hotspot key=daemon_lib lines=6442 functions=206 -->
+<!-- arch-hotspot key=tools_mod lines=14858 functions=53 -->
+<!-- arch-hotspot key=daemon_lib lines=6444 functions=206 -->
 <!-- arch-hotspot key=onboard_cli lines=9723 functions=235 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
