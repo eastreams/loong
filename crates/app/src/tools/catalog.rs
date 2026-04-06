@@ -516,6 +516,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "delegate_async"
         | "session_archive"
         | "session_cancel"
+        | "session_continue"
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
         | "session_recover"
@@ -872,6 +873,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_continue_definition,
         },
         ToolDescriptor {
