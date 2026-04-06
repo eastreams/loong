@@ -1,9 +1,9 @@
 use crate::memory::WindowTurn;
 use crate::runtime_self_continuity;
 
-const SUMMARY_MAX_RENDERED_TURNS: usize = 3;
+const SUMMARY_MAX_RENDERED_TURNS: usize = 4;
 const SUMMARY_PREFERRED_USER_TURNS: usize = 3;
-const SUMMARY_PREFERRED_ASSISTANT_TURNS: usize = 0;
+const SUMMARY_PREFERRED_ASSISTANT_TURNS: usize = 1;
 const SUMMARY_TURN_EXCERPT_CHARS: usize = 96;
 const SUMMARY_TOTAL_CHARS_MAX: usize = 480;
 const PRIOR_COMPACTED_SUMMARY_PLACEHOLDER: &str = "[prior compacted summary]";
@@ -182,24 +182,45 @@ struct RenderedSummaryLine {
 }
 
 fn render_structured_summary(lines: &[RenderedSummaryLine], omitted_lines: usize) -> String {
-    let mut sections = Vec::new();
     let scope_note = runtime_self_continuity::compaction_summary_scope_note();
-    sections.push(scope_note.to_owned());
+    let omitted_line = if omitted_lines > 0 {
+        Some(format!(
+            "{OMITTED_CONTEXT_PREFIX} {omitted_lines} earlier turns omitted."
+        ))
+    } else {
+        None
+    };
+    let reserved_chars = omitted_line
+        .as_ref()
+        .map(|line| line.chars().count() + 1)
+        .unwrap_or(0);
+    let content_budget_limit = SUMMARY_TOTAL_CHARS_MAX.saturating_sub(reserved_chars);
+    let mut budget = SummaryCharBudget::new(content_budget_limit);
+    let mut sections = Vec::new();
+
+    push_summary_line(&mut sections, &mut budget, scope_note);
 
     let user_lines = collect_summary_group(lines, true);
-    append_summary_section(&mut sections, USER_CONTEXT_HEADING, &user_lines);
+    append_summary_section(
+        &mut sections,
+        &mut budget,
+        USER_CONTEXT_HEADING,
+        &user_lines,
+    );
 
     let assistant_lines = collect_summary_group(lines, false);
-    append_summary_section(&mut sections, ASSISTANT_PROGRESS_HEADING, &assistant_lines);
+    append_summary_section(
+        &mut sections,
+        &mut budget,
+        ASSISTANT_PROGRESS_HEADING,
+        &assistant_lines,
+    );
 
-    if omitted_lines > 0 {
-        let omitted_line =
-            format!("{OMITTED_CONTEXT_PREFIX} {omitted_lines} earlier turns omitted.");
+    if let Some(omitted_line) = omitted_line {
         sections.push(omitted_line);
     }
 
-    let rendered = sections.join("\n");
-    trim_to_chars(&rendered, SUMMARY_TOTAL_CHARS_MAX)
+    sections.join("\n")
 }
 
 fn collect_summary_group(lines: &[RenderedSummaryLine], is_user: bool) -> Vec<String> {
@@ -210,17 +231,68 @@ fn collect_summary_group(lines: &[RenderedSummaryLine], is_user: bool) -> Vec<St
         .collect::<Vec<_>>()
 }
 
-fn append_summary_section(sections: &mut Vec<String>, heading: &str, lines: &[String]) {
+fn append_summary_section(
+    sections: &mut Vec<String>,
+    budget: &mut SummaryCharBudget,
+    heading: &str,
+    lines: &[String],
+) {
     if lines.is_empty() {
         return;
     }
 
-    sections.push(heading.to_owned());
+    if !push_summary_line(sections, budget, heading) {
+        return;
+    }
 
     for line in lines {
         let bullet_line = format!("- {line}");
-        sections.push(bullet_line);
+        if !push_summary_line(sections, budget, &bullet_line) {
+            return;
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SummaryCharBudget {
+    remaining: usize,
+    has_lines: bool,
+}
+
+impl SummaryCharBudget {
+    fn new(limit: usize) -> Self {
+        Self {
+            remaining: limit,
+            has_lines: false,
+        }
+    }
+}
+
+fn push_summary_line(
+    sections: &mut Vec<String>,
+    budget: &mut SummaryCharBudget,
+    line: &str,
+) -> bool {
+    if budget.remaining == 0 {
+        return false;
+    }
+
+    let separator_chars = if budget.has_lines { 1 } else { 0 };
+    if budget.remaining <= separator_chars {
+        return false;
+    }
+
+    let available_chars = budget.remaining - separator_chars;
+    let rendered_line = trim_to_chars(line, available_chars);
+    let rendered_chars = rendered_line.chars().count();
+    if rendered_chars == 0 {
+        return false;
+    }
+
+    sections.push(rendered_line);
+    budget.remaining -= separator_chars + rendered_chars;
+    budget.has_lines = true;
+    true
 }
 
 fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
@@ -318,7 +390,25 @@ fn is_summary_metadata_line(line: &str) -> bool {
     if line.starts_with(OMITTED_CONTEXT_PREFIX) {
         return true;
     }
+    if is_legacy_omitted_turns_marker(line) {
+        return true;
+    }
     false
+}
+
+fn is_legacy_omitted_turns_marker(line: &str) -> bool {
+    let Some(stripped_line) = line.strip_prefix("... ") else {
+        return false;
+    };
+
+    let Some((count, suffix)) = stripped_line.split_once(' ') else {
+        return false;
+    };
+    if count.parse::<usize>().is_err() {
+        return false;
+    }
+
+    suffix == "earlier turns omitted"
 }
 
 fn strip_repeated_summary_role_prefixes(mut line: &str) -> (&str, &str) {

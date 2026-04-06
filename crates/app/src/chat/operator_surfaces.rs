@@ -690,7 +690,6 @@ pub(super) async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResu
             &runtime.session_id,
             &runtime.turn_coordinator,
             binding,
-            &runtime.memory_config,
         )
         .await?;
         let render_width = detect_cli_chat_render_width();
@@ -756,7 +755,6 @@ pub(super) async fn load_manual_compaction_result(
     session_id: &str,
     turn_coordinator: &ConversationTurnCoordinator,
     binding: ConversationRuntimeBinding<'_>,
-    _memory_config: &MemoryRuntimeConfig,
 ) -> CliResult<ManualCompactionResult> {
     let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
     let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);

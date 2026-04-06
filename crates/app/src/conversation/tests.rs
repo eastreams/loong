@@ -23865,7 +23865,7 @@ fn compact_window_bounds_summary_content_and_prior_summaries() {
 fn compact_window_retains_prior_summary_details_across_repeated_compaction() {
     use super::compaction::{CompactPolicy, compact_window};
 
-    let prior_summary = "Compacted 1 earlier turns\nuser: For this test, remember these facts exactly: - codename: NIMBUS-17 - owner: Mina - budget: 47";
+    let prior_summary = "Compacted 1 earlier turns\nuser: For this test, remember these facts exactly: - codename: NIMBUS-17 - owner: Mina - budget: 47\n... 1 earlier turns omitted";
     let turns = vec![
         crate::memory::WindowTurn {
             role: "user".into(),
@@ -23910,6 +23910,10 @@ fn compact_window_retains_prior_summary_details_across_repeated_compaction() {
     assert!(
         !summary.contains("[prior compacted summary]"),
         "repeated compaction should retain prior summary details: {summary}"
+    );
+    assert!(
+        !summary.contains("... 1 earlier turns omitted"),
+        "repeated compaction should drop legacy omitted markers from prior summaries: {summary}"
     );
 }
 
@@ -23967,6 +23971,10 @@ fn compact_window_prioritizes_user_fact_turns_when_summary_budget_is_limited() {
     assert!(summary.contains("October"));
     assert!(summary.contains("RIVER-9"));
     assert!(summary.contains("Owen"));
+    assert!(
+        summary.contains("Assistant progress:"),
+        "bounded summaries should still reserve space for assistant progress: {summary}"
+    );
 }
 
 #[test]
