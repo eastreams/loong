@@ -518,7 +518,7 @@ fn resolve_loongclaw_home(
     loongclaw_home
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loongclaw"))
+        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loong"))
 }
 
 pub(super) fn default_loongclaw_home() -> PathBuf {
