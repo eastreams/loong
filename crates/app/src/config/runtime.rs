@@ -31,7 +31,7 @@ use super::{
     shared::{
         ConfigValidationIssue, ConfigValidationLocale, ConfigValidationSeverity,
         DEFAULT_CONFIG_FILE, default_loongclaw_home as shared_default_loongclaw_home, expand_path,
-        format_config_validation_issues,
+        format_config_validation_issues, warn_legacy_home_once,
     },
     tools::{
         DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, RuntimePluginsConfig, ToolConfig,
@@ -2113,6 +2113,7 @@ pub fn render(config: &LoongClawConfig) -> CliResult<String> {
 }
 
 pub fn default_config_path() -> PathBuf {
+    warn_legacy_home_once();
     default_loongclaw_home().join(DEFAULT_CONFIG_FILE)
 }
 
