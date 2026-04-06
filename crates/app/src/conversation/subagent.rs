@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as DeError;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value, json};
 
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
@@ -251,8 +253,7 @@ pub fn subagent_surface_fields(subagent: Option<&ConstrainedSubagentHandle>) -> 
     fields
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConstrainedSubagentProfile {
     Orchestrator,
     Leaf,
@@ -282,6 +283,63 @@ impl ConstrainedSubagentProfile {
         match self {
             Self::Orchestrator => ConstrainedSubagentControlScope::Children,
             Self::Leaf => ConstrainedSubagentControlScope::None,
+        }
+    }
+}
+
+impl Serialize for ConstrainedSubagentProfile {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("ConstrainedSubagentProfile", 2)?;
+        let role = self.role();
+        let control_scope = self.control_scope();
+        state.serialize_field("role", &role)?;
+        state.serialize_field("control_scope", &control_scope)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ConstrainedSubagentProfile {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum ProfileRepr {
+            LegacyString(String),
+            Structured {
+                role: ConstrainedSubagentRole,
+                control_scope: ConstrainedSubagentControlScope,
+            },
+        }
+
+        let profile_repr = ProfileRepr::deserialize(deserializer)?;
+        match profile_repr {
+            ProfileRepr::LegacyString(value) => match value.as_str() {
+                "orchestrator" => Ok(ConstrainedSubagentProfile::Orchestrator),
+                "leaf" => Ok(ConstrainedSubagentProfile::Leaf),
+                other => Err(D::Error::custom(format!(
+                    "unknown subagent profile `{other}`"
+                ))),
+            },
+            ProfileRepr::Structured {
+                role,
+                control_scope,
+            } => match (role, control_scope) {
+                (
+                    ConstrainedSubagentRole::Orchestrator,
+                    ConstrainedSubagentControlScope::Children,
+                ) => Ok(ConstrainedSubagentProfile::Orchestrator),
+                (ConstrainedSubagentRole::Leaf, ConstrainedSubagentControlScope::None) => {
+                    Ok(ConstrainedSubagentProfile::Leaf)
+                }
+                _ => Err(D::Error::custom(
+                    "invalid subagent profile role/control_scope combination",
+                )),
+            },
         }
     }
 }
@@ -522,6 +580,9 @@ impl ConstrainedSubagentContractView {
     }
 
     pub fn allows_child_delegation(&self) -> bool {
+        if let Some(profile) = self.profile {
+            return profile.allows_child_delegation();
+        }
         let depth_budget = self.depth_budget;
         let Some(depth_budget) = depth_budget else {
             return false;

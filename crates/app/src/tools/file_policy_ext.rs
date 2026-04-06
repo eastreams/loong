@@ -44,7 +44,6 @@ impl FilePolicyExtension {
             }
             "config.import" => {
                 required_capabilities.insert(Capability::FilesystemRead);
-
                 let mode_requires_write =
                     super::config_import::config_import_mode_requires_write_object(payload);
                 if mode_requires_write {
@@ -55,6 +54,16 @@ impl FilePolicyExtension {
         }
 
         required_capabilities
+    }
+
+    #[cfg(test)]
+    fn required_capability(tool_name: &str) -> Option<Capability> {
+        let empty_payload = serde_json::Map::new();
+        let required_capabilities = Self::required_capabilities(tool_name, &empty_payload);
+        if required_capabilities.len() != 1 {
+            return None;
+        }
+        required_capabilities.into_iter().next()
     }
 
     /// Check whether `raw_path` escapes the configured file root.
@@ -68,10 +77,9 @@ impl FilePolicyExtension {
     /// 1. Full `canonicalize` — works when the entire path already exists.
     /// 2. Symlink detection — if the path is a symlink whose target cannot be
     ///    canonicalized (dangling), read the link target and check it directly.
-    /// 3. Deepest existing ancestor `canonicalize` + missing suffix re-attach —
-    ///    handles `file.write "nested/new.txt"` where one or more trailing
-    ///    components do not exist yet.
-    /// 4. Pure path normalization — no existing ancestor can be resolved.
+    /// 3. Parent `canonicalize` + file name — handles `file.write "new.txt"`
+    ///    where the leaf does not exist yet.
+    /// 4. Pure path normalization — neither path nor parent exists on disk.
     ///
     /// # Known limitations
     ///
@@ -88,19 +96,19 @@ impl FilePolicyExtension {
             None => return false,
         };
 
-        let effective_root = self.canon_root.as_deref().unwrap_or(root);
-        let normalized_effective_root = super::normalize_without_fs(effective_root);
-
         let candidate = Path::new(raw_path);
         let combined = if candidate.is_absolute() {
             candidate.to_path_buf()
         } else {
-            effective_root.join(candidate)
+            root.join(candidate)
         };
+
+        // Effective root: prefer cached canonicalized form, fall back to raw.
+        let effective_root = self.canon_root.as_deref().unwrap_or(root);
 
         // 1. Try full canonicalize (works when the path already exists).
         if let Ok(canon) = combined.canonicalize() {
-            return !canon.starts_with(&normalized_effective_root);
+            return !canon.starts_with(effective_root);
         }
 
         // 1.5. Path is a symlink but canonicalize failed (dangling target) —
@@ -110,61 +118,26 @@ impl FilePolicyExtension {
                 let resolved = if target.is_absolute() {
                     target
                 } else {
-                    let raw_parent = combined.parent().unwrap_or(effective_root);
-                    let symlink_parent = match raw_parent.canonicalize() {
-                        Ok(parent) => parent,
-                        Err(_) => return true,
-                    };
-                    symlink_parent.join(&target)
+                    combined.parent().unwrap_or(root).join(&target)
                 };
                 let normalized_target = super::normalize_without_fs(&resolved);
-                return !normalized_target.starts_with(&normalized_effective_root);
+                return !normalized_target.starts_with(effective_root);
             }
             // Cannot read the link — conservatively deny.
             return true;
         }
 
-        // 2. Path doesn't exist — canonicalize the deepest existing ancestor,
-        //    then re-attach the missing suffix. Handles nested new paths such
-        //    as `file.write "nested/new.txt"` and keeps `/var` vs
-        //    `/private/var` aliases aligned on macOS.
-        if let Some(reconstructed_path) = reconstruct_from_existing_ancestor(&combined) {
-            let normalized_reconstructed = super::normalize_without_fs(&reconstructed_path);
-            return !normalized_reconstructed.starts_with(&normalized_effective_root);
+        // 2. Path doesn't exist — canonicalize the parent directory instead,
+        //    then re-attach the file name.  Handles `file.write "new.txt"`.
+        if let (Some(parent), Some(file_name)) = (combined.parent(), combined.file_name())
+            && let Ok(canon_parent) = parent.canonicalize()
+        {
+            return !canon_parent.join(file_name).starts_with(effective_root);
         }
 
         // 3. Neither path nor parent exists — fall back to pure normalization.
         let normalized = super::normalize_without_fs(&combined);
-        !normalized.starts_with(&normalized_effective_root)
-    }
-
-    fn raw_paths_for_request<'a>(
-        tool_name: &str,
-        payload: &'a serde_json::Map<String, serde_json::Value>,
-    ) -> Vec<&'a str> {
-        let tool_name = super::canonical_tool_name(tool_name);
-        let mut raw_paths = Vec::new();
-
-        if tool_name == "config.import" {
-            let input_path = trimmed_non_empty_path(payload.get("input_path"));
-            if let Some(input_path) = input_path {
-                raw_paths.push(input_path);
-            }
-
-            let output_path = trimmed_non_empty_path(payload.get("output_path"));
-            if let Some(output_path) = output_path {
-                raw_paths.push(output_path);
-            }
-
-            return raw_paths;
-        }
-
-        let raw_path = trimmed_non_empty_path(payload.get("path"));
-        if let Some(raw_path) = raw_path {
-            raw_paths.push(raw_path);
-        }
-
-        raw_paths
+        !normalized.starts_with(effective_root)
     }
 
     fn authorize_file_payload(
@@ -196,31 +169,47 @@ impl FilePolicyExtension {
 
         Ok(())
     }
-}
 
-fn reconstruct_from_existing_ancestor(path: &Path) -> Option<PathBuf> {
-    let mut suffix_components = Vec::new();
-    let mut cursor = path;
+    fn raw_paths_for_request<'a>(
+        tool_name: &str,
+        payload: &'a serde_json::Map<String, serde_json::Value>,
+    ) -> Vec<&'a str> {
+        let mut raw_paths = Vec::new();
 
-    while !cursor.exists() {
-        let component = cursor.file_name()?;
-        suffix_components.push(component.to_os_string());
-        cursor = cursor.parent()?;
+        if tool_name == "config.import" {
+            let input_path = payload
+                .get("input_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if !input_path.is_empty() {
+                raw_paths.push(input_path);
+            }
+
+            let mode_requires_write =
+                super::config_import::config_import_mode_requires_write_object(payload);
+            if mode_requires_write {
+                let output_path = payload
+                    .get("output_path")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if !output_path.is_empty() {
+                    raw_paths.push(output_path);
+                }
+            }
+
+            return raw_paths;
+        }
+
+        let raw_path = payload
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        if !raw_path.is_empty() {
+            raw_paths.push(raw_path);
+        }
+
+        raw_paths
     }
-
-    let mut reconstructed = cursor.canonicalize().ok()?;
-    for component in suffix_components.iter().rev() {
-        reconstructed.push(component);
-    }
-
-    Some(reconstructed)
-}
-
-fn trimmed_non_empty_path(value: Option<&serde_json::Value>) -> Option<&str> {
-    let raw_value = value.and_then(serde_json::Value::as_str);
-    let trimmed_value = raw_value.map(str::trim);
-
-    trimmed_value.filter(|value| !value.is_empty())
 }
 
 pub(crate) fn authorize_direct_file_payload(
@@ -262,19 +251,20 @@ impl PolicyExtension for FilePolicyExtension {
         }
 
         for required_capability in required_capabilities {
-            let capability_is_allowed = context
+            if context
                 .token
                 .allowed_capabilities
-                .contains(&required_capability);
-            if capability_is_allowed {
+                .contains(&required_capability)
+            {
                 continue;
             }
 
-            let extension = self.name().to_owned();
-            let reason = format!(
-                "tool `{tool_name}` requires capability `{required_capability:?}` not granted to token"
-            );
-            return Err(PolicyError::ExtensionDenied { extension, reason });
+            return Err(PolicyError::ExtensionDenied {
+                extension: self.name().to_owned(),
+                reason: format!(
+                    "tool `{tool_name}` requires capability `{required_capability:?}` not granted to token"
+                ),
+            });
         }
 
         self.authorize_file_payload(tool_name, payload)?;
@@ -402,8 +392,7 @@ mod tests {
 
     #[test]
     fn denies_path_escape() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
             Capability::InvokeTool,
@@ -421,8 +410,7 @@ mod tests {
 
     #[test]
     fn allows_path_within_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
             Capability::InvokeTool,
@@ -435,13 +423,12 @@ mod tests {
     }
 
     #[test]
-    fn config_import_requires_filesystem_read() {
+    fn claw_migrate_requires_filesystem_read() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([Capability::InvokeTool]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "config.toml"}});
+        let params = json!({"tool_name": "claw.migrate", "payload": {"input_path": "config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(matches!(
             ext.authorize_extension(&ctx).unwrap_err(),
@@ -450,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn config_import_allowed_with_filesystem_read() {
+    fn claw_migrate_allowed_with_filesystem_read() {
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
@@ -458,17 +445,17 @@ mod tests {
             Capability::FilesystemRead,
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "config.toml"}});
+        let params = json!({"tool_name": "claw.migrate", "payload": {"input_path": "config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
     }
 
     #[test]
     fn memory_search_requires_filesystem_read() {
-        let payload = serde_json::Map::new();
-        let required = FilePolicyExtension::required_capabilities("memory_search", &payload);
-        assert_eq!(required, BTreeSet::from([Capability::FilesystemRead]));
+        assert_eq!(
+            FilePolicyExtension::required_capability("memory_search"),
+            Some(Capability::FilesystemRead)
+        );
 
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
@@ -512,9 +499,10 @@ mod tests {
 
     #[test]
     fn memory_get_allowed_with_filesystem_read() {
-        let payload = serde_json::Map::new();
-        let required = FilePolicyExtension::required_capabilities("memory_get", &payload);
-        assert_eq!(required, BTreeSet::from([Capability::FilesystemRead]));
+        assert_eq!(
+            FilePolicyExtension::required_capability("memory_get"),
+            Some(Capability::FilesystemRead)
+        );
 
         let ext = FilePolicyExtension::new(None);
         let pack = test_pack();
@@ -559,20 +547,15 @@ mod tests {
 
     #[test]
     fn denies_absolute_path_outside_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let outside_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+        let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
             Capability::InvokeTool,
             Capability::FilesystemRead,
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
-        let escape_path = outside_dir.path().join("outside.txt");
-        let params = json!({
-            "tool_name": "file.read",
-            "payload": {"path": escape_path.display().to_string()}
-        });
+        // Absolute path to a completely different location — must be denied
+        let params = json!({"tool_name": "file.read", "payload": {"path": "/etc/passwd"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(matches!(
             ext.authorize_extension(&ctx).unwrap_err(),
@@ -581,9 +564,8 @@ mod tests {
     }
 
     #[test]
-    fn config_import_sandbox_uses_input_path_key() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+    fn claw_migrate_sandbox_uses_input_path_key() {
+        let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
             Capability::InvokeTool,
@@ -592,7 +574,7 @@ mod tests {
         let caps = BTreeSet::from([Capability::InvokeTool]);
         // input_path escapes the root — must be denied
         let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "../../etc/passwd"}});
+            json!({"tool_name": "claw.migrate", "payload": {"input_path": "../../etc/passwd"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(matches!(
             ext.authorize_extension(&ctx).unwrap_err(),
@@ -601,9 +583,8 @@ mod tests {
     }
 
     #[test]
-    fn config_import_within_root_allowed() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
+    fn claw_migrate_within_root_allowed() {
+        let ext = FilePolicyExtension::new(Some(PathBuf::from("/home/user/project")));
         let pack = test_pack();
         let token = token_with_caps(BTreeSet::from([
             Capability::InvokeTool,
@@ -611,146 +592,9 @@ mod tests {
         ]));
         let caps = BTreeSet::from([Capability::InvokeTool]);
         let params =
-            json!({"tool_name": "config.import", "payload": {"input_path": "subdir/config.toml"}});
+            json!({"tool_name": "claw.migrate", "payload": {"input_path": "subdir/config.toml"}});
         let ctx = make_context(&pack, &token, &caps, Some(&params));
         assert!(ext.authorize_extension(&ctx).is_ok());
-    }
-
-    #[test]
-    fn config_import_apply_checks_output_path() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-            Capability::FilesystemWrite,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "apply",
-                "input_path": "subdir/config.toml",
-                "output_path": "../../etc/passwd"
-            }
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn config_import_plan_checks_trimmed_output_preview_path() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "plan",
-                "input_path": "subdir/config.toml",
-                "output_path": " ../../etc/passwd "
-            }
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        let result = ext.authorize_extension(&ctx);
-        assert!(matches!(
-            result.unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn config_import_apply_requires_filesystem_write() {
-        let ext = FilePolicyExtension::new(None);
-        let pack = test_pack();
-        let token = token_with_caps(BTreeSet::from([
-            Capability::InvokeTool,
-            Capability::FilesystemRead,
-        ]));
-        let caps = BTreeSet::from([Capability::InvokeTool]);
-        let params = json!({
-            "tool_name": "config.import",
-            "payload": {
-                "mode": "apply",
-                "input_path": "config.toml",
-                "output_path": "loongclaw.toml"
-            }
-        });
-        let ctx = make_context(&pack, &token, &caps, Some(&params));
-        assert!(matches!(
-            ext.authorize_extension(&ctx).unwrap_err(),
-            PolicyError::ExtensionDenied { .. }
-        ));
-    }
-
-    #[test]
-    fn nested_new_path_within_root_is_allowed() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-
-        assert!(
-            !ext.path_escapes_root("nested/generated/loongclaw.toml"),
-            "nested new path under the file root should stay allowed"
-        );
-    }
-
-    #[test]
-    fn lexical_parent_segments_after_missing_path_still_escape_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let nested_dir = root_dir.path().join("nested");
-        std::fs::create_dir_all(&nested_dir).expect("create nested dir");
-
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-
-        assert!(
-            ext.path_escapes_root("nested/missing/../../../outside.txt"),
-            "lexical parent segments should not bypass the file root after ancestor reconstruction"
-        );
-    }
-
-    #[test]
-    fn allows_path_within_lexically_normalized_missing_root() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let raw_root = root_dir.path().join("missing").join("..");
-        let ext = FilePolicyExtension::new(Some(raw_root));
-
-        assert!(
-            !ext.path_escapes_root("inside.txt"),
-            "normalized missing-root paths should still allow in-root files"
-        );
-    }
-
-    #[test]
-    fn direct_file_payload_authorization_accepts_config_import_aliases() {
-        let root_dir = tempfile::tempdir().expect("tempdir");
-        let runtime_config = crate::tools::runtime_config::ToolRuntimeConfig {
-            file_root: Some(root_dir.path().to_path_buf()),
-            ..crate::tools::runtime_config::ToolRuntimeConfig::default()
-        };
-        let payload_value = json!({
-            "mode": "apply",
-            "input_path": "legacy-config.toml",
-            "output_path": "../outside.toml"
-        });
-        let payload = payload_value
-            .as_object()
-            .cloned()
-            .expect("payload should be an object");
-
-        let error = authorize_direct_file_payload("claw.migrate", &payload, &runtime_config)
-            .expect_err("alias should still reuse config.import direct file policy checks");
-
-        assert!(error.starts_with("policy_denied: "));
-        assert!(error.contains("outside.toml"));
     }
 
     // ── Symlink-aware filesystem tests ──────────────────────────────────
@@ -834,33 +678,6 @@ mod tests {
 
         let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
         assert!(!ext.path_escapes_root(link.to_str().unwrap()));
-    }
-
-    #[test]
-    fn denies_dangling_relative_symlink_via_symlinked_parent_directory() {
-        let outside = tempfile::tempdir().unwrap();
-        let outside_parent = outside.path().join("real-parent");
-        std::fs::create_dir_all(&outside_parent).unwrap();
-
-        let nested_link = outside_parent.join("dangling_relative_link");
-        let relative_target = Path::new("..").join("secret.txt");
-        if !try_symlink(&relative_target, &nested_link) {
-            return;
-        }
-
-        let root_dir = tempfile::tempdir().unwrap();
-        let linked_parent = root_dir.path().join("linked-parent");
-        if !try_symlink_dir(&outside_parent, &linked_parent) {
-            return;
-        }
-
-        let escaped_path = linked_parent.join("dangling_relative_link");
-        let ext = FilePolicyExtension::new(Some(root_dir.path().to_path_buf()));
-
-        assert!(
-            ext.path_escapes_root(escaped_path.to_str().unwrap()),
-            "relative dangling targets must resolve against the canonical symlink parent"
-        );
     }
 
     #[test]

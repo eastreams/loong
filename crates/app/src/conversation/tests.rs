@@ -20166,12 +20166,6 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
-    let kernel_ctx = crate::context::bootstrap_kernel_context_with_config(
-        "delegate-worktree-inline",
-        60,
-        &config,
-    )
-    .expect("bootstrap kernel context");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -20180,7 +20174,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::kernel(&kernel_ctx),
+            ConversationRuntimeBinding::direct(),
         )
         .await
         .expect("approval resolve reply");
