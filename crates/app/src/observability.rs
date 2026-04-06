@@ -1,8 +1,10 @@
+use regex::Regex;
 use serde_json::Value;
 
 const MAX_LOGGED_JSON_KEYS: usize = 8;
 const MAX_LOGGED_JSON_KEY_CHARS: usize = 48;
 const MAX_ERROR_CHARS: usize = 240;
+const REDACTED_VALUE: &str = "[REDACTED]";
 
 pub(crate) fn json_value_kind(value: &Value) -> &'static str {
     match value {
@@ -44,15 +46,78 @@ fn truncate_logged_json_key(key: &str) -> String {
 
 pub(crate) fn summarize_error(error: &str) -> String {
     let compact = error.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= MAX_ERROR_CHARS {
-        return compact;
+    let redacted = redact_sensitive_error_fragments(compact.as_str());
+    if redacted.chars().count() <= MAX_ERROR_CHARS {
+        return redacted;
     }
 
-    let truncated = compact
+    let truncated = redacted
         .chars()
         .take(MAX_ERROR_CHARS.saturating_sub(3))
         .collect::<String>();
     format!("{truncated}...")
+}
+
+fn redact_sensitive_error_fragments(input: &str) -> String {
+    let redacted_emails = redact_email_addresses(input);
+    let redacted_bearer = redact_bearer_tokens(redacted_emails.as_str());
+    let redacted_query_params = redact_signed_query_params(redacted_bearer.as_str());
+    let redacted_key_value = redact_key_value_secrets(redacted_query_params.as_str());
+    redact_long_hex_tokens(redacted_key_value.as_str())
+}
+
+fn redact_email_addresses(input: &str) -> String {
+    let pattern = r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b";
+    let Ok(regex) = Regex::new(pattern) else {
+        return input.to_owned();
+    };
+    regex.replace_all(input, REDACTED_VALUE).into_owned()
+}
+
+fn redact_bearer_tokens(input: &str) -> String {
+    let pattern = r"(?i)\bbearer\s+[a-z0-9._~+/=\-]+\b";
+    let Ok(regex) = Regex::new(pattern) else {
+        return input.to_owned();
+    };
+    let replacement = format!("Bearer {REDACTED_VALUE}");
+    regex.replace_all(input, replacement).into_owned()
+}
+
+fn redact_signed_query_params(input: &str) -> String {
+    let pattern =
+        r"(?i)([?&](?:sig|signature|x-amz-signature|x-goog-signature|access_token|token)=)[^&\s]+";
+    let Ok(regex) = Regex::new(pattern) else {
+        return input.to_owned();
+    };
+    regex
+        .replace_all(input, |captures: &regex::Captures| {
+            let prefix = captures.get(1).map_or("", |value| value.as_str());
+            format!("{prefix}{REDACTED_VALUE}")
+        })
+        .into_owned()
+}
+
+fn redact_key_value_secrets(input: &str) -> String {
+    let pattern =
+        r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\b(\s*[:=]\s*)([^\s,;]+)";
+    let Ok(regex) = Regex::new(pattern) else {
+        return input.to_owned();
+    };
+    regex
+        .replace_all(input, |captures: &regex::Captures| {
+            let key = captures.get(1).map_or("", |value| value.as_str());
+            let separator = captures.get(2).map_or("", |value| value.as_str());
+            format!("{key}{separator}{REDACTED_VALUE}")
+        })
+        .into_owned()
+}
+
+fn redact_long_hex_tokens(input: &str) -> String {
+    let pattern = r"\b[a-f0-9]{32,}\b";
+    let Ok(regex) = Regex::new(pattern) else {
+        return input.to_owned();
+    };
+    regex.replace_all(input, REDACTED_VALUE).into_owned()
 }
 
 #[cfg(test)]
@@ -124,5 +189,19 @@ mod tests {
         assert!(!summary.contains('\t'));
         assert!(summary.ends_with("..."));
         assert!(summary.chars().count() <= 240);
+    }
+
+    #[test]
+    fn summarize_error_redacts_sensitive_fragments() {
+        let error = "Bearer sk-super-secret-token user=alice@example.com url=https://example.com/callback?sig=abcdef123456 api_key=token-1234567890abcdef hash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let summary = summarize_error(error);
+
+        assert!(summary.contains("Bearer [REDACTED]"));
+        assert!(summary.contains("user=[REDACTED]"));
+        assert!(summary.contains("sig=[REDACTED]"));
+        assert!(summary.contains("api_key=[REDACTED]"));
+        assert!(!summary.contains("alice@example.com"));
+        assert!(!summary.contains("sk-super-secret-token"));
+        assert!(!summary.contains("0123456789abcdef0123456789abcdef"));
     }
 }

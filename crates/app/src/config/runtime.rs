@@ -34,11 +34,11 @@ use super::{
         format_config_validation_issues,
     },
     tools::{
-        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, ToolConfig,
-        WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV, WEB_SEARCH_FIRECRAWL_API_KEY_ENV,
-        WEB_SEARCH_JINA_API_KEY_ENV, WEB_SEARCH_JINA_AUTH_TOKEN_ENV,
-        WEB_SEARCH_PERPLEXITY_API_KEY_ENV, WEB_SEARCH_PROVIDER_VALID_VALUES,
-        WEB_SEARCH_TAVILY_API_KEY_ENV,
+        DEFAULT_WEB_SEARCH_PROVIDER, ExternalSkillsConfig, RuntimePluginsConfig, ToolConfig,
+        WEB_SEARCH_BRAVE_API_KEY_ENV, WEB_SEARCH_EXA_API_KEY_ENV,
+        WEB_SEARCH_FIRECRAWL_API_KEY_ENV, WEB_SEARCH_JINA_API_KEY_ENV,
+        WEB_SEARCH_JINA_AUTH_TOKEN_ENV, WEB_SEARCH_PERPLEXITY_API_KEY_ENV,
+        WEB_SEARCH_PROVIDER_VALID_VALUES, WEB_SEARCH_TAVILY_API_KEY_ENV,
     },
 };
 use crate::secrets::{canonicalize_env_secret_reference, secret_ref_env_name};
@@ -153,6 +153,8 @@ pub struct LoongClawConfig {
     pub tools: ToolConfig,
     #[serde(default)]
     pub external_skills: ExternalSkillsConfig,
+    #[serde(default)]
+    pub runtime_plugins: RuntimePluginsConfig,
     #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
@@ -1551,6 +1553,7 @@ impl LoongClawConfig {
         issues.extend(self.feishu_integration.validate());
         issues.extend(self.memory.validate());
         issues.extend(self.tools.validate());
+        issues.extend(self.runtime_plugins.validate());
         issues
     }
 

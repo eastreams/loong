@@ -193,6 +193,7 @@ pub async fn run_doctor_cli(options: DoctorCommandOptions) -> CliResult<()> {
         "create tool file root",
     ));
     checks.extend(collect_browser_companion_doctor_checks(&config).await);
+    checks.extend(collect_runtime_plugins_doctor_checks(&config));
 
     checks.extend(check_feishu_integration(&config, options.fix, &mut fixes));
     let channel_inventory = mvp::channel::channel_inventory(&config);
@@ -333,6 +334,96 @@ fn collect_channel_surface_checks(inventory: &mvp::channel::ChannelInventory) ->
 
     checks.extend(snapshot_checks);
     checks.extend(discovery_checks);
+
+    checks
+}
+
+fn collect_runtime_plugins_doctor_checks(
+    config: &mvp::config::LoongClawConfig,
+) -> Vec<DoctorCheck> {
+    let state = crate::collect_runtime_snapshot_runtime_plugins_state(config);
+    let runtime_level = if !state.enabled || state.scanned_root_count == 0 {
+        DoctorCheckLevel::Warn
+    } else {
+        DoctorCheckLevel::Pass
+    };
+    let mut checks = vec![DoctorCheck {
+        name: "runtime plugins runtime".to_owned(),
+        level: runtime_level,
+        detail: format!(
+            "enabled={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={}",
+            state.enabled,
+            doctor_render_string_list(&state.supported_bridges),
+            doctor_render_string_list(&state.supported_adapter_families),
+            doctor_render_string_list(&state.roots),
+            state.scanned_root_count,
+        ),
+    }];
+
+    if !state.enabled {
+        return checks;
+    }
+
+    let inventory_level = match state.inventory_status {
+        crate::RuntimeSnapshotInventoryStatus::Error => DoctorCheckLevel::Fail,
+        crate::RuntimeSnapshotInventoryStatus::Disabled => DoctorCheckLevel::Warn,
+        crate::RuntimeSnapshotInventoryStatus::Ok => {
+            let zero_roots_scanned = state.scanned_root_count == 0;
+            let has_setup_warnings = state.setup_incomplete_plugin_count > 0;
+            let has_blocked_plugins = state.blocked_plugin_count > 0;
+            if zero_roots_scanned || has_setup_warnings || has_blocked_plugins {
+                DoctorCheckLevel::Warn
+            } else {
+                DoctorCheckLevel::Pass
+            }
+        }
+    };
+    let inventory_detail = if let Some(error) = state.inventory_error.as_deref() {
+        format!(
+            "inventory_status={} error={error}",
+            state.inventory_status.as_str()
+        )
+    } else {
+        let blocked_ids = state
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.status.starts_with("blocked_"))
+            .map(|plugin| plugin.plugin_id.as_str())
+            .collect::<Vec<_>>();
+        let setup_incomplete_ids = state
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.status == "setup_incomplete")
+            .map(|plugin| plugin.plugin_id.as_str())
+            .collect::<Vec<_>>();
+        format!(
+            "inventory_status={} readiness_evaluation={} discovered={} translated={} ready={} setup_incomplete={} blocked={} blocked_ids={} setup_incomplete_ids={}",
+            state.inventory_status.as_str(),
+            state.readiness_evaluation,
+            state.discovered_plugin_count,
+            state.translated_plugin_count,
+            state.ready_plugin_count,
+            state.setup_incomplete_plugin_count,
+            state.blocked_plugin_count,
+            doctor_render_string_list(
+                &blocked_ids
+                    .iter()
+                    .map(|id| (*id).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+            doctor_render_string_list(
+                &setup_incomplete_ids
+                    .iter()
+                    .map(|id| (*id).to_owned())
+                    .collect::<Vec<_>>(),
+            ),
+        )
+    };
+    checks.push(DoctorCheck {
+        name: "runtime plugins inventory".to_owned(),
+        level: inventory_level,
+        detail: inventory_detail,
+    });
 
     checks
 }
@@ -2035,6 +2126,14 @@ fn doctor_plugin_bridge_account_summaries(
     summaries
 }
 
+fn doctor_render_string_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "-".to_owned()
+    } else {
+        values.join(",")
+    }
+}
+
 #[cfg(test)]
 fn build_doctor_next_steps(
     checks: &[DoctorCheck],
@@ -2285,6 +2384,52 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
             &mut steps,
             format!(
                 "Keep using the built-in browser lane, or disable `tools.browser_companion.enabled` until the managed companion runtime is ready, then re-run: {rerun_command}"
+            ),
+        );
+    }
+
+    let runtime_snapshot_json_command = format!(
+        "{} runtime-snapshot --json --config {}",
+        mvp::config::CLI_COMMAND_NAME,
+        crate::cli_handoff::shell_quote_argument(&config_path_display),
+    );
+    if checks.iter().any(|check| {
+        check.name == "runtime plugins runtime" && check.level != DoctorCheckLevel::Pass
+    }) {
+        let runtime_plugins_disabled = checks.iter().any(|check| {
+            check.name == "runtime plugins runtime" && check.detail.contains("enabled=false")
+        });
+        if runtime_plugins_disabled {
+            push_unique_step(
+                &mut steps,
+                format!(
+                    "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: {rerun_command}"
+                ),
+            );
+        } else {
+            push_unique_step(
+                &mut steps,
+                format!(
+                    "Review runtime plugin roots and support policy in config, then re-run diagnostics: {rerun_command}"
+                ),
+            );
+            push_unique_step(
+                &mut steps,
+                format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+            );
+        }
+    }
+    if checks.iter().any(|check| {
+        check.name == "runtime plugins inventory" && check.level != DoctorCheckLevel::Pass
+    }) {
+        push_unique_step(
+            &mut steps,
+            format!("Inspect runtime plugin inventory: {runtime_snapshot_json_command}"),
+        );
+        push_unique_step(
+            &mut steps,
+            format!(
+                "Review [runtime_plugins].roots, [runtime_plugins].supported_bridges, [runtime_plugins].supported_adapter_families, and package manifests, then re-run diagnostics: {rerun_command}"
             ),
         );
     }
@@ -2809,6 +2954,14 @@ mod tests {
         ));
         std::fs::create_dir_all(&temp_dir).expect("create browser companion temp dir");
         temp_dir
+    }
+
+    fn runtime_plugins_test_config(root: &Path, enabled: bool) -> mvp::config::LoongClawConfig {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.tools.file_root = Some(root.display().to_string());
+        config.runtime_plugins.enabled = enabled;
+        config.runtime_plugins.roots = vec![root.join("runtime-plugins").display().to_string()];
+        config
     }
 
     fn sample_audit_event(
@@ -5937,6 +6090,76 @@ mod tests {
                 step == "Optional browser preview: loong skills enable-browser-preview --config '/tmp/loongclaw.toml'"
             }),
             "doctor should keep generic browser preview behind personalization when only three healthy-path actions are shown: {next_steps:#?}"
+        );
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_warns_when_runtime_is_disabled() {
+        let root = browser_companion_temp_dir("runtime-plugins-disabled");
+        let config = runtime_plugins_test_config(&root, false);
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].name, "runtime plugins runtime");
+        assert_eq!(checks[0].level, DoctorCheckLevel::Warn);
+        assert!(checks[0].detail.contains("enabled=false"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_warns_when_no_runtime_roots_are_scanned() {
+        let root = browser_companion_temp_dir("runtime-plugins-zero-roots");
+        let mut config = runtime_plugins_test_config(&root, true);
+        config.runtime_plugins.roots = vec!["   ".to_owned()];
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "runtime plugins runtime"
+                    && check.level == DoctorCheckLevel::Warn
+                    && check.detail.contains("enabled=true")
+                    && check.detail.contains("scanned_roots=0")
+            }),
+            "runtime plugins runtime should warn when no usable roots can be scanned: {checks:#?}"
+        );
+        assert!(
+            checks.iter().any(|check| {
+                check.name == "runtime plugins inventory"
+                    && check.level == DoctorCheckLevel::Fail
+                    && check.detail.contains("inventory_status=error")
+            }),
+            "runtime plugins inventory should fail when roots resolve to nothing: {checks:#?}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn build_doctor_next_steps_guides_runtime_plugin_enablement_when_disabled() {
+        let checks = vec![DoctorCheck {
+            name: "runtime plugins runtime".to_owned(),
+            level: DoctorCheckLevel::Warn,
+            detail: "enabled=false supported_bridges=- supported_adapter_families=- roots=/tmp/runtime-plugins scanned_roots=0".to_owned(),
+        }];
+        let config = mvp::config::LoongClawConfig::default();
+
+        let next_steps =
+            build_doctor_next_steps(&checks, Path::new("/tmp/loongclaw.toml"), &config, false);
+
+        assert!(
+            next_steps.iter().any(|step| {
+                step == "Enable runtime plugins by setting [runtime_plugins].enabled = true, then re-run diagnostics: loong doctor --config '/tmp/loongclaw.toml'"
+            }),
+            "doctor should surface an explicit runtime-plugin enablement step: {next_steps:#?}"
+        );
+        assert!(
+            next_steps
+                .iter()
+                .all(|step| { !step.starts_with("Inspect runtime plugin inventory:") }),
+            "disabled runtime plugins should not suggest inventory inspection before enablement: {next_steps:#?}"
         );
     }
 }

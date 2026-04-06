@@ -101,6 +101,7 @@ impl GatewayControlAppState {
                 capability_snapshot_sha256: String::new(),
                 capability_snapshot: String::new(),
             },
+            runtime_plugins: json!({}),
             external_skills: json!({}),
         };
         Self {

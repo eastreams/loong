@@ -221,6 +221,7 @@ pub struct GatewayRuntimeSnapshotReadModel {
     pub channels: GatewayRuntimeSnapshotChannelsReadModel,
     pub tool_runtime: Value,
     pub tools: GatewayRuntimeSnapshotToolsReadModel,
+    pub runtime_plugins: Value,
     pub external_skills: Value,
 }
 
@@ -403,6 +404,7 @@ pub fn build_runtime_snapshot_read_model(
         capability_snapshot_sha256,
         capability_snapshot,
     };
+    let runtime_plugins = crate::runtime_snapshot_runtime_plugins_json(&snapshot.runtime_plugins);
     let external_skills = crate::runtime_snapshot_external_skills_json(&snapshot.external_skills);
 
     GatewayRuntimeSnapshotReadModel {
@@ -415,6 +417,7 @@ pub fn build_runtime_snapshot_read_model(
         channels,
         tool_runtime,
         tools,
+        runtime_plugins,
         external_skills,
     }
 }

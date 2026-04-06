@@ -3,6 +3,7 @@ use std::{
     path::PathBuf,
 };
 
+use loongclaw_kernel::{BridgeSupportMatrix, PluginBridgeKind};
 use serde::{Deserialize, Serialize};
 
 use super::shared::{
@@ -34,6 +35,15 @@ pub(crate) const MIN_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 256;
 pub const MAX_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 100_000;
 pub(crate) const MIN_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 1_024;
 pub const MAX_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 500_000;
+pub(crate) const RUNTIME_PLUGIN_SUPPORTED_BRIDGE_LABELS: &[&str] = &[
+    "http_json",
+    "process_stdio",
+    "native_ffi",
+    "wasm_component",
+    "mcp_server",
+    "acp_bridge",
+    "acp_runtime",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolConfig {
@@ -507,6 +517,18 @@ pub struct ExternalSkillsConfig {
     pub auto_expose_installed: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RuntimePluginsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub roots: Vec<String>,
+    #[serde(default)]
+    pub supported_bridges: Vec<String>,
+    #[serde(default)]
+    pub supported_adapter_families: Vec<String>,
+}
+
 impl Default for ToolConfig {
     fn default() -> Self {
         Self {
@@ -947,6 +969,180 @@ impl ExternalSkillsConfig {
 
     pub fn resolved_install_root(&self) -> Option<PathBuf> {
         self.install_root.as_deref().map(expand_path)
+    }
+}
+
+impl RuntimePluginsConfig {
+    pub fn resolved_roots(&self) -> Vec<PathBuf> {
+        self.roots
+            .iter()
+            .map(String::as_str)
+            .map(str::trim)
+            .filter(|root| !root.is_empty())
+            .map(expand_path)
+            .collect()
+    }
+
+    pub fn resolved_supported_bridges(&self) -> Result<Vec<PluginBridgeKind>, String> {
+        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
+        if !invalid_bridge_labels.is_empty() {
+            return Err(format!(
+                "runtime_plugins.supported_bridges contains invalid bridge labels: {}",
+                invalid_bridge_labels.join(", ")
+            ));
+        }
+
+        let mut bridge_kinds = BTreeSet::new();
+        for raw_bridge in &self.supported_bridges {
+            let trimmed_bridge = raw_bridge.trim();
+            if trimmed_bridge.is_empty() {
+                continue;
+            }
+
+            let Some(bridge_kind) = PluginBridgeKind::parse_label(trimmed_bridge) else {
+                continue;
+            };
+            if bridge_kind == PluginBridgeKind::Unknown {
+                continue;
+            }
+
+            bridge_kinds.insert(bridge_kind);
+        }
+
+        Ok(bridge_kinds.into_iter().collect())
+    }
+
+    pub fn normalized_supported_adapter_families(&self) -> Vec<String> {
+        let mut families = BTreeSet::new();
+        for raw_family in &self.supported_adapter_families {
+            let trimmed_family = raw_family.trim();
+            if trimmed_family.is_empty() {
+                continue;
+            }
+
+            families.insert(trimmed_family.to_owned());
+        }
+
+        families.into_iter().collect()
+    }
+
+    pub fn readiness_evaluation_label(&self) -> &'static str {
+        let bridge_policy_configured = self
+            .supported_bridges
+            .iter()
+            .any(|raw_bridge| !raw_bridge.trim().is_empty());
+        let adapter_policy_configured = self
+            .supported_adapter_families
+            .iter()
+            .any(|raw_family| !raw_family.trim().is_empty());
+
+        if bridge_policy_configured || adapter_policy_configured {
+            return "configured_bridge_support_matrix";
+        }
+
+        "default_bridge_support_matrix"
+    }
+
+    pub fn resolved_bridge_support_matrix(&self) -> Result<BridgeSupportMatrix, String> {
+        let default_matrix = BridgeSupportMatrix::default();
+        let configured_bridge_kinds = self
+            .resolved_supported_bridges()?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+
+        let supported_bridges = if configured_bridge_kinds.is_empty() {
+            default_matrix.supported_bridges
+        } else {
+            configured_bridge_kinds
+        };
+        let supported_adapter_families = self
+            .normalized_supported_adapter_families()
+            .into_iter()
+            .collect();
+
+        Ok(BridgeSupportMatrix {
+            supported_bridges,
+            supported_adapter_families,
+            supported_compatibility_modes: default_matrix.supported_compatibility_modes,
+            supported_compatibility_shims: default_matrix.supported_compatibility_shims,
+            supported_compatibility_shim_profiles: default_matrix
+                .supported_compatibility_shim_profiles,
+        })
+    }
+
+    pub(super) fn validate(&self) -> Vec<ConfigValidationIssue> {
+        let mut issues = Vec::new();
+
+        let has_non_empty_root = self.roots.iter().any(|root| !root.trim().is_empty());
+        if self.enabled && !has_non_empty_root {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert(
+                "invalid_reason".to_owned(),
+                "runtime_plugins.enabled requires at least one non-empty root".to_owned(),
+            );
+            extra_message_variables.insert(
+                "suggested_fix".to_owned(),
+                "set runtime_plugins.roots to one or more plugin discovery directories".to_owned(),
+            );
+            issues.push(ConfigValidationIssue {
+                severity: super::shared::ConfigValidationSeverity::Error,
+                code: super::shared::ConfigValidationCode::InvalidValue,
+                field_path: "runtime_plugins.roots".to_owned(),
+                inline_field_path: "runtime_plugins.roots".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: None,
+                extra_message_variables,
+            });
+        }
+
+        let invalid_bridge_labels = self.invalid_supported_bridge_labels();
+        if !invalid_bridge_labels.is_empty() {
+            let mut extra_message_variables = BTreeMap::new();
+            extra_message_variables.insert(
+                "invalid_reason".to_owned(),
+                format!(
+                    "unsupported bridge labels: {}",
+                    invalid_bridge_labels.join(", ")
+                ),
+            );
+            extra_message_variables.insert(
+                "suggested_fix".to_owned(),
+                format!(
+                    "use only: {}",
+                    RUNTIME_PLUGIN_SUPPORTED_BRIDGE_LABELS.join(", ")
+                ),
+            );
+            issues.push(ConfigValidationIssue {
+                severity: super::shared::ConfigValidationSeverity::Error,
+                code: super::shared::ConfigValidationCode::InvalidValue,
+                field_path: "runtime_plugins.supported_bridges".to_owned(),
+                inline_field_path: "runtime_plugins.supported_bridges".to_owned(),
+                example_env_name: String::new(),
+                suggested_env_name: None,
+                extra_message_variables,
+            });
+        }
+
+        issues
+    }
+
+    fn invalid_supported_bridge_labels(&self) -> Vec<String> {
+        let mut invalid_labels = BTreeSet::new();
+        for raw_bridge in &self.supported_bridges {
+            let trimmed_bridge = raw_bridge.trim();
+            if trimmed_bridge.is_empty() {
+                continue;
+            }
+
+            let parsed_bridge_kind = PluginBridgeKind::parse_label(trimmed_bridge);
+            let bridge_kind_is_invalid = parsed_bridge_kind.is_none()
+                || parsed_bridge_kind == Some(PluginBridgeKind::Unknown);
+            if bridge_kind_is_invalid {
+                invalid_labels.insert(trimmed_bridge.to_owned());
+            }
+        }
+
+        invalid_labels.into_iter().collect()
     }
 }
 
@@ -1844,6 +2040,140 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .resolved_install_root()
                 .expect("install root should resolve")
                 .ends_with("demo-skills")
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_defaults_to_safe_off_mode() {
+        let config = RuntimePluginsConfig::default();
+        assert!(!config.enabled);
+        assert!(config.roots.is_empty());
+        assert!(config.supported_bridges.is_empty());
+        assert!(config.supported_adapter_families.is_empty());
+        assert_eq!(
+            config.readiness_evaluation_label(),
+            "default_bridge_support_matrix"
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_resolved_roots_expand_user_home() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["~/runtime-plugins".to_owned()],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let roots = config.resolved_roots();
+        assert_eq!(roots.len(), 1);
+        assert!(
+            roots[0].ends_with("runtime-plugins"),
+            "expected expanded plugin root to preserve tail path"
+        );
+        assert!(roots[0].is_absolute());
+        assert!(
+            !roots[0].to_string_lossy().starts_with("~/"),
+            "expected `~` prefix to be expanded"
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_resolved_roots_skip_blank_entries() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec![
+                "   ".to_owned(),
+                "runtime-plugins".to_owned(),
+                "".to_owned(),
+            ],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let roots = config.resolved_roots();
+
+        assert_eq!(roots, vec![PathBuf::from("runtime-plugins")]);
+    }
+
+    #[test]
+    fn runtime_plugins_bridge_support_matrix_uses_configured_policy() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["~/runtime-plugins".to_owned()],
+            supported_bridges: vec![
+                " http ".to_owned(),
+                "acpx".to_owned(),
+                "http_json".to_owned(),
+            ],
+            supported_adapter_families: vec![
+                " web-search ".to_owned(),
+                "python-stdio-adapter".to_owned(),
+                "web-search".to_owned(),
+            ],
+        };
+
+        let matrix = config
+            .resolved_bridge_support_matrix()
+            .expect("configured runtime plugin bridge policy should resolve");
+
+        assert_eq!(
+            config.readiness_evaluation_label(),
+            "configured_bridge_support_matrix"
+        );
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::HttpJson)
+        );
+        assert!(
+            matrix
+                .supported_bridges
+                .contains(&PluginBridgeKind::AcpRuntime)
+        );
+        assert!(
+            matrix
+                .supported_adapter_families
+                .contains("python-stdio-adapter")
+        );
+        assert!(matrix.supported_adapter_families.contains("web-search"));
+    }
+
+    #[test]
+    fn runtime_plugins_validate_rejects_invalid_bridge_labels() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["/tmp/runtime-plugins".to_owned()],
+            supported_bridges: vec!["bogus".to_owned(), "unknown".to_owned()],
+            supported_adapter_families: Vec::new(),
+        };
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "runtime_plugins.supported_bridges"),
+            "expected runtime_plugins.supported_bridges validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn runtime_plugins_validate_rejects_enabled_mode_without_roots() {
+        let config = RuntimePluginsConfig {
+            enabled: true,
+            roots: vec!["   ".to_owned()],
+            supported_bridges: Vec::new(),
+            supported_adapter_families: Vec::new(),
+        };
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "runtime_plugins.roots"),
+            "expected runtime_plugins.roots validation issue, got {issues:?}"
         );
     }
 

@@ -19,7 +19,8 @@ use std::{
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use kernel::{
     BootstrapTaskStatus, Capability, ConnectorCommand, FixedClock, InMemoryAuditSink,
-    PluginActivationStatus, TaskIntent, ToolCoreOutcome, ToolCoreRequest,
+    PluginActivationStatus, PluginScanner, PluginSetupReadinessContext, PluginTranslator,
+    TaskIntent, ToolCoreOutcome, ToolCoreRequest, evaluate_plugin_setup_requirements,
 };
 use loongclaw_contracts::SecretRef;
 use serde::{Deserialize, Serialize};
@@ -2296,6 +2297,7 @@ pub struct RuntimeSnapshotCliState {
     pub visible_tool_names: Vec<String>,
     pub capability_snapshot: String,
     pub capability_snapshot_sha256: String,
+    pub runtime_plugins: RuntimeSnapshotRuntimePluginsState,
     pub external_skills: RuntimeSnapshotExternalSkillsState,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
@@ -2361,6 +2363,46 @@ pub struct RuntimeSnapshotExternalSkillsState {
     pub shadowed_skill_count: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotRuntimePluginsState {
+    pub enabled: bool,
+    pub roots: Vec<String>,
+    pub supported_bridges: Vec<String>,
+    pub supported_adapter_families: Vec<String>,
+    pub inventory_status: RuntimeSnapshotInventoryStatus,
+    pub inventory_error: Option<String>,
+    pub readiness_evaluation: String,
+    pub scanned_root_count: usize,
+    pub scanned_file_count: usize,
+    pub discovered_plugin_count: usize,
+    pub translated_plugin_count: usize,
+    pub ready_plugin_count: usize,
+    pub setup_incomplete_plugin_count: usize,
+    pub blocked_plugin_count: usize,
+    pub plugins: Vec<RuntimeSnapshotRuntimePluginState>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSnapshotRuntimePluginState {
+    pub plugin_id: String,
+    pub provider_id: String,
+    pub connector_name: String,
+    pub source_path: String,
+    pub source_kind: String,
+    pub package_root: String,
+    pub package_manifest_path: Option<String>,
+    pub bridge_kind: String,
+    pub adapter_family: String,
+    pub setup_mode: Option<String>,
+    pub setup_surface: Option<String>,
+    pub slot_claims: Vec<String>,
+    pub conflicting_slot_claims: Vec<String>,
+    pub status: String,
+    pub reason: String,
+    pub missing_required_env_vars: Vec<String>,
+    pub missing_required_config_keys: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSnapshotArtifactMetadata {
     pub created_at: String,
@@ -2386,6 +2428,8 @@ pub struct RuntimeSnapshotRestoreSpec {
     pub acp: mvp::config::AcpConfig,
     pub tools: mvp::config::ToolConfig,
     pub external_skills: mvp::config::ExternalSkillsConfig,
+    #[serde(default)]
+    pub runtime_plugins: mvp::config::RuntimePluginsConfig,
     pub managed_skills: RuntimeSnapshotRestoreManagedSkillsSpec,
     pub warnings: Vec<String>,
 }
@@ -2431,6 +2475,7 @@ pub struct RuntimeSnapshotArtifactDocument {
     pub channels: Value,
     pub tool_runtime: Value,
     pub tools: Value,
+    pub runtime_plugins: Value,
     pub external_skills: Value,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
 }
@@ -2508,6 +2553,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
     let capability_snapshot = mvp::tools::capability_snapshot_with_config(&snapshot_tool_runtime);
     let capability_snapshot_sha256 =
         runtime_snapshot_tool_digest(&visible_tool_names, &capability_snapshot)?;
+    let runtime_plugins = collect_runtime_snapshot_runtime_plugins_state(config);
     let restore_spec = build_runtime_snapshot_restore_spec(config, &external_skills);
 
     Ok(RuntimeSnapshotCliState {
@@ -2523,6 +2569,7 @@ fn collect_runtime_snapshot_cli_state_from_parts(
         visible_tool_names,
         capability_snapshot,
         capability_snapshot_sha256,
+        runtime_plugins,
         external_skills,
         restore_spec,
     })
@@ -2699,6 +2746,295 @@ fn collect_runtime_snapshot_external_skills_state(
     }
 }
 
+pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
+    config: &mvp::config::LoongClawConfig,
+) -> RuntimeSnapshotRuntimePluginsState {
+    let readiness_evaluation = config
+        .runtime_plugins
+        .readiness_evaluation_label()
+        .to_owned();
+    let roots = config
+        .runtime_plugins
+        .resolved_roots()
+        .into_iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>();
+    let supported_bridges = config
+        .runtime_plugins
+        .resolved_supported_bridges()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|bridge_kind| bridge_kind.as_str().to_owned())
+        .collect::<Vec<_>>();
+    let supported_adapter_families = config
+        .runtime_plugins
+        .normalized_supported_adapter_families();
+
+    if !config.runtime_plugins.enabled {
+        return RuntimeSnapshotRuntimePluginsState {
+            enabled: false,
+            roots,
+            supported_bridges,
+            supported_adapter_families,
+            inventory_status: RuntimeSnapshotInventoryStatus::Disabled,
+            inventory_error: None,
+            readiness_evaluation,
+            scanned_root_count: 0,
+            scanned_file_count: 0,
+            discovered_plugin_count: 0,
+            translated_plugin_count: 0,
+            ready_plugin_count: 0,
+            setup_incomplete_plugin_count: 0,
+            blocked_plugin_count: 0,
+            plugins: Vec::new(),
+        };
+    }
+
+    let resolved_roots = config.runtime_plugins.resolved_roots();
+    if resolved_roots.is_empty() {
+        return RuntimeSnapshotRuntimePluginsState {
+            enabled: true,
+            roots,
+            supported_bridges,
+            supported_adapter_families,
+            inventory_status: RuntimeSnapshotInventoryStatus::Error,
+            inventory_error: Some(
+                "runtime_plugins.enabled=true but no runtime plugin roots are configured"
+                    .to_owned(),
+            ),
+            readiness_evaluation,
+            scanned_root_count: 0,
+            scanned_file_count: 0,
+            discovered_plugin_count: 0,
+            translated_plugin_count: 0,
+            ready_plugin_count: 0,
+            setup_incomplete_plugin_count: 0,
+            blocked_plugin_count: 0,
+            plugins: Vec::new(),
+        };
+    }
+
+    let scanner = PluginScanner::new();
+    let mut combined = kernel::PluginScanReport::default();
+    let mut descriptors = Vec::new();
+    for root in &resolved_roots {
+        let report = match scanner.scan_path(root) {
+            Ok(report) => report,
+            Err(error) => {
+                return RuntimeSnapshotRuntimePluginsState {
+                    enabled: true,
+                    roots,
+                    supported_bridges,
+                    supported_adapter_families,
+                    inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                    inventory_error: Some(format!(
+                        "runtime plugin scan failed for {}: {error}",
+                        root.display()
+                    )),
+                    readiness_evaluation,
+                    scanned_root_count: 0,
+                    scanned_file_count: 0,
+                    discovered_plugin_count: 0,
+                    translated_plugin_count: 0,
+                    ready_plugin_count: 0,
+                    setup_incomplete_plugin_count: 0,
+                    blocked_plugin_count: 0,
+                    plugins: Vec::new(),
+                };
+            }
+        };
+        combined.scanned_files += report.scanned_files;
+        combined.matched_plugins += report.matched_plugins;
+        descriptors.extend(report.descriptors);
+    }
+    combined.descriptors = descriptors;
+
+    let bridge_matrix = match config.runtime_plugins.resolved_bridge_support_matrix() {
+        Ok(matrix) => matrix,
+        Err(error) => {
+            return RuntimeSnapshotRuntimePluginsState {
+                enabled: true,
+                roots,
+                supported_bridges,
+                supported_adapter_families,
+                inventory_status: RuntimeSnapshotInventoryStatus::Error,
+                inventory_error: Some(error),
+                readiness_evaluation,
+                scanned_root_count: resolved_roots.len(),
+                scanned_file_count: combined.scanned_files,
+                discovered_plugin_count: combined.matched_plugins,
+                translated_plugin_count: 0,
+                ready_plugin_count: 0,
+                setup_incomplete_plugin_count: 0,
+                blocked_plugin_count: 0,
+                plugins: Vec::new(),
+            };
+        }
+    };
+
+    let translator = PluginTranslator::new();
+    let translation = translator.translate_scan_report(&combined);
+    let readiness_context = runtime_plugin_setup_readiness_context(config);
+    let activation = translator.plan_activation(&translation, &bridge_matrix, &readiness_context);
+    let inventory_entries = activation.inventory_entries(&translation);
+    let inventory_by_key = inventory_entries
+        .into_iter()
+        .map(|entry| ((entry.source_path.clone(), entry.plugin_id.clone()), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    let plugins = translation
+        .entries
+        .iter()
+        .map(|entry| {
+            let entry_key = (entry.source_path.clone(), entry.plugin_id.clone());
+            let inventory_entry = inventory_by_key.get(&entry_key);
+            let setup_mode = entry
+                .setup
+                .as_ref()
+                .map(|setup| setup.mode.as_str().to_owned());
+            let setup_surface = entry.setup.as_ref().and_then(|setup| setup.surface.clone());
+            let setup_requirements = evaluate_plugin_setup_requirements(
+                entry
+                    .setup
+                    .as_ref()
+                    .map(|setup| setup.required_env_vars.as_slice())
+                    .unwrap_or(&[]),
+                entry
+                    .setup
+                    .as_ref()
+                    .map(|setup| setup.required_config_keys.as_slice())
+                    .unwrap_or(&[]),
+                &readiness_context,
+            );
+            let activation_status = inventory_entry.and_then(|item| item.activation_status);
+            let slot_claims = entry
+                .slot_claims
+                .iter()
+                .map(kernel::PluginSlotClaim::canonical_label)
+                .collect::<Vec<_>>();
+            let conflicting_slot_claims = if matches!(
+                activation_status,
+                Some(PluginActivationStatus::BlockedSlotClaimConflict)
+            ) {
+                slot_claims.clone()
+            } else {
+                Vec::new()
+            };
+            let status = activation_status
+                .map(runtime_plugin_activation_status)
+                .unwrap_or("unknown")
+                .to_owned();
+            let reason = inventory_entry
+                .and_then(|item| item.activation_reason.clone())
+                .unwrap_or_else(|| "-".to_owned());
+            let missing_required_env_vars = if matches!(
+                activation_status,
+                Some(PluginActivationStatus::SetupIncomplete)
+            ) {
+                setup_requirements.missing_required_env_vars
+            } else {
+                Vec::new()
+            };
+            let missing_required_config_keys = if matches!(
+                activation_status,
+                Some(PluginActivationStatus::SetupIncomplete)
+            ) {
+                setup_requirements.missing_required_config_keys
+            } else {
+                Vec::new()
+            };
+
+            RuntimeSnapshotRuntimePluginState {
+                plugin_id: entry.plugin_id.clone(),
+                provider_id: entry.provider_id.clone(),
+                connector_name: entry.connector_name.clone(),
+                source_path: entry.source_path.clone(),
+                source_kind: entry.source_kind.as_str().to_owned(),
+                package_root: entry.package_root.clone(),
+                package_manifest_path: entry.package_manifest_path.clone(),
+                bridge_kind: entry.runtime.bridge_kind.as_str().to_owned(),
+                adapter_family: entry.runtime.adapter_family.clone(),
+                setup_mode,
+                setup_surface,
+                slot_claims,
+                conflicting_slot_claims,
+                status,
+                reason,
+                missing_required_env_vars,
+                missing_required_config_keys,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    RuntimeSnapshotRuntimePluginsState {
+        enabled: true,
+        roots,
+        supported_bridges,
+        supported_adapter_families,
+        inventory_status: RuntimeSnapshotInventoryStatus::Ok,
+        inventory_error: None,
+        readiness_evaluation,
+        scanned_root_count: resolved_roots.len(),
+        scanned_file_count: combined.scanned_files,
+        discovered_plugin_count: combined.matched_plugins,
+        translated_plugin_count: translation.translated_plugins,
+        ready_plugin_count: activation.ready_plugins,
+        setup_incomplete_plugin_count: activation.setup_incomplete_plugins,
+        blocked_plugin_count: activation.blocked_plugins,
+        plugins,
+    }
+}
+
+fn runtime_plugin_setup_readiness_context(
+    config: &mvp::config::LoongClawConfig,
+) -> PluginSetupReadinessContext {
+    let verified_env_vars = std::env::vars_os()
+        .filter_map(|(key, value)| {
+            let value_string = value.to_string_lossy();
+            let trimmed_value = value_string.trim();
+            if trimmed_value.is_empty() {
+                return None;
+            }
+
+            Some(key.to_string_lossy().to_string())
+        })
+        .collect();
+    let mut verified_config_keys = BTreeSet::new();
+    if let Ok(value) = serde_json::to_value(config) {
+        collect_config_paths(&value, None, &mut verified_config_keys);
+    }
+
+    PluginSetupReadinessContext {
+        verified_env_vars,
+        verified_config_keys,
+    }
+}
+
+fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                let next_prefix = match prefix {
+                    Some(prefix) => format!("{prefix}.{key}"),
+                    None => key.clone(),
+                };
+                out.insert(next_prefix.clone());
+                collect_config_paths(child, Some(next_prefix.as_str()), out);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_config_paths(child, prefix, out);
+            }
+        }
+        _ => {
+            if let Some(prefix) = prefix {
+                out.insert(prefix.to_owned());
+            }
+        }
+    }
+}
+
 fn runtime_snapshot_effective_external_skills_policy(
     tool_runtime: &mvp::tools::runtime_config::ToolRuntimeConfig,
 ) -> Result<
@@ -2790,6 +3126,10 @@ fn json_array_len(value: Option<&Value>) -> usize {
     value.and_then(Value::as_array).map_or(0, Vec::len)
 }
 
+fn runtime_plugin_activation_status(status: PluginActivationStatus) -> &'static str {
+    status.as_str()
+}
+
 fn json_string_array_to_set(
     value: Option<&Value>,
     context: &str,
@@ -2828,6 +3168,7 @@ fn build_runtime_snapshot_restore_spec(
         acp: config.acp.clone(),
         tools: config.tools.clone(),
         external_skills: config.external_skills.clone(),
+        runtime_plugins: config.runtime_plugins.clone(),
         managed_skills: build_runtime_snapshot_restore_managed_skills_spec(
             external_skills,
             &mut warnings,
@@ -3466,6 +3807,10 @@ pub fn build_runtime_snapshot_artifact_json_payload(
             .cloned()
             .unwrap_or(Value::Null),
         tools: base_payload.get("tools").cloned().unwrap_or(Value::Null),
+        runtime_plugins: base_payload
+            .get("runtime_plugins")
+            .cloned()
+            .unwrap_or(Value::Null),
         external_skills: base_payload
             .get("external_skills")
             .cloned()
@@ -5615,6 +5960,58 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
         render_string_list(snapshot.visible_tool_names.iter().map(String::as_str))
     ));
     lines.push(format!(
+        "runtime_plugins inventory_status={} enabled={} readiness_evaluation={} supported_bridges={} supported_adapter_families={} roots={} scanned_roots={} scanned_files={} discovered={} translated={} ready={} setup_incomplete={} blocked={}",
+        snapshot.runtime_plugins.inventory_status.as_str(),
+        snapshot.runtime_plugins.enabled,
+        snapshot.runtime_plugins.readiness_evaluation,
+        render_string_list(snapshot.runtime_plugins.supported_bridges.iter().map(String::as_str)),
+        render_string_list(
+            snapshot
+                .runtime_plugins
+                .supported_adapter_families
+                .iter()
+                .map(String::as_str)
+        ),
+        render_string_list(snapshot.runtime_plugins.roots.iter().map(String::as_str)),
+        snapshot.runtime_plugins.scanned_root_count,
+        snapshot.runtime_plugins.scanned_file_count,
+        snapshot.runtime_plugins.discovered_plugin_count,
+        snapshot.runtime_plugins.translated_plugin_count,
+        snapshot.runtime_plugins.ready_plugin_count,
+        snapshot.runtime_plugins.setup_incomplete_plugin_count,
+        snapshot.runtime_plugins.blocked_plugin_count,
+    ));
+    if let Some(error) = snapshot.runtime_plugins.inventory_error.as_deref() {
+        lines.push(format!("  runtime_plugin_error {error}"));
+    }
+    for plugin in &snapshot.runtime_plugins.plugins {
+        let setup_mode = plugin.setup_mode.as_deref().unwrap_or("-");
+        let setup_surface = plugin.setup_surface.as_deref().unwrap_or("-");
+        let missing_required_env_vars =
+            render_string_list(plugin.missing_required_env_vars.iter().map(String::as_str));
+        let missing_required_config_keys = render_string_list(
+            plugin
+                .missing_required_config_keys
+                .iter()
+                .map(String::as_str),
+        );
+        lines.push(format!(
+            "  runtime_plugin {} provider={} connector={} bridge={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
+            plugin.plugin_id,
+            plugin.provider_id,
+            plugin.connector_name,
+            plugin.bridge_kind,
+            plugin.status,
+            setup_mode,
+            setup_surface,
+            plugin.reason,
+            missing_required_env_vars,
+            missing_required_config_keys,
+            render_string_list(plugin.slot_claims.iter().map(String::as_str)),
+            render_string_list(plugin.conflicting_slot_claims.iter().map(String::as_str)),
+        ));
+    }
+    lines.push(format!(
         "external_skills inventory_status={} override_active={} enabled={} require_download_approval={} auto_expose_installed={} install_root={} resolved_skills={} shadowed_skills={} inventory_error={}",
         snapshot.external_skills.inventory_status.as_str(),
         snapshot.external_skills.override_active,
@@ -5832,6 +6229,48 @@ fn runtime_snapshot_external_skills_json(snapshot: &RuntimeSnapshotExternalSkill
         "resolved_skill_count": snapshot.resolved_skill_count,
         "shadowed_skill_count": snapshot.shadowed_skill_count,
         "inventory": snapshot.inventory,
+    })
+}
+
+pub(crate) fn runtime_snapshot_runtime_plugins_json(
+    snapshot: &RuntimeSnapshotRuntimePluginsState,
+) -> Value {
+    json!({
+        "enabled": snapshot.enabled,
+        "roots": snapshot.roots,
+        "supported_bridges": snapshot.supported_bridges,
+        "supported_adapter_families": snapshot.supported_adapter_families,
+        "inventory_status": snapshot.inventory_status.as_str(),
+        "inventory_error": snapshot.inventory_error,
+        "readiness_evaluation": snapshot.readiness_evaluation,
+        "scanned_root_count": snapshot.scanned_root_count,
+        "scanned_file_count": snapshot.scanned_file_count,
+        "discovered_plugin_count": snapshot.discovered_plugin_count,
+        "translated_plugin_count": snapshot.translated_plugin_count,
+        "ready_plugin_count": snapshot.ready_plugin_count,
+        "setup_incomplete_plugin_count": snapshot.setup_incomplete_plugin_count,
+        "blocked_plugin_count": snapshot.blocked_plugin_count,
+        "plugins": snapshot.plugins.iter().map(|plugin| {
+            json!({
+                "plugin_id": plugin.plugin_id,
+                "provider_id": plugin.provider_id,
+                "connector_name": plugin.connector_name,
+                "source_path": plugin.source_path,
+                "source_kind": plugin.source_kind,
+                "package_root": plugin.package_root,
+                "package_manifest_path": plugin.package_manifest_path,
+                "bridge_kind": plugin.bridge_kind,
+                "adapter_family": plugin.adapter_family,
+                "setup_mode": plugin.setup_mode,
+                "setup_surface": plugin.setup_surface,
+                "slot_claims": plugin.slot_claims,
+                "conflicting_slot_claims": plugin.conflicting_slot_claims,
+                "status": plugin.status,
+                "reason": plugin.reason,
+                "missing_required_env_vars": plugin.missing_required_env_vars,
+                "missing_required_config_keys": plugin.missing_required_config_keys,
+            })
+        }).collect::<Vec<_>>(),
     })
 }
 

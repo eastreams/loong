@@ -55,6 +55,7 @@ fn runtime_snapshot_fixture(
             capability_snapshot_sha256: String::new(),
             capability_snapshot: String::new(),
         },
+        runtime_plugins: serde_json::json!({}),
         external_skills: serde_json::json!({}),
     }
 }
