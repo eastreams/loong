@@ -274,14 +274,18 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
         snapshot.inventory_status.as_str(),
         snapshot.enabled,
         snapshot.readiness_evaluation,
-        render_string_list(snapshot.supported_bridges.iter().map(String::as_str)),
-        render_string_list(
+        crate::render_line_safe_text_values(
+            snapshot.supported_bridges.iter().map(String::as_str),
+            ","
+        ),
+        crate::render_line_safe_text_values(
             snapshot
                 .supported_adapter_families
                 .iter()
-                .map(String::as_str)
+                .map(String::as_str),
+            ",",
         ),
-        render_string_list(snapshot.roots.iter().map(String::as_str)),
+        crate::render_line_safe_text_values(snapshot.roots.iter().map(String::as_str), ","),
         snapshot.scanned_root_count,
         snapshot.scanned_file_count,
         snapshot.discovered_plugin_count,
@@ -292,34 +296,59 @@ fn render_runtime_plugins_lines(snapshot: &RuntimeSnapshotRuntimePluginsState) -
     )];
 
     if let Some(error) = snapshot.inventory_error.as_deref() {
-        lines.push(format!("  runtime_plugin_error {error}"));
+        let rendered_error = crate::render_line_safe_text_value(error);
+
+        lines.push(format!("  runtime_plugin_error {rendered_error}"));
     }
 
     for plugin in &snapshot.plugins {
-        let setup_mode = plugin.setup_mode.as_deref().unwrap_or("-");
-        let setup_surface = plugin.setup_surface.as_deref().unwrap_or("-");
-        let missing_required_env_vars =
-            render_string_list(plugin.missing_required_env_vars.iter().map(String::as_str));
-        let missing_required_config_keys = render_string_list(
+        let plugin_id = crate::render_line_safe_text_value(&plugin.plugin_id);
+        let source_path = crate::render_line_safe_text_value(plugin.source_path.as_str());
+        let package_root = crate::render_line_safe_text_value(plugin.package_root.as_str());
+        let provider_id = crate::render_line_safe_text_value(&plugin.provider_id);
+        let connector_name = crate::render_line_safe_text_value(&plugin.connector_name);
+        let bridge_kind = crate::render_line_safe_text_value(&plugin.bridge_kind);
+        let adapter_family = crate::render_line_safe_text_value(&plugin.adapter_family);
+        let status = crate::render_line_safe_text_value(&plugin.status);
+        let setup_mode = crate::render_line_safe_optional_text_value(plugin.setup_mode.as_deref());
+        let setup_surface =
+            crate::render_line_safe_optional_text_value(plugin.setup_surface.as_deref());
+        let reason = crate::render_line_safe_text_value(&plugin.reason);
+        let missing_required_env_vars = crate::render_line_safe_text_values(
+            plugin.missing_required_env_vars.iter().map(String::as_str),
+            ",",
+        );
+        let missing_required_config_keys = crate::render_line_safe_text_values(
             plugin
                 .missing_required_config_keys
                 .iter()
                 .map(String::as_str),
+            ",",
         );
+        let slot_claims =
+            crate::render_line_safe_text_values(plugin.slot_claims.iter().map(String::as_str), ",");
+        let conflicting_slot_claims = crate::render_line_safe_text_values(
+            plugin.conflicting_slot_claims.iter().map(String::as_str),
+            ",",
+        );
+
         lines.push(format!(
-            "  runtime_plugin {} provider={} connector={} bridge={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
-            plugin.plugin_id,
-            plugin.provider_id,
-            plugin.connector_name,
-            plugin.bridge_kind,
-            plugin.status,
+            "  runtime_plugin {} source_path={} package_root={} provider={} connector={} bridge={} adapter_family={} status={} setup_mode={} setup_surface={} reason={} missing_env_vars={} missing_config_keys={} slot_claims={} conflicting_slot_claims={}",
+            plugin_id,
+            source_path,
+            package_root,
+            provider_id,
+            connector_name,
+            bridge_kind,
+            adapter_family,
+            status,
             setup_mode,
             setup_surface,
-            plugin.reason,
+            reason,
             missing_required_env_vars,
             missing_required_config_keys,
-            render_string_list(plugin.slot_claims.iter().map(String::as_str)),
-            render_string_list(plugin.conflicting_slot_claims.iter().map(String::as_str)),
+            slot_claims,
+            conflicting_slot_claims,
         ));
     }
 

@@ -379,9 +379,11 @@ fn collect_runtime_plugins_doctor_checks(
         }
     };
     let inventory_detail = if let Some(error) = state.inventory_error.as_deref() {
+        let rendered_error = crate::render_line_safe_text_value(error);
+
         format!(
-            "inventory_status={} error={error}",
-            state.inventory_status.as_str()
+            "inventory_status={} error={rendered_error}",
+            state.inventory_status.as_str(),
         )
     } else {
         let blocked_ids = state
@@ -2128,10 +2130,10 @@ fn doctor_plugin_bridge_account_summaries(
 
 fn doctor_render_string_list(values: &[String]) -> String {
     if values.is_empty() {
-        "-".to_owned()
-    } else {
-        values.join(",")
+        return "-".to_owned();
     }
+
+    crate::render_line_safe_text_values(values.iter().map(String::as_str), ",")
 }
 
 #[cfg(test)]
@@ -2396,9 +2398,7 @@ fn build_doctor_next_steps_with_channel_surfaces_and_path_env(
     if checks.iter().any(|check| {
         check.name == "runtime plugins runtime" && check.level != DoctorCheckLevel::Pass
     }) {
-        let runtime_plugins_disabled = checks.iter().any(|check| {
-            check.name == "runtime plugins runtime" && check.detail.contains("enabled=false")
-        });
+        let runtime_plugins_disabled = !config.runtime_plugins.enabled;
         if runtime_plugins_disabled {
             push_unique_step(
                 &mut steps,
@@ -6104,6 +6104,42 @@ mod tests {
         assert_eq!(checks[0].name, "runtime plugins runtime");
         assert_eq!(checks[0].level, DoctorCheckLevel::Warn);
         assert!(checks[0].detail.contains("enabled=false"));
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn collect_runtime_plugins_doctor_checks_escape_runtime_values() {
+        let root = browser_companion_temp_dir("runtime-plugins-escaped");
+        let mut config = runtime_plugins_test_config(&root, true);
+        let escaped_root = root.join("runtime\nplugins");
+
+        config.runtime_plugins.roots = vec![escaped_root.display().to_string()];
+        config.runtime_plugins.supported_adapter_families = vec!["web\nsearch".to_owned()];
+
+        let checks = collect_runtime_plugins_doctor_checks(&config);
+        let runtime_check = checks
+            .iter()
+            .find(|check| check.name == "runtime plugins runtime")
+            .expect("runtime plugins runtime check should exist");
+        let inventory_check = checks
+            .iter()
+            .find(|check| check.name == "runtime plugins inventory")
+            .expect("runtime plugins inventory check should exist");
+
+        assert!(
+            runtime_check
+                .detail
+                .contains("supported_adapter_families=\"web\\nsearch\"")
+        );
+        assert!(runtime_check.detail.contains("roots=\""));
+        assert!(runtime_check.detail.contains("\\nplugins\""));
+        assert!(
+            inventory_check
+                .detail
+                .contains("error=\"runtime plugin scan failed for ")
+        );
+        assert!(inventory_check.detail.contains("\\nplugins"));
 
         std::fs::remove_dir_all(&root).ok();
     }
