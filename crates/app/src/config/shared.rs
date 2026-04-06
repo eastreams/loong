@@ -1024,6 +1024,9 @@ mod legacy_home_tests {
     fn detect_legacy_home_no_warning_fresh_install() {
         let temp = tempfile::tempdir().unwrap();
         let result = detect_legacy_home(temp.path());
-        assert!(result.is_none(), "should not detect legacy on fresh install");
+        assert!(
+            result.is_none(),
+            "should not detect legacy on fresh install"
+        );
     }
 }
