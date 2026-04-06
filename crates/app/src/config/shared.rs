@@ -537,20 +537,17 @@ fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Prints a one-time migration hint to stderr when the legacy home directory
+/// Emits a one-time migration hint when the legacy home directory
 /// exists but the new one does not.
 pub(super) fn warn_legacy_home_once() {
     LEGACY_HOME_WARNING.call_once(|| {
         let user_home = get_user_home();
         if let Some(legacy) = detect_legacy_home(&user_home) {
             let new_home = user_home.join(".loong");
-            eprintln!(
-                "[loong] Legacy home directory {} found, but {} does not exist.",
+            tracing::warn!(
+                "Legacy home directory {} found, but {} does not exist. To migrate: mv {} {}",
                 legacy.display(),
                 new_home.display(),
-            );
-            eprintln!(
-                "[loong] To migrate: mv {} {}",
                 legacy.display(),
                 new_home.display(),
             );
