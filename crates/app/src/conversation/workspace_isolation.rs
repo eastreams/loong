@@ -384,6 +384,7 @@ mod tests {
             kernel_bound: false,
             identity: None,
             profile: None,
+            agent_role: None,
         };
         let clean_cleanup = cleanup_delegate_workspace_root(&clean_execution)
             .expect("cleanup clean worktree")
@@ -414,6 +415,7 @@ mod tests {
             kernel_bound: false,
             identity: None,
             profile: None,
+            agent_role: None,
         };
         let dirty_cleanup = cleanup_delegate_workspace_root(&dirty_execution)
             .expect("cleanup dirty worktree")

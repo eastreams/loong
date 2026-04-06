@@ -91,7 +91,7 @@ pub use session_history::{
     load_turn_checkpoint_event_summary,
 };
 pub use subagent::{
-    ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
+    AgentRole, ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
     ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
     ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
     ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentIsolation,

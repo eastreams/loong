@@ -2882,6 +2882,7 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
             role: crate::conversation::ConstrainedSubagentRole::Orchestrator,
             control_scope: crate::conversation::ConstrainedSubagentControlScope::Children,
         }),
+        agent_role: None,
     };
     let runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
         web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
@@ -3212,8 +3213,7 @@ async fn default_runtime_build_context_merges_delegate_runtime_contract_with_sys
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn default_runtime_build_context_includes_delegate_profile_guidance_before_runtime_contract()
-{
+async fn default_runtime_build_context_includes_delegate_role_guidance_before_runtime_contract() {
     let mut config = test_config();
     let child_session_id = seed_delegate_child_session_with_contract(
         &mut config,
@@ -3227,31 +3227,59 @@ async fn default_runtime_build_context_includes_delegate_profile_guidance_before
     let assembled = runtime
         .build_context(&config, &child_session_id, true, binding)
         .await
-        .expect("build context with delegate profile guidance");
+        .expect("build context with delegate role guidance");
 
     let merged = assembled.messages[0]["content"]
         .as_str()
         .expect("system prompt should stay string");
-    let profile_marker = "[delegate_child_profile]";
+    let role_marker = "[delegate_child_role]";
     let contract_marker = "[delegate_child_runtime_contract]";
-    let profile_index = merged
-        .find(profile_marker)
-        .expect("delegate profile marker should exist");
-    let contract_index = merged
-        .find(contract_marker)
-        .expect("delegate runtime contract marker should exist");
 
     assert!(
-        merged.contains("You are running with the `plan` delegate profile."),
-        "expected plan profile guidance, got: {merged}"
+        merged.contains("You are running with the `worker` agent role."),
+        "expected worker role guidance, got: {merged}"
     );
     assert!(
         merged.contains("- Turn findings into an execution plan."),
-        "expected plan guidance bullet, got: {merged}"
+        "expected worker guidance bullet, got: {merged}"
     );
     assert!(
-        profile_index < contract_index,
-        "expected delegate profile guidance to appear before runtime contract, got: {merged}"
+        merged.find(role_marker).expect("role marker")
+            < merged.find(contract_marker).expect("contract marker"),
+        "expected delegate role guidance before runtime contract, got: {merged}"
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_omits_delegate_role_guidance_when_child_has_no_profile_or_stored_role()
+ {
+    let mut config = test_config();
+    let child_session_id = seed_delegate_child_session_with_contract(
+        &mut config,
+        "system-prompt-no-role",
+        sample_delegate_runtime_narrowing(),
+        None,
+    );
+    let runtime = DefaultConversationRuntime::with_context_engine(StubSystemPromptAdditionEngine);
+    let binding = crate::conversation::ConversationRuntimeBinding::direct();
+
+    let assembled = runtime
+        .build_context(&config, &child_session_id, true, binding)
+        .await
+        .expect("build context without delegate role guidance");
+
+    let merged = assembled.messages[0]["content"]
+        .as_str()
+        .expect("system prompt should stay string");
+
+    assert!(
+        !merged.contains("[delegate_child_role]"),
+        "expected no delegate role guidance marker when role is unresolved, got: {merged}"
+    );
+    assert!(
+        merged.contains("[delegate_child_runtime_contract]"),
+        "expected runtime contract marker to still render, got: {merged}"
     );
 }
 
@@ -12760,6 +12788,7 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
         kernel_bound: false,
         identity: None,
         profile: None,
+        agent_role: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
         session_id: "child-session".to_owned(),
@@ -12930,6 +12959,7 @@ async fn continue_session_with_runtime_rejects_failed_delegate_child() {
         kernel_bound: false,
         identity: None,
         profile: None,
+        agent_role: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
         session_id: "child-session".to_owned(),
@@ -13002,6 +13032,7 @@ async fn continue_session_with_runtime_rejects_archived_delegate_child() {
         kernel_bound: false,
         identity: None,
         profile: None,
+        agent_role: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
         session_id: "child-session".to_owned(),
@@ -13083,6 +13114,7 @@ async fn continue_session_with_runtime_rejects_invalid_timeout_override() {
         kernel_bound: false,
         identity: None,
         profile: None,
+        agent_role: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
         session_id: "child-session".to_owned(),
@@ -13158,6 +13190,7 @@ async fn continue_session_with_runtime_caps_timeout_override_and_persists_contra
         kernel_bound: false,
         identity: None,
         profile: None,
+        agent_role: None,
     };
     repo.append_event(crate::session::repository::NewSessionEvent {
         session_id: "child-session".to_owned(),

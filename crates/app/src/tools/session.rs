@@ -17,9 +17,9 @@ use super::payload::{
 use crate::config::{SessionVisibility, ToolConfig};
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::{
-    ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentHandle,
-    ConstrainedSubagentIdentity, ConstrainedSubagentProfile, DelegateBuiltinProfile,
-    coordination_actions_for_subagent_handle, subagent_surface_fields,
+    AgentRole, ConstrainedSubagentContractView, ConstrainedSubagentExecution,
+    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentProfile,
+    DelegateBuiltinProfile, coordination_actions_for_subagent_handle, subagent_surface_fields,
 };
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -1747,6 +1747,8 @@ fn resolve_subagent_contract_for_session(
         return Ok(None);
     }
 
+    let lifecycle_profile = delegate_lifecycle.and_then(|lifecycle| lifecycle.profile);
+
     if let Some(contract) =
         delegate_lifecycle.and_then(resolve_subagent_contract_from_delegate_lifecycle)
     {
@@ -1769,13 +1771,18 @@ fn resolve_subagent_contract_for_session(
         }
     };
 
-    Ok(Some(attach_session_label_identity(
-        ConstrainedSubagentContractView::from_profile(ConstrainedSubagentProfile::for_child_depth(
-            depth,
-            tool_config.delegate.max_depth,
-        )),
-        session,
-    )))
+    let mut contract = ConstrainedSubagentContractView::from_profile(
+        ConstrainedSubagentProfile::for_child_depth(depth, tool_config.delegate.max_depth),
+    );
+    if let Some(agent_role) = resolve_agent_role_for_delegate_profile(
+        lifecycle_profile,
+        depth,
+        tool_config.delegate.max_depth,
+    ) {
+        contract = contract.with_agent_role(agent_role);
+    }
+
+    Ok(Some(attach_session_label_identity(contract, session)))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -1865,6 +1872,23 @@ fn is_expected_lineage_gap_error(error: &str) -> bool {
     let is_broken = error.starts_with("session_lineage_broken:");
     let is_cycle = error.starts_with("session_lineage_cycle_detected:");
     is_broken || is_cycle
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn delegate_builtin_profile_from_lifecycle_profile(
+    lifecycle_profile: Option<&str>,
+) -> Option<DelegateBuiltinProfile> {
+    lifecycle_profile.and_then(DelegateBuiltinProfile::from_lifecycle_profile)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_agent_role_for_delegate_profile(
+    lifecycle_profile: Option<&str>,
+    depth: usize,
+    max_depth: usize,
+) -> Option<AgentRole> {
+    delegate_builtin_profile_from_lifecycle_profile(lifecycle_profile)
+        .map(|profile| profile.resolved_agent_role(depth, max_depth))
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2797,6 +2821,26 @@ fn session_delegate_lifecycle_json(
     lifecycle: SessionDelegateLifecycleRecord,
     subagent_contract: Option<&ConstrainedSubagentContractView>,
 ) -> Value {
+    let lifecycle_profile = lifecycle.profile;
+    let execution = lifecycle.execution.map(|execution| {
+        let fallback_agent_role = subagent_contract
+            .and_then(ConstrainedSubagentContractView::resolved_agent_role)
+            .or_else(|| {
+                resolve_agent_role_for_delegate_profile(
+                    lifecycle_profile,
+                    execution.depth,
+                    execution.max_depth,
+                )
+            });
+
+        let execution = execution.with_resolved_profile();
+        if let Some(agent_role) = fallback_agent_role {
+            execution.with_resolved_agent_role(agent_role)
+        } else {
+            execution
+        }
+    });
+
     json!({
         "profile": lifecycle.profile,
         "mode": lifecycle.mode,
@@ -2805,9 +2849,7 @@ fn session_delegate_lifecycle_json(
         "started_at": lifecycle.started_at,
         "timeout_seconds": lifecycle.timeout_seconds,
         "contract": subagent_contract.cloned(),
-        "execution": lifecycle
-            .execution
-            .map(ConstrainedSubagentExecution::with_resolved_profile),
+        "execution": execution,
         "staleness": lifecycle.staleness.map(session_delegate_staleness_json),
         "cancellation": lifecycle
             .cancellation
@@ -2819,10 +2861,19 @@ fn session_delegate_lifecycle_json(
 fn resolve_subagent_contract_from_delegate_lifecycle(
     lifecycle: &SessionDelegateLifecycleRecord,
 ) -> Option<ConstrainedSubagentContractView> {
-    lifecycle
-        .execution
-        .as_ref()
-        .map(ConstrainedSubagentExecution::contract_view)
+    lifecycle.execution.as_ref().map(|execution| {
+        let mut contract = execution.contract_view();
+        if contract.agent_role.is_none()
+            && let Some(agent_role) = resolve_agent_role_for_delegate_profile(
+                lifecycle.profile,
+                execution.depth,
+                execution.max_depth,
+            )
+        {
+            contract = contract.with_agent_role(agent_role);
+        }
+        contract
+    })
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -6384,11 +6435,19 @@ mod tests {
             outcome.payload["delegate_lifecycle"]["execution"]["mode"],
             "async"
         );
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["agent_role"],
+            "explorer"
+        );
         assert_eq!(outcome.payload["subagent"]["session_id"], "child-session");
         assert_eq!(outcome.payload["subagent_identity"]["nickname"], "Child");
         assert_eq!(
             outcome.payload["subagent_contract"]["identity"]["nickname"],
             "Child"
+        );
+        assert_eq!(
+            outcome.payload["subagent_contract"]["agent_role"],
+            "explorer"
         );
         assert_eq!(
             outcome.payload["delegate_lifecycle"]["execution"]["depth"],
@@ -6656,6 +6715,108 @@ mod tests {
                 .expect("load legacy session")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn session_status_legacy_depth_fallback_preserves_profile_role() {
+        let config = isolated_memory_config("session-status-legacy-role");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({ "profile": "verify" }),
+        })
+        .expect("append legacy queued event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        let contract = &outcome.payload["subagent_contract"];
+        assert_eq!(contract["agent_role"], "verifier");
+        assert_eq!(contract["profile"]["role"], "leaf");
+    }
+
+    #[test]
+    fn session_status_legacy_execution_without_profile_keeps_agent_role_unknown() {
+        let config = isolated_memory_config("session-status-legacy-no-profile-role");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 2,
+                    "active_children": 0,
+                    "max_active_children": 3,
+                    "timeout_seconds": 60,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "kernel_bound": false
+                }
+            }),
+        })
+        .expect("append legacy queued event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert!(outcome.payload["delegate_lifecycle"]["profile"].is_null());
+        assert!(outcome.payload["delegate_lifecycle"]["execution"]["agent_role"].is_null());
+        assert!(outcome.payload["subagent_contract"]["agent_role"].is_null());
     }
 
     #[test]
