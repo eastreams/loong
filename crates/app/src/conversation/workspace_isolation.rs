@@ -247,6 +247,7 @@ fn discover_git_executable() -> Result<PathBuf, String> {
     Ok(discovered)
 }
 
+#[cfg(unix)]
 fn stable_command_search_path() -> OsString {
     let env_path = std::env::var_os("PATH");
     let fallback = env_path
@@ -269,14 +270,30 @@ fn stable_command_search_path() -> OsString {
     OsString::from(trimmed)
 }
 
+#[cfg(windows)]
+fn stable_command_search_path() -> OsString {
+    let env_path = std::env::var_os("PATH");
+    env_path
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            OsString::from(r"C:\Windows\System32;C:\Windows;C:\Program Files\Git\cmd")
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn git_hooks_null_device() -> &'static str {
+        if cfg!(windows) { "NUL" } else { "/dev/null" }
+    }
 
     fn init_git_repo(root: &Path) {
         std::fs::create_dir_all(root).expect("create git repo root");
         let root_string = root.display().to_string();
         let git_executable = resolve_git_executable().expect("resolve git executable");
+        let null_device = git_hooks_null_device();
+        let hooks_path = format!("core.hooksPath={null_device}");
 
         let init_status = Command::new(git_executable)
             .args(["-C", root_string.as_str(), "init", "-q"])
@@ -320,7 +337,7 @@ mod tests {
                 "-c",
                 "commit.gpgsign=false",
                 "-c",
-                "core.hooksPath=/dev/null",
+                hooks_path.as_str(),
                 "commit",
                 "--no-verify",
                 "-q",

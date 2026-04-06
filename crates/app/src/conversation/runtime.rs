@@ -10,7 +10,7 @@ use crate::CliResult;
 use crate::KernelContext;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::delegate_runtime::{
-    derive_subagent_profile_from_lineage, load_delegate_execution, resolve_delegate_child_contract,
+    derive_subagent_profile_from_lineage, resolve_delegate_child_contract,
 };
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
@@ -352,11 +352,68 @@ fn merge_effective_runtime_narrowing(
 }
 
 #[cfg(feature = "memory-sqlite")]
+struct DelegateAnchorSnapshot {
+    execution: Option<ConstrainedSubagentExecution>,
+    profile: Option<DelegateBuiltinProfile>,
+    workspace_root: Option<PathBuf>,
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_delegate_anchor_snapshot(
+    repo: &SessionRepository,
+    session_id: &str,
+) -> Result<DelegateAnchorSnapshot, String> {
+    let events = repo.list_delegate_lifecycle_events(session_id)?;
+    let mut execution = None;
+    let mut profile = None;
+    let mut workspace_root = None;
+
+    for event in events.into_iter().rev() {
+        let is_delegate_anchor = matches!(
+            event.event_kind.as_str(),
+            "delegate_queued" | "delegate_started"
+        );
+        if !is_delegate_anchor {
+            continue;
+        }
+
+        if execution.is_none() {
+            execution = super::subagent::ConstrainedSubagentExecution::from_event_payload(
+                &event.payload_json,
+            );
+        }
+        if profile.is_none() {
+            profile = super::subagent::ConstrainedSubagentExecution::profile_from_event_payload(
+                &event.payload_json,
+            );
+        }
+        if workspace_root.is_none() {
+            let event_workspace_root =
+                super::subagent::ConstrainedSubagentExecution::from_event_payload(
+                    &event.payload_json,
+                )
+                .and_then(|execution| execution.workspace_root);
+            workspace_root = event_workspace_root;
+        }
+        if execution.is_some() && profile.is_some() && workspace_root.is_some() {
+            break;
+        }
+    }
+
+    Ok(DelegateAnchorSnapshot {
+        execution,
+        profile,
+        workspace_root,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn load_delegate_execution_contract(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<ConstrainedSubagentExecution>, String> {
-    load_delegate_execution(repo, session_id)
+    let snapshot = load_delegate_anchor_snapshot(repo, session_id)?;
+    Ok(snapshot.execution)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -364,20 +421,8 @@ fn load_delegate_profile(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<DelegateBuiltinProfile>, String> {
-    let events = repo.list_delegate_lifecycle_events(session_id)?;
-    let profile = events.into_iter().rev().find_map(|event| {
-        let is_delegate_anchor = matches!(
-            event.event_kind.as_str(),
-            "delegate_queued" | "delegate_started"
-        );
-        if !is_delegate_anchor {
-            return None;
-        }
-        super::subagent::ConstrainedSubagentExecution::profile_from_event_payload(
-            &event.payload_json,
-        )
-    });
-    Ok(profile)
+    let snapshot = load_delegate_anchor_snapshot(repo, session_id)?;
+    Ok(snapshot.profile)
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -385,9 +430,8 @@ fn load_delegate_workspace_root(
     repo: &SessionRepository,
     session_id: &str,
 ) -> Result<Option<PathBuf>, String> {
-    let execution = load_delegate_execution(repo, session_id)?;
-    let workspace_root = execution.and_then(|execution| execution.workspace_root);
-    Ok(workspace_root)
+    let snapshot = load_delegate_anchor_snapshot(repo, session_id)?;
+    Ok(snapshot.workspace_root)
 }
 
 #[cfg(feature = "memory-sqlite")]

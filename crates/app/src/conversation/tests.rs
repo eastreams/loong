@@ -2041,6 +2041,8 @@ fn init_git_repo_for_delegate_test(root: &std::path::Path) {
         .expect("git add status");
     assert!(add_status.success(), "git add should succeed");
 
+    let null_device = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let hooks_path = format!("core.hooksPath={null_device}");
     let commit_status = std::process::Command::new(&git_executable)
         .args([
             "-C",
@@ -2048,7 +2050,7 @@ fn init_git_repo_for_delegate_test(root: &std::path::Path) {
             "-c",
             "commit.gpgsign=false",
             "-c",
-            "core.hooksPath=/dev/null",
+            hooks_path.as_str(),
             "commit",
             "--no-verify",
             "-q",
@@ -12840,6 +12842,190 @@ async fn continue_session_with_runtime_reopens_completed_delegate_child_and_refr
             .map(|event| event.event_kind.as_str()),
         Some("delegate_started")
     );
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn continue_session_with_runtime_preserves_prior_terminal_outcome_when_restart_fails() {
+    let mut config = test_config();
+    config.tools.sessions.allow_mutation = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-preserve-outcome");
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Completed,
+    })
+    .expect("create child session");
+
+    let execution = crate::conversation::ConstrainedSubagentExecution {
+        mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        depth: 1,
+        max_depth: 2,
+        active_children: 0,
+        max_active_children: 3,
+        timeout_seconds: 17,
+        allow_shell_in_child: false,
+        child_tool_allowlist: vec!["file.read".to_owned()],
+        workspace_root: None,
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        kernel_bound: false,
+        identity: None,
+        profile: None,
+    };
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: execution.spawn_payload("initial child task", Some("Child")),
+    })
+    .expect("append delegate lifecycle anchor");
+    repo.upsert_terminal_outcome(
+        "child-session",
+        "ok",
+        json!({
+            "child_session_id": "child-session",
+            "final_output": "old output"
+        }),
+    )
+    .expect("upsert old terminal outcome");
+
+    let runtime = FakeRuntime::new(vec![], Err("continued failure".to_owned()));
+    let outcome = crate::tools::continue_session_with_runtime(
+        json!({
+            "session_id": "child-session",
+            "input": "continue with the next step"
+        }),
+        "root-session",
+        &memory_config,
+        &config.tools,
+        &config,
+        &runtime,
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("session_continue should return an error outcome");
+
+    assert_eq!(outcome.status, "error");
+    assert_eq!(outcome.payload["error"], "continued failure");
+
+    let child = repo
+        .load_session("child-session")
+        .expect("load child session")
+        .expect("child session row");
+    assert_eq!(
+        child.state,
+        crate::session::repository::SessionState::Failed
+    );
+    let terminal_outcome = repo
+        .load_terminal_outcome("child-session")
+        .expect("load child terminal outcome")
+        .expect("prior terminal outcome should still exist");
+    assert_eq!(terminal_outcome.status, "ok");
+    assert_eq!(terminal_outcome.payload_json["final_output"], "old output");
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn continue_session_with_runtime_backfills_profile_from_older_delegate_anchor() {
+    let mut config = test_config();
+    config.tools.sessions.allow_mutation = true;
+    config.memory.sqlite_path = unique_acp_sqlite_path("session-continue-profile-backfill");
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)
+        .expect("session repository");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "root-session".to_owned(),
+        kind: crate::session::repository::SessionKind::Root,
+        parent_session_id: None,
+        label: Some("Root".to_owned()),
+        state: crate::session::repository::SessionState::Ready,
+    })
+    .expect("create root session");
+    repo.create_session(crate::session::repository::NewSessionRecord {
+        session_id: "child-session".to_owned(),
+        kind: crate::session::repository::SessionKind::DelegateChild,
+        parent_session_id: Some("root-session".to_owned()),
+        label: Some("Child".to_owned()),
+        state: crate::session::repository::SessionState::Completed,
+    })
+    .expect("create child session");
+
+    let execution = crate::conversation::ConstrainedSubagentExecution {
+        mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
+        depth: 1,
+        max_depth: 2,
+        active_children: 0,
+        max_active_children: 3,
+        timeout_seconds: 17,
+        allow_shell_in_child: false,
+        child_tool_allowlist: vec!["file.read".to_owned()],
+        workspace_root: None,
+        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
+        kernel_bound: false,
+        identity: None,
+        profile: None,
+    };
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_queued".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: execution.spawn_payload_with_profile(
+            "initial child task",
+            Some("Child"),
+            Some(crate::conversation::DelegateBuiltinProfile::Research),
+        ),
+    })
+    .expect("append queued delegate lifecycle anchor");
+    repo.append_event(crate::session::repository::NewSessionEvent {
+        session_id: "child-session".to_owned(),
+        event_kind: "delegate_started".to_owned(),
+        actor_session_id: Some("root-session".to_owned()),
+        payload_json: execution.spawn_payload("initial child task", Some("Child")),
+    })
+    .expect("append started delegate lifecycle anchor");
+
+    let runtime = FakeRuntime::with_turn_and_completion(
+        vec![],
+        Ok(ProviderTurn {
+            assistant_text: "continued output".to_owned(),
+            tool_intents: vec![],
+            raw_meta: Value::Null,
+        }),
+        Ok("continued output".to_owned()),
+    );
+    let outcome = crate::tools::continue_session_with_runtime(
+        json!({
+            "session_id": "child-session",
+            "input": "continue with the next step"
+        }),
+        "root-session",
+        &memory_config,
+        &config.tools,
+        &config,
+        &runtime,
+        ConversationRuntimeBinding::direct(),
+    )
+    .await
+    .expect("session_continue should succeed");
+
+    assert_eq!(outcome.payload["profile"], "research");
 }
 
 #[cfg(feature = "memory-sqlite")]

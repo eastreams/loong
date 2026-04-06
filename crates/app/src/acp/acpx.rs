@@ -37,6 +37,10 @@ const ACPX_MCP_PROXY_SCRIPT_NAME: &str = "loongclaw-acpx-mcp-proxy.mjs";
 const ACPX_MCP_PROXY_SCRIPT_SOURCE: &str = include_str!("assets/acpx-mcp-proxy.mjs");
 static ACPX_MCP_PROXY_SCRIPT_PATH: OnceLock<Result<String, String>> = OnceLock::new();
 
+mod command_probe;
+
+use command_probe::{CommandOutputError, wait_for_command_output};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AcpxRuntimeHandleState {
     name: String,
@@ -534,6 +538,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             }));
         }
 
+        let probe_timeout = Duration::from_millis(config.acp.startup_timeout_ms());
         let mut mcp_proxy_ready = true;
         if raw_profile.mcp_servers.is_empty() {
             diagnostics.insert(
@@ -546,7 +551,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 "available_but_disabled_by_policy".to_owned(),
             );
         } else {
-            match probe_mcp_proxy_support(cwd.as_deref()).await {
+            match probe_mcp_proxy_support(cwd.as_deref(), probe_timeout).await {
                 Ok((script_path, node_version)) => {
                     diagnostics.insert(
                         "mcp_runtime_proxy".to_owned(),
@@ -583,7 +588,7 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
             probe.current_dir(cwd);
         }
 
-        match probe.output().await {
+        match wait_for_command_output(&mut probe, probe_timeout).await {
             Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
@@ -627,15 +632,22 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
                 }))
             }
             Err(error) => {
-                diagnostics.insert(
-                    "status".to_owned(),
-                    if error.kind() == ErrorKind::NotFound {
-                        "missing_command".to_owned()
-                    } else {
-                        "spawn_failed".to_owned()
-                    },
-                );
-                diagnostics.insert("error".to_owned(), error.to_string());
+                let (status, error_message) = match error {
+                    CommandOutputError::TimedOut => {
+                        ("timed_out", "acpx version probe timed out".to_owned())
+                    }
+                    CommandOutputError::Io(error) => {
+                        let status = if error.kind() == ErrorKind::NotFound {
+                            "missing_command"
+                        } else {
+                            "spawn_failed"
+                        };
+                        let error_message = error.to_string();
+                        (status, error_message)
+                    }
+                };
+                diagnostics.insert("status".to_owned(), status.to_owned());
+                diagnostics.insert("error".to_owned(), error_message);
                 Ok(Some(AcpDoctorReport {
                     healthy: false,
                     diagnostics,
@@ -961,20 +973,32 @@ fn materialize_mcp_proxy_script() -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
-async fn probe_mcp_proxy_support(cwd: Option<&str>) -> CliResult<(String, String)> {
+async fn probe_mcp_proxy_support(
+    cwd: Option<&str>,
+    timeout_duration: Duration,
+) -> CliResult<(String, String)> {
     let script_path = ensure_mcp_proxy_script_path()?;
     let mut probe = Command::new(ACPX_MCP_PROXY_NODE_COMMAND);
     probe.arg("--version");
     if let Some(cwd) = cwd {
         probe.current_dir(cwd);
     }
-    let output = probe.output().await.map_err(|error| {
-        if error.kind() == ErrorKind::NotFound {
-            format!("embedded ACPX MCP proxy requires `{ACPX_MCP_PROXY_NODE_COMMAND}` on PATH")
-        } else {
-            format!("probe embedded ACPX MCP proxy runtime failed: {error}")
-        }
-    })?;
+    let output = wait_for_command_output(&mut probe, timeout_duration)
+        .await
+        .map_err(|error| match error {
+            CommandOutputError::TimedOut => {
+                "embedded ACPX MCP proxy runtime probe timed out".to_owned()
+            }
+            CommandOutputError::Io(error) => {
+                if error.kind() == ErrorKind::NotFound {
+                    format!(
+                        "embedded ACPX MCP proxy requires `{ACPX_MCP_PROXY_NODE_COMMAND}` on PATH"
+                    )
+                } else {
+                    format!("probe embedded ACPX MCP proxy runtime failed: {error}")
+                }
+            }
+        })?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     let observed = match (stdout.is_empty(), stderr.is_empty()) {

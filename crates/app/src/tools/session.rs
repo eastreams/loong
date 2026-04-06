@@ -467,6 +467,7 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
     let expected_state = target_session.state;
     let child_session_id = request.session_id.clone();
     let current_session_id = current_session_id.to_owned();
+    let prior_terminal_outcome = repo.load_terminal_outcome(&child_session_id)?;
     let effective_timeout_seconds = request
         .timeout_seconds
         .min(app_config.tools.delegate.timeout_seconds);
@@ -479,7 +480,7 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
         binding,
         || async {
             let transitioned = repo
-                .transition_session_with_event_and_clear_terminal_outcome_if_current(
+                .transition_session_with_event_if_current(
                     &child_session_id,
                     crate::session::repository::TransitionSessionWithEventIfCurrentRequest {
                     expected_state,
@@ -515,6 +516,20 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
                 binding,
             )
             .await?;
+            if outcome.status != "ok"
+                && let Some(prior_terminal_outcome) = prior_terminal_outcome.as_ref()
+            {
+                repo.upsert_terminal_outcome(
+                    &child_session_id,
+                    &prior_terminal_outcome.status,
+                    prior_terminal_outcome.payload_json.clone(),
+                )
+                .map_err(|error| {
+                    format!(
+                        "session_continue_restore_terminal_outcome_failed: {error}"
+                    )
+                })?;
+            }
             inject_session_continue_payload(
                 &mut outcome,
                 &child_session_id,
@@ -599,21 +614,37 @@ fn load_delegate_execution_contract(
     session_id: &str,
 ) -> Result<Option<DelegateExecutionContract>, String> {
     let events = repo.list_delegate_lifecycle_events(session_id)?;
-    Ok(events.into_iter().rev().find_map(|event| {
-        matches!(
+    let mut resolved_execution = None;
+    let mut resolved_profile = None;
+
+    for event in events.into_iter().rev() {
+        let is_delegate_anchor = matches!(
             event.event_kind.as_str(),
             "delegate_queued" | "delegate_started"
-        )
-        .then(|| {
-            Some(DelegateExecutionContract {
-                execution: ConstrainedSubagentExecution::from_event_payload(&event.payload_json)?,
-                profile: ConstrainedSubagentExecution::profile_from_event_payload(
-                    &event.payload_json,
-                ),
-            })
-        })
-        .flatten()
-    }))
+        );
+        if !is_delegate_anchor {
+            continue;
+        }
+
+        if resolved_execution.is_none() {
+            resolved_execution =
+                ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
+        }
+        if resolved_profile.is_none() {
+            resolved_profile =
+                ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
+        }
+        if resolved_execution.is_some() && resolved_profile.is_some() {
+            break;
+        }
+    }
+
+    Ok(
+        resolved_execution.map(|execution| DelegateExecutionContract {
+            execution,
+            profile: resolved_profile,
+        }),
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -2647,12 +2678,12 @@ fn session_delegate_lifecycle_at(
         match event.event_kind.as_str() {
             "delegate_queued" => {
                 queued_at = Some(event.ts);
-                profile = profile.or_else(|| {
-                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json)
-                });
-                execution = execution.or_else(|| {
-                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-                });
+                let parsed_profile =
+                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
+                let parsed_execution =
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
+                profile = parsed_profile.or(profile);
+                execution = parsed_execution.or(execution);
                 queued_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")
@@ -2665,12 +2696,12 @@ fn session_delegate_lifecycle_at(
             }
             "delegate_started" => {
                 started_at = Some(event.ts);
-                profile = profile.or_else(|| {
-                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json)
-                });
-                execution = execution.or_else(|| {
-                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-                });
+                let parsed_profile =
+                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
+                let parsed_execution =
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
+                profile = parsed_profile.or(profile);
+                execution = parsed_execution.or(execution);
                 started_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")

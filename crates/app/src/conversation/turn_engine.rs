@@ -1765,8 +1765,22 @@ fn augment_tool_payload_for_kernel(
     payload: serde_json::Value,
     session_context: &SessionContext,
 ) -> AugmentedToolPayload {
+    let invoked_tool_name = if canonical_tool_name == "tool.invoke" {
+        payload
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    let tool_search_context_name = if invoked_tool_name.as_deref() == Some("tool.search") {
+        "tool.search"
+    } else {
+        canonical_tool_name
+    };
     let augmented_tool_search = inject_tool_search_visibility_context_trusted(
-        canonical_tool_name,
+        tool_search_context_name,
         payload,
         session_context,
         false,
@@ -1798,12 +1812,9 @@ fn augment_tool_payload_for_kernel(
     }
 
     // tool.invoke wrapping a browser tool: inject scope into the nested arguments.
-    let is_browser_invoke = canonical_tool_name == "tool.invoke"
-        && payload
-            .get("tool_id")
-            .and_then(serde_json::Value::as_str)
-            .map(crate::tools::canonical_tool_name)
-            .is_some_and(browser_scope_injection_required);
+    let is_browser_invoke = invoked_tool_name
+        .as_deref()
+        .is_some_and(browser_scope_injection_required);
     if is_browser_invoke && let serde_json::Value::Object(mut outer) = payload {
         if let Some(arguments) = outer.remove("arguments") {
             outer.insert(
@@ -3516,6 +3527,7 @@ impl TurnEngine {
             }
         };
         let injected_trusted_internal_context = injected.trusted_internal_context
+            || augmented_payload.trusted_internal_context
             || (!injected_payload_uses_reserved_internal_context
                 && augmented_payload_uses_reserved_internal_context);
         let trusted_internal_context =

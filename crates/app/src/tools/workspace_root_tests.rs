@@ -34,6 +34,7 @@ fn execute_tool_core_with_test_context(
     }
 }
 
+#[cfg(feature = "tool-file")]
 #[test]
 fn file_read_uses_workspace_root_from_trusted_internal_payload() {
     let outer_root = std::env::temp_dir().join(format!(

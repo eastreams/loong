@@ -190,7 +190,7 @@ async fn run_shell_command_with_timeout(
     process_exec::run_process_with_timeout(command, args, cwd, timeout_ms, "shell command").await
 }
 
-#[cfg(all(test, feature = "tool-shell"))]
+#[cfg(all(test, feature = "tool-shell", unix))]
 mod tests {
     use super::*;
     use crate::test_support::unique_temp_dir;
