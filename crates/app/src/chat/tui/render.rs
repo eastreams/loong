@@ -2218,6 +2218,7 @@ mod tests {
         focus: FocusStack,
         clarify_dialog: Option<ClarifyDialog>,
         stats_overlay: Option<StatsOverlayView<'static>>,
+        session_picker: Option<state::SessionPickerState>,
         tool_inspector: Option<TestToolInspector>,
         slash_command_selection: usize,
     }
@@ -2230,6 +2231,7 @@ mod tests {
                 focus: FocusStack::new(),
                 clarify_dialog: None,
                 stats_overlay: None,
+                session_picker: None,
                 tool_inspector: None,
                 slash_command_selection: 0,
             }
@@ -2268,7 +2270,12 @@ mod tests {
             self.stats_overlay
         }
         fn session_picker(&self) -> Option<SessionPickerView<'_>> {
-            None
+            let picker = self.session_picker.as_ref()?;
+
+            Some(SessionPickerView {
+                picker,
+                current_session_id: self.pane.session_id.as_str(),
+            })
         }
         fn slash_command_selection(&self) -> usize {
             self.slash_command_selection
@@ -2616,6 +2623,99 @@ mod tests {
         assert!(
             text.contains("/review"),
             "matching command should be rendered: {text:?}"
+        );
+    }
+
+    #[test]
+    fn draw_renders_session_picker_with_human_thread_details() {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::SessionPicker);
+        let session_picker = state::SessionPickerState {
+            mode: state::SessionPickerMode::Subagents,
+            sessions: vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "root-session".to_owned(),
+                    label: Some("Main thread".to_owned()),
+                    agent_presentation: None,
+                    state: "running".to_owned(),
+                    kind: "root".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "delegate:1".to_owned(),
+                    label: Some("Reference pass".to_owned()),
+                    agent_presentation: Some(
+                        crate::session::presentation::DelegateAgentPresentation {
+                            persona_id: "xu-xiake".to_owned(),
+                            role_id: "explorer".to_owned(),
+                            names: crate::session::presentation::LocalizedSubagentText {
+                                zh_hans: "徐霞客".to_owned(),
+                                zh_hant: "徐霞客".to_owned(),
+                                en: "Xu Xiake".to_owned(),
+                                ja: "徐霞客".to_owned(),
+                            },
+                            roles: crate::session::presentation::LocalizedSubagentText {
+                                zh_hans: "行者".to_owned(),
+                                zh_hant: "行者".to_owned(),
+                                en: "Explorer".to_owned(),
+                                ja: "探索者".to_owned(),
+                            },
+                            model: Some("gpt-5".to_owned()),
+                            reasoning_effort: Some("high".to_owned()),
+                        },
+                    ),
+                    state: "running".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("running".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 1,
+                    attention_approval_count: 0,
+                },
+            ],
+            query: String::new(),
+            selected_index: 0,
+            list_scroll_offset: 0,
+        };
+        let shell = TestShell {
+            focus,
+            session_picker: Some(session_picker),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("Subagents"),
+            "picker title should render: {text:?}"
+        );
+        assert!(
+            text.contains("Main thread"),
+            "custom root thread label should render: {text:?}"
+        );
+        assert!(
+            text.contains("running · thread"),
+            "root detail should use human thread wording: {text:?}"
+        );
+        assert!(
+            text.contains("Xu Xiake · Explorer"),
+            "subagent primary label should render: {text:?}"
+        );
+        assert!(
+            text.contains("gpt-5 · high"),
+            "subagent provider label should render: {text:?}"
         );
     }
 
