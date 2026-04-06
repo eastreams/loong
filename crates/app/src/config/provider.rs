@@ -2884,6 +2884,8 @@ impl ProviderKind {
             Some("deepseek-chat")
         } else if matches!(self, ProviderKind::Minimax) {
             Some("MiniMax-M2.7")
+        } else if matches!(self, ProviderKind::Xiaomi) {
+            Some("mimo-v2-pro")
         } else {
             None
         }
@@ -4799,7 +4801,7 @@ api_key_env = "OPENAI_API_KEY"
         );
         assert_eq!(
             ProviderKind::Xiaomi.recommended_onboarding_model(),
-            Some("mimo-v2-flash")
+            Some("mimo-v2-pro")
         );
         assert_eq!(
             ProviderKind::KimiCoding.recommended_onboarding_model(),

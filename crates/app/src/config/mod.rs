@@ -558,6 +558,7 @@ mod tests {
             (ProviderKind::Kimi, Some("MOONSHOT_API_KEY")),
             (ProviderKind::Minimax, Some("MINIMAX_API_KEY")),
             (ProviderKind::Openai, Some("OPENAI_API_KEY")),
+            (ProviderKind::Xiaomi, Some("XIAOMI_API_KEY")),
         ];
         for (kind, expected) in cases {
             let config = ProviderConfig {
@@ -2453,6 +2454,7 @@ safe_lane_health_replan_warn_threshold = 0.55
                 "https://ark.cn-beijing.volces.com/api/v3/models",
             ),
             (ProviderKind::Xai, "https://api.x.ai/v1/language-models"),
+            (ProviderKind::Xiaomi, "https://api.xiaomimimo.com/v1/models"),
             (ProviderKind::Zai, "https://api.z.ai/api/paas/v4/models"),
             (
                 ProviderKind::Zhipu,
