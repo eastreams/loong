@@ -828,7 +828,7 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
     let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
     runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
-        ensure_sqlite_schema_repairs_if_needed(conn)
+        ensure_sqlite_runtime_schema_ready(conn)
     })?;
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
@@ -1397,9 +1397,9 @@ fn open_sqlite_connection_with_diagnostics(
 
     let schema_upgrade_started_at = StdInstant::now();
     let schema_probe = probe_sqlite_schema(&conn)?;
-    let current_schema_ready = schema_probe.current_schema_ready;
+    let requires_current_schema_setup = schema_probe.requires_current_schema_setup();
 
-    if !current_schema_ready {
+    if requires_current_schema_setup {
         let schema_init_started_at = StdInstant::now();
         #[cfg(test)]
         test_support::record_sqlite_schema_init(path);
@@ -1593,8 +1593,7 @@ fn open_sqlite_connection_with_diagnostics(
         diagnostics.schema_init_ms = elapsed_ms(schema_init_started_at);
     }
 
-    ensure_sqlite_schema_repairs_if_needed(&mut conn)?;
-    ensure_control_plane_pairing_tables(&conn)?;
+    ensure_sqlite_runtime_schema_ready(&mut conn)?;
     diagnostics.schema_upgrade_ms = elapsed_ms(schema_upgrade_started_at);
 
     #[cfg(test)]
@@ -1628,11 +1627,18 @@ struct SqliteSchemaProbe {
 }
 
 impl SqliteSchemaProbe {
-    fn requires_repairs(self) -> bool {
+    fn requires_current_schema_setup(self) -> bool {
+        if self.user_version > SQLITE_MEMORY_SCHEMA_VERSION {
+            return false;
+        }
         if self.user_version < SQLITE_MEMORY_SCHEMA_VERSION {
             return true;
         }
         !self.current_schema_ready
+    }
+
+    fn requires_repairs(self) -> bool {
+        self.requires_current_schema_setup()
     }
 }
 
@@ -1666,6 +1672,12 @@ fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), S
     ensure_canonical_record_storage(conn)?;
     write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
 
+    Ok(())
+}
+
+fn ensure_sqlite_runtime_schema_ready(conn: &mut Connection) -> Result<(), String> {
+    ensure_sqlite_schema_repairs_if_needed(conn)?;
+    ensure_control_plane_pairing_tables(conn)?;
     Ok(())
 }
 
@@ -8747,6 +8759,143 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.scope, MemoryScope::Workspace);
         assert_eq!(hits[0].record.kind, CanonicalMemoryKind::ImportedProfile);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cached_runtime_repair_path_restores_control_plane_pairing_tables() {
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-cached-runtime-pairing-schema-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("cached-runtime-pairing-schema.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
+
+        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
+        runtime
+            .with_connection_mut("test.drop_cached_pairing_tables", |conn| {
+                conn.execute_batch(
+                    "
+                    DROP INDEX IF EXISTS idx_control_plane_pairing_requests_status_requested_at;
+                    DROP INDEX IF EXISTS idx_control_plane_device_tokens_device_id;
+                    DROP TABLE IF EXISTS control_plane_pairing_requests;
+                    DROP TABLE IF EXISTS control_plane_device_tokens;
+                    ",
+                )
+                .map_err(|error| format!("drop cached pairing tables failed: {error}"))?;
+                Ok(())
+            })
+            .expect("drop cached pairing tables");
+
+        ensure_memory_db_ready_with_diagnostics(None, &config)
+            .expect("repair cached control-plane pairing schema");
+
+        let pairing_requests_table_exists = runtime
+            .with_connection("test.verify_cached_pairing_requests_table", |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'table' AND name = 'control_plane_pairing_requests'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|count| count == 1)
+                .map_err(|error| format!("query cached pairing requests table failed: {error}"))
+            })
+            .expect("query cached pairing requests table");
+        let device_tokens_table_exists = runtime
+            .with_connection("test.verify_cached_device_tokens_table", |conn| {
+                conn.query_row(
+                    "SELECT COUNT(*)
+                     FROM sqlite_master
+                     WHERE type = 'table' AND name = 'control_plane_device_tokens'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|count| count == 1)
+                .map_err(|error| format!("query cached device tokens table failed: {error}"))
+            })
+            .expect("query cached device tokens table");
+
+        assert!(pairing_requests_table_exists);
+        assert!(device_tokens_table_exists);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_preserves_newer_schema_versions_without_current_repairs() {
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-future-sqlite-schema-version-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("future-schema-version.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
+
+        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
+        let future_schema_version = SQLITE_MEMORY_SCHEMA_VERSION + 1;
+        runtime
+            .with_connection_mut("test.bump_sqlite_user_version", |conn| {
+                write_sqlite_user_version(conn, future_schema_version)
+            })
+            .expect("bump sqlite user_version");
+
+        reset_sqlite_schema_repair_metrics_for_tests();
+        ensure_memory_db_ready_with_diagnostics(None, &config)
+            .expect("recheck cached newer sqlite schema");
+
+        let cached_user_version = runtime
+            .with_connection("test.read_cached_future_user_version", |conn| {
+                read_sqlite_user_version(conn)
+            })
+            .expect("read cached future sqlite user_version");
+        assert_eq!(cached_user_version, future_schema_version);
+        drop(runtime);
+
+        reset_sqlite_runtime_test_state();
+        ensure_memory_db_ready_with_diagnostics(Some(db_path.clone()), &config)
+            .expect("reopen newer sqlite schema");
+
+        let reopened_runtime =
+            acquire_memory_runtime(&config).expect("reopen cached sqlite runtime");
+        let reopened_user_version = reopened_runtime
+            .with_connection("test.read_future_user_version", |conn| {
+                read_sqlite_user_version(conn)
+            })
+            .expect("read future sqlite user_version");
+        let schema_init_count = sqlite_schema_init_count_for_tests(&db_path);
+
+        assert_eq!(reopened_user_version, future_schema_version);
+        assert_eq!(schema_init_count, 0);
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);
