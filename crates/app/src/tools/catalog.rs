@@ -445,8 +445,39 @@ impl ToolCatalog {
     }
 }
 
+fn feishu_declared_concurrency_class(tool_name: &str) -> Option<ToolConcurrencyClass> {
+    if !tool_name.starts_with("feishu.") {
+        return None;
+    }
+
+    if tool_name == "feishu.messages.resource.get" {
+        // This downloads remote content into the configured local file root.
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    let tags = tool_tags(tool_name);
+
+    if tags.contains(&"read") {
+        return Some(ToolConcurrencyClass::ReadOnly);
+    }
+
+    if tags.contains(&"write") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    if tags.contains(&"update") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    if tags.contains(&"callback") {
+        return Some(ToolConcurrencyClass::Mutating);
+    }
+
+    None
+}
+
 fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
-    match tool_name {
+    let explicit_class = match tool_name {
         "tool.search"
         | "external_skills.resolve"
         | "external_skills.search"
@@ -470,7 +501,7 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "browser.companion.wait"
         | "browser.extract"
         | "web.fetch"
-        | "web.search" => ToolConcurrencyClass::ReadOnly,
+        | "web.search" => Some(ToolConcurrencyClass::ReadOnly),
         "config.import"
         | "external_skills.fetch"
         | "external_skills.install"
@@ -497,9 +528,19 @@ fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
         | "browser.companion.session.start"
         | "browser.companion.session.stop"
         | "browser.companion.type"
-        | "browser.open" => ToolConcurrencyClass::Mutating,
-        _ => ToolConcurrencyClass::Unknown,
+        | "browser.open" => Some(ToolConcurrencyClass::Mutating),
+        _ => None,
+    };
+
+    if let Some(explicit_class) = explicit_class {
+        return explicit_class;
     }
+
+    if let Some(feishu_class) = feishu_declared_concurrency_class(tool_name) {
+        return feishu_class;
+    }
+
+    ToolConcurrencyClass::Unknown
 }
 
 fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
@@ -4872,6 +4913,51 @@ mod tests {
         let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
         assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
+    }
+
+    #[cfg(feature = "feishu-integration")]
+    #[test]
+    fn feishu_tool_catalog_entries_expose_explicit_concurrency_class() {
+        let catalog = tool_catalog();
+        let feishu_descriptors: Vec<&ToolDescriptor> = catalog
+            .descriptors()
+            .iter()
+            .filter(|descriptor| descriptor.name.starts_with("feishu."))
+            .collect();
+
+        assert!(!feishu_descriptors.is_empty());
+
+        for descriptor in feishu_descriptors {
+            assert_ne!(
+                descriptor.concurrency_class(),
+                ToolConcurrencyClass::Unknown,
+                "{} should expose an explicit concurrency class",
+                descriptor.name
+            );
+        }
+
+        let calendar_list =
+            find_tool_catalog_entry("feishu.calendar.list").expect("feishu.calendar.list entry");
+        assert_eq!(
+            calendar_list.concurrency_class,
+            ToolConcurrencyClass::ReadOnly
+        );
+
+        let messages_send =
+            find_tool_catalog_entry("feishu.messages.send").expect("feishu.messages.send entry");
+        assert_eq!(
+            messages_send.concurrency_class,
+            ToolConcurrencyClass::Mutating
+        );
+    }
+
+    #[cfg(all(feature = "feishu-integration", feature = "tool-file"))]
+    #[test]
+    fn feishu_resource_download_catalog_entry_is_mutating() {
+        let entry = find_tool_catalog_entry("feishu.messages.resource.get")
+            .expect("feishu.messages.resource.get entry");
+
+        assert_eq!(entry.concurrency_class, ToolConcurrencyClass::Mutating);
     }
 
     #[test]
