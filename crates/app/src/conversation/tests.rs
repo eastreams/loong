@@ -2992,6 +2992,7 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
 fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -2999,9 +3000,11 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
+        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
+        agent_role: None,
         profile: None,
     };
     let runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
@@ -3042,6 +3045,7 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
     };
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -3049,9 +3053,11 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
+        workspace_root: None,
         runtime_narrowing: execution_runtime_narrowing.clone(),
         kernel_bound: false,
         identity: None,
+        agent_role: None,
         profile: None,
     };
     let session_context = SessionContext::child(

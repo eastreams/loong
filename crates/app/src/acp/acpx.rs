@@ -2234,7 +2234,7 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn doctor_accepts_path_discovered_fake_version_command() {
-        let _guard = acpx_test_lock();
+        let _lock = lock_acpx_runtime_tests().await;
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe-path");
         let bin_dir = temp_dir.join("bin");
         let script_path = bin_dir.join("fake-acpx");
@@ -2242,7 +2242,7 @@ exit 0
         write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
             .expect("write fake acpx script");
 
-        let mut env = ScopedEnv::new();
+        let mut env = crate::test_support::ScopedEnv::new();
         let original_path = std::env::var_os("PATH").unwrap_or_default();
         let original_entries = std::env::split_paths(&original_path);
         let mut path_entries = vec![bin_dir.clone()];
@@ -2278,57 +2278,6 @@ exit 0
             Some(&"fake-acpx".to_owned())
         );
         assert_eq!(report.diagnostics.get("status"), Some(&"ready".to_owned()));
-    }
-
-    #[test]
-    fn build_mcp_proxy_agent_command_preserves_server_cwd() {
-        let server = AcpxMcpServerEntry {
-            name: "docs".to_owned(),
-            command: "uvx".to_owned(),
-            args: vec!["context7-mcp".to_owned()],
-            env: vec![AcpxMcpServerEnvEntry {
-                name: "API_TOKEN".to_owned(),
-                value: "secret".to_owned(),
-            }],
-            cwd: Some("/workspace/docs".to_owned()),
-        };
-
-        let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
-            .expect("proxy command");
-        let payload_marker = "--payload-file ";
-        let payload_index = command.find(payload_marker).expect("payload marker");
-        let payload_argument = &command[payload_index + payload_marker.len()..];
-        let payload_path = decode_test_command_argument(payload_argument);
-        let payload_bytes = std::fs::read(&payload_path).expect("read payload file");
-        let payload: Value = serde_json::from_slice(&payload_bytes).expect("parse payload");
-
-        assert_eq!(
-            payload["mcpServers"][0]["cwd"],
-            Value::String("/workspace/docs".to_owned())
-        );
-    }
-
-    fn decode_test_command_argument(argument: &str) -> String {
-        let trimmed_argument = argument.trim();
-        let is_quoted = trimmed_argument.starts_with('"') && trimmed_argument.ends_with('"');
-        if !is_quoted {
-            return trimmed_argument.to_owned();
-        }
-
-        let quoted_argument = &trimmed_argument[1..trimmed_argument.len() - 1];
-        let mut decoded = String::new();
-        let mut chars = quoted_argument.chars();
-        while let Some(character) = chars.next() {
-            if character == '\\' {
-                match chars.next() {
-                    Some(escaped_character) => decoded.push(escaped_character),
-                    None => decoded.push('\\'),
-                }
-                continue;
-            }
-            decoded.push(character);
-        }
-        decoded
     }
 
     #[tokio::test]

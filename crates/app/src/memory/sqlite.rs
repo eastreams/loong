@@ -490,7 +490,10 @@ fn revalidate_cached_sqlite_runtime(runtime: &SqliteRuntime) -> Result<(), Strin
 fn cached_runtime_schema_current(runtime: &SqliteRuntime) -> Result<bool, String> {
     runtime.with_connection("memory.cached_runtime_schema_probe", |conn| {
         let user_version = read_sqlite_user_version(conn)?;
-        if user_version != SQLITE_MEMORY_SCHEMA_VERSION {
+        if user_version > SQLITE_MEMORY_SCHEMA_VERSION {
+            return Ok(true);
+        }
+        if user_version < SQLITE_MEMORY_SCHEMA_VERSION {
             return Ok(false);
         }
         sqlite_current_schema_objects_ready(conn)
@@ -856,6 +859,9 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
         revalidate_cached_sqlite_runtime(runtime.as_ref())?;
         diagnostics.schema_upgrade_ms = elapsed_ms(schema_revalidate_started_at);
     }
+    runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
+        ensure_sqlite_runtime_schema_ready(conn)
+    })?;
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
 
