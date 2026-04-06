@@ -263,13 +263,7 @@ async fn probe_browser_companion_version(
     }
 
     for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
-        let mut probe = if should_probe_browser_companion_via_sh(command) {
-            let mut probe = Command::new(POSIX_SH_PATH);
-            probe.arg(command);
-            probe
-        } else {
-            Command::new(command)
-        };
+        let mut probe = build_browser_companion_probe_command(command);
         probe.arg(BROWSER_COMPANION_VERSION_ARG);
         probe.kill_on_drop(true);
         probe.stdout(Stdio::piped());
@@ -314,6 +308,19 @@ async fn probe_browser_companion_version(
     }
 
     Err(BrowserCompanionProbeError::TimedOut)
+}
+
+fn build_browser_companion_probe_command(command: &str) -> Command {
+    #[cfg(unix)]
+    {
+        if should_probe_browser_companion_via_sh(command) {
+            let mut probe = Command::new(POSIX_SH_PATH);
+            probe.arg(command);
+            return probe;
+        }
+    }
+
+    Command::new(command)
 }
 
 async fn read_probe_pipe<R>(pipe: &mut Option<R>) -> Result<Vec<u8>, BrowserCompanionProbeError>
