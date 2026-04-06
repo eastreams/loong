@@ -31,7 +31,6 @@ mod turn_middleware_registry;
 mod turn_observer;
 mod turn_shared;
 pub(crate) mod workspace_isolation;
-pub(crate) mod workspace_isolation;
 
 pub use analytics::{
     ConversationEventRecord, DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary,
