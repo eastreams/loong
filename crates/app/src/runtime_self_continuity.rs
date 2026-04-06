@@ -33,6 +33,13 @@ const RUNTIME_DURABLE_RECALL_INTRO: &str = concat!(
     "It does not override Resolved Runtime Identity or Session Profile.",
 );
 
+const COMPACTION_SUMMARY_SCOPE_NOTE: &str = concat!(
+    "Session-local recall only. ",
+    "Does not replace Runtime Self Context. ",
+    "Does not override Resolved Runtime Identity, Session Profile, ",
+    "or advisory durable recall.",
+);
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeSelfContinuity {
     pub runtime_self: RuntimeSelfModel,
@@ -40,6 +47,10 @@ pub struct RuntimeSelfContinuity {
     pub resolved_identity: Option<ResolvedRuntimeIdentity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_profile_projection: Option<String>,
+}
+
+pub(crate) fn compaction_summary_scope_note() -> &'static str {
+    COMPACTION_SUMMARY_SCOPE_NOTE
 }
 
 impl RuntimeSelfContinuity {

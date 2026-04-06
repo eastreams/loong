@@ -11,6 +11,7 @@ use std::sync::{
 
 #[cfg(feature = "memory-sqlite")]
 use loongclaw_contracts::Capability;
+use serde_json::json;
 use tokio::sync::Notify;
 
 use crate::CliResult;
@@ -28,13 +29,16 @@ mod latest_session_selector_tests;
 use self::cli_input::ConcurrentCliInputReader;
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
+#[cfg(any(test, feature = "memory-sqlite"))]
+use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
 use super::conversation::{
     ConversationRuntimeBinding, ConversationSessionAddress, ConversationTurnCoordinator,
     ConversationTurnObserver, ConversationTurnObserverHandle, ConversationTurnPhase,
     ConversationTurnPhaseEvent, ConversationTurnToolEvent, ConversationTurnToolState,
-    ExecutionLane, ProviderErrorMode, parse_approval_prompt_view, resolve_context_engine_selection,
+    ExecutionLane, ProviderErrorMode, collect_context_engine_runtime_snapshot,
+    parse_approval_prompt_view, resolve_context_engine_selection,
 };
 #[cfg(any(test, feature = "memory-sqlite"))]
 use super::conversation::{
@@ -54,6 +58,7 @@ use super::conversation::{load_fast_lane_tool_batch_event_summary, load_safe_lan
 use super::memory;
 #[cfg(feature = "memory-sqlite")]
 use super::memory::runtime_config::MemoryRuntimeConfig;
+use super::runtime_self_continuity;
 #[cfg(feature = "memory-sqlite")]
 use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
@@ -72,6 +77,12 @@ const CLI_CHAT_LIVE_PREVIEW_MIN_BUFFER_CHARS: usize = 320;
 const CLI_CHAT_LIVE_PREVIEW_MAX_BUFFER_CHARS: usize = 4096;
 const CLI_CHAT_LIVE_TOOL_ARGS_MIN_BUFFER_CHARS: usize = 160;
 const CLI_CHAT_LIVE_TOOL_ARGS_MAX_BUFFER_CHARS: usize = 1024;
+const CLI_CHAT_HELP_COMMAND: &str = "/help";
+const CLI_CHAT_COMPACT_COMMAND: &str = "/compact";
+const CLI_CHAT_STATUS_COMMAND: &str = "/status";
+const CLI_CHAT_HISTORY_COMMAND: &str = "/history";
+const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND: &str = "/turn_checkpoint_repair";
+const CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS: &str = "/turn-checkpoint-repair";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliChatOptions {
@@ -233,6 +244,11 @@ struct CliChatStartupSummary {
     session_id: String,
     context_engine_id: String,
     context_engine_source: String,
+    compaction_enabled: bool,
+    compaction_min_messages: Option<usize>,
+    compaction_trigger_estimated_tokens: Option<usize>,
+    compaction_preserve_recent_turns: usize,
+    compaction_fail_open: bool,
     acp_enabled: bool,
     dispatch_enabled: bool,
     conversation_routing: String,
@@ -298,6 +314,31 @@ struct CliChatLiveSurfaceObserver {
     render_width: usize,
     render_sink: CliChatLiveSurfaceSink,
     state: StdMutex<CliChatLiveSurfaceState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManualCompactionResult {
+    status: ManualCompactionStatus,
+    before_turns: usize,
+    after_turns: usize,
+    estimated_tokens_before: Option<usize>,
+    estimated_tokens_after: Option<usize>,
+    summary_headline: Option<String>,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManualCompactionStatus {
+    Applied,
+    NoChange,
+    FailedOpen,
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ManualCompactionWindowSnapshot {
+    turns: Vec<memory::WindowTurn>,
+    turn_count: Option<usize>,
 }
 
 #[allow(clippy::print_stdout)] // CLI REPL output
@@ -670,7 +711,7 @@ async fn run_concurrent_cli_host_loop(
 async fn process_cli_chat_input(
     runtime: &CliTurnRuntime,
     input: &str,
-    _options: &CliChatOptions,
+    options: &CliChatOptions,
     event_sink: Option<&dyn AcpTurnEventSink>,
 ) -> CliResult<CliChatLoopControl> {
     if input.is_empty() {
@@ -679,11 +720,19 @@ async fn process_cli_chat_input(
     if is_exit_command(&runtime.config, input) {
         return Ok(CliChatLoopControl::Exit);
     }
-    if input == "/help" {
+    if input == CLI_CHAT_HELP_COMMAND {
         print_help();
         return Ok(CliChatLoopControl::Continue);
     }
-    if input == "/history" {
+    if is_cli_chat_status_command(input)? {
+        print_cli_chat_status(runtime, options).await?;
+        return Ok(CliChatLoopControl::Continue);
+    }
+    if is_manual_compaction_command(input)? {
+        print_manual_compaction(runtime).await?;
+        return Ok(CliChatLoopControl::Continue);
+    }
+    if input == CLI_CHAT_HISTORY_COMMAND {
         #[cfg(feature = "memory-sqlite")]
         print_history(
             &runtime.session_id,
@@ -790,11 +839,26 @@ fn print_cli_chat_startup(runtime: &CliTurnRuntime, options: &CliChatOptions) ->
     Ok(())
 }
 
+#[allow(clippy::print_stdout)] // CLI output
+async fn print_cli_chat_status(
+    runtime: &CliTurnRuntime,
+    options: &CliChatOptions,
+) -> CliResult<()> {
+    let render_width = detect_cli_chat_render_width();
+    let summary = build_cli_chat_startup_summary(runtime, options)?;
+    let rendered_lines = render_cli_chat_status_lines_with_width(&summary, render_width);
+    print_rendered_cli_chat_lines(&rendered_lines);
+    print_turn_checkpoint_startup_health(runtime).await;
+    Ok(())
+}
+
 fn build_cli_chat_startup_summary(
     runtime: &CliTurnRuntime,
     options: &CliChatOptions,
 ) -> CliResult<CliChatStartupSummary> {
     let context_engine_selection = resolve_context_engine_selection(&runtime.config);
+    let context_engine_runtime = collect_context_engine_runtime_snapshot(&runtime.config)?;
+    let compaction = context_engine_runtime.compaction;
     let acp_selection = resolve_acp_backend_selection(&runtime.config);
     Ok(CliChatStartupSummary {
         config_path: runtime.resolved_path.display().to_string(),
@@ -802,6 +866,14 @@ fn build_cli_chat_startup_summary(
         session_id: runtime.session_id.clone(),
         context_engine_id: context_engine_selection.id.to_owned(),
         context_engine_source: context_engine_selection.source.as_str().to_owned(),
+        compaction_enabled: compaction.enabled,
+        compaction_min_messages: compaction.min_messages,
+        compaction_trigger_estimated_tokens: compaction.trigger_estimated_tokens,
+        compaction_preserve_recent_turns: runtime
+            .config
+            .conversation
+            .compact_preserve_recent_turns(),
+        compaction_fail_open: compaction.fail_open,
         acp_enabled: runtime.config.acp.enabled,
         dispatch_enabled: runtime.config.acp.dispatch_enabled(),
         conversation_routing: runtime
@@ -934,6 +1006,14 @@ fn render_cli_chat_startup_lines_with_width(
     render_tui_screen_spec(&screen_spec, width, false)
 }
 
+fn render_cli_chat_status_lines_with_width(
+    summary: &CliChatStartupSummary,
+    width: usize,
+) -> Vec<String> {
+    let message_spec = build_cli_chat_status_message_spec(summary);
+    render_tui_message_spec(&message_spec, width)
+}
+
 fn detect_cli_chat_render_width() -> usize {
     crate::presentation::detect_render_width()
 }
@@ -946,19 +1026,6 @@ fn print_rendered_cli_chat_lines(lines: &[String]) {
 }
 
 fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScreenSpec {
-    let allowed_channels = if summary.allowed_channels.is_empty() {
-        "-".to_owned()
-    } else {
-        summary.allowed_channels.join(",")
-    };
-    let runtime_line = format!(
-        "ACP enabled={} dispatch_enabled={} routing={} backend={} ({}) allowed_channels={allowed_channels}",
-        summary.acp_enabled,
-        summary.dispatch_enabled,
-        summary.conversation_routing,
-        summary.acp_backend_id,
-        summary.acp_backend_source,
-    );
     let mut sections = vec![
         TuiSectionSpec::ActionGroup {
             title: Some("start here".to_owned()),
@@ -972,40 +1039,126 @@ fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScr
             title: None,
             lines: vec!["- type your request, or use /help for commands".to_owned()],
         },
-        TuiSectionSpec::KeyValues {
-            title: Some("session details".to_owned()),
-            items: vec![
-                TuiKeyValueSpec::Plain {
-                    key: "session".to_owned(),
-                    value: summary.session_id.clone(),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "config".to_owned(),
-                    value: summary.config_path.clone(),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "memory".to_owned(),
-                    value: summary.memory_label.clone(),
-                },
-            ],
+    ];
+    let runtime_sections = build_cli_chat_runtime_sections(summary);
+    sections.extend(runtime_sections);
+
+    TuiScreenSpec {
+        header_style: TuiHeaderStyle::Compact,
+        subtitle: Some("interactive chat".to_owned()),
+        title: Some("chat ready".to_owned()),
+        progress_line: None,
+        intro_lines: Vec::new(),
+        sections,
+        choices: Vec::new(),
+        footer_lines: Vec::new(),
+    }
+}
+
+fn build_cli_chat_status_message_spec(summary: &CliChatStartupSummary) -> TuiMessageSpec {
+    let caption = format!("session={}", summary.session_id);
+    let mut sections = build_cli_chat_runtime_sections(summary);
+    let operator_callout = TuiSectionSpec::Callout {
+        tone: TuiCalloutTone::Info,
+        title: Some("operator controls".to_owned()),
+        lines: vec![format!(
+            "Use {CLI_CHAT_COMPACT_COMMAND} to checkpoint the active session window on demand."
+        )],
+    };
+    sections.push(operator_callout);
+
+    TuiMessageSpec {
+        role: "status".to_owned(),
+        caption: Some(caption),
+        sections,
+        footer_lines: Vec::new(),
+    }
+}
+
+fn build_cli_chat_runtime_sections(summary: &CliChatStartupSummary) -> Vec<TuiSectionSpec> {
+    let allowed_channels = if summary.allowed_channels.is_empty() {
+        "-".to_owned()
+    } else {
+        summary.allowed_channels.join(",")
+    };
+    let compaction_min_messages = summary
+        .compaction_min_messages
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let compaction_trigger_estimated_tokens = summary
+        .compaction_trigger_estimated_tokens
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    let runtime_line = format!(
+        "ACP enabled={} dispatch_enabled={} routing={} backend={} ({}) allowed_channels={allowed_channels}",
+        summary.acp_enabled,
+        summary.dispatch_enabled,
+        summary.conversation_routing,
+        summary.acp_backend_id,
+        summary.acp_backend_source,
+    );
+    let session_items = vec![
+        TuiKeyValueSpec::Plain {
+            key: "session".to_owned(),
+            value: summary.session_id.clone(),
         },
-        TuiSectionSpec::KeyValues {
-            title: Some("runtime details".to_owned()),
-            items: vec![
-                TuiKeyValueSpec::Plain {
-                    key: "context engine".to_owned(),
-                    value: format!(
-                        "{} ({})",
-                        summary.context_engine_id, summary.context_engine_source
-                    ),
-                },
-                TuiKeyValueSpec::Plain {
-                    key: "acp".to_owned(),
-                    value: runtime_line,
-                },
-            ],
+        TuiKeyValueSpec::Plain {
+            key: "config".to_owned(),
+            value: summary.config_path.clone(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: "memory".to_owned(),
+            value: summary.memory_label.clone(),
         },
     ];
+    let context_engine_value = format!(
+        "{} ({})",
+        summary.context_engine_id, summary.context_engine_source
+    );
+    let runtime_items = vec![
+        TuiKeyValueSpec::Plain {
+            key: "context engine".to_owned(),
+            value: context_engine_value,
+        },
+        TuiKeyValueSpec::Plain {
+            key: "acp".to_owned(),
+            value: runtime_line,
+        },
+    ];
+    let session_section = TuiSectionSpec::KeyValues {
+        title: Some("session details".to_owned()),
+        items: session_items,
+    };
+    let runtime_section = TuiSectionSpec::KeyValues {
+        title: Some("runtime details".to_owned()),
+        items: runtime_items,
+    };
+    let continuity_section = TuiSectionSpec::KeyValues {
+        title: Some("continuity maintenance".to_owned()),
+        items: vec![
+            TuiKeyValueSpec::Plain {
+                key: "compaction".to_owned(),
+                value: summary.compaction_enabled.to_string(),
+            },
+            TuiKeyValueSpec::Plain {
+                key: "min messages".to_owned(),
+                value: compaction_min_messages,
+            },
+            TuiKeyValueSpec::Plain {
+                key: "trigger tokens".to_owned(),
+                value: compaction_trigger_estimated_tokens,
+            },
+            TuiKeyValueSpec::Plain {
+                key: "preserve recent".to_owned(),
+                value: summary.compaction_preserve_recent_turns.to_string(),
+            },
+            TuiKeyValueSpec::Plain {
+                key: "fail open".to_owned(),
+                value: summary.compaction_fail_open.to_string(),
+            },
+        ],
+    };
+    let mut sections = vec![session_section, runtime_section, continuity_section];
 
     if summary.explicit_acp_request
         || summary.event_stream_enabled
@@ -1031,16 +1184,7 @@ fn build_cli_chat_startup_screen_spec(summary: &CliChatStartupSummary) -> TuiScr
         });
     }
 
-    TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("interactive chat".to_owned()),
-        title: Some("chat ready".to_owned()),
-        progress_line: None,
-        intro_lines: Vec::new(),
-        sections,
-        choices: Vec::new(),
-        footer_lines: Vec::new(),
-    }
+    sections
 }
 
 fn render_cli_chat_help_lines_with_width(width: usize) -> Vec<String> {
@@ -1051,11 +1195,19 @@ fn render_cli_chat_help_lines_with_width(width: usize) -> Vec<String> {
 fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
     let command_items = vec![
         TuiKeyValueSpec::Plain {
-            key: "/help".to_owned(),
+            key: CLI_CHAT_HELP_COMMAND.to_owned(),
             value: "show chat commands".to_owned(),
         },
         TuiKeyValueSpec::Plain {
-            key: "/history".to_owned(),
+            key: CLI_CHAT_COMPACT_COMMAND.to_owned(),
+            value: "write a continuity-safe checkpoint into the active window".to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_STATUS_COMMAND.to_owned(),
+            value: "show session, runtime, compaction, and durability status".to_owned(),
+        },
+        TuiKeyValueSpec::Plain {
+            key: CLI_CHAT_HISTORY_COMMAND.to_owned(),
             value: "print the current session sliding window".to_owned(),
         },
         TuiKeyValueSpec::Plain {
@@ -1071,7 +1223,7 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
             value: "summarize durable turn finalization state".to_owned(),
         },
         TuiKeyValueSpec::Plain {
-            key: "/turn_checkpoint_repair".to_owned(),
+            key: CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND.to_owned(),
             value: "repair durable turn finalization tail when safe".to_owned(),
         },
         TuiKeyValueSpec::Plain {
@@ -1081,7 +1233,9 @@ fn build_cli_chat_help_message_spec() -> TuiMessageSpec {
     ];
     let note_lines = vec![
         "Type any non-command text to send a normal assistant turn.".to_owned(),
+        "Use /status to inspect runtime maintenance settings without sending a turn.".to_owned(),
         "Use /history to inspect the active memory window when a reply feels off.".to_owned(),
+        "Use /compact to checkpoint the active session before the next turn.".to_owned(),
     ];
 
     TuiMessageSpec {
@@ -1128,6 +1282,85 @@ fn build_cli_chat_history_message_spec(
         caption: Some(caption),
         sections: vec![history_section],
         footer_lines: Vec::new(),
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn render_manual_compaction_lines_with_width(
+    session_id: &str,
+    result: &ManualCompactionResult,
+    width: usize,
+) -> Vec<String> {
+    let message_spec = build_manual_compaction_message_spec(session_id, result);
+    render_tui_message_spec(&message_spec, width)
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn build_manual_compaction_message_spec(
+    session_id: &str,
+    result: &ManualCompactionResult,
+) -> TuiMessageSpec {
+    let caption = format!("session={session_id}");
+    let status = format_manual_compaction_status(result.status).to_owned();
+    let estimated_tokens_before = format_manual_compaction_tokens(result.estimated_tokens_before);
+    let estimated_tokens_after = format_manual_compaction_tokens(result.estimated_tokens_after);
+    let tone = manual_compaction_tone(result.status);
+
+    let result_section = TuiSectionSpec::KeyValues {
+        title: Some("compaction result".to_owned()),
+        items: vec![
+            tui_plain_item("status", status),
+            tui_plain_item("before turns", result.before_turns.to_string()),
+            tui_plain_item("after turns", result.after_turns.to_string()),
+            tui_plain_item("tokens before", estimated_tokens_before),
+            tui_plain_item("tokens after", estimated_tokens_after),
+            tui_plain_item(
+                "summary",
+                result
+                    .summary_headline
+                    .clone()
+                    .unwrap_or_else(|| "-".to_owned()),
+            ),
+        ],
+    };
+
+    let detail_section = TuiSectionSpec::Callout {
+        tone,
+        title: Some("details".to_owned()),
+        lines: vec![result.detail.clone()],
+    };
+
+    TuiMessageSpec {
+        role: "compact".to_owned(),
+        caption: Some(caption),
+        sections: vec![result_section, detail_section],
+        footer_lines: Vec::new(),
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_manual_compaction_status(status: ManualCompactionStatus) -> &'static str {
+    match status {
+        ManualCompactionStatus::Applied => "applied",
+        ManualCompactionStatus::NoChange => "no_change",
+        ManualCompactionStatus::FailedOpen => "failed_open",
+    }
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn format_manual_compaction_tokens(value: Option<usize>) -> String {
+    let Some(value) = value else {
+        return "-".to_owned();
+    };
+    value.to_string()
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn manual_compaction_tone(status: ManualCompactionStatus) -> TuiCalloutTone {
+    match status {
+        ManualCompactionStatus::Applied => TuiCalloutTone::Success,
+        ManualCompactionStatus::NoChange => TuiCalloutTone::Info,
+        ManualCompactionStatus::FailedOpen => TuiCalloutTone::Warning,
     }
 }
 
@@ -2391,6 +2624,40 @@ fn print_help() {
 }
 
 #[allow(clippy::print_stdout)] // CLI output
+async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResult<()> {
+    #[cfg(feature = "memory-sqlite")]
+    {
+        let binding = ConversationRuntimeBinding::kernel(&runtime.kernel_ctx);
+        let result = load_manual_compaction_result(
+            &runtime.config,
+            &runtime.session_id,
+            &runtime.turn_coordinator,
+            binding,
+            &runtime.memory_config,
+        )
+        .await?;
+        let render_width = detect_cli_chat_render_width();
+        let rendered_lines =
+            render_manual_compaction_lines_with_width(&runtime.session_id, &result, render_width);
+        print_rendered_cli_chat_lines(&rendered_lines);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "memory-sqlite"))]
+    {
+        let _ = runtime;
+        let render_width = detect_cli_chat_render_width();
+        let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
+            "compact",
+            "manual compaction unavailable: memory-sqlite feature disabled",
+            render_width,
+        );
+        print_rendered_cli_chat_lines(&rendered_lines);
+        Ok(())
+    }
+}
+
+#[allow(clippy::print_stdout)] // CLI output
 async fn print_history(
     session_id: &str,
     limit: usize,
@@ -2423,6 +2690,147 @@ async fn print_history(
 
         print_rendered_cli_chat_lines(&rendered_lines);
         Ok(())
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn load_manual_compaction_result(
+    config: &LoongClawConfig,
+    session_id: &str,
+    turn_coordinator: &ConversationTurnCoordinator,
+    binding: ConversationRuntimeBinding<'_>,
+    _memory_config: &MemoryRuntimeConfig,
+) -> CliResult<ManualCompactionResult> {
+    let before_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
+    let before_turns = resolve_manual_compaction_turn_count(&before_snapshot);
+    let report = turn_coordinator
+        .compact_session(config, session_id, binding)
+        .await?;
+    let after_snapshot = load_manual_compaction_window_snapshot(session_id, binding).await?;
+    let after_turns = resolve_manual_compaction_turn_count(&after_snapshot);
+    let summary_headline = extract_manual_compaction_summary_headline(&after_snapshot);
+    let status = manual_compaction_status_from_report(&report)?;
+    let detail = build_manual_compaction_detail(status, &summary_headline);
+
+    Ok(ManualCompactionResult {
+        status,
+        before_turns,
+        after_turns,
+        estimated_tokens_before: report.estimated_tokens_before,
+        estimated_tokens_after: report.estimated_tokens_after,
+        summary_headline,
+        detail,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn load_manual_compaction_window_snapshot(
+    session_id: &str,
+    binding: ConversationRuntimeBinding<'_>,
+) -> CliResult<ManualCompactionWindowSnapshot> {
+    const MAX_MANUAL_COMPACTION_WINDOW_TURNS: usize = 512;
+
+    let kernel_ctx = binding
+        .kernel_context()
+        .ok_or_else(|| "manual compaction requires a kernel-bound session".to_owned())?;
+    let caps = BTreeSet::from([Capability::MemoryRead]);
+    let request = loongclaw_contracts::MemoryCoreRequest {
+        operation: memory::MEMORY_OP_WINDOW.to_owned(),
+        payload: json!({
+            "session_id": session_id,
+            "limit": MAX_MANUAL_COMPACTION_WINDOW_TURNS,
+            "allow_extended_limit": true,
+        }),
+    };
+    let outcome = kernel_ctx
+        .kernel
+        .execute_memory_core(
+            kernel_ctx.pack_id(),
+            &kernel_ctx.token,
+            &caps,
+            None,
+            request,
+        )
+        .await
+        .map_err(|error| format!("load compaction window via kernel failed: {error}"))?;
+
+    if outcome.status != "ok" {
+        let status = outcome.status;
+        let message = format!("load compaction window via kernel returned non-ok status: {status}");
+        return Err(message);
+    }
+
+    let turns = memory::decode_window_turns(&outcome.payload);
+    let turn_count = memory::decode_window_turn_count(&outcome.payload);
+
+    Ok(ManualCompactionWindowSnapshot { turns, turn_count })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_manual_compaction_turn_count(snapshot: &ManualCompactionWindowSnapshot) -> usize {
+    snapshot.turn_count.unwrap_or(snapshot.turns.len())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn extract_manual_compaction_summary_headline(
+    snapshot: &ManualCompactionWindowSnapshot,
+) -> Option<String> {
+    let first_turn = snapshot.turns.first()?;
+    let content = first_turn.content.trim();
+    if !content.starts_with("Compacted ") {
+        return None;
+    }
+
+    let headline = content.lines().next()?.trim();
+    Some(headline.to_owned())
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn manual_compaction_status_from_report(
+    report: &ContextCompactionReport,
+) -> CliResult<ManualCompactionStatus> {
+    if report.was_applied() {
+        return Ok(ManualCompactionStatus::Applied);
+    }
+
+    if report.was_skipped() {
+        return Ok(ManualCompactionStatus::NoChange);
+    }
+
+    if report.was_failed_open() {
+        return Ok(ManualCompactionStatus::FailedOpen);
+    }
+
+    let status_label = report.status_label();
+    let message = format!("manual compaction returned unexpected status: {status_label}");
+    Err(message)
+}
+
+#[cfg(any(test, feature = "memory-sqlite"))]
+fn build_manual_compaction_detail(
+    status: ManualCompactionStatus,
+    summary_headline: &Option<String>,
+) -> String {
+    let continuity_note = runtime_self_continuity::compaction_summary_scope_note();
+    match status {
+        ManualCompactionStatus::Applied => match summary_headline {
+            Some(headline) => {
+                format!("{headline}. {continuity_note}")
+            }
+            None => {
+                format!(
+                    "Compaction completed and the active session window was rewritten. {continuity_note}"
+                )
+            }
+        },
+        ManualCompactionStatus::NoChange => {
+            "No compaction change applied. The active session was already summarized or already compact enough."
+                .to_owned()
+        }
+        ManualCompactionStatus::FailedOpen => {
+            "Compaction failed open and left the current history unchanged. Inspect /status and /history before continuing."
+                .to_owned()
+        }
     }
 }
 
@@ -2565,18 +2973,46 @@ fn parse_turn_checkpoint_summary_limit(
     )
 }
 
-fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
-    let mut tokens = input.split_whitespace();
+fn parse_exact_chat_command(input: &str, aliases: &[&str], usage: &str) -> CliResult<bool> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+
+    let mut tokens = trimmed.split_whitespace();
     let Some(command) = tokens.next() else {
         return Ok(false);
     };
-    if command != "/turn_checkpoint_repair" && command != "/turn-checkpoint-repair" {
+    if !aliases.contains(&command) {
         return Ok(false);
     }
+
     if tokens.next().is_some() {
-        return Err("usage: /turn_checkpoint_repair".to_owned());
+        return Err(usage.to_owned());
     }
+
     Ok(true)
+}
+
+fn is_manual_compaction_command(input: &str) -> CliResult<bool> {
+    let aliases = [CLI_CHAT_COMPACT_COMMAND];
+    let usage = "usage: /compact";
+    parse_exact_chat_command(input, &aliases, usage)
+}
+
+fn is_cli_chat_status_command(input: &str) -> CliResult<bool> {
+    let aliases = [CLI_CHAT_STATUS_COMMAND];
+    let usage = "usage: /status";
+    parse_exact_chat_command(input, &aliases, usage)
+}
+
+fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
+    let aliases = [
+        CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND,
+        CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS,
+    ];
+    let usage = "usage: /turn_checkpoint_repair";
+    parse_exact_chat_command(input, &aliases, usage)
 }
 
 #[allow(clippy::print_stdout)] // CLI output
@@ -4514,6 +4950,69 @@ mod tests {
     };
     #[cfg(feature = "memory-sqlite")]
     use serde_json::{Value, json};
+
+    #[cfg(feature = "memory-sqlite")]
+    fn test_config() -> LoongClawConfig {
+        let mut config = LoongClawConfig::default();
+        config.provider = crate::config::ProviderConfig::default();
+        config.audit.mode = crate::config::AuditMode::InMemory;
+        config
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn unique_memory_sqlite_path(suffix: &str) -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let file_name = format!("loongclaw-chat-{suffix}-{nanos}.sqlite");
+        let path = std::env::temp_dir().join(file_name);
+        path.display().to_string()
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    fn test_kernel_context_with_memory(
+        agent_id: &str,
+        memory_config: &MemoryRuntimeConfig,
+    ) -> crate::KernelContext {
+        let clock = Arc::new(FixedClock::new(1_700_000_000));
+        let audit = Arc::new(InMemoryAuditSink::default());
+        let mut kernel = LoongClawKernel::with_runtime(StaticPolicyEngine::default(), clock, audit);
+
+        let pack = VerticalPackManifest {
+            pack_id: "test-pack-memory".to_owned(),
+            domain: "testing".to_owned(),
+            version: "0.1.0".to_owned(),
+            default_route: ExecutionRoute {
+                harness_kind: HarnessKind::EmbeddedPi,
+                adapter: None,
+            },
+            allowed_connectors: BTreeSet::new(),
+            granted_capabilities: BTreeSet::from([Capability::MemoryRead, Capability::MemoryWrite]),
+            metadata: BTreeMap::new(),
+        };
+
+        kernel
+            .register_pack(pack)
+            .expect("register memory test pack");
+
+        let adapter = crate::memory::MvpMemoryAdapter::with_config(memory_config.clone());
+        kernel.register_core_memory_adapter(adapter);
+
+        kernel
+            .set_default_core_memory_adapter("mvp-memory")
+            .expect("set memory test adapter");
+
+        let token = kernel
+            .issue_token("test-pack-memory", agent_id, 60)
+            .expect("issue memory test token");
+
+        crate::KernelContext {
+            kernel: Arc::new(kernel),
+            token,
+        }
+    }
+
     #[test]
     fn cli_chat_options_detect_explicit_acp_requests() {
         assert!(
@@ -5383,6 +5882,11 @@ mod tests {
                 session_id: "default".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "config".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
                 acp_enabled: true,
                 dispatch_enabled: true,
                 conversation_routing: "automatic".to_owned(),
@@ -5424,8 +5928,16 @@ mod tests {
             "chat startup should still preserve runtime context in a compact secondary section: {lines:#?}"
         );
         assert!(
+            lines.iter().any(|line| line == "continuity maintenance"),
+            "chat startup should show compaction maintenance settings in a dedicated section: {lines:#?}"
+        );
+        assert!(
             lines.iter().any(|line| line == "- session: default"),
             "chat startup should continue to show session identity after the handoff block: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "- compaction: true"),
+            "chat startup should show whether automatic compaction is enabled: {lines:#?}"
         );
     }
 
@@ -5438,6 +5950,11 @@ mod tests {
                 session_id: "thread-42".to_owned(),
                 context_engine_id: "threaded".to_owned(),
                 context_engine_source: "env".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
                 acp_enabled: true,
                 dispatch_enabled: true,
                 conversation_routing: "manual".to_owned(),
@@ -5467,6 +5984,57 @@ mod tests {
                 .iter()
                 .any(|line| line == "- working directory: /workspace/project"),
             "chat startup should still surface the working directory override: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_status_lines_focus_on_runtime_state_without_start_here() {
+        let lines = render_cli_chat_status_lines_with_width(
+            &CliChatStartupSummary {
+                config_path: "/tmp/loongclaw.toml".to_owned(),
+                memory_label: "/tmp/loongclaw.db".to_owned(),
+                session_id: "default".to_owned(),
+                context_engine_id: "threaded".to_owned(),
+                context_engine_source: "config".to_owned(),
+                compaction_enabled: true,
+                compaction_min_messages: Some(6),
+                compaction_trigger_estimated_tokens: Some(120),
+                compaction_preserve_recent_turns: 4,
+                compaction_fail_open: false,
+                acp_enabled: true,
+                dispatch_enabled: true,
+                conversation_routing: "automatic".to_owned(),
+                allowed_channels: vec!["cli".to_owned()],
+                acp_backend_id: "builtin".to_owned(),
+                acp_backend_source: "default".to_owned(),
+                explicit_acp_request: false,
+                event_stream_enabled: false,
+                bootstrap_mcp_servers: Vec::new(),
+                working_directory: None,
+            },
+            80,
+        );
+
+        assert_eq!(lines[0], "status: session=default");
+        assert!(
+            lines.iter().any(|line| line == "session details"),
+            "status output should keep session facts grouped under a section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "runtime details"),
+            "status output should keep runtime facts grouped under a section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "continuity maintenance"),
+            "status output should surface compaction maintenance settings: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "note: operator controls"),
+            "status output should include the operator control callout: {lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.starts_with("start here:")),
+            "status output should not re-render the first-turn guidance block: {lines:#?}"
         );
     }
 
@@ -5774,12 +6342,111 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|line| line == "- /history: print the current session sliding window"),
+                .any(|line| line.contains("/history: print the current session sliding window")),
             "help output should render slash commands as readable key-value rows: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line
+                .contains("/status: show session, runtime, compaction, and durability status")),
+            "help output should surface the status command: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line
+                .contains("/compact: write a continuity-safe checkpoint into the active window")),
+            "help output should surface the manual compaction command: {lines:#?}"
         );
         assert!(
             lines.iter().any(|line| line == "note: usage notes"),
             "help output should preserve operator guidance as a callout: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_cli_chat_status_lines_surface_runtime_and_compaction_controls() {
+        let summary = CliChatStartupSummary {
+            config_path: "/tmp/loongclaw.toml".to_owned(),
+            memory_label: "window_plus_summary".to_owned(),
+            session_id: "session-status".to_owned(),
+            context_engine_id: "default".to_owned(),
+            context_engine_source: "config".to_owned(),
+            compaction_enabled: true,
+            compaction_min_messages: Some(6),
+            compaction_trigger_estimated_tokens: Some(12_000),
+            compaction_preserve_recent_turns: 4,
+            compaction_fail_open: true,
+            acp_enabled: true,
+            dispatch_enabled: true,
+            conversation_routing: "auto".to_owned(),
+            allowed_channels: vec!["cli".to_owned()],
+            acp_backend_id: "builtin".to_owned(),
+            acp_backend_source: "config".to_owned(),
+            explicit_acp_request: false,
+            event_stream_enabled: false,
+            bootstrap_mcp_servers: Vec::new(),
+            working_directory: None,
+        };
+
+        let lines = render_cli_chat_status_lines_with_width(&summary, 80);
+
+        assert_eq!(lines[0], "status: session=session-status");
+        assert!(
+            lines.iter().any(|line| line == "continuity maintenance"),
+            "status output should expose compaction settings as a dedicated section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("compaction: true")),
+            "status output should expose compaction enablement: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("trigger tokens: 12000")),
+            "status output should surface the compaction token trigger: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line == "note: operator controls"),
+            "status output should append the operator controls callout: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("checkpoint the active session window on demand")),
+            "status output should direct operators toward manual compaction: {lines:#?}"
+        );
+    }
+
+    #[test]
+    fn render_manual_compaction_lines_surface_structured_result() {
+        let result = ManualCompactionResult {
+            status: ManualCompactionStatus::Applied,
+            before_turns: 8,
+            after_turns: 3,
+            estimated_tokens_before: Some(1200),
+            estimated_tokens_after: Some(420),
+            summary_headline: Some("Compacted 6 earlier turns".to_owned()),
+            detail: "Compacted 6 earlier turns. Session-local recall only. It does not replace Runtime Self Context.".to_owned(),
+        };
+
+        let lines = render_manual_compaction_lines_with_width("session-compact", &result, 80);
+
+        assert_eq!(lines[0], "compact: session=session-compact");
+        assert!(
+            lines.iter().any(|line| line == "compaction result"),
+            "manual compaction should render a dedicated result section: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("status: applied")),
+            "manual compaction should surface the applied status: {lines:#?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("tokens after: 420")),
+            "manual compaction should surface token estimates: {lines:#?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Runtime Self Context")),
+            "manual compaction should preserve the continuity boundary detail: {lines:#?}"
         );
     }
 
@@ -6422,6 +7089,115 @@ allowed_decisions: yes / auto / full / esc";
         let error = is_turn_checkpoint_repair_command("/turn_checkpoint_repair now")
             .expect_err("extra args should be rejected");
         assert!(error.contains("usage"));
+    }
+
+    #[test]
+    fn is_cli_chat_status_command_accepts_exact_match_and_rejects_extra_args() {
+        assert!(is_cli_chat_status_command("/status").expect("parse"));
+        assert!(!is_cli_chat_status_command("/history").expect("parse"));
+
+        let error =
+            is_cli_chat_status_command("/status now").expect_err("extra args should be rejected");
+        assert_eq!(error, "usage: /status");
+    }
+
+    #[test]
+    fn is_manual_compaction_command_accepts_exact_match_and_rejects_extra_args() {
+        assert!(is_manual_compaction_command("/compact").expect("parse"));
+        assert!(!is_manual_compaction_command("/history").expect("parse"));
+
+        let error = is_manual_compaction_command("/compact now")
+            .expect_err("extra args should be rejected");
+        assert_eq!(error, "usage: /compact");
+    }
+
+    #[test]
+    fn manual_compaction_status_from_report_maps_failed_open() {
+        let report = ContextCompactionReport {
+            status: TurnCheckpointProgressStatus::FailedOpen,
+            estimated_tokens_before: Some(420),
+            estimated_tokens_after: Some(420),
+        };
+
+        let status =
+            manual_compaction_status_from_report(&report).expect("failed_open should map cleanly");
+
+        assert_eq!(status, ManualCompactionStatus::FailedOpen);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
+        let mut config = test_config();
+        let db_path = unique_memory_sqlite_path("chat-manual-compaction");
+        let _ = std::fs::remove_file(&db_path);
+        config.memory.sqlite_path = db_path.clone();
+        config.memory.sliding_window = 32;
+        config.conversation.compact_enabled = false;
+        config.conversation.compact_preserve_recent_turns = 2;
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let kernel_ctx = test_kernel_context_with_memory("chat-manual-compaction", &memory_config);
+        let session_id = "chat-manual-compaction";
+
+        for (role, content) in [
+            ("user", "ask 1"),
+            ("assistant", "reply 1"),
+            ("user", "ask 2"),
+            ("assistant", "reply 2"),
+            ("user", "ask 3"),
+            ("assistant", "reply 3"),
+            ("user", "recent ask"),
+            ("assistant", "recent reply"),
+        ] {
+            crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+                .expect("seed turns should succeed");
+        }
+
+        let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
+        let turn_coordinator = ConversationTurnCoordinator::new();
+        let result = load_manual_compaction_result(
+            &config,
+            session_id,
+            &turn_coordinator,
+            binding,
+            &memory_config,
+        )
+        .await
+        .expect("manual compaction should succeed");
+
+        assert_eq!(result.status, ManualCompactionStatus::Applied);
+        assert_eq!(result.before_turns, 8);
+        assert_eq!(result.after_turns, 3);
+        assert!(
+            result.estimated_tokens_before.is_some(),
+            "manual compaction should surface a before-token estimate"
+        );
+        assert!(
+            result.estimated_tokens_after.is_some(),
+            "manual compaction should surface an after-token estimate"
+        );
+        assert!(
+            result
+                .summary_headline
+                .as_deref()
+                .is_some_and(|headline| headline.contains("Compacted 6 earlier turns"))
+        );
+        assert!(
+            result.detail.contains("Runtime Self Context"),
+            "manual compaction detail should reuse the continuity boundary note"
+        );
+
+        let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+            .expect("window load should succeed");
+        assert!(
+            turns[0]
+                .content
+                .contains("Does not replace Runtime Self Context"),
+            "manual compaction should persist the continuity-aware checkpoint"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     fn test_turn_checkpoint_diagnostics(

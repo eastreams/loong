@@ -32,13 +32,14 @@ use crate::operator::delegate_runtime::{
     build_delegate_child_lifecycle_seed, next_delegate_child_depth,
 };
 use crate::runtime_self_continuity;
+use crate::tools::runtime_tool_view_for_config;
 
 use super::super::config::LoongClawConfig;
 use super::ConversationSessionAddress;
 use super::ProviderErrorMode;
 use super::analytics::{
-    SafeLaneEventSummary, TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan,
-    summarize_safe_lane_history,
+    SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
+    TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
 };
 #[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
@@ -139,6 +140,43 @@ use crate::session::repository::{
 
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextCompactionReport {
+    pub status: AnalyticsTurnCheckpointProgressStatus,
+    pub estimated_tokens_before: Option<usize>,
+    pub estimated_tokens_after: Option<usize>,
+}
+
+impl ContextCompactionReport {
+    pub fn status_label(&self) -> &'static str {
+        match self.status {
+            AnalyticsTurnCheckpointProgressStatus::Pending => "pending",
+            AnalyticsTurnCheckpointProgressStatus::Skipped => "skipped",
+            AnalyticsTurnCheckpointProgressStatus::Completed => "completed",
+            AnalyticsTurnCheckpointProgressStatus::Failed => "failed",
+            AnalyticsTurnCheckpointProgressStatus::FailedOpen => "failed_open",
+        }
+    }
+
+    pub fn was_applied(&self) -> bool {
+        matches!(
+            self.status,
+            AnalyticsTurnCheckpointProgressStatus::Completed
+        )
+    }
+
+    pub fn was_skipped(&self) -> bool {
+        matches!(self.status, AnalyticsTurnCheckpointProgressStatus::Skipped)
+    }
+
+    pub fn was_failed_open(&self) -> bool {
+        matches!(
+            self.status,
+            AnalyticsTurnCheckpointProgressStatus::FailedOpen
+        )
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SafeLaneExecutionMetrics {
@@ -1102,6 +1140,66 @@ fn parse_pending_approval_input_decision(input: &str) -> Option<PendingApprovalI
 impl ConversationTurnCoordinator {
     pub fn new() -> Self {
         Self
+    }
+
+    pub async fn compact_session(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ContextCompactionReport> {
+        let runtime = DefaultConversationRuntime::from_config_or_env(config)?;
+        self.compact_session_with_runtime(config, session_id, &runtime, binding)
+            .await
+    }
+
+    pub async fn compact_session_with_runtime<R: ConversationRuntime + ?Sized>(
+        &self,
+        config: &LoongClawConfig,
+        session_id: &str,
+        runtime: &R,
+        binding: ConversationRuntimeBinding<'_>,
+    ) -> CliResult<ContextCompactionReport> {
+        let tool_view = runtime_tool_view_for_config(&config.tools);
+        let before_messages = runtime
+            .build_messages(config, session_id, false, &tool_view, binding)
+            .await?;
+        let estimated_tokens_before = estimate_tokens(&before_messages);
+        let compaction_outcome = maybe_compact_context(
+            config,
+            runtime,
+            session_id,
+            &before_messages,
+            estimated_tokens_before,
+            binding,
+            true,
+        )
+        .await?;
+
+        let mut status = compaction_outcome.checkpoint_status();
+        let mut estimated_tokens_after = estimated_tokens_before;
+
+        if compaction_outcome == ContextCompactionOutcome::Completed {
+            let after_messages = runtime
+                .build_messages(config, session_id, false, &tool_view, binding)
+                .await?;
+            let did_change = before_messages != after_messages;
+            let next_estimated_tokens = estimate_tokens(&after_messages);
+
+            estimated_tokens_after = next_estimated_tokens;
+
+            if !did_change {
+                status = TurnCheckpointProgressStatus::Skipped;
+            }
+        }
+
+        let report = ContextCompactionReport {
+            status: analytics_turn_checkpoint_progress_status(status),
+            estimated_tokens_before,
+            estimated_tokens_after,
+        };
+
+        Ok(report)
     }
 
     pub async fn handle_turn(
@@ -2146,12 +2244,17 @@ async fn maybe_compact_context<R: ConversationRuntime + ?Sized>(
     messages: &[Value],
     estimated_tokens: Option<usize>,
     binding: ConversationRuntimeBinding<'_>,
+    force: bool,
 ) -> CliResult<ContextCompactionOutcome> {
     let estimated_tokens = estimated_tokens.or_else(|| estimate_tokens(messages));
-    if !config
-        .conversation
-        .should_compact_with_estimate(messages.len(), estimated_tokens)
-    {
+    let should_attempt_compaction = if force {
+        true
+    } else {
+        config
+            .conversation
+            .should_compact_with_estimate(messages.len(), estimated_tokens)
+    };
+    if !should_attempt_compaction {
         return Ok(ContextCompactionOutcome::Skipped);
     }
     let Some(kernel_ctx) = binding.kernel_context() else {
@@ -2344,6 +2447,20 @@ fn estimate_tokens(messages: &[Value]) -> Option<usize> {
     });
 
     Some(estimated)
+}
+
+fn analytics_turn_checkpoint_progress_status(
+    status: TurnCheckpointProgressStatus,
+) -> AnalyticsTurnCheckpointProgressStatus {
+    match status {
+        TurnCheckpointProgressStatus::Pending => AnalyticsTurnCheckpointProgressStatus::Pending,
+        TurnCheckpointProgressStatus::Skipped => AnalyticsTurnCheckpointProgressStatus::Skipped,
+        TurnCheckpointProgressStatus::Completed => AnalyticsTurnCheckpointProgressStatus::Completed,
+        TurnCheckpointProgressStatus::Failed => AnalyticsTurnCheckpointProgressStatus::Failed,
+        TurnCheckpointProgressStatus::FailedOpen => {
+            AnalyticsTurnCheckpointProgressStatus::FailedOpen
+        }
+    }
 }
 
 fn lane_policy_from_config(config: &LoongClawConfig) -> LaneArbiterPolicy {
@@ -3376,6 +3493,7 @@ async fn repair_turn_checkpoint_tail_entry<R: ConversationRuntime + ?Sized>(
             resume_input.messages(),
             resume_input.estimated_tokens(),
             binding,
+            false,
         )
         .await
         {
@@ -3597,6 +3715,7 @@ async fn finalize_provider_turn_reply<R: ConversationRuntime + ?Sized>(
             tail_phase.after_turn_messages(),
             tail_phase.estimated_tokens(),
             binding,
+            false,
         )
         .await
         {
@@ -8033,6 +8152,7 @@ mod tests {
             &messages,
             Some(16),
             binding,
+            false,
         ));
 
         assert_eq!(
@@ -8104,6 +8224,7 @@ mod tests {
             &messages,
             Some(16),
             binding,
+            false,
         ));
 
         assert_eq!(
