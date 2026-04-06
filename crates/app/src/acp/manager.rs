@@ -261,6 +261,7 @@ impl AcpSessionManager {
                 tracing::debug!(
                     target: "loongclaw.acp",
                     backend_id = %handle.backend_id,
+                    has_trace_id,
                     state = ?result.state,
                     stop_reason = ?result.stop_reason,
                     reported_event_count,
@@ -269,7 +270,6 @@ impl AcpSessionManager {
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
-                    has_trace_id,
                     "ACP turn completed"
                 );
                 Ok(result)

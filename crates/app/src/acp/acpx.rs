@@ -1008,7 +1008,7 @@ fn quote_command_part(value: &str) -> String {
         ch.is_ascii_alphanumeric()
             || matches!(
                 ch,
-                '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-'
+                '_' | '.' | '/' | ':' | '@' | '+' | '=' | ',' | '-'
             )
     }) {
         return value.to_owned();
