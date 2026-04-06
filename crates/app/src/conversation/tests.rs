@@ -2933,6 +2933,7 @@ fn session_context_keeps_execution_and_contract_in_sync_when_child_contract_is_o
 fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -2940,6 +2941,7 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
+        workspace_root: None,
         runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
         kernel_bound: false,
         identity: None,
@@ -2983,6 +2985,7 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
     };
     let execution = crate::conversation::ConstrainedSubagentExecution {
         mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        isolation: crate::conversation::ConstrainedSubagentIsolation::Shared,
         depth: 1,
         max_depth: 3,
         active_children: 0,
@@ -2990,6 +2993,7 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
         timeout_seconds: 60,
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
+        workspace_root: None,
         runtime_narrowing: execution_runtime_narrowing.clone(),
         kernel_bound: false,
         identity: None,
@@ -22202,6 +22206,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
         .with_async_delegate_spawner(Arc::new(gated_spawner))
         .with_durable_memory_config(memory_config.clone()),
     );
+    let kernel_ctx = test_kernel_context("delegate-async-profile-shaping");
 
     let coordinator = ConversationTurnCoordinator::new();
     let runtime_for_task = runtime.clone();
@@ -22213,7 +22218,7 @@ async fn handle_turn_with_runtime_executes_delegate_async_via_coordinator_withou
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
                 runtime_for_task.as_ref(),
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
             )
             .await
     });
@@ -22428,6 +22433,8 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.delegate.allow_shell_in_child = true;
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -22463,6 +22470,7 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
         .with_async_delegate_spawner(Arc::new(gated_spawner))
         .with_durable_memory_config(memory_config.clone()),
     );
+    let kernel_ctx = test_kernel_context("delegate-async-queued-projection");
 
     let coordinator = ConversationTurnCoordinator::new();
     let runtime_for_task = runtime.clone();
@@ -22474,7 +22482,7 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
                 runtime_for_task.as_ref(),
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
             )
             .await
     });
@@ -22546,6 +22554,8 @@ async fn handle_turn_with_runtime_delegate_async_projects_queued_event_to_parent
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -22581,6 +22591,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_queued_event_to_parent
         .with_async_delegate_spawner(Arc::new(gated_spawner))
         .with_durable_memory_config(memory_config.clone()),
     );
+    let kernel_ctx = test_kernel_context("delegate-async-queued-projection");
 
     let coordinator = ConversationTurnCoordinator::new();
     let runtime_for_task = runtime.clone();
@@ -22592,7 +22603,7 @@ async fn handle_turn_with_runtime_delegate_async_projects_queued_event_to_parent
                 "show raw json tool output",
                 ProviderErrorMode::Propagate,
                 runtime_for_task.as_ref(),
-                ConversationRuntimeBinding::direct(),
+                ConversationRuntimeBinding::kernel(&kernel_ctx),
             )
             .await
     });
@@ -22634,6 +22645,8 @@ async fn handle_turn_with_runtime_delegate_async_projects_terminal_event_to_pare
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -23314,6 +23327,8 @@ async fn handle_turn_with_runtime_delegate_supports_worktree_isolation_for_clean
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.file_root = Some(repo_root.display().to_string());
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -23353,6 +23368,7 @@ async fn handle_turn_with_runtime_delegate_supports_worktree_isolation_for_clean
     )
     .with_durable_memory_config(memory_config.clone());
     let coordinator = ConversationTurnCoordinator::new();
+    let kernel_ctx = test_kernel_context("conversation-delegate-worktree-clean");
 
     let reply = coordinator
         .handle_turn_with_runtime(
@@ -23361,12 +23377,15 @@ async fn handle_turn_with_runtime_delegate_supports_worktree_isolation_for_clean
             "show raw json tool output",
             ProviderErrorMode::Propagate,
             &runtime,
-            ConversationRuntimeBinding::direct(),
+            ConversationRuntimeBinding::kernel(&kernel_ctx),
         )
         .await
         .expect("worktree isolation reply");
 
-    let line = reply.lines().last().expect("tool result line should exist");
+    let line = reply
+        .lines()
+        .find(|line| line.starts_with("[ok] "))
+        .expect("tool result line should exist");
     let payload = line
         .strip_prefix("[ok] ")
         .expect("tool result line should keep [ok] prefix");
@@ -23435,6 +23454,8 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
     config.tools.file_root = Some(repo_root.display().to_string());
+    enable_guided_autonomy(&mut config);
+    preapprove_tool_call(&mut config, "delegate_async");
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)

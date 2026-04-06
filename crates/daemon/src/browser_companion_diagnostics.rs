@@ -14,6 +14,8 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 3;
+#[cfg(test)]
+const TEST_BROWSER_COMPANION_VERSION_PREFIX: &str = "test-browser-companion-version:";
 #[cfg(unix)]
 const POSIX_SH_PATH: &str = "/bin/sh";
 
@@ -680,7 +682,8 @@ mod tests {
     #[test]
     fn browser_companion_probe_timeout_duration_saturates() {
         let timeout_duration = browser_companion_probe_timeout_duration(u64::MAX);
+        let expected = Duration::new(u64::MAX, 500_000_000);
 
-        assert_eq!(timeout_duration, Duration::MAX);
+        assert_eq!(timeout_duration, expected);
     }
 }

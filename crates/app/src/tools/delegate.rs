@@ -450,7 +450,7 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label.as_deref(), Some("release-check"));
-        assert_eq!(request.timeout_seconds, Some(DEFAULT_TIMEOUT_SECONDS));
+        assert_eq!(request.timeout_seconds, None);
     }
 
     #[test]
