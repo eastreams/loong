@@ -2361,11 +2361,13 @@ mod tests {
     #[test]
     fn injected_config_overrides_global() {
         let _env = ScopedEnv::new();
-        std::fs::create_dir_all("/tmp/injected-root").expect("create injected file root");
+        let injected_root = tempfile::tempdir().expect("create injected file root");
+        let injected_root_path = injected_root.path().to_path_buf();
+        let config_path = injected_root_path.join("loongclaw.toml");
         let config = ToolRuntimeConfig {
-            file_root: Some(PathBuf::from("/tmp/injected-root")),
+            file_root: Some(injected_root_path),
             shell_allow: BTreeSet::from(["echo".to_owned()]),
-            config_path: Some(PathBuf::from("/tmp/injected-root/loongclaw.toml")),
+            config_path: Some(config_path),
             ..ToolRuntimeConfig::default()
         };
         let result = crate::tools::execute_tool_core_with_config(
