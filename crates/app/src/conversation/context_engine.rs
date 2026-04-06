@@ -951,6 +951,77 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn default_engine_kernel_bound_workspace_recall_system_reorders_retrieved_memory() {
+        let capabilities = std::collections::BTreeSet::from([
+            loongclaw_contracts::Capability::InvokeTool,
+            loongclaw_contracts::Capability::FilesystemRead,
+            loongclaw_contracts::Capability::FilesystemWrite,
+            loongclaw_contracts::Capability::MemoryRead,
+        ]);
+        let harness = TurnTestHarness::with_capabilities(capabilities);
+        let session_id = "kernel-workspace-recall-session";
+        let sqlite_path = harness.temp_dir.join("memory.sqlite3");
+        let sqlite_path_text = sqlite_path.display().to_string();
+        let curated_memory_path = harness.temp_dir.join("MEMORY.md");
+
+        std::fs::write(
+            &curated_memory_path,
+            "# Durable Notes\n\nPromote workspace recall above history.\n",
+        )
+        .expect("write durable recall");
+
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(harness.temp_dir.display().to_string());
+        config.memory.sqlite_path = sqlite_path_text;
+        config.memory.system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
+
+        let memory_config =
+            memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        memory::append_turn_direct(session_id, "user", "turn 1", &memory_config)
+            .expect("append turn 1 should succeed");
+        memory::append_turn_direct(session_id, "assistant", "turn 2", &memory_config)
+            .expect("append turn 2 should succeed");
+
+        let binding =
+            ConversationRuntimeBinding::from_optional_kernel_context(Some(&harness.kernel_ctx));
+        let assembled = DefaultContextEngine
+            .assemble_context(&config, session_id, true, binding)
+            .await
+            .expect("assemble context");
+
+        assert!(
+            assembled.messages.len() >= 3,
+            "expected system prompt, retrieved memory, and history turns"
+        );
+        let retrieved_artifact = assembled
+            .artifacts
+            .iter()
+            .find(|artifact| artifact.artifact_kind == ContextArtifactKind::RetrievedMemory)
+            .expect("retrieved memory artifact");
+        let retrieved_index = retrieved_artifact.message_index;
+        let retrieved_message = &assembled.messages[retrieved_index];
+
+        assert_eq!(retrieved_message["role"], "system");
+        assert!(
+            retrieved_message["content"]
+                .as_str()
+                .is_some_and(|content| content.contains("Promote workspace recall above history.")),
+            "expected a retrieved memory message containing workspace recall content"
+        );
+        let first_user_index = assembled
+            .messages
+            .iter()
+            .position(|message| message["role"] == "user")
+            .expect("first history message index");
+        assert!(
+            retrieved_index < first_user_index,
+            "retrieved memory (index {retrieved_index}) should precede history (index {first_user_index})"
+        );
+        assert_eq!(assembled.messages[first_user_index]["content"], "turn 1");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn default_engine_kernel_bound_messages_match_provider_governed_profile_projection() {
         let capabilities = std::collections::BTreeSet::from([
             loongclaw_contracts::Capability::InvokeTool,

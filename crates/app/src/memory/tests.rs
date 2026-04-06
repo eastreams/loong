@@ -340,6 +340,32 @@ fn load_prompt_context_with_diagnostics_projects_typed_personalization_without_p
 
 #[cfg(feature = "memory-sqlite")]
 #[test]
+fn load_prompt_context_with_diagnostics_uses_selected_memory_system_id_in_provenance() {
+    let (root, mut config) = isolated_memory_workspace("loongclaw-selected-system-provenance");
+    let session_id = "selected-system-provenance-session";
+
+    config.resolved_system_id = Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
+
+    append_turn_direct(session_id, "user", "hello from selected system", &config)
+        .expect("append_turn_direct should succeed");
+
+    let (entries, _diagnostics) = load_prompt_context_with_diagnostics(session_id, &config)
+        .expect("load_prompt_context_with_diagnostics should succeed");
+
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].provenance.len(), 1);
+    assert_eq!(
+        entries[0].provenance[0].memory_system_id,
+        crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID
+    );
+
+    let sqlite_path = config.sqlite_path.expect("sqlite path");
+    let _ = std::fs::remove_file(sqlite_path);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[test]
 fn pre_compaction_durable_flush_deduplicates_repeated_summary_exports() {
     let durable_flush_lock = crate::test_support::durable_memory_flush_test_lock();
     let _durable_flush_guard = durable_flush_lock.blocking_lock();

@@ -1,14 +1,14 @@
 use loongclaw_contracts::{MemoryCoreOutcome, MemoryCoreRequest};
 use serde_json::{Value, json};
 
-use crate::config::MemoryMode;
-use crate::config::MemoryProfile;
+use crate::config::{MemoryMode, MemoryProfile, MemorySystemKind};
 use crate::runtime_identity;
 
 #[cfg(feature = "memory-sqlite")]
 use super::sqlite;
 use super::{
-    MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, encode_stage_envelope_payload,
+    MEMORY_OP_READ_CONTEXT, MEMORY_OP_READ_STAGE_ENVELOPE, MemoryContextProvenance,
+    MemoryProvenanceSourceKind, MemoryRecallMode, MemoryScope, encode_stage_envelope_payload,
     orchestrator::hydrate_stage_envelope_with_workspace_root,
     protocol::{MemoryContextEntry, MemoryContextKind},
     runtime_config::MemoryRuntimeConfig,
@@ -59,6 +59,31 @@ fn read_context_runtime_config(
 
         runtime_config.profile = profile;
         runtime_config.mode = mode;
+    }
+
+    if let Some(system_value) = payload.get("system") {
+        let system_text = system_value
+            .as_str()
+            .ok_or_else(|| "memory.read_context payload.system must be a string".to_owned())?;
+        let system = MemorySystemKind::parse_id(system_text).ok_or_else(|| {
+            format!("memory.read_context payload.system `{system_text}` is unsupported")
+        })?;
+
+        runtime_config.system = system;
+    }
+
+    if let Some(system_id_value) = payload.get("system_id") {
+        let normalized_system_id = match system_id_value {
+            Value::Null => None,
+            Value::String(raw_value) => super::normalize_system_id(raw_value.as_str()),
+            Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_) => {
+                return Err(
+                    "memory.read_context payload.system_id must be a string or null".to_owned(),
+                );
+            }
+        };
+
+        runtime_config.resolved_system_id = normalized_system_id;
     }
 
     if let Some(sliding_window_value) = payload.get("sliding_window") {
@@ -175,11 +200,11 @@ pub fn load_prompt_context(
     config: &MemoryRuntimeConfig,
 ) -> Result<Vec<MemoryContextEntry>, String> {
     let mut entries = Vec::new();
-
     let profile_entry = build_profile_entry(config);
     if let Some(profile_entry) = profile_entry {
         entries.push(profile_entry);
     }
+    let selected_system_id = super::selected_prompt_hydration_system_id(config);
 
     #[cfg(feature = "memory-sqlite")]
     {
@@ -194,6 +219,14 @@ pub fn load_prompt_context(
                 kind: MemoryContextKind::Summary,
                 role: "system".to_owned(),
                 content: summary,
+                provenance: vec![MemoryContextProvenance::new(
+                    selected_system_id.as_str(),
+                    MemoryProvenanceSourceKind::SummaryCheckpoint,
+                    Some(session_id.to_owned()),
+                    None,
+                    Some(MemoryScope::Session),
+                    MemoryRecallMode::PromptAssembly,
+                )],
             });
         }
         for turn in snapshot.window_turns {
@@ -201,6 +234,14 @@ pub fn load_prompt_context(
                 kind: MemoryContextKind::Turn,
                 role: turn.role,
                 content: turn.content,
+                provenance: vec![MemoryContextProvenance::new(
+                    selected_system_id.as_str(),
+                    MemoryProvenanceSourceKind::RecentWindowTurn,
+                    Some(session_id.to_owned()),
+                    None,
+                    Some(MemoryScope::Session),
+                    MemoryRecallMode::PromptAssembly,
+                )],
             });
         }
     }
@@ -228,6 +269,14 @@ pub(super) fn build_profile_entry(config: &MemoryRuntimeConfig) -> Option<Memory
         kind: MemoryContextKind::Profile,
         role: "system".to_owned(),
         content: profile_section,
+        provenance: vec![MemoryContextProvenance::new(
+            super::selected_prompt_hydration_system_id(config).as_str(),
+            MemoryProvenanceSourceKind::ProfileNote,
+            None,
+            None,
+            Some(MemoryScope::Session),
+            MemoryRecallMode::PromptAssembly,
+        )],
     })
 }
 
@@ -284,6 +333,28 @@ mod tests {
                 .any(|entry| entry.content.contains("turn 1")),
             "expected summary to mention older turns"
         );
+        let summary_entry = hydrated
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Summary)
+            .expect("summary entry");
+        assert_eq!(summary_entry.provenance.len(), 1);
+        assert_eq!(
+            summary_entry.provenance[0].source_kind,
+            MemoryProvenanceSourceKind::SummaryCheckpoint
+        );
+        assert_eq!(
+            summary_entry.provenance[0].scope,
+            Some(MemoryScope::Session)
+        );
+        let turn_entry = hydrated
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Turn)
+            .expect("turn entry");
+        assert_eq!(turn_entry.provenance.len(), 1);
+        assert_eq!(
+            turn_entry.provenance[0].source_kind,
+            MemoryProvenanceSourceKind::RecentWindowTurn
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
@@ -326,6 +397,19 @@ mod tests {
                 .iter()
                 .any(|entry| entry.content.contains("Imported ZeroClaw preferences")),
             "expected profile note content"
+        );
+        let profile_entry = hydrated
+            .iter()
+            .find(|entry| entry.kind == MemoryContextKind::Profile)
+            .expect("profile entry");
+        assert_eq!(profile_entry.provenance.len(), 1);
+        assert_eq!(
+            profile_entry.provenance[0].source_kind,
+            MemoryProvenanceSourceKind::ProfileNote
+        );
+        assert_eq!(
+            profile_entry.provenance[0].scope,
+            Some(MemoryScope::Session)
         );
 
         let _ = std::fs::remove_file(&db_path);
@@ -718,6 +802,35 @@ mod tests {
         assert!(
             has_durable_recall,
             "expected staged envelope payload to keep workspace durable recall"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn load_prompt_context_uses_selected_memory_system_id_in_provenance() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let db_path = temp_dir.path().join("selected-system.sqlite3");
+
+        let mut config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path),
+            profile: crate::config::MemoryProfile::WindowOnly,
+            mode: crate::config::MemoryMode::WindowOnly,
+            ..MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id =
+            Some(crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned());
+
+        super::super::append_turn_direct("selected-system-session", "user", "hello", &config)
+            .expect("append turn should succeed");
+
+        let entries =
+            load_prompt_context("selected-system-session", &config).expect("load prompt context");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].provenance.len(), 1);
+        assert_eq!(
+            entries[0].provenance[0].memory_system_id,
+            crate::memory::WORKSPACE_RECALL_MEMORY_SYSTEM_ID
         );
     }
 }

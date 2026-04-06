@@ -5887,6 +5887,12 @@ pub fn memory_system_metadata_json(
         .copied()
         .map(mvp::memory::MemoryStageFamily::as_str)
         .collect::<Vec<_>>();
+    let supported_recall_modes = metadata
+        .supported_recall_modes
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryRecallMode::as_str)
+        .collect::<Vec<_>>();
     let mut payload = serde_json::Map::new();
     payload.insert("id".to_owned(), json!(metadata.id));
     payload.insert("api_version".to_owned(), json!(metadata.api_version));
@@ -5897,6 +5903,10 @@ pub fn memory_system_metadata_json(
     payload.insert(
         "supported_pre_assembly_stage_families".to_owned(),
         json!(supported_pre_assembly_stage_families),
+    );
+    payload.insert(
+        "supported_recall_modes".to_owned(),
+        json!(supported_recall_modes),
     );
     payload.insert("summary".to_owned(), json!(metadata.summary));
     if let Some(source) = source {
@@ -5910,6 +5920,15 @@ fn format_memory_stage_family_names(families: &[mvp::memory::MemoryStageFamily])
         .iter()
         .copied()
         .map(mvp::memory::MemoryStageFamily::as_str)
+        .collect::<Vec<_>>();
+    render_string_list(names)
+}
+
+fn format_memory_recall_mode_names(recall_modes: &[mvp::memory::MemoryRecallMode]) -> String {
+    let names = recall_modes
+        .iter()
+        .copied()
+        .map(mvp::memory::MemoryRecallMode::as_str)
         .collect::<Vec<_>>();
     render_string_list(names)
 }
@@ -5956,15 +5975,18 @@ pub fn render_memory_system_snapshot_text(
             .selected_metadata
             .supported_pre_assembly_stage_families,
     );
+    let selected_recall_modes =
+        format_memory_recall_mode_names(&snapshot.selected_metadata.supported_recall_modes);
     let mut lines = vec![
         format!("config={config_path}"),
         format!(
-            "selected={} source={} api_version={} capabilities={} pre_assembly_stages={} summary={}",
+            "selected={} source={} api_version={} capabilities={} pre_assembly_stages={} recall_modes={} summary={}",
             snapshot.selected_metadata.id,
             snapshot.selected.source.as_str(),
             snapshot.selected_metadata.api_version,
             format_capability_names(&selected_capabilities),
             selected_pre_assembly_stages,
+            selected_recall_modes,
             snapshot.selected_metadata.summary
         ),
         format!(
@@ -5985,12 +6007,14 @@ pub fn render_memory_system_snapshot_text(
         let capabilities = metadata.capability_names();
         let pre_assembly_stages =
             format_memory_stage_family_names(&metadata.supported_pre_assembly_stage_families);
+        let recall_modes = format_memory_recall_mode_names(&metadata.supported_recall_modes);
         lines.push(format!(
-            "- {} api_version={} capabilities={} pre_assembly_stages={} summary={}",
+            "- {} api_version={} capabilities={} pre_assembly_stages={} recall_modes={} summary={}",
             metadata.id,
             metadata.api_version,
             format_capability_names(&capabilities),
             pre_assembly_stages,
+            recall_modes,
             metadata.summary
         ));
     }

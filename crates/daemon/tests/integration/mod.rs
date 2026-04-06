@@ -1424,6 +1424,10 @@ fn memory_system_metadata_json_includes_stage_families_summary_and_source() {
         payload["supported_pre_assembly_stage_families"],
         json!(["derive", "retrieve", "rank"])
     );
+    assert_eq!(
+        payload["supported_recall_modes"],
+        json!(["prompt_assembly"])
+    );
 }
 
 #[test]
@@ -1448,6 +1452,10 @@ fn build_memory_systems_cli_json_payload_includes_runtime_policy() {
     assert_eq!(
         payload["selected"]["supported_pre_assembly_stage_families"],
         json!(["derive", "retrieve", "rank"])
+    );
+    assert_eq!(
+        payload["selected"]["supported_recall_modes"],
+        json!(["prompt_assembly"])
     );
     assert_eq!(payload["policy"]["backend"], "sqlite");
     assert_eq!(payload["policy"]["profile"], "window_plus_summary");
@@ -1477,11 +1485,11 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
 
     assert!(rendered.contains("config=/tmp/loongclaw.toml"));
     assert!(rendered.contains(
-        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration pre_assembly_stages=derive,retrieve,rank"
+        "selected=builtin source=default api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly"
     ));
     assert!(rendered.contains("policy=backend:sqlite profile:window_plus_summary mode:window_plus_summary ingest_mode:async_background fail_open:false strict_mode_requested:true strict_mode_active:false effective_fail_open:true"));
     assert!(rendered.contains(
-        "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration pre_assembly_stages=derive,retrieve,rank"
+        "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration,retrieval_provenance pre_assembly_stages=derive,retrieve,rank recall_modes=prompt_assembly"
     ));
 }
 
