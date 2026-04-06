@@ -4,6 +4,7 @@ mod autonomy_policy;
 mod compaction;
 mod context_engine;
 mod context_engine_registry;
+mod delegate_child_runtime;
 mod ingress;
 mod lane_arbiter;
 mod persistence;
