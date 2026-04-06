@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 
@@ -1084,6 +1085,7 @@ impl Drop for SessionActorGuard {
     }
 }
 
+#[cfg(test)]
 const IDENTIFIER_FINGERPRINT_HEX_PREFIX_LEN: usize = 24;
 
 fn normalized_identifier(raw: Option<&str>) -> Option<String> {
@@ -1096,6 +1098,7 @@ fn normalized_conversation_id(raw: Option<&str>) -> Option<String> {
     normalized_identifier(raw)
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RedactedBindingScopeForLog {
     route_session_id: String,
@@ -1105,11 +1108,13 @@ struct RedactedBindingScopeForLog {
     thread_id: Option<String>,
 }
 
+#[cfg(test)]
 fn redact_identifier_for_log(raw: Option<&str>) -> Option<String> {
     let normalized = normalized_identifier(raw)?;
     Some(identifier_fingerprint(normalized.as_str()))
 }
 
+#[cfg(test)]
 fn identifier_fingerprint(raw: &str) -> String {
     let digest = Sha256::digest(raw.as_bytes());
     let hex = hex::encode(digest);
@@ -1117,6 +1122,7 @@ fn identifier_fingerprint(raw: &str) -> String {
     format!("sha256:{prefix}")
 }
 
+#[cfg(test)]
 fn redact_binding_scope_for_log(
     binding: Option<&AcpSessionBindingScope>,
 ) -> Option<RedactedBindingScopeForLog> {
