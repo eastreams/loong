@@ -23759,20 +23759,12 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     assert_eq!(payloads[0]["isolation"], "worktree");
     assert_eq!(payloads[0]["workspace_retained"], true);
 
-    let git_executable = delegate_test_git_executable();
-    let cleanup_status = std::process::Command::new(git_executable)
-        .args([
-            "-C",
-            workspace_root.as_str(),
-            "worktree",
-            "remove",
-            "--force",
-            workspace_root.as_str(),
-        ])
-        .status()
-        .expect("cleanup retained worktree status");
+    let cleanup_result = super::workspace_isolation::cleanup_prepared_delegate_workspace_root(
+        ConstrainedSubagentIsolation::Worktree,
+        Some(worktree_root.as_path()),
+    );
     assert!(
-        cleanup_status.success(),
+        cleanup_result.is_ok(),
         "cleanup retained worktree should succeed"
     );
 }

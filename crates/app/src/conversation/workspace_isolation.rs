@@ -185,16 +185,55 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
         OsStr::new("--force"),
         worktree_root.as_os_str(),
     ];
-    let output = run_git_command(&args)?;
-    if output.status.success() {
-        return Ok(());
+    let display_path = worktree_root.display();
+
+    #[cfg(windows)]
+    {
+        const REMOVE_RETRY_ATTEMPTS: usize = 5;
+        const REMOVE_RETRY_DELAY_MS: u64 = 100;
+
+        for attempt_index in 0..REMOVE_RETRY_ATTEMPTS {
+            let output = run_git_command(&args)?;
+            if output.status.success() {
+                return Ok(());
+            }
+
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            let has_retry_budget = attempt_index + 1 < REMOVE_RETRY_ATTEMPTS;
+            let should_retry =
+                has_retry_budget && should_retry_delegate_worktree_remove(stderr.as_str());
+            if should_retry {
+                std::thread::sleep(std::time::Duration::from_millis(REMOVE_RETRY_DELAY_MS));
+                continue;
+            }
+
+            return Err(format!(
+                "remove delegate worktree `{display_path}` failed: {stderr}"
+            ));
+        }
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let display_path = worktree_root.display();
-    Err(format!(
-        "remove delegate worktree `{display_path}` failed: {stderr}"
-    ))
+    #[cfg(not(windows))]
+    {
+        let output = run_git_command(&args)?;
+        if output.status.success() {
+            return Ok(());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "remove delegate worktree `{display_path}` failed: {stderr}"
+        ));
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+#[cfg(windows)]
+fn should_retry_delegate_worktree_remove(stderr: &str) -> bool {
+    let lowercase_stderr = stderr.to_ascii_lowercase();
+    lowercase_stderr.contains("permission denied") || lowercase_stderr.contains("access is denied")
 }
 
 fn delegate_worktree_is_dirty(workspace_root: &Path) -> Result<bool, String> {
