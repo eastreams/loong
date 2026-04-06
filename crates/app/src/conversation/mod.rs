@@ -1,4 +1,5 @@
 pub mod analytics;
+mod announce;
 mod approval_resolution;
 mod autonomy_policy;
 mod compaction;

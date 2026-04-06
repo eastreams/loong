@@ -2508,6 +2508,69 @@ impl SessionRepository {
         })
     }
 
+    pub fn append_event_if_session_active(
+        &self,
+        event: NewSessionEvent,
+    ) -> Result<Option<SessionEventRecord>, String> {
+        let session_id = normalize_required_text(&event.session_id, "session_id")?;
+        let event_kind = normalize_required_text(&event.event_kind, "event_kind")?;
+        let actor_session_id = normalize_optional_text(event.actor_session_id);
+        let ts = unix_ts_now();
+        let payload_value = event.payload_json;
+        let payload_json = serde_json::to_string(&payload_value)
+            .map_err(|error| format!("encode session event payload failed: {error}"))?;
+
+        let mut conn = self.open_connection()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("open session append transaction failed: {error}"))?;
+        let raw_state = tx
+            .query_row(
+                "SELECT state FROM sessions WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| format!("load session state for append failed: {error}"))?;
+        let Some(raw_state) = raw_state else {
+            return Ok(None);
+        };
+        let session_state = SessionState::from_db(raw_state.as_str())?;
+        let session_is_terminal = matches!(
+            session_state,
+            SessionState::Completed | SessionState::Failed | SessionState::TimedOut
+        );
+        if session_is_terminal {
+            return Ok(None);
+        }
+
+        tx.execute(
+            "INSERT INTO session_events(
+                session_id, event_kind, actor_session_id, payload_json, ts
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                session_id.as_str(),
+                event_kind.as_str(),
+                actor_session_id.as_deref(),
+                payload_json.as_str(),
+                ts,
+            ],
+        )
+        .map_err(|error| format!("insert session event failed: {error}"))?;
+        let event_id = tx.last_insert_rowid();
+        tx.commit()
+            .map_err(|error| format!("commit session append transaction failed: {error}"))?;
+
+        Ok(Some(SessionEventRecord {
+            id: event_id,
+            session_id,
+            event_kind,
+            actor_session_id,
+            payload_json: payload_value,
+            ts,
+        }))
+    }
+
     fn open_connection(&self) -> Result<Connection, String> {
         Connection::open(&self.db_path)
             .map_err(|error| format!("open session repository sqlite db failed: {error}"))

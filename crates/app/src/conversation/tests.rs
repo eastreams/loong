@@ -41,7 +41,7 @@ use crate::memory::{
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
-    NewSessionToolPolicyRecord, SessionKind, SessionRepository, SessionState,
+    NewSessionToolPolicyRecord, SessionEventRecord, SessionKind, SessionRepository, SessionState,
     TransitionApprovalRequestIfCurrentRequest,
 };
 #[cfg(feature = "memory-sqlite")]
@@ -49,6 +49,58 @@ use crate::test_support::unique_temp_dir;
 
 #[cfg(feature = "memory-sqlite")]
 const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
+
+#[cfg(feature = "memory-sqlite")]
+async fn wait_for_delegate_announce_event(
+    repo: &SessionRepository,
+    parent_session_id: &str,
+    expected_child_session_id: &str,
+) -> SessionEventRecord {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+
+    loop {
+        let events = repo
+            .list_recent_events(parent_session_id, 20)
+            .expect("list parent events");
+        let announce_event = events.into_iter().find(|event| {
+            let event_kind_matches =
+                event.event_kind == super::announce::DELEGATE_RESULTS_ANNOUNCED_EVENT_KIND;
+            if !event_kind_matches {
+                return false;
+            }
+
+            let results = event.payload_json.get("results");
+            let results = results.and_then(Value::as_array);
+            let Some(results) = results else {
+                return false;
+            };
+
+            results.iter().any(|result| {
+                let child_session_id = result.get("child_session_id");
+                child_session_id == Some(&Value::String(expected_child_session_id.to_owned()))
+            })
+        });
+        if let Some(announce_event) = announce_event {
+            return announce_event;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            panic!("timed out waiting for delegate announce event");
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn make_delegate_announce_test_config(db_path: &std::path::Path) -> LoongClawConfig {
+    let mut config = test_config();
+    config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.announce_debounce_ms = 0;
+    enable_guided_autonomy(&mut config);
+
+    config
+}
 
 #[cfg(feature = "memory-sqlite")]
 fn run_conversation_test_on_large_stack<F>(thread_name: &str, operation: F)
@@ -19675,9 +19727,7 @@ async fn handle_turn_with_runtime_requires_approval_before_delegate_execution() 
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     config.tools.approval.mode = crate::config::GovernedToolApprovalMode::Strict;
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -19793,9 +19843,7 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -19917,6 +19965,21 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
         frozen_result.content,
         crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
     );
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        announce_event.payload_json["results"][0]["frozen_result"]["content"]["text"],
+        "Child final output"
+    );
 
     let requested = runtime
         .turn_requested_tool_views
@@ -19936,9 +19999,7 @@ async fn handle_turn_with_runtime_kernel_delegate_calls_subagent_lifecycle_hooks
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -20066,6 +20127,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.announce_debounce_ms = 0;
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -20148,6 +20210,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.announce_debounce_ms = 0;
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -20234,6 +20297,17 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     assert_eq!(
         frozen_result.content,
         crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
+    );
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
     );
 
     assert_eq!(
@@ -23150,6 +23224,22 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+
+    let announce_event =
+        wait_for_delegate_announce_event(&repo, "root-session", &child.session_id).await;
+    assert_eq!(
+        announce_event.payload_json["announce_kind"],
+        "delegate_result"
+    );
+    assert_eq!(announce_event.payload_json["result_count"], 1);
+    assert_eq!(
+        announce_event.payload_json["results"][0]["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        announce_event.payload_json["results"][0]["frozen_result"]["content"]["error"]["code"],
+        "spawn unavailable"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
