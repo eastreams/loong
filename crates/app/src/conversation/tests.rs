@@ -2954,6 +2954,45 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
     );
 }
 
+#[test]
+fn resolved_subagent_contract_uses_effective_runtime_narrowing_over_stale_contract_view() {
+    let effective_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
+        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+            max_sessions: Some(1),
+            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+        },
+        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+    };
+    let stale_contract_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
+        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+            max_sessions: Some(3),
+            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+        },
+        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+    };
+    let mut session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
+    )
+    .with_runtime_narrowing(effective_runtime_narrowing.clone());
+
+    session_context.subagent_contract = Some(
+        crate::conversation::ConstrainedSubagentContractView::from_runtime_narrowing(
+            stale_contract_runtime_narrowing,
+        ),
+    );
+
+    let resolved_runtime_narrowing = session_context
+        .resolved_subagent_contract()
+        .map(|contract| contract.runtime_narrowing);
+
+    assert_eq!(
+        resolved_runtime_narrowing,
+        Some(effective_runtime_narrowing)
+    );
+}
+
 #[tokio::test]
 async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine_with_kernel() {
     let calls = Arc::new(Mutex::new(Vec::new()));

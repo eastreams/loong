@@ -3063,6 +3063,42 @@ mod tests {
     }
 
     #[test]
+    fn merge_runtime_narrowing_sources_handles_empty_and_single_source_inputs() {
+        let primary_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(2),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            ..ToolRuntimeNarrowing::default()
+        };
+        let empty_runtime_narrowing = ToolRuntimeNarrowing::default();
+
+        let none_result = merge_runtime_narrowing_sources(None, None);
+        let primary_only_result =
+            merge_runtime_narrowing_sources(Some(primary_runtime_narrowing.clone()), None);
+        let secondary_only_result =
+            merge_runtime_narrowing_sources(None, Some(primary_runtime_narrowing.clone()));
+        let empty_primary_result =
+            merge_runtime_narrowing_sources(Some(empty_runtime_narrowing.clone()), None);
+        let empty_primary_with_secondary_result = merge_runtime_narrowing_sources(
+            Some(empty_runtime_narrowing),
+            Some(primary_runtime_narrowing.clone()),
+        );
+
+        assert!(none_result.is_none());
+        assert_eq!(primary_only_result, Some(primary_runtime_narrowing.clone()));
+        assert_eq!(
+            secondary_only_result,
+            Some(primary_runtime_narrowing.clone())
+        );
+        assert!(empty_primary_result.is_none());
+        assert_eq!(
+            empty_primary_with_secondary_result,
+            Some(primary_runtime_narrowing)
+        );
+    }
+
+    #[test]
     fn delegate_child_prompt_summary_returns_none_when_narrowing_is_empty() {
         assert_eq!(
             ToolRuntimeConfig::default().delegate_child_prompt_summary(None),

@@ -225,9 +225,7 @@ impl SessionContext {
             contract = contract.with_profile(profile);
         }
         let resolved_runtime_narrowing = self.resolved_runtime_narrowing().cloned();
-        if contract.runtime_narrowing.is_empty()
-            && let Some(runtime_narrowing) = resolved_runtime_narrowing
-        {
+        if let Some(runtime_narrowing) = resolved_runtime_narrowing {
             contract = contract.with_runtime_narrowing(runtime_narrowing);
         }
         (!contract.is_empty()).then_some(contract)
