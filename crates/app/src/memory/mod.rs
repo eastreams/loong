@@ -15,6 +15,7 @@ mod context;
 #[cfg(feature = "memory-sqlite")]
 mod durable_flush;
 mod durable_recall;
+mod execution;
 mod kernel_adapter;
 mod orchestrator;
 mod protocol;
@@ -37,6 +38,11 @@ pub use canonical::{
 pub use context::load_prompt_context;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use durable_flush::flush_pre_compaction_durable_memory;
+pub(crate) use durable_recall::load_durable_recall_entries;
+pub use execution::{
+    BuiltinMemoryPreAssemblyExecutor, MemoryPreAssemblyContext, MemoryPreAssemblyExecutor,
+    RecallFirstMemoryPreAssemblyExecutor,
+};
 pub use kernel_adapter::MvpMemoryAdapter;
 pub(crate) use orchestrator::run_compact_stage;
 pub use orchestrator::{
@@ -59,13 +65,13 @@ pub(crate) use sqlite::CanonicalMemorySearchHit;
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{ConversationTurn, SqliteBootstrapDiagnostics, SqliteContextLoadDiagnostics};
 pub use stage::{
-    DerivedMemoryKind, MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
-    MemoryRetrievalRequest, MemoryStageFamily, StageDiagnostics, StageEnvelope, StageOutcome,
-    builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
+    DerivedMemoryKind, MemoryRetrievalRequest, MemoryStageFamily, StageDiagnostics, StageEnvelope,
+    StageOutcome, builtin_post_turn_stage_families, builtin_pre_assembly_stage_families,
 };
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
-    MemorySystemCapability, MemorySystemMetadata, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
+    MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
+    RecallFirstMemorySystem,
 };
 pub use system_registry::{
     MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,
@@ -268,7 +274,6 @@ pub fn load_prompt_context_with_diagnostics(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(Vec<MemoryContextEntry>, SqliteContextLoadDiagnostics), String> {
     let mut profile_entry = context::build_profile_entry(config);
-    let selected_system_id = selected_prompt_hydration_system_id(config);
 
     let (snapshot, diagnostics) =
         sqlite::load_context_snapshot_with_diagnostics(session_id, config)?;
@@ -290,14 +295,6 @@ pub fn load_prompt_context_with_diagnostics(
             kind: MemoryContextKind::Summary,
             role: "system".to_owned(),
             content: summary,
-            provenance: vec![MemoryContextProvenance::new(
-                selected_system_id.as_str(),
-                MemoryProvenanceSourceKind::SummaryCheckpoint,
-                Some(session_id.to_owned()),
-                None,
-                Some(MemoryScope::Session),
-                MemoryRecallMode::PromptAssembly,
-            )],
         });
     }
     for turn in snapshot.window_turns {
@@ -305,27 +302,10 @@ pub fn load_prompt_context_with_diagnostics(
             kind: MemoryContextKind::Turn,
             role: turn.role,
             content: turn.content,
-            provenance: vec![MemoryContextProvenance::new(
-                selected_system_id.as_str(),
-                MemoryProvenanceSourceKind::RecentWindowTurn,
-                Some(session_id.to_owned()),
-                None,
-                Some(MemoryScope::Session),
-                MemoryRecallMode::PromptAssembly,
-            )],
         });
     }
 
     Ok((entries, diagnostics))
-}
-
-#[cfg(feature = "memory-sqlite")]
-pub(crate) fn selected_prompt_hydration_system_id(
-    config: &runtime_config::MemoryRuntimeConfig,
-) -> String {
-    let selected_system_id = registered_memory_system_id(Some(config.selected_system_id()));
-
-    selected_system_id.unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned())
 }
 
 #[cfg(feature = "memory-sqlite")]

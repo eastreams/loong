@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::config::{
-    AuditMode, AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
+    AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
@@ -34,11 +34,18 @@ use crate::memory::MEMORY_OP_WINDOW;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
+use crate::memory::{
+    MemorySystem, MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
+    register_memory_system,
+};
+#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestStatus, NewApprovalGrantRecord, NewSessionEvent, NewSessionRecord,
     NewSessionToolPolicyRecord, SessionKind, SessionRepository, SessionState,
     TransitionApprovalRequestIfCurrentRequest,
 };
+#[cfg(feature = "memory-sqlite")]
+use crate::test_support::unique_temp_dir;
 
 #[cfg(feature = "memory-sqlite")]
 const DEEP_DELEGATE_REENTRY_TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
@@ -101,6 +108,25 @@ enum FakeTurnResponse {
 }
 
 type CompactHook = Arc<dyn Fn(&str, &[Value]) -> Result<(), String> + Send + Sync>;
+
+#[cfg(feature = "memory-sqlite")]
+struct RegistryRetrieveOnlyConversationMemorySystem;
+
+#[cfg(feature = "memory-sqlite")]
+impl MemorySystem for RegistryRetrieveOnlyConversationMemorySystem {
+    fn id(&self) -> &'static str {
+        "registry-retrieve-only-conversation"
+    }
+
+    fn metadata(&self) -> MemorySystemMetadata {
+        MemorySystemMetadata::new(
+            "registry-retrieve-only-conversation",
+            [MemorySystemCapability::PromptHydration],
+            "Conversation test registry-selected memory system",
+        )
+        .with_supported_pre_assembly_stage_families([crate::memory::MemoryStageFamily::Retrieve])
+    }
+}
 
 struct TraitDefaultToolViewRuntime;
 struct NoopTurnMiddleware {
@@ -1641,12 +1667,10 @@ impl ConversationRuntime for FakeRuntime {
 }
 
 fn test_config() -> LoongClawConfig {
-    let mut config = LoongClawConfig {
+    LoongClawConfig {
         provider: ProviderConfig::default(),
         ..LoongClawConfig::default()
-    };
-    config.audit.mode = AuditMode::InMemory;
-    config
+    }
 }
 
 fn enable_guided_autonomy(config: &mut LoongClawConfig) {
@@ -4129,31 +4153,21 @@ async fn default_runtime_kernel_build_context_preserves_profile_projection() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn default_runtime_build_context_with_workspace_recall_system_reorders_memory_projection() {
-    let runtime = DefaultConversationRuntime::default();
-    let session_id = unique_acp_test_id("default-runtime-context", "workspace-recall-system");
-    let temp_dir = tempfile::tempdir().expect("tempdir");
-    let workspace_root = temp_dir.path();
-    let memory_dir = workspace_root.join("memory");
-    std::fs::create_dir_all(&memory_dir).expect("create memory dir");
-    std::fs::write(
-        workspace_root.join("MEMORY.md"),
-        "# Durable Notes\n\nRemember the deploy freeze window.\n",
-    )
-    .expect("write curated durable memory");
-    std::fs::write(
-        memory_dir.join("2026-03-22.md"),
-        "## Durable Recall\n\nCustomer migration starts tomorrow.\n",
-    )
-    .expect("write daily durable memory");
+async fn default_runtime_build_context_with_registry_selected_system_skips_builtin_memory_projection()
+ {
+    register_memory_system("registry-retrieve-only-conversation", || {
+        Box::new(RegistryRetrieveOnlyConversationMemorySystem)
+    })
+    .expect("register conversation registry-selected memory system");
 
-    let sqlite_path = unique_memory_sqlite_path("workspace-recall-system");
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "registry-selected-system");
+    let sqlite_path = unique_memory_sqlite_path("registry-selected-system");
     let mut config = test_config();
-    config.memory.system = MemorySystemKind::WorkspaceRecall;
+    config.memory.system_id = Some("registry-retrieve-only-conversation".to_owned());
     config.memory.profile = MemoryProfile::WindowPlusSummary;
     config.memory.sliding_window = 2;
     config.memory.sqlite_path = sqlite_path.clone();
-    config.tools.file_root = Some(workspace_root.display().to_string());
 
     let runtime_config =
         crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -4192,46 +4206,97 @@ async fn default_runtime_build_context_with_workspace_recall_system_reorders_mem
         ]
     );
     assert!(
-        assembled.messages.iter().any(|message| {
-            message["role"] == "system"
-                && message["content"]
-                    .as_str()
-                    .is_some_and(|content| content.contains("Remember the deploy freeze window."))
-        }),
-        "workspace recall system should project durable recall into the runtime context"
-    );
-    let durable_recall_index = assembled
-        .messages
-        .iter()
-        .position(|message| {
-            message["role"] == "system"
-                && message["content"]
-                    .as_str()
-                    .is_some_and(|content| content.contains("Remember the deploy freeze window."))
-        })
-        .expect("workspace recall system message index");
-    let first_window_turn_index = assembled
-        .messages
-        .iter()
-        .position(|message| {
-            message["role"] == "assistant" && message["content"].as_str() == Some("turn 2")
-        })
-        .expect("first projected window turn index");
-    assert!(
-        durable_recall_index < first_window_turn_index,
-        "workspace recall should be ranked ahead of projected recent history"
-    );
-    assert!(
         !assembled.messages.iter().any(|message| {
             message["role"] == "system"
                 && message["content"]
                     .as_str()
                     .is_some_and(|content| content.contains("## Memory Summary"))
         }),
-        "workspace recall system should suppress builtin summary projection after rank-stage reordering"
+        "registry-selected systems without executors should not reuse builtin summary projection"
     );
 
     let _ = std::fs::remove_file(sqlite_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_runtime_build_context_with_recall_first_system_prioritizes_recall_and_suppresses_summary()
+ {
+    let runtime = DefaultConversationRuntime::default();
+    let session_id = unique_acp_test_id("default-runtime-context", "recall-first-system");
+    let sqlite_path = unique_memory_sqlite_path("recall-first-system");
+    let workspace_root = unique_temp_dir("conversation-recall-first-workspace");
+    let memory_file = workspace_root.join("MEMORY.md");
+    let mut config = test_config();
+    config.memory.system_id = Some(RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned());
+    config.memory.profile = MemoryProfile::WindowPlusSummary;
+    config.memory.sliding_window = 2;
+    config.memory.sqlite_path = sqlite_path.clone();
+    config.tools.file_root = Some(workspace_root.display().to_string());
+
+    std::fs::create_dir_all(&workspace_root).expect("create workspace root");
+    std::fs::write(
+        &memory_file,
+        "Release checklist includes rollback verification and smoke tests.",
+    )
+    .expect("write workspace memory file");
+
+    let runtime_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::memory::append_turn_direct(&session_id, "user", "turn 1", &runtime_config)
+        .expect("append turn 1 should succeed");
+    crate::memory::append_turn_direct(&session_id, "assistant", "turn 2", &runtime_config)
+        .expect("append turn 2 should succeed");
+    crate::memory::append_turn_direct(&session_id, "user", "turn 3", &runtime_config)
+        .expect("append turn 3 should succeed");
+
+    let assembled = runtime
+        .build_context(
+            &config,
+            &session_id,
+            true,
+            ConversationRuntimeBinding::direct(),
+        )
+        .await
+        .expect("build context with recall-first system");
+
+    let recall_message_index = assembled
+        .messages
+        .iter()
+        .position(|message| {
+            let role = message["role"].as_str();
+            let content = message["content"].as_str();
+            let is_recall =
+                content.is_some_and(|value| value.contains("## Advisory Durable Recall"));
+            role == Some("system") && is_recall
+        })
+        .expect("expected a projected system recall message");
+    let first_turn_index = assembled
+        .messages
+        .iter()
+        .position(|message| {
+            let role = message["role"].as_str();
+            matches!(role, Some("user" | "assistant"))
+        })
+        .expect("expected projected turn history");
+    let summary_present = assembled.messages.iter().any(|message| {
+        let role = message["role"].as_str();
+        let content = message["content"].as_str();
+        let is_summary = content.is_some_and(|value| value.contains("## Memory Summary"));
+        role == Some("system") && is_summary
+    });
+
+    assert!(
+        recall_message_index < first_turn_index,
+        "expected recall-first system to project durable recall before turn history"
+    );
+    assert!(
+        !summary_present,
+        "recall-first system should suppress builtin summary when recall exists"
+    );
+
+    let _ = std::fs::remove_file(sqlite_path);
+    let _ = std::fs::remove_dir_all(&workspace_root);
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -15911,14 +15976,6 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
             kind: crate::memory::MemoryContextKind::Turn,
             role: turn.role.clone(),
             content: turn.content.clone(),
-            provenance: vec![crate::memory::MemoryContextProvenance::new(
-                "builtin",
-                crate::memory::MemoryProvenanceSourceKind::RecentWindowTurn,
-                Some("fixture-session".to_owned()),
-                None,
-                Some(crate::memory::MemoryScope::Session),
-                crate::memory::MemoryRecallMode::PromptAssembly,
-            )],
         })
         .collect::<Vec<_>>();
     let envelope = crate::memory::StageEnvelope {
@@ -15931,6 +15988,7 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
                 degraded: false,
                 derivation_error: None,
                 retrieval_error: None,
+                rank_error: None,
                 recent_window_count: recent_window.len(),
                 entry_count: entries.len(),
             },

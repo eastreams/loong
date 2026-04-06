@@ -12,7 +12,7 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
-    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
+    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem,
 };
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
@@ -90,8 +90,8 @@ fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
             Arc::new(|| Box::new(BuiltinMemorySystem)),
         );
         map.insert(
-            WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned(),
-            Arc::new(|| Box::new(WorkspaceRecallMemorySystem)),
+            RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(RecallFirstMemorySystem)),
         );
         RwLock::new(map)
     })
@@ -108,9 +108,16 @@ where
 {
     let normalized = super::normalize_system_id(id)
         .ok_or_else(|| "memory system id must not be empty".to_owned())?;
-    if normalized == DEFAULT_MEMORY_SYSTEM_ID {
+
+    let reserved_id = match normalized.as_str() {
+        DEFAULT_MEMORY_SYSTEM_ID => Some(DEFAULT_MEMORY_SYSTEM_ID),
+        RECALL_FIRST_MEMORY_SYSTEM_ID => Some(RECALL_FIRST_MEMORY_SYSTEM_ID),
+        _ => None,
+    };
+
+    if let Some(reserved_id) = reserved_id {
         return Err(format!(
-            "memory system `{DEFAULT_MEMORY_SYSTEM_ID}` is reserved and cannot be overridden"
+            "memory system `{reserved_id}` is reserved and cannot be overridden"
         ));
     }
 
@@ -131,6 +138,11 @@ where
     let mut guard = registry()
         .write()
         .map_err(|_error| "memory system registry lock poisoned".to_owned())?;
+    let already_registered = guard.contains_key(&normalized);
+    if already_registered {
+        let error = format!("memory system `{normalized}` is already registered");
+        return Err(error);
+    }
     guard.insert(normalized, Arc::new(factory));
     Ok(())
 }
@@ -253,7 +265,7 @@ pub fn collect_memory_system_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
+    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
     fn clear_memory_runtime_env_overrides(env: &mut ScopedEnv) {
@@ -280,6 +292,22 @@ mod tests {
                 "registry-custom",
                 [MemorySystemCapability::PromptHydration],
                 "Test registry system",
+            )
+        }
+    }
+
+    struct DuplicateRegistrySystem;
+
+    impl MemorySystem for DuplicateRegistrySystem {
+        fn id(&self) -> &'static str {
+            "registry-duplicate-check"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-duplicate-check",
+                [MemorySystemCapability::PromptHydration],
+                "Duplicate registry test system",
             )
         }
     }
@@ -365,12 +393,36 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_recall_first_override() {
+        let error = register_memory_system(RECALL_FIRST_MEMORY_SYSTEM_ID, || {
+            Box::new(MatchingRegistrySystem)
+        })
+        .expect_err("recall-first memory system should stay reserved");
+        assert!(error.contains("reserved"), "error: {error}");
+    }
+
+    #[test]
     fn registry_rejects_registry_id_mismatches() {
         let error = register_memory_system("registry-custom-alias", || {
             Box::new(MismatchedRegistrySystem)
         })
         .expect_err("registry id mismatch should fail");
         assert!(error.contains("must match"), "error: {error}");
+    }
+
+    #[test]
+    fn registry_rejects_duplicate_custom_id() {
+        register_memory_system("registry-duplicate-check", || {
+            Box::new(DuplicateRegistrySystem)
+        })
+        .expect("register first custom system");
+
+        let error = register_memory_system("registry-duplicate-check", || {
+            Box::new(DuplicateRegistrySystem)
+        })
+        .expect_err("duplicate custom ids should fail");
+
+        assert!(error.contains("already registered"), "error: {error}");
     }
 
     #[test]
@@ -400,25 +452,6 @@ mod tests {
                 .contains(&MemorySystemCapability::CanonicalStore),
             "builtin metadata should include canonical-store capability"
         );
-        assert_eq!(
-            builtin.supported_recall_modes,
-            vec![MemoryRecallMode::PromptAssembly]
-        );
-
-        let workspace_recall = metadata
-            .iter()
-            .find(|entry| entry.id == WORKSPACE_RECALL_MEMORY_SYSTEM_ID)
-            .expect("workspace_recall metadata entry");
-        assert!(
-            workspace_recall
-                .capabilities
-                .contains(&MemorySystemCapability::RetrievalProvenance),
-            "workspace_recall metadata should include retrieval provenance capability"
-        );
-        assert_eq!(
-            workspace_recall.supported_recall_modes,
-            vec![MemoryRecallMode::PromptAssembly]
-        );
     }
 
     #[test]
@@ -433,11 +466,15 @@ mod tests {
     }
 
     #[test]
-    fn memory_system_registry_stays_builtin_only_until_adapter_lands() {
+    fn memory_system_registry_includes_in_tree_recall_first_system() {
         let ids = list_memory_system_ids().expect("list memory-system ids");
         assert!(
+            ids.iter().any(|id| id == RECALL_FIRST_MEMORY_SYSTEM_ID),
+            "expected in-tree alternate memory system to be registered"
+        );
+        assert!(
             !ids.iter().any(|id| id == "lucid"),
-            "future adapter ids should not appear before the adapter actually lands"
+            "future adapter ids should still stay hidden until they actually land"
         );
     }
 
@@ -524,15 +561,15 @@ mod tests {
     fn registry_backed_memory_system_env_surfaces_in_runtime_snapshot() {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
-        register_memory_system("registry-custom", || Box::new(MatchingRegistrySystem))
+        register_memory_system("registry-custom-env", || Box::new(MatchingRegistrySystem))
             .expect("register custom registry system");
-        env.set(MEMORY_SYSTEM_ENV, "registry-custom");
+        env.set(MEMORY_SYSTEM_ENV, "registry-custom-env");
 
         let config = LoongClawConfig::default();
         let snapshot =
             collect_memory_system_runtime_snapshot(&config).expect("collect runtime snapshot");
 
-        assert_eq!(snapshot.selected.id, "registry-custom");
+        assert_eq!(snapshot.selected.id, "registry-custom-env");
         assert_eq!(snapshot.selected.source, MemorySystemSelectionSource::Env);
     }
 
