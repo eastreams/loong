@@ -5492,16 +5492,22 @@ mod tests {
             detail: "Firecrawl Search: FIRECRAWL_API_KEY (expected). web.search will stay unavailable until the provider credential is supplied".to_owned(),
         }];
         let mut config = mvp::config::LoongClawConfig::default();
+        let config_path = Path::new("/tmp/loongclaw.toml");
 
         config.tools.web_search.default_provider =
             mvp::config::WEB_SEARCH_PROVIDER_FIRECRAWL.to_owned();
 
         let next_steps = build_doctor_next_steps_with_path_env(
             &checks,
-            Path::new("/tmp/loongclaw.toml"),
+            config_path,
             &config,
             false,
             Some(std::ffi::OsStr::new("")),
+        );
+        let rerun_onboard_command =
+            crate::cli_handoff::format_subcommand_with_config("onboard", "/tmp/loongclaw.toml");
+        let expected_onboard_step = format!(
+            "Or rerun onboarding to review the web search provider choice: {rerun_onboard_command}"
         );
 
         assert!(
@@ -5511,9 +5517,7 @@ mod tests {
             "doctor should surface the missing Firecrawl env binding as a concrete next step: {next_steps:#?}"
         );
         assert!(
-            next_steps.iter().any(|step| {
-                step == "Or rerun onboarding to review the web search provider choice: loongclaw onboard --config '/tmp/loongclaw.toml'"
-            }),
+            next_steps.iter().any(|step| step == &expected_onboard_step),
             "doctor should keep the onboarding recovery path explicit for web search credentials: {next_steps:#?}"
         );
     }
