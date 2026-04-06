@@ -2,6 +2,55 @@ use super::*;
 
 #[tokio::test]
 #[cfg(unix)]
+async fn doctor_accepts_path_discovered_fake_version_command() {
+    let _lock = lock_acpx_runtime_tests().await;
+    let temp_dir = unique_temp_dir("loongclaw-acpx-probe-path");
+    let bin_dir = temp_dir.join("bin");
+    let script_path = bin_dir.join("fake-acpx");
+    std::fs::create_dir_all(&bin_dir).expect("create bin dir");
+    write_executable_script_atomically(&script_path, "#!/bin/sh\necho 'acpx 0.1.16'\n")
+        .expect("write fake acpx script");
+
+    let mut env = crate::test_support::ScopedEnv::new();
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let original_entries = std::env::split_paths(&original_path);
+    let mut path_entries = vec![bin_dir.clone()];
+    path_entries.extend(original_entries);
+    let joined_path = std::env::join_paths(path_entries).expect("join PATH");
+    env.set("PATH", joined_path);
+
+    let backend = AcpxCliProbeBackend;
+    let config = LoongClawConfig {
+        acp: AcpConfig {
+            backends: AcpBackendProfilesConfig {
+                acpx: Some(AcpxBackendConfig {
+                    command: Some("fake-acpx".to_owned()),
+                    expected_version: Some("0.1.16".to_owned()),
+                    cwd: Some(temp_dir.display().to_string()),
+                    ..AcpxBackendConfig::default()
+                }),
+            },
+            ..AcpConfig::default()
+        },
+        ..LoongClawConfig::default()
+    };
+
+    let report = backend
+        .doctor(&config)
+        .await
+        .expect("doctor should not fail")
+        .expect("doctor report");
+
+    assert!(report.healthy, "doctor should use launcher path");
+    assert_eq!(
+        report.diagnostics.get("command"),
+        Some(&"fake-acpx".to_owned())
+    );
+    assert_eq!(report.diagnostics.get("status"), Some(&"ready".to_owned()));
+}
+
+#[tokio::test]
+#[cfg(unix)]
 async fn runtime_backend_executes_session_turn_and_controls_when_path_is_narrowed() {
     let _lock = lock_acpx_runtime_tests().await;
     let temp_dir = unique_temp_dir("loongclaw-acpx-runtime-narrow-path");

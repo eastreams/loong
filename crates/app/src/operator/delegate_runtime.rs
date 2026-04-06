@@ -139,6 +139,41 @@ pub(crate) fn build_delegate_child_lifecycle_seed(
     DelegateChildLifecycleSeed { execution, request }
 }
 
+pub(crate) fn constrained_subagent_execution_for_delegate(
+    delegate_policy: &crate::tools::delegate::ResolvedDelegatePolicy,
+    binding: ConversationRuntimeBinding<'_>,
+    subagent_identity: Option<ConstrainedSubagentIdentity>,
+    mode: ConstrainedSubagentMode,
+    max_depth: usize,
+    max_active_children: usize,
+    next_child_depth: usize,
+    active_children: usize,
+    workspace_root: Option<std::path::PathBuf>,
+) -> ConstrainedSubagentExecution {
+    let subagent_profile = ConstrainedSubagentProfile::for_child_depth(next_child_depth, max_depth);
+    let agent_role = delegate_policy
+        .profile
+        .map(|profile| profile.resolved_agent_role(next_child_depth, max_depth));
+
+    ConstrainedSubagentExecution {
+        mode,
+        isolation: delegate_policy.isolation,
+        depth: next_child_depth,
+        max_depth,
+        active_children,
+        max_active_children,
+        timeout_seconds: delegate_policy.timeout_seconds,
+        allow_shell_in_child: delegate_policy.allow_shell_in_child,
+        child_tool_allowlist: delegate_policy.child_tool_allowlist.clone(),
+        workspace_root,
+        runtime_narrowing: delegate_policy.runtime_narrowing.clone(),
+        kernel_bound: binding.is_kernel_bound(),
+        identity: subagent_identity,
+        profile: Some(subagent_profile),
+        agent_role,
+    }
+}
+
 fn build_delegate_child_execution(
     config: &LoongClawConfig,
     binding: ConversationRuntimeBinding<'_>,
@@ -264,6 +299,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
     error: String,
 ) -> Result<(), String> {
@@ -272,7 +308,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
         child_session_id.to_owned(),
         Some(parent_session_id.to_owned()),
         label,
-        None,
+        profile,
         error.clone(),
         0,
     );
@@ -305,6 +341,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
     child_session_id: &str,
     parent_session_id: &str,
     label: Option<String>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
     error: String,
 ) -> Result<(), String> {
@@ -314,6 +351,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
         child_session_id,
         parent_session_id,
         label,
+        profile,
         execution,
         error.clone(),
     );
