@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use include_dir::{Dir, include_dir};
 use serde::Serialize;
 
@@ -401,17 +403,39 @@ pub(crate) fn bundled_external_skill(skill_id: &str) -> Option<BundledExternalSk
         .find(|skill| skill.skill_id == skill_id.trim())
 }
 
+fn bundled_external_skill_expected_relative_dir(
+    skill: &BundledExternalSkill,
+) -> Result<Cow<'static, str>, String> {
+    let memberships = bundled_skill_pack_memberships(skill.skill_id);
+    match memberships.as_slice() {
+        [] => Ok(Cow::Borrowed(skill.skill_id)),
+        [pack] => Ok(Cow::Owned(format!("{}/{}", pack.pack_id, skill.skill_id))),
+        _ => Err(format!(
+            "bundled skill `{}` belongs to multiple packs, so its repository layout is ambiguous",
+            skill.skill_id
+        )),
+    }
+}
+
 pub(crate) fn bundled_external_skill_dir(
     skill: &BundledExternalSkill,
-) -> Option<&'static Dir<'static>> {
-    BUNDLED_SKILLS_DIR.get_dir(skill.relative_dir)
+) -> Result<&'static Dir<'static>, String> {
+    let expected_relative_dir = bundled_external_skill_expected_relative_dir(skill)?;
+    if skill.relative_dir != expected_relative_dir.as_ref() {
+        return Err(format!(
+            "bundled skill `{}` registry path `{}` does not match expected pack layout `{}`",
+            skill.skill_id, skill.relative_dir, expected_relative_dir
+        ));
+    }
+    BUNDLED_SKILLS_DIR
+        .get_dir(skill.relative_dir)
+        .ok_or_else(|| format!("missing bundled skill directory `{}`", skill.relative_dir))
 }
 
 pub(crate) fn bundled_external_skill_markdown(
     skill: &BundledExternalSkill,
 ) -> Result<&'static str, String> {
-    let dir = bundled_external_skill_dir(skill)
-        .ok_or_else(|| format!("missing bundled skill directory `{}`", skill.relative_dir))?;
+    let dir = bundled_external_skill_dir(skill)?;
     let file = dir
         .entries()
         .iter()
@@ -437,10 +461,47 @@ pub(crate) fn bundled_external_skill_markdown(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
-        bundled_external_skill, bundled_external_skill_markdown, bundled_preinstall_targets,
+        BUNDLED_SKILLS_DIR, bundled_external_skill, bundled_external_skill_dir,
+        bundled_external_skill_markdown, bundled_external_skills, bundled_preinstall_targets,
         bundled_skill_pack, bundled_skill_pack_memberships,
     };
+
+    fn collect_embedded_skill_dirs(
+        dir: &include_dir::Dir<'static>,
+        relative_dir: &str,
+        discovered: &mut BTreeSet<String>,
+    ) {
+        let has_skill_markdown = dir.entries().iter().any(|entry| {
+            matches!(
+                entry,
+                include_dir::DirEntry::File(file)
+                    if file.path().file_name().is_some_and(|name| name == "SKILL.md")
+            )
+        });
+        if has_skill_markdown && !relative_dir.is_empty() {
+            discovered.insert(relative_dir.to_owned());
+        }
+
+        for entry in dir.entries() {
+            let include_dir::DirEntry::Dir(child) = entry else {
+                continue;
+            };
+            let child_name = child
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("embedded bundled directories should have utf-8 names");
+            let child_relative_dir = if relative_dir.is_empty() {
+                child_name.to_owned()
+            } else {
+                format!("{relative_dir}/{child_name}")
+            };
+            collect_embedded_skill_dirs(child, child_relative_dir.as_str(), discovered);
+        }
+    }
 
     #[test]
     fn curated_bundled_inventory_contains_requested_preinstalls() {
@@ -510,6 +571,42 @@ mod tests {
         assert!(
             !markdown.trim().is_empty(),
             "docx bundled markdown should stay readable after pack reorganization"
+        );
+    }
+
+    #[test]
+    fn bundled_registry_paths_follow_pack_layout_contract() {
+        for skill in bundled_external_skills() {
+            let dir = bundled_external_skill_dir(skill).unwrap_or_else(|error| {
+                panic!("bundled registry drift for `{}`: {error}", skill.skill_id)
+            });
+            assert!(
+                dir.entries().iter().any(|entry| {
+                    matches!(
+                        entry,
+                        include_dir::DirEntry::File(file)
+                            if file.path().file_name().is_some_and(|name| name == "SKILL.md")
+                    )
+                }),
+                "bundled skill `{}` should keep a top-level SKILL.md in `{}`",
+                skill.skill_id,
+                skill.relative_dir
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_registry_covers_embedded_skill_tree() {
+        let registered_dirs = bundled_external_skills()
+            .iter()
+            .map(|skill| skill.relative_dir.to_owned())
+            .collect::<BTreeSet<_>>();
+        let mut embedded_dirs = BTreeSet::new();
+        collect_embedded_skill_dirs(&BUNDLED_SKILLS_DIR, "", &mut embedded_dirs);
+
+        assert_eq!(
+            registered_dirs, embedded_dirs,
+            "every embedded bundled skill directory should be registered exactly once"
         );
     }
 }

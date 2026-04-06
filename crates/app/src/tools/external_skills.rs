@@ -735,9 +735,11 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                 })?;
             let bundled_markdown =
                 super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
-            let bundled_dir = super::bundled_skills::bundled_external_skill_dir(&bundled)
-                .ok_or_else(|| {
-                    format!("missing bundled external skill directory for `{bundled_skill_id}`")
+            let bundled_dir =
+                super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
+                    format!(
+                        "failed to resolve bundled external skill `{bundled_skill_id}`: {error}"
+                    )
                 })?;
             let skill_id = normalize_skill_id(bundled.skill_id)?;
             let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
