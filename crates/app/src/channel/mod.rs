@@ -2,6 +2,7 @@ use crate::config::LoongClawConfig;
 
 mod catalog;
 mod commands;
+mod core;
 #[cfg(feature = "channel-dingtalk")]
 mod dingtalk;
 #[cfg(feature = "channel-discord")]
@@ -12,9 +13,7 @@ mod email;
 pub mod feishu;
 #[cfg(feature = "channel-google-chat")]
 mod google_chat;
-mod core;
 mod http;
-mod runtime;
 #[cfg(feature = "channel-imessage")]
 mod imessage;
 #[cfg(feature = "channel-irc")]
@@ -30,7 +29,7 @@ mod nextcloud_talk;
 #[cfg(feature = "channel-nostr")]
 mod nostr;
 mod registry;
-mod runtime_state;
+mod runtime;
 pub(crate) mod sdk;
 #[cfg(feature = "channel-signal")]
 mod signal;
@@ -106,10 +105,8 @@ pub use registry::{
     resolve_channel_onboarding_descriptor, resolve_channel_operation_descriptor,
     resolve_channel_runtime_command_descriptor, validate_plugin_channel_bridge_manifest,
 };
-pub use runtime_state::ChannelOperationRuntime;
-use runtime_state::ChannelOperationRuntimeTracker;
-pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
-pub use tlon_command::run_tlon_send;
+pub use runtime::state::ChannelOperationRuntime;
+use runtime::state::ChannelOperationRuntimeTracker;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -118,6 +115,8 @@ pub use tlon_command::run_tlon_send;
     feature = "channel-whatsapp"
 ))]
 pub use runtime::turn_feedback::ChannelTurnFeedbackPolicy;
+pub use sdk::{background_channel_runtime_descriptors, is_background_channel_surface_enabled};
+pub use tlon_command::run_tlon_send;
 
 mod types;
 pub use types::ChannelOutboundTargetKind as ChannelCatalogTargetKind;
@@ -1194,7 +1193,7 @@ mod tests {
             9191,
             operation,
             |runtime| async move {
-                let live = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+                let live = runtime::state::load_channel_operation_runtime_for_account_from_dir(
                     runtime_dir_for_body.as_path(),
                     ChannelPlatform::Telegram,
                     "serve",
@@ -1218,7 +1217,7 @@ mod tests {
 
         assert_eq!(result, "ok");
 
-        let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let finished = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1261,7 +1260,7 @@ mod tests {
                     let runtime_dir_for_body = runtime_dir_for_body.clone();
                     async move {
                         let live =
-                            runtime_state::load_channel_operation_runtime_for_account_from_dir(
+                            runtime::state::load_channel_operation_runtime_for_account_from_dir(
                                 runtime_dir_for_body.as_path(),
                                 ChannelPlatform::Telegram,
                                 "serve",
@@ -1288,7 +1287,7 @@ mod tests {
             .expect("cooperative stop wrapper join should succeed")
             .expect("cooperative stop wrapper should succeed");
 
-        let finished = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let finished = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1309,7 +1308,7 @@ mod tests {
     async fn with_channel_serve_runtime_rejects_duplicate_running_instance() {
         let runtime_dir = temp_runtime_dir("serve-runtime-duplicate");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1352,7 +1351,7 @@ mod tests {
     async fn with_channel_serve_runtime_allows_takeover_when_previous_instance_is_stale() {
         let runtime_dir = temp_runtime_dir("serve-runtime-stale-takeover");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1383,7 +1382,7 @@ mod tests {
 
         assert_eq!(result, "ok");
 
-        let runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        let runtime = runtime::state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1417,7 +1416,7 @@ mod tests {
     async fn with_channel_serve_runtime_rejects_active_legacy_owner_after_inactive_account_prune() {
         let runtime_dir = temp_runtime_dir("serve-runtime-legacy-owner");
         let now = now_ms_for_test();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        runtime::state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -1431,7 +1430,7 @@ mod tests {
             Some(7001),
         )
         .expect("seed inactive account-scoped runtime state");
-        runtime_state::write_runtime_state_for_test_with_pid(
+        runtime::state::write_runtime_state_for_test_with_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",

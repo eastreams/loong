@@ -4,11 +4,11 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
-use super::super::runtime_state::ChannelOperationRuntimeTracker;
 use super::super::runtime::serve::{
     ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
     with_channel_serve_runtime_with_stop,
 };
+use super::super::runtime::state::ChannelOperationRuntimeTracker;
 use super::super::types::ChannelCommandFuture;
 use super::context::{ChannelCommandContext, ChannelResolvedRuntimeAccount};
 

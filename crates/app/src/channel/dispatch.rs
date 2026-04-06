@@ -194,23 +194,11 @@ use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
-use super::runtime_state;
 use super::runtime::serve::{
     ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
     with_channel_serve_runtime_with_stop,
 };
-#[cfg(feature = "channel-signal")]
-use super::signal;
-#[cfg(feature = "channel-signal")]
-use super::signal_command;
-#[cfg(feature = "channel-slack")]
-use super::slack;
-#[cfg(feature = "channel-synology-chat")]
-use super::synology_chat;
-#[cfg(feature = "channel-teams")]
-use super::teams;
-#[cfg(feature = "channel-telegram")]
-use super::telegram;
+use super::runtime::state;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -227,6 +215,18 @@ use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
     feature = "channel-whatsapp",
 ))]
 use super::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
+#[cfg(feature = "channel-signal")]
+use super::signal;
+#[cfg(feature = "channel-signal")]
+use super::signal_command;
+#[cfg(feature = "channel-slack")]
+use super::slack;
+#[cfg(feature = "channel-synology-chat")]
+use super::synology_chat;
+#[cfg(feature = "channel-teams")]
+use super::teams;
+#[cfg(feature = "channel-telegram")]
+use super::telegram;
 #[cfg(feature = "channel-webhook")]
 use super::webhook;
 #[cfg(feature = "channel-wecom")]
@@ -234,7 +234,7 @@ use super::wecom;
 #[cfg(feature = "channel-whatsapp")]
 use super::whatsapp;
 
-use super::runtime_state::ChannelOperationRuntime;
+use super::runtime::state::ChannelOperationRuntime;
 use super::types::{
     ChannelAdapter, ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
@@ -2331,7 +2331,7 @@ pub fn load_channel_operation_runtime_for_account_from_dir_for_test(
     account_id: &str,
     now_ms: u64,
 ) -> Option<ChannelOperationRuntime> {
-    runtime_state::load_channel_operation_runtime_for_account_from_dir(
+    state::load_channel_operation_runtime_for_account_from_dir(
         runtime_dir,
         platform,
         operation_id,

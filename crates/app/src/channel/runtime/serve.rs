@@ -10,9 +10,9 @@ use std::{
 use tokio::sync::Notify;
 
 use super::super::registry::ChannelCommandFamilyDescriptor;
-use super::super::runtime_state as state;
-use super::super::runtime_state::ChannelOperationRuntimeTracker;
 use super::super::types::ChannelPlatform;
+use super::state;
+use super::state::ChannelOperationRuntimeTracker;
 use crate::CliResult;
 
 #[cfg(any(
