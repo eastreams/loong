@@ -1088,10 +1088,16 @@ impl Drop for SessionActorGuard {
     }
 }
 
-fn normalized_conversation_id(raw: Option<&str>) -> Option<String> {
+const IDENTIFIER_FINGERPRINT_HEX_PREFIX_LEN: usize = 24;
+
+fn normalized_identifier(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_owned())
+}
+
+fn normalized_conversation_id(raw: Option<&str>) -> Option<String> {
+    normalized_identifier(raw)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1104,14 +1110,14 @@ struct RedactedBindingScopeForLog {
 }
 
 fn redact_identifier_for_log(raw: Option<&str>) -> Option<String> {
-    let normalized = normalized_conversation_id(raw)?;
+    let normalized = normalized_identifier(raw)?;
     Some(identifier_fingerprint(normalized.as_str()))
 }
 
 fn identifier_fingerprint(raw: &str) -> String {
     let digest = Sha256::digest(raw.as_bytes());
     let hex = hex::encode(digest);
-    let prefix = hex.chars().take(12).collect::<String>();
+    let prefix = &hex[..IDENTIFIER_FINGERPRINT_HEX_PREFIX_LEN];
     format!("sha256:{prefix}")
 }
 
