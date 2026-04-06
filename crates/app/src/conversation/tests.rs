@@ -307,6 +307,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
                     execution,
                     timeout_seconds,
                     child_binding.as_borrowed(),
+                    None,
                 )
                 .await;
                 Ok(())
@@ -1138,6 +1139,45 @@ fn persisted_conversation_event_payloads_by_name(
                 .then(|| parsed.get("payload").cloned().unwrap_or(Value::Null))
         })
         .collect()
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn stored_conversation_event_records(
+    sqlite_path: &std::path::Path,
+    session_id: &str,
+) -> Vec<(String, Value)> {
+    let connection = Connection::open(sqlite_path).expect("open conversation sqlite");
+    let mut statement = connection
+        .prepare(
+            "SELECT content
+               FROM turns
+              WHERE session_id = ?1
+              ORDER BY id ASC",
+        )
+        .expect("prepare turns query");
+    let rows = statement
+        .query_map([session_id], |row| row.get::<_, String>(0))
+        .expect("query turns");
+
+    let mut records = Vec::new();
+    for row in rows {
+        let content = row.expect("turn content");
+        let Ok(parsed) = serde_json::from_str::<Value>(&content) else {
+            continue;
+        };
+        let is_conversation_event =
+            parsed.get("type").and_then(Value::as_str) == Some("conversation_event");
+        if !is_conversation_event {
+            continue;
+        }
+        let event_name = parsed["event"]
+            .as_str()
+            .expect("conversation event name")
+            .to_owned();
+        let payload = parsed.get("payload").cloned().unwrap_or(Value::Null);
+        records.push((event_name, payload));
+    }
+    records
 }
 
 fn persisted_internal_records_by_type(
@@ -2048,7 +2088,11 @@ fn init_git_repo_for_delegate_test(root: &std::path::Path) {
             "-c",
             "commit.gpgsign=false",
             "-c",
-            "core.hooksPath=/dev/null",
+            if cfg!(windows) {
+                "core.hooksPath=NUL"
+            } else {
+                "core.hooksPath=/dev/null"
+            },
             "commit",
             "--no-verify",
             "-q",
@@ -2078,6 +2122,20 @@ fn shell_exec_test_command() -> (&'static str, Vec<&'static str>, &'static str) 
             vec!["/C", "echo", "approved-shell-output"],
             "approved-shell-output",
         )
+    }
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+fn stable_shell_exec_test_path_env() -> String {
+    #[cfg(unix)]
+    {
+        "/usr/bin:/bin".to_owned()
+    }
+
+    #[cfg(windows)]
+    {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+        format!(r"{system_root}\System32;{system_root}")
     }
 }
 
@@ -12466,6 +12524,11 @@ async fn default_app_tool_dispatcher_executes_session_wait_for_visible_terminal_
 
     let mut config = test_config();
     config.memory.sqlite_path = db_path.display().to_string();
+    config.tools.delegate.child_tool_allowlist = vec![
+        "file.read".to_owned(),
+        "web.fetch".to_owned(),
+        "web.search".to_owned(),
+    ];
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
@@ -20031,6 +20094,8 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_once_preserve
         state: crate::session::repository::SessionState::Ready,
     })
     .expect("create root session");
+    let mut env = crate::test_support::ScopedEnv::new();
+    env.set("PATH", stable_shell_exec_test_path_env());
     repo.ensure_approval_request(crate::session::repository::NewApprovalRequestRecord {
         approval_request_id: "apr-delegate-1".to_owned(),
         session_id: "root-session".to_owned(),
@@ -20560,6 +20625,8 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
         state: crate::session::repository::SessionState::Ready,
     })
     .expect("create root session");
+    let mut env = crate::test_support::ScopedEnv::new();
+    env.set("PATH", stable_shell_exec_test_path_env());
 
     let (command, args, expected_stdout) = shell_exec_test_command();
     let args_json = json!({
@@ -20690,6 +20757,8 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
         state: crate::session::repository::SessionState::Ready,
     })
     .expect("create root session");
+    let mut env = crate::test_support::ScopedEnv::new();
+    env.set("PATH", stable_shell_exec_test_path_env());
 
     let kernel_ctx =
         crate::context::bootstrap_kernel_context_with_config("shell-approval-always", 60, &config)
@@ -20868,6 +20937,8 @@ async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_
         state: crate::session::repository::SessionState::Ready,
     })
     .expect("create root session");
+    let mut env = crate::test_support::ScopedEnv::new();
+    env.set("PATH", stable_shell_exec_test_path_env());
 
     let (command, args, _expected_stdout) = shell_exec_test_command();
     let args_json = json!({
@@ -22462,6 +22533,11 @@ async fn handle_turn_with_runtime_delegate_async_profile_shapes_child_execution_
     enable_guided_autonomy(&mut config);
     preapprove_tool_call(&mut config, "delegate_async");
     config.tools.delegate.allow_shell_in_child = true;
+    config.tools.delegate.child_tool_allowlist = vec![
+        "file.read".to_owned(),
+        "web.fetch".to_owned(),
+        "web.search".to_owned(),
+    ];
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
         .expect("session repository");
@@ -22901,6 +22977,40 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_is_observable_aft
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+
+    let delegate_projection_records =
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let parent_records =
+                    stored_conversation_event_records(db_path.as_path(), "root-session");
+                let delegate_projection_records: Vec<(String, Value)> = parent_records
+                    .into_iter()
+                    .filter(|(event_name, _)| {
+                        event_name == "delegate_child_queued"
+                            || event_name == "delegate_child_terminal"
+                    })
+                    .collect();
+                if delegate_projection_records.len() >= 2 {
+                    break delegate_projection_records;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("parent delegate projection events should be persisted");
+
+    assert_eq!(delegate_projection_records[0].0, "delegate_child_queued");
+    assert_eq!(delegate_projection_records[0].1["phase"], "queued");
+    assert_eq!(delegate_projection_records[1].0, "delegate_child_terminal");
+    assert_eq!(delegate_projection_records[1].1["phase"], "failed");
+    assert_eq!(
+        delegate_projection_records[1].1["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        delegate_projection_records[1].1["error"],
+        "spawn unavailable"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -23122,6 +23232,27 @@ async fn handle_turn_with_runtime_delegate_async_spawn_panic_is_observable_after
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(event_kinds.contains(&"delegate_spawn_failed"));
+
+    let parent_records = stored_conversation_event_records(db_path.as_path(), "root-session");
+    let delegate_projection_records: Vec<(String, Value)> = parent_records
+        .into_iter()
+        .filter(|(event_name, _)| {
+            event_name == "delegate_child_queued" || event_name == "delegate_child_terminal"
+        })
+        .collect();
+    assert_eq!(delegate_projection_records.len(), 2);
+    assert_eq!(delegate_projection_records[0].0, "delegate_child_queued");
+    assert_eq!(delegate_projection_records[0].1["phase"], "queued");
+    assert_eq!(delegate_projection_records[1].0, "delegate_child_terminal");
+    assert_eq!(delegate_projection_records[1].1["phase"], "failed");
+    assert_eq!(
+        delegate_projection_records[1].1["child_session_id"],
+        child.session_id
+    );
+    assert_eq!(
+        delegate_projection_records[1].1["error"],
+        "delegate_async_spawn_panic: panic-async-spawn"
+    );
 }
 
 #[cfg(feature = "memory-sqlite")]

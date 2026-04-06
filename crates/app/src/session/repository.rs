@@ -735,7 +735,14 @@ impl SessionRepository {
             .execute(
                 "UPDATE sessions
                  SET state = ?3, updated_at = ?4, last_error = ?5
-                 WHERE session_id = ?1 AND state = ?2",
+                 WHERE session_id = ?1
+                   AND state = ?2
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM session_events archived
+                        WHERE archived.session_id = ?1
+                          AND archived.event_kind = 'session_archived'
+                   )",
                 params![
                     session_id,
                     request.expected_state.as_str(),
@@ -805,7 +812,14 @@ impl SessionRepository {
             .execute(
                 "UPDATE sessions
                  SET state = ?3, updated_at = ?4, last_error = ?5
-                 WHERE session_id = ?1 AND state = ?2",
+                 WHERE session_id = ?1
+                   AND state = ?2
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM session_events archived
+                        WHERE archived.session_id = ?1
+                          AND archived.event_kind = 'session_archived'
+                   )",
                 params![
                     session_id,
                     request.expected_state.as_str(),
@@ -3884,7 +3898,7 @@ mod tests {
                 },
             )
             .expect_err("transition should fail when event insert fails");
-        assert!(error.contains("insert session transition event failed"));
+        assert!(error.contains("conditionally update session state in transition failed"));
 
         let child = repo
             .load_session("child-session")
@@ -3951,6 +3965,75 @@ mod tests {
             .expect("list events");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event_kind, "delegate_started");
+    }
+
+    #[test]
+    fn transition_session_with_event_if_current_rejects_archived_session() {
+        let config = isolated_memory_config("transition-session-archived");
+        let repo = SessionRepository::new(&config).expect("repository");
+        create_root_session(&repo, "archived-session");
+        archive_session(&repo, "archived-session", 200);
+
+        let transitioned = repo
+            .transition_session_with_event_if_current(
+                "archived-session",
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Ready,
+                    next_state: SessionState::Running,
+                    last_error: None,
+                    event_kind: "delegate_started".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({}),
+                },
+            )
+            .expect("transition archived session");
+
+        assert!(transitioned.is_none());
+    }
+
+    #[test]
+    fn transition_session_with_event_and_clear_terminal_outcome_rejects_archived_session() {
+        let config = isolated_memory_config("transition-session-clear-archived");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Completed,
+        })
+        .expect("create child");
+        repo.upsert_terminal_outcome(
+            "child-session",
+            "ok",
+            json!({
+                "child_session_id": "child-session",
+                "final_output": "old"
+            }),
+        )
+        .expect("upsert terminal outcome");
+        archive_session(&repo, "child-session", 300);
+
+        let transitioned = repo
+            .transition_session_with_event_and_clear_terminal_outcome_if_current(
+                "child-session",
+                TransitionSessionWithEventIfCurrentRequest {
+                    expected_state: SessionState::Completed,
+                    next_state: SessionState::Running,
+                    last_error: None,
+                    event_kind: "delegate_started".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({}),
+                },
+            )
+            .expect("transition archived session with clear");
+
+        assert!(transitioned.is_none());
+        assert!(
+            repo.load_terminal_outcome("child-session")
+                .expect("load terminal outcome")
+                .is_some()
+        );
     }
 
     #[test]

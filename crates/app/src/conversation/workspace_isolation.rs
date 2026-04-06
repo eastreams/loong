@@ -176,9 +176,10 @@ fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), S
 }
 
 fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
+    let repo_root = resolve_git_repo_root(worktree_root)?;
     let args = [
         OsStr::new("-C"),
-        worktree_root.as_os_str(),
+        repo_root.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
@@ -320,7 +321,11 @@ mod tests {
                 "-c",
                 "commit.gpgsign=false",
                 "-c",
-                "core.hooksPath=/dev/null",
+                if cfg!(windows) {
+                    "core.hooksPath=NUL"
+                } else {
+                    "core.hooksPath=/dev/null"
+                },
                 "commit",
                 "--no-verify",
                 "-q",

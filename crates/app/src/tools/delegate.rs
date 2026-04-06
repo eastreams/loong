@@ -53,17 +53,24 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
     let task = required_payload_string(payload, "task", "delegate tool")?;
     let label = optional_payload_string(payload, "label");
     let specialization = optional_payload_string(payload, "specialization");
-    let profile = payload
-        .get("profile")
-        .and_then(Value::as_str)
-        .map(parse_delegate_profile)
-        .transpose()?;
-    let isolation = payload
-        .get("isolation")
-        .and_then(Value::as_str)
-        .map(parse_delegate_isolation)
-        .transpose()?
-        .unwrap_or_default();
+    let profile = match payload.get("profile") {
+        Some(Value::String(raw_profile)) => Some(parse_delegate_profile(raw_profile)?),
+        Some(value) => {
+            return Err(format!(
+                "invalid_delegate_profile: expected a string, got: {value}"
+            ));
+        }
+        None => None,
+    };
+    let isolation = match payload.get("isolation") {
+        Some(Value::String(raw_isolation)) => parse_delegate_isolation(raw_isolation)?,
+        Some(value) => {
+            return Err(format!(
+                "invalid_delegate_isolation: expected a string, got: {value}"
+            ));
+        }
+        None => ConstrainedSubagentIsolation::default(),
+    };
     let timeout_seconds = parse_delegate_timeout_seconds(payload)?;
 
     Ok(DelegateRequest {
@@ -167,9 +174,25 @@ pub(crate) fn resolve_delegate_policy(
         .clone()
         .or_else(|| profile.map(|profile| profile.default_label().to_owned()));
 
-    let child_tool_allowlist = profile
-        .map(delegate_profile_child_tool_allowlist)
-        .unwrap_or_else(|| config.child_tool_allowlist.clone());
+    let child_tool_allowlist = match profile {
+        Some(profile) => {
+            let profile_allowlist = delegate_profile_child_tool_allowlist(profile);
+            if config.child_tool_allowlist.is_empty() {
+                profile_allowlist
+            } else {
+                profile_allowlist
+                    .into_iter()
+                    .filter(|tool_name| {
+                        config
+                            .child_tool_allowlist
+                            .iter()
+                            .any(|allowed_tool_name| allowed_tool_name == tool_name)
+                    })
+                    .collect()
+            }
+        }
+        None => config.child_tool_allowlist.clone(),
+    };
     let allow_shell_in_child = profile.map_or(config.allow_shell_in_child, |profile| {
         config.allow_shell_in_child && profile.allows_shell_in_child()
     });
@@ -528,7 +551,32 @@ mod tests {
     }
 
     #[test]
-    fn resolve_delegate_policy_uses_profile_defaults_and_presets() {
+    fn parse_delegate_request_rejects_non_string_profile() {
+        let error = parse_delegate_request(&json!({
+            "task": "review the patch",
+            "profile": 1
+        }))
+        .expect_err("non-string profile should be rejected");
+
+        assert!(error.contains("invalid_delegate_profile"), "error: {error}");
+    }
+
+    #[test]
+    fn parse_delegate_request_rejects_non_string_isolation() {
+        let error = parse_delegate_request(&json!({
+            "task": "review the patch",
+            "isolation": 1
+        }))
+        .expect_err("non-string isolation should be rejected");
+
+        assert!(
+            error.contains("invalid_delegate_isolation"),
+            "error: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_delegate_policy_uses_profile_defaults_without_widening_operator_allowlist() {
         let request = DelegateRequest {
             task: "review the patch".to_owned(),
             label: None,
@@ -551,9 +599,33 @@ mod tests {
         assert_eq!(policy.isolation, ConstrainedSubagentIsolation::Shared);
         assert_eq!(policy.timeout_seconds, 45);
         assert!(policy.allow_shell_in_child);
+        assert_eq!(policy.child_tool_allowlist, vec!["file.read".to_owned()]);
+    }
+
+    #[test]
+    fn resolve_delegate_policy_uses_profile_allowlist_when_operator_allowlist_is_empty() {
+        let request = DelegateRequest {
+            task: "research the bug".to_owned(),
+            label: None,
+            specialization: None,
+            profile: Some(DelegateBuiltinProfile::Plan),
+            isolation: ConstrainedSubagentIsolation::Shared,
+            timeout_seconds: None,
+        };
+        let config = DelegateToolConfig {
+            child_tool_allowlist: Vec::new(),
+            ..DelegateToolConfig::default()
+        };
+
+        let policy = resolve_delegate_policy(&request, &config);
+
         assert_eq!(
             policy.child_tool_allowlist,
-            vec!["file.read".to_owned(), "web.fetch".to_owned()]
+            vec![
+                "file.read".to_owned(),
+                "web.fetch".to_owned(),
+                "web.search".to_owned(),
+            ]
         );
     }
 

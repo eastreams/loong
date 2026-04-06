@@ -1765,8 +1765,18 @@ fn augment_tool_payload_for_kernel(
     payload: serde_json::Value,
     session_context: &SessionContext,
 ) -> AugmentedToolPayload {
+    let tool_search_context_name = if canonical_tool_name == "tool.invoke" {
+        payload
+            .get("tool_id")
+            .and_then(serde_json::Value::as_str)
+            .map(crate::tools::canonical_tool_name)
+            .unwrap_or(canonical_tool_name)
+            .to_owned()
+    } else {
+        canonical_tool_name.to_owned()
+    };
     let augmented_tool_search = inject_tool_search_visibility_context_trusted(
-        canonical_tool_name,
+        tool_search_context_name.as_str(),
         payload,
         session_context,
         false,
@@ -3264,6 +3274,7 @@ impl TurnEngine {
         );
         let augmented_payload_uses_reserved_internal_context =
             crate::tools::payload_uses_reserved_internal_tool_context(&augmented_payload.payload);
+        let augmented_trusted_internal_context = augmented_payload.trusted_internal_context;
         let request = ToolCoreRequest {
             tool_name: resolved_tool.canonical_name.to_owned(),
             payload: augmented_payload.payload,
@@ -3515,6 +3526,7 @@ impl TurnEngine {
             }
         };
         let injected_trusted_internal_context = injected.trusted_internal_context
+            || augmented_trusted_internal_context
             || (!injected_payload_uses_reserved_internal_context
                 && augmented_payload_uses_reserved_internal_context);
         let trusted_internal_context =
@@ -5764,6 +5776,67 @@ mod tests {
                 [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
                 [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
             json!(["file.read", "tool.invoke", "tool.search"])
+        );
+        assert_eq!(
+            augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["browser"]["max_sessions"],
+            1
+        );
+    }
+
+    #[test]
+    fn augment_tool_payload_injects_visible_tool_ids_for_tool_invoke_search() {
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["tool.search", "tool.invoke", "file.read"]),
+        );
+        let tool_name = "tool.invoke";
+        let payload = json!({
+            "tool_id": "tool.search",
+            "arguments": {
+                "query": "read note.md",
+                "limit": 3,
+            }
+        });
+
+        let augmented = augment_tool_payload_for_kernel(tool_name, payload, &session_context);
+
+        assert_eq!(augmented.payload["tool_id"], "tool.search");
+        assert_eq!(
+            augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY],
+            json!(["file.read", "tool.invoke", "tool.search"])
+        );
+        assert!(augmented.trusted_internal_context);
+    }
+
+    #[test]
+    fn augment_tool_payload_keeps_trusted_context_when_model_supplies_empty_reserved_shell() {
+        let session_context = SessionContext::root_with_tool_view(
+            "root-session",
+            crate::tools::ToolView::from_tool_names(["file.read"]),
+        )
+        .with_workspace_root(std::path::PathBuf::from("/tmp/child-workspace"))
+        .with_runtime_narrowing(crate::tools::runtime_config::ToolRuntimeNarrowing {
+            browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+            },
+            ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+        });
+        let payload = json!({
+            "path": "note.txt",
+            "_loongclaw": {}
+        });
+
+        let augmented = augment_tool_payload_for_kernel("file.read", payload, &session_context);
+
+        assert!(augmented.trusted_internal_context);
+        assert_eq!(
+            augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
+                [crate::tools::LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY],
+            "/tmp/child-workspace"
         );
         assert_eq!(
             augmented.payload[crate::tools::LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]

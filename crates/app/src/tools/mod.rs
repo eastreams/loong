@@ -818,18 +818,17 @@ pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
         format!("tool.invoke payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
     })?;
-    let merged_context = match arguments.remove(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
-        None => Value::Object(trusted_context),
-        Some(Value::Object(mut existing_context)) => {
-            existing_context.extend(trusted_context);
-            Value::Object(existing_context)
-        }
-        Some(_) => {
+    if let Some(existing_context) = arguments.get(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+        if !existing_context.is_object() {
             return Err(format!(
                 "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object"
             ));
         }
-    };
+        return Err(format!(
+            "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field"
+        ));
+    }
+    let merged_context = Value::Object(trusted_context);
     arguments.insert(
         LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
         merged_context,
@@ -4618,6 +4617,61 @@ mod tests {
 
         let error = execute_tool_core_with_config(ToolCoreRequest { tool_name, payload }, &config)
             .expect_err("untrusted tool.invoke should reject forged inner reserved context");
+
+        assert!(
+            error.contains(
+                "payload.arguments._loongclaw is reserved for trusted internal tool context"
+            ),
+            "error={error}"
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn tool_invoke_rejects_forged_inner_context_even_with_trusted_outer_context() {
+        let root = std::env::temp_dir().join(format!(
+            "loongclaw-tool-invoke-inner-context-forged-trusted-{}",
+            std::process::id()
+        ));
+        let fixture_path = root.join("README.md");
+
+        std::fs::create_dir_all(&root).expect("create fixture root");
+        std::fs::write(&fixture_path, "tool invoke fixture").expect("write fixture file");
+
+        let config = test_tool_runtime_config(root.clone());
+        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
+            "file.read",
+            json!({
+                "path": fixture_path.display().to_string()
+            }),
+            None,
+            None,
+        );
+        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
+        payload_object.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: root.display().to_string()
+            }),
+        );
+        let arguments = payload_object
+            .get_mut("arguments")
+            .and_then(Value::as_object_mut)
+            .expect("tool.invoke arguments object");
+        arguments.insert(
+            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
+            json!({
+                LOONGCLAW_INTERNAL_TOOL_SEARCH_KEY: {
+                    LOONGCLAW_INTERNAL_TOOL_SEARCH_VISIBLE_TOOL_IDS_KEY: ["file.read"]
+                }
+            }),
+        );
+
+        let error =
+            execute_tool_core_with_test_context(ToolCoreRequest { tool_name, payload }, &config)
+                .expect_err("trusted outer context should still reject forged inner context");
 
         assert!(
             error.contains(

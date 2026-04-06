@@ -513,6 +513,7 @@ pub(crate) async fn continue_session_with_runtime<R: ConversationRuntime + ?Size
                 continued_execution,
                 effective_timeout_seconds,
                 binding,
+                None,
             )
             .await?;
             inject_session_continue_payload(
@@ -2671,12 +2672,16 @@ fn session_delegate_lifecycle_at(
         match event.event_kind.as_str() {
             "delegate_queued" => {
                 queued_at = Some(event.ts);
-                profile = profile.or_else(|| {
-                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json)
-                });
-                execution = execution.or_else(|| {
-                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-                });
+                let event_profile =
+                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
+                let event_execution =
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
+                if let Some(event_profile) = event_profile {
+                    profile = Some(event_profile);
+                }
+                if let Some(event_execution) = event_execution {
+                    execution = Some(event_execution);
+                }
                 queued_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")
@@ -2689,12 +2694,16 @@ fn session_delegate_lifecycle_at(
             }
             "delegate_started" => {
                 started_at = Some(event.ts);
-                profile = profile.or_else(|| {
-                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json)
-                });
-                execution = execution.or_else(|| {
-                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-                });
+                let event_profile =
+                    ConstrainedSubagentExecution::profile_from_event_payload(&event.payload_json);
+                let event_execution =
+                    ConstrainedSubagentExecution::from_event_payload(&event.payload_json);
+                if let Some(event_profile) = event_profile {
+                    profile = Some(event_profile);
+                }
+                if let Some(event_execution) = event_execution {
+                    execution = Some(event_execution);
+                }
                 started_timeout_seconds = event
                     .payload_json
                     .get("timeout_seconds")
@@ -6571,6 +6580,113 @@ mod tests {
             "overdue"
         );
         assert!(outcome.payload["delegate_lifecycle"]["started_at"].is_number());
+    }
+
+    #[test]
+    fn session_status_prefers_latest_delegate_started_anchor_after_continue() {
+        let config = isolated_memory_config("session-status-lifecycle-latest-anchor");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create root");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "profile": "research",
+                "timeout_seconds": 30,
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 2,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 30,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["web.fetch"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append queued event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "profile": "research",
+                "timeout_seconds": 30,
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 2,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 30,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["web.fetch"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append first started event");
+        repo.append_event(NewSessionEvent {
+            session_id: "child-session".to_owned(),
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            payload_json: json!({
+                "profile": "verify",
+                "timeout_seconds": 45,
+                "execution": {
+                    "mode": "async",
+                    "depth": 1,
+                    "max_depth": 2,
+                    "active_children": 0,
+                    "max_active_children": 2,
+                    "timeout_seconds": 45,
+                    "allow_shell_in_child": false,
+                    "child_tool_allowlist": ["file.read"],
+                    "kernel_bound": false,
+                    "runtime_narrowing": {}
+                }
+            }),
+        })
+        .expect("append continued started event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_status".to_owned(),
+                payload: json!({
+                    "session_id": "child-session"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_status outcome");
+
+        assert_eq!(outcome.payload["delegate_lifecycle"]["profile"], "verify");
+        assert_eq!(outcome.payload["delegate_lifecycle"]["timeout_seconds"], 45);
+        assert_eq!(
+            outcome.payload["delegate_lifecycle"]["execution"]["child_tool_allowlist"],
+            json!(["file.read"])
+        );
     }
 
     #[test]
