@@ -2084,6 +2084,19 @@ fn shell_exec_test_command() -> (&'static str, Vec<&'static str>, &'static str) 
 }
 
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
+fn shell_exec_test_env() -> crate::test_support::ScopedEnv {
+    let mut env = crate::test_support::ScopedEnv::new();
+
+    #[cfg(unix)]
+    env.set("PATH", "/bin:/usr/bin:/usr/local/bin");
+
+    #[cfg(windows)]
+    env.set("PATH", r"C:\Windows\System32;C:\Windows");
+
+    env
+}
+
+#[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 fn shell_exec_approval_key(command: &str) -> String {
     crate::tools::shell_policy_ext::shell_exec_approval_key_for_normalized_command(command)
 }
@@ -20586,6 +20599,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_kernel_replays_previo
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution() {
+    let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-shell-approval", "request")
@@ -20696,6 +20710,7 @@ async fn handle_turn_with_runtime_requires_approval_before_shell_exec_execution(
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_for_approve_once() {
+    let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-shell-approval", "approve-once")
@@ -20828,6 +20843,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_replays_shell_exec_fo
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses_shell_grant() {
+    let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-shell-approval", "approve-always")
@@ -21006,6 +21022,7 @@ async fn handle_turn_with_runtime_approval_request_resolve_approve_always_reuses
 #[cfg(all(feature = "memory-sqlite", feature = "tool-shell"))]
 #[tokio::test]
 async fn handle_turn_with_runtime_approval_request_resolve_deny_does_not_replay_shell_exec() {
+    let _env = shell_exec_test_env();
     let db_path = std::env::temp_dir().join(format!(
         "{}.sqlite3",
         unique_acp_test_id("conversation-shell-approval", "deny")

@@ -872,6 +872,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_continue_definition,
         },
         ToolDescriptor {
