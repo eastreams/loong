@@ -128,10 +128,9 @@ pub use types::{
     ChannelStreamingMode, FeishuChannelSendRequest,
 };
 
-mod serve_runtime;
-pub use serve_runtime::ChannelServeStopHandle;
+pub use runtime::serve::ChannelServeStopHandle;
 #[cfg(test)]
-use serve_runtime::{
+use runtime::serve::{
     with_channel_serve_runtime_in_dir, with_channel_serve_runtime_with_stop_in_dir,
 };
 
@@ -187,7 +186,7 @@ pub use dispatch::{
     run_whatsapp_send,
 };
 #[cfg(test)]
-use serve_runtime::ChannelServeRuntimeSpec;
+use runtime::serve::ChannelServeRuntimeSpec;
 #[cfg(test)]
 use types::{
     KnownChannelSessionSendTarget, parse_known_channel_session_send_target, process_channel_batch,

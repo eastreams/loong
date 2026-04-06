@@ -5,7 +5,7 @@ use crate::KernelContext;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 use super::super::runtime_state::ChannelOperationRuntimeTracker;
-use super::super::serve_runtime::{
+use super::super::runtime::serve::{
     ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
     with_channel_serve_runtime_with_stop,
 };

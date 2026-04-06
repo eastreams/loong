@@ -10,7 +10,7 @@ use super::dispatch::{
     ChannelCommandContext, ChannelResolvedRuntimeAccount, build_whatsapp_command_context,
     run_channel_serve_command_with_stop,
 };
-use super::serve_runtime::{ChannelServeCommandSpec, ChannelServeStopHandle};
+use super::runtime::serve::{ChannelServeCommandSpec, ChannelServeStopHandle};
 use super::{ChannelOutboundTargetKind, WHATSAPP_COMMAND_FAMILY_DESCRIPTOR};
 use super::{
     http::{ChannelOutboundHttpPolicy, build_outbound_http_client, validate_outbound_http_target},

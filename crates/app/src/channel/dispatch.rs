@@ -195,7 +195,7 @@ use super::registry::{
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
 use super::runtime_state;
-use super::serve_runtime::{
+use super::runtime::serve::{
     ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
     with_channel_serve_runtime_with_stop,
 };

@@ -1,4 +1,5 @@
 // crates/app/src/channel/runtime/mod.rs
 
 pub(in crate::channel) mod http;
+pub(in crate::channel) mod serve;
 pub(in crate::channel) mod turn_feedback;
