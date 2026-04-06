@@ -296,6 +296,22 @@ mod tests {
         }
     }
 
+    struct MatchingRegistryEnvSystem;
+
+    impl MemorySystem for MatchingRegistryEnvSystem {
+        fn id(&self) -> &'static str {
+            "registry-custom-env"
+        }
+
+        fn metadata(&self) -> MemorySystemMetadata {
+            MemorySystemMetadata::new(
+                "registry-custom-env",
+                [MemorySystemCapability::PromptHydration],
+                "Test env registry system",
+            )
+        }
+    }
+
     struct DuplicateRegistrySystem;
 
     impl MemorySystem for DuplicateRegistrySystem {
@@ -561,8 +577,10 @@ mod tests {
     fn registry_backed_memory_system_env_surfaces_in_runtime_snapshot() {
         let mut env = ScopedEnv::new();
         clear_memory_runtime_env_overrides(&mut env);
-        register_memory_system("registry-custom-env", || Box::new(MatchingRegistrySystem))
-            .expect("register custom registry system");
+        register_memory_system("registry-custom-env", || {
+            Box::new(MatchingRegistryEnvSystem)
+        })
+        .expect("register custom registry system");
         env.set(MEMORY_SYSTEM_ENV, "registry-custom-env");
 
         let config = LoongClawConfig::default();
