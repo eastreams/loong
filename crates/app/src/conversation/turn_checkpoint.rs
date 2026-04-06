@@ -501,7 +501,7 @@ impl TurnCheckpointFinalizationProgress {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ContextCompactionOutcome {
+pub(crate) enum ContextCompactionOutcome {
     Skipped,
     Completed,
     FailedOpen,

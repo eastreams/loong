@@ -377,19 +377,8 @@ impl ConversationContextEngine for DefaultContextEngine {
         #[cfg(feature = "memory-sqlite")]
         {
             const MAX_COMPACTION_CONFLICT_RETRIES: usize = 3;
-            let memory_config =
-                memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
 
             for _ in 0..MAX_COMPACTION_CONFLICT_RETRIES {
-                let context_entries =
-                    load_memory_context_entries(&memory_config, session_id, kernel_ctx).await?;
-                let has_summary_checkpoint = context_entries
-                    .into_iter()
-                    .any(|entry| entry.kind == memory::MemoryContextKind::Summary);
-                if has_summary_checkpoint {
-                    return Ok(());
-                }
-
                 let snapshot = load_memory_window_snapshot(config, session_id, kernel_ctx).await?;
                 if !snapshot.is_complete_session_snapshot() {
                     return Ok(());
@@ -557,36 +546,6 @@ async fn load_memory_window_snapshot(
         turns: memory::decode_window_turns(&outcome.payload),
         turn_count: memory::decode_window_turn_count(&outcome.payload),
     })
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn load_memory_context_entries(
-    config: &memory::runtime_config::MemoryRuntimeConfig,
-    session_id: &str,
-    kernel_ctx: &KernelContext,
-) -> CliResult<Vec<memory::MemoryContextEntry>> {
-    let request = memory::build_read_context_request(session_id, config);
-    let caps = BTreeSet::from([Capability::MemoryRead]);
-    let outcome = kernel_ctx
-        .kernel
-        .execute_memory_core(
-            kernel_ctx.pack_id(),
-            &kernel_ctx.token,
-            &caps,
-            None,
-            request,
-        )
-        .await
-        .map_err(|error| format!("load memory context via kernel failed: {error}"))?;
-
-    if outcome.status != "ok" {
-        return Err(format!(
-            "load memory context via kernel returned non-ok status: {}",
-            outcome.status
-        ));
-    }
-
-    Ok(memory::decode_memory_context_entries(&outcome.payload))
 }
 
 async fn persist_memory_window(

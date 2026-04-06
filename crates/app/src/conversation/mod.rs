@@ -105,7 +105,9 @@ pub use turn_checkpoint::{
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
-pub use turn_coordinator::{ConversationTurnCoordinator, spawn_background_delegate_with_runtime};
+pub use turn_coordinator::{
+    ContextCompactionReport, ConversationTurnCoordinator, spawn_background_delegate_with_runtime,
+};
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,
     ToolIntent, ToolOutcome, TurnEngine, TurnFailure, TurnFailureKind, TurnResult,

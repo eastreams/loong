@@ -23748,6 +23748,12 @@ fn compact_window_preserves_recent_turns_and_summarizes_history() {
     assert_eq!(compacted.len(), 3);
     assert_eq!(compacted[0].role, "user");
     assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
+    assert!(
+        compacted[0]
+            .content
+            .contains("Session-local recall only. Does not replace Runtime Self Context"),
+    );
+    assert!(compacted[0].content.contains("User context:"));
     assert_eq!(compacted[1].content, "recent ask");
     assert_eq!(compacted[2].content, "recent reply");
 }
@@ -23961,6 +23967,42 @@ fn compact_window_prioritizes_user_fact_turns_when_summary_budget_is_limited() {
     assert!(summary.contains("October"));
     assert!(summary.contains("RIVER-9"));
     assert!(summary.contains("Owen"));
+}
+
+#[test]
+fn compact_window_emits_continuity_boundary_and_structured_sections() {
+    use super::compaction::{CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "codename: NIMBUS-17 owner: Mina budget: 47".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "ack-1".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(4),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = &compacted[0].content;
+
+    assert!(summary.contains("Session-local recall only."));
+    assert!(summary.contains("User context:"));
+    assert!(summary.contains("Assistant progress:"));
+    assert!(summary.contains("Does not replace Runtime Self Context"));
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -24454,6 +24496,75 @@ async fn default_context_engine_compact_context_preserves_existing_summarized_hi
         }),
         "compaction should preserve preexisting summarized history"
     );
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
+#[cfg(feature = "memory-sqlite")]
+#[tokio::test]
+async fn default_context_engine_compact_context_can_run_again_after_a_prior_checkpoint() {
+    use super::context_engine::{ConversationContextEngine, DefaultContextEngine};
+
+    let mut config = test_config();
+    let db_path = unique_memory_sqlite_path("default-context-engine-repeated-compaction");
+    let _ = std::fs::remove_file(&db_path);
+    config.memory.sqlite_path = db_path.clone();
+    config.memory.sliding_window = 32;
+    config.conversation.compact_preserve_recent_turns = 2;
+
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let kernel_ctx = test_kernel_context_with_memory(
+        "test-default-context-engine-repeated-compaction",
+        &memory_config,
+    );
+    let session_id = "default-context-engine-repeated-compaction";
+
+    for (role, content) in [
+        ("user", "codename: NIMBUS-17"),
+        ("assistant", "ack-1"),
+        ("user", "launch month: October"),
+        ("assistant", "ack-2"),
+        ("user", "owner: Mina"),
+        ("assistant", "ack-3"),
+        ("user", "recent ask"),
+        ("assistant", "recent reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("seed initial turns should succeed");
+    }
+
+    let engine = DefaultContextEngine;
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("first compaction should succeed");
+
+    for (role, content) in [
+        ("user", "fallback code: RIVER-9"),
+        ("assistant", "ack-4"),
+        ("user", "newest ask"),
+        ("assistant", "newest reply"),
+    ] {
+        crate::memory::append_turn_direct(session_id, role, content, &memory_config)
+            .expect("append follow-up turns should succeed");
+    }
+
+    engine
+        .compact_context(&config, session_id, &[], &kernel_ctx)
+        .await
+        .expect("second compaction should succeed");
+
+    let turns = crate::memory::window_direct(session_id, 32, &memory_config)
+        .expect("window load should succeed");
+    let summary = &turns[0].content;
+
+    assert_eq!(turns.len(), 3);
+    assert!(summary.contains("Compacted 5 earlier turns"));
+    assert!(summary.contains("NIMBUS-17"));
+    assert!(summary.contains("RIVER-9"));
+    assert!(summary.contains("Session-local recall only."));
+    assert_eq!(turns[1].content, "newest ask");
+    assert_eq!(turns[2].content, "newest reply");
 
     let _ = std::fs::remove_file(&db_path);
 }
