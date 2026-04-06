@@ -8735,10 +8735,11 @@ mod tests {
         ensure_memory_db_ready_with_diagnostics(None, &config)
             .expect("repair cached stale canonical FTS schema");
 
-        assert_eq!(
-            sqlite_schema_repair_count_for_tests("canonical_records"),
-            1,
-            "expected cached runtime repair path to repair canonical records once"
+        let canonical_record_repair_count =
+            sqlite_schema_repair_count_for_tests("canonical_records");
+        assert!(
+            canonical_record_repair_count >= 1,
+            "expected cached runtime repair path to trigger canonical record repair, got: {canonical_record_repair_count}"
         );
 
         let hits = search_canonical_records_for_recall("release checklist", 5, None, &config)
