@@ -1030,8 +1030,12 @@ impl FakeRuntime {
 }
 
 fn unique_acp_test_id(prefix: &str, suffix: &str) -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEST_ID_SUFFIX: AtomicU64 = AtomicU64::new(1);
+    let unique_suffix = NEXT_TEST_ID_SUFFIX.fetch_add(1, Ordering::Relaxed);
     format!(
-        "{prefix}-{suffix}-{}",
+        "{prefix}-{suffix}-{}-{unique_suffix}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
@@ -2972,131 +2976,6 @@ fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_
         allow_shell_in_child: false,
         child_tool_allowlist: vec!["web.fetch".to_owned()],
         workspace_root: None,
-        runtime_narrowing: execution_runtime_narrowing.clone(),
-        kernel_bound: false,
-        identity: None,
-        profile: None,
-    };
-    let session_context = SessionContext::child(
-        "child-session",
-        "root-session",
-        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
-    )
-    .with_subagent_execution(execution);
-
-    let session_runtime_narrowing = session_context.runtime_narrowing.clone();
-    let resolved_runtime_narrowing = session_context.resolved_runtime_narrowing().cloned();
-
-    assert_eq!(
-        session_runtime_narrowing,
-        Some(execution_runtime_narrowing.clone())
-    );
-    assert_eq!(
-        resolved_runtime_narrowing,
-        Some(execution_runtime_narrowing)
-    );
-}
-
-#[test]
-fn resolved_subagent_contract_uses_effective_runtime_narrowing_over_stale_contract_view() {
-    let effective_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
-        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
-            max_sessions: Some(1),
-            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
-        },
-        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
-    };
-    let stale_contract_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
-        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
-            max_sessions: Some(3),
-            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
-        },
-        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
-    };
-    let mut session_context = SessionContext::child(
-        "child-session",
-        "root-session",
-        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
-    )
-    .with_runtime_narrowing(effective_runtime_narrowing.clone());
-
-    session_context.subagent_contract = Some(
-        crate::conversation::ConstrainedSubagentContractView::from_runtime_narrowing(
-            stale_contract_runtime_narrowing,
-        ),
-    );
-
-    let resolved_runtime_narrowing = session_context
-        .resolved_subagent_contract()
-        .map(|contract| contract.runtime_narrowing);
-
-    assert_eq!(
-        resolved_runtime_narrowing,
-        Some(effective_runtime_narrowing)
-    );
-}
-
-#[test]
-fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
-    let execution = crate::conversation::ConstrainedSubagentExecution {
-        mode: crate::conversation::ConstrainedSubagentMode::Inline,
-        depth: 1,
-        max_depth: 3,
-        active_children: 0,
-        max_active_children: 2,
-        timeout_seconds: 60,
-        allow_shell_in_child: false,
-        child_tool_allowlist: vec!["web.fetch".to_owned()],
-        runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
-        kernel_bound: false,
-        identity: None,
-        profile: None,
-    };
-    let runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
-        web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
-            allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-    let session_context = SessionContext::child(
-        "child-session",
-        "root-session",
-        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
-    )
-    .with_runtime_narrowing(runtime_narrowing.clone())
-    .with_subagent_execution(execution);
-
-    let execution_runtime_narrowing = session_context
-        .subagent_execution
-        .as_ref()
-        .map(|execution| execution.runtime_narrowing.clone());
-    let session_runtime_narrowing = session_context.runtime_narrowing.clone();
-    let effective_runtime_narrowing = session_context.subagent_runtime_narrowing().cloned();
-
-    assert_eq!(execution_runtime_narrowing, Some(runtime_narrowing.clone()));
-    assert_eq!(session_runtime_narrowing, Some(runtime_narrowing.clone()));
-    assert_eq!(effective_runtime_narrowing, Some(runtime_narrowing));
-}
-
-#[test]
-fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_to_session_scope() {
-    let execution_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
-        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
-            max_sessions: Some(1),
-            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
-        },
-        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
-    };
-    let execution = crate::conversation::ConstrainedSubagentExecution {
-        mode: crate::conversation::ConstrainedSubagentMode::Inline,
-        depth: 1,
-        max_depth: 3,
-        active_children: 0,
-        max_active_children: 2,
-        timeout_seconds: 60,
-        allow_shell_in_child: false,
-        child_tool_allowlist: vec!["web.fetch".to_owned()],
         runtime_narrowing: execution_runtime_narrowing.clone(),
         kernel_bound: false,
         identity: None,

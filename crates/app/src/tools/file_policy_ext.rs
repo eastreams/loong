@@ -121,7 +121,13 @@ impl FilePolicyExtension {
                     combined.parent().unwrap_or(root).join(&target)
                 };
                 let normalized_target = super::normalize_without_fs(&resolved);
-                return !normalized_target.starts_with(effective_root);
+                let under_effective_root = normalized_target.starts_with(effective_root);
+                if under_effective_root {
+                    return false;
+                }
+                let normalized_root = super::normalize_without_fs(root);
+                let under_raw_root = normalized_target.starts_with(&normalized_root);
+                return !under_raw_root;
             }
             // Cannot read the link — conservatively deny.
             return true;
@@ -137,7 +143,13 @@ impl FilePolicyExtension {
 
         // 3. Neither path nor parent exists — fall back to pure normalization.
         let normalized = super::normalize_without_fs(&combined);
-        !normalized.starts_with(effective_root)
+        let under_effective_root = normalized.starts_with(effective_root);
+        if under_effective_root {
+            return false;
+        }
+        let normalized_root = super::normalize_without_fs(root);
+        let under_raw_root = normalized.starts_with(&normalized_root);
+        !under_raw_root
     }
 
     fn authorize_file_payload(
