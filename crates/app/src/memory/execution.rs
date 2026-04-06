@@ -191,6 +191,12 @@ fn run_builtin_retrieval_entries(
 
     #[cfg(feature = "memory-sqlite")]
     {
+        let mode = context.config.mode;
+        let supports_cross_session_recall = matches!(mode, MemoryMode::WindowPlusSummary);
+        if !supports_cross_session_recall {
+            return Ok(entries);
+        }
+
         let query = retrieval_query_from_recent_window(context.recent_window);
         if let Some(query) = query {
             let budget_items = context.config.sliding_window.min(6);
@@ -313,6 +319,15 @@ fn rank_recall_first_entries(entries: Vec<MemoryContextEntry>) -> Vec<MemoryCont
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{MemoryMode, MemoryProfile};
+
+    #[cfg(feature = "memory-sqlite")]
+    fn execution_temp_dir(prefix: &str) -> std::path::PathBuf {
+        let process_id = std::process::id();
+        let temp_dir = std::env::temp_dir();
+        let path = temp_dir.join(format!("{prefix}-{process_id}"));
+        path
+    }
 
     #[test]
     fn retrieval_query_prefers_latest_non_empty_user_turn() {
@@ -369,5 +384,98 @@ mod tests {
             ranked_kinds,
             vec![MemoryContextKind::RetrievedMemory, MemoryContextKind::Turn]
         );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn builtin_retrieval_entries_skip_cross_session_recall_for_window_only() {
+        let tmp = execution_temp_dir("loongclaw-execution-window-only");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("window-only.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        let prior_session_id = "execution-window-only-prior";
+        let active_session_id = "execution-window-only-active";
+
+        crate::memory::append_turn_direct(
+            prior_session_id,
+            "assistant",
+            "rollback checklist",
+            &config,
+        )
+        .expect("append prior session turn");
+
+        let recent_window = vec![WindowTurn {
+            role: "user".to_owned(),
+            content: "rollback checklist".to_owned(),
+            ts: None,
+        }];
+        let context = MemoryPreAssemblyContext {
+            session_id: active_session_id,
+            workspace_root: None,
+            config: &config,
+            recent_window: recent_window.as_slice(),
+        };
+
+        let entries = run_builtin_retrieval_entries(&context).expect("run retrieval entries");
+
+        assert!(entries.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn builtin_retrieval_entries_skip_cross_session_recall_for_profile_plus_window() {
+        let tmp = execution_temp_dir("loongclaw-execution-profile-plus-window");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("profile-plus-window.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::ProfilePlusWindow,
+            mode: MemoryMode::ProfilePlusWindow,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            profile_note: Some("saved operator preferences".to_owned()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        let prior_session_id = "execution-profile-plus-window-prior";
+        let active_session_id = "execution-profile-plus-window-active";
+
+        crate::memory::append_turn_direct(
+            prior_session_id,
+            "assistant",
+            "rollback checklist",
+            &config,
+        )
+        .expect("append prior session turn");
+
+        let recent_window = vec![WindowTurn {
+            role: "user".to_owned(),
+            content: "rollback checklist".to_owned(),
+            ts: None,
+        }];
+        let context = MemoryPreAssemblyContext {
+            session_id: active_session_id,
+            workspace_root: None,
+            config: &config,
+            recent_window: recent_window.as_slice(),
+        };
+
+        let entries = run_builtin_retrieval_entries(&context).expect("run retrieval entries");
+
+        assert!(entries.is_empty());
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

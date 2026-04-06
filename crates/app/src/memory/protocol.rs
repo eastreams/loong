@@ -563,4 +563,22 @@ mod tests {
         assert_eq!(envelope.diagnostics[1].family, MemoryStageFamily::Rank);
         assert_eq!(envelope.diagnostics[1].outcome, StageOutcome::Skipped);
     }
+
+    #[test]
+    fn decode_stage_envelope_preserves_rank_error_when_present() {
+        let payload = json!({
+            "hydrated": {
+                "diagnostics": {
+                    "system_id": "builtin",
+                    "rank_error": "rank stage timeout"
+                }
+            },
+            "diagnostics": []
+        });
+
+        let envelope = decode_stage_envelope(&payload).expect("decode stage envelope");
+        let rank_error = envelope.hydrated.diagnostics.rank_error;
+
+        assert_eq!(rank_error.as_deref(), Some("rank stage timeout"));
+    }
 }
