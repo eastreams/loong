@@ -18,10 +18,6 @@ where
     F: for<'a> FnOnce(&'a ChannelCommandContext<R>) -> ChannelCommandFuture<'a>,
     G: FnOnce(&ChannelCommandContext<R>) -> String,
 {
-    crate::runtime_env::initialize_runtime_environment(
-        &context.config,
-        Some(context.resolved_path.as_path()),
-    );
     context.emit_route_notice(spec.channel_id);
     send(&context).await?;
 

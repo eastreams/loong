@@ -164,8 +164,16 @@ use crate::conversation::{ConversationTurnCoordinator, ProviderErrorMode};
 
 pub(super) use super::commands::{
     ChannelCommandContext, ChannelResolvedRuntimeAccount, ChannelSendCommandSpec,
-    run_channel_send_command, run_channel_serve_command_with_stop,
+    run_channel_send_command,
 };
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+pub(super) use super::commands::{ChannelServeCommandSpec, run_channel_serve_command_with_stop};
 #[cfg(feature = "channel-dingtalk")]
 use super::dingtalk;
 #[cfg(feature = "channel-discord")]
@@ -194,11 +202,26 @@ use super::registry::{
     CHANNEL_OPERATION_SERVE_ID, FEISHU_COMMAND_FAMILY_DESCRIPTOR, MATRIX_COMMAND_FAMILY_DESCRIPTOR,
     WECOM_COMMAND_FAMILY_DESCRIPTOR,
 };
-use super::runtime_state;
-use super::serve_runtime::{
-    ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
-    with_channel_serve_runtime_with_stop,
+use super::runtime::serve::{
+    ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
 };
+use super::runtime::state;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+))]
+use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp",
+))]
+use super::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(feature = "channel-signal")]
 use super::signal;
 #[cfg(feature = "channel-signal")]
@@ -211,22 +234,6 @@ use super::synology_chat;
 use super::teams;
 #[cfg(feature = "channel-telegram")]
 use super::telegram;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-))]
-use super::turn_feedback::ChannelTurnFeedbackCapture;
-#[cfg(any(
-    feature = "channel-telegram",
-    feature = "channel-feishu",
-    feature = "channel-matrix",
-    feature = "channel-wecom",
-    feature = "channel-whatsapp",
-))]
-use super::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(feature = "channel-webhook")]
 use super::webhook;
 #[cfg(feature = "channel-wecom")]
@@ -234,7 +241,7 @@ use super::wecom;
 #[cfg(feature = "channel-whatsapp")]
 use super::whatsapp;
 
-use super::runtime_state::ChannelOperationRuntime;
+use super::runtime::state::ChannelOperationRuntime;
 use super::types::{
     ChannelAdapter, ChannelDeliveryFeishuCallback, ChannelDeliveryResource, ChannelInboundMessage,
     ChannelOutboundTargetKind, ChannelPlatform, ChannelSendReceipt, ChannelSession,
@@ -2331,7 +2338,7 @@ pub fn load_channel_operation_runtime_for_account_from_dir_for_test(
     account_id: &str,
     now_ms: u64,
 ) -> Option<ChannelOperationRuntime> {
-    runtime_state::load_channel_operation_runtime_for_account_from_dir(
+    state::load_channel_operation_runtime_for_account_from_dir(
         runtime_dir,
         platform,
         operation_id,

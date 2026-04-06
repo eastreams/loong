@@ -4,14 +4,54 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
-use super::super::runtime_state::ChannelOperationRuntimeTracker;
-use super::super::serve_runtime::{
-    ChannelServeCommandSpec, ChannelServeRuntimeSpec, ChannelServeStopHandle,
-    with_channel_serve_runtime_with_stop,
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+use super::super::registry::ChannelCommandFamilyDescriptor;
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+use super::super::runtime::serve::{
+    ChannelServeRuntimeSpec, ChannelServeStopHandle, with_channel_serve_runtime_with_stop,
 };
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+use super::super::runtime::state::ChannelOperationRuntimeTracker;
 use super::super::types::ChannelCommandFuture;
 use super::context::{ChannelCommandContext, ChannelResolvedRuntimeAccount};
 
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
+#[derive(Debug, Clone, Copy)]
+pub(in crate::channel) struct ChannelServeCommandSpec {
+    pub(in crate::channel) family: ChannelCommandFamilyDescriptor,
+}
+
+#[cfg(any(
+    feature = "channel-telegram",
+    feature = "channel-feishu",
+    feature = "channel-matrix",
+    feature = "channel-wecom",
+    feature = "channel-whatsapp"
+))]
 pub(in crate::channel) async fn run_channel_serve_command_with_stop<R, V, F>(
     context: ChannelCommandContext<R>,
     spec: ChannelServeCommandSpec,

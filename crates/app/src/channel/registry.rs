@@ -32,8 +32,8 @@ use crate::config::{
 pub use self::twitch::TWITCH_CATALOG_COMMAND_FAMILY_DESCRIPTOR;
 use self::twitch::{TWITCH_ONBOARDING_DESCRIPTOR, TWITCH_OPERATIONS, build_twitch_snapshots};
 use super::{
-    ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform, runtime_state,
-    webhook_auth::build_webhook_auth_header_from_parts,
+    ChannelCatalogTargetKind, ChannelOperationRuntime, ChannelPlatform,
+    core::webhook_auth::build_webhook_auth_header_from_parts, runtime::state,
 };
 
 #[path = "registry_bridge.rs"]
@@ -3226,7 +3226,7 @@ pub(super) fn channel_catalog_entry_from_descriptor(
 pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
     channel_inventory_with_now(
         config,
-        runtime_state::default_channel_runtime_state_dir().as_path(),
+        state::default_channel_runtime_state_dir().as_path(),
         now_ms(),
     )
 }
@@ -3234,7 +3234,7 @@ pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
 pub fn channel_status_snapshots(config: &LoongClawConfig) -> Vec<ChannelStatusSnapshot> {
     channel_status_snapshots_with_now(
         config,
-        runtime_state::default_channel_runtime_state_dir().as_path(),
+        state::default_channel_runtime_state_dir().as_path(),
         now_ms(),
     )
 }
@@ -7183,7 +7183,7 @@ fn attach_runtime(
     now_ms: u64,
 ) -> ChannelOperationStatus {
     if operation.tracks_runtime {
-        status.runtime = runtime_state::load_channel_operation_runtime_for_account_from_dir(
+        status.runtime = state::load_channel_operation_runtime_for_account_from_dir(
             runtime_dir,
             platform,
             operation.id,
@@ -9846,7 +9846,7 @@ mod tests {
 
         let runtime_dir = temp_runtime_dir("registry-runtime");
         let now = now_ms();
-        runtime_state::write_runtime_state_for_test(
+        state::write_runtime_state_for_test(
             runtime_dir.as_path(),
             ChannelPlatform::Feishu,
             "serve",
@@ -9989,7 +9989,7 @@ mod tests {
 
         let runtime_dir = temp_runtime_dir("registry-account-runtime");
         let now = now_ms();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Feishu,
             "serve",
@@ -10027,7 +10027,7 @@ mod tests {
 
         let runtime_dir = temp_runtime_dir("registry-duplicate-runtime");
         let now = now_ms();
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
@@ -10041,7 +10041,7 @@ mod tests {
             Some(1001),
         )
         .expect("write first runtime state");
-        runtime_state::write_runtime_state_for_test_with_account_and_pid(
+        state::write_runtime_state_for_test_with_account_and_pid(
             runtime_dir.as_path(),
             ChannelPlatform::Telegram,
             "serve",
