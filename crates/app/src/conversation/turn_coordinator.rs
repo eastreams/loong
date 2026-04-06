@@ -46,7 +46,7 @@ use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
 use super::persistence::{
     format_provider_error_reply, persist_acp_runtime_events, persist_conversation_event,
     persist_reply_turns_raw_with_mode, persist_reply_turns_with_mode, persist_tool_decision,
-    persist_tool_outcome,
+    persist_tool_outcome, provider_error_reply_body,
 };
 use super::plan_executor::{
     PlanExecutor, PlanNodeError, PlanNodeErrorKind, PlanNodeExecutor, PlanRunFailure,
@@ -75,9 +75,14 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
+    ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
+use super::trust_projection::{
+    build_delegate_queued_child_session_request, build_delegate_started_child_session_request,
+    emit_provider_failover_trust_event_if_needed, emit_runtime_binding_trust_event_if_needed,
+};
 use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
     SafeLaneFailureRouteReason, SafeLaneReplanBudget,
@@ -131,9 +136,9 @@ use crate::session::recovery::{
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalDecision, ApprovalRequestStatus, CreateSessionWithEventRequest,
-    FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, SessionKind,
-    SessionRepository, SessionState, TransitionSessionWithEventIfCurrentRequest,
+    ApprovalDecision, ApprovalRequestStatus, FinalizeSessionTerminalRequest, NewSessionEvent,
+    NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    TransitionSessionWithEventIfCurrentRequest,
 };
 
 #[derive(Default)]
@@ -888,6 +893,13 @@ impl ResolvedProviderTurn {
         match self {
             Self::PersistReply(reply) => Some(reply.reply.as_str()),
             Self::ReturnError(_) => None,
+        }
+    }
+
+    fn provider_error_text(&self) -> Option<&str> {
+        match self {
+            Self::PersistReply(reply) => provider_error_reply_body(reply.reply.as_str()),
+            Self::ReturnError(error) => Some(error.error.as_str()),
         }
     }
 }
@@ -2556,6 +2568,11 @@ fn build_provider_turn_tool_terminal_events(
 
     events
 }
+
+#[cfg(test)]
+fn summarize_tool_event_request(intent: &ToolIntent) -> Option<String> {
+    summarize_single_tool_followup_request(intent)
+}
 fn provider_turn_observer_supports_streaming(
     config: &LoongClawConfig,
     observer: Option<&ConversationTurnObserverHandle>,
@@ -2747,6 +2764,17 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
         ingress,
     )
     .await;
+    let should_emit_binding_trust_event =
+        !matches!(lane, ExecutionLane::Safe) || config.conversation.safe_lane_emit_runtime_events;
+    if should_emit_binding_trust_event {
+        emit_runtime_binding_trust_event_if_needed(
+            runtime,
+            session_id,
+            &lane_execution.turn_result,
+            binding,
+        )
+        .await;
+    }
     observe_provider_turn_tool_batch_terminal(observer, &lane_execution.tool_events);
     let loop_verdict = turn_loop_state.observe_turn(turn_loop_policy, &turn);
     let followup_config =
@@ -2762,7 +2790,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
 
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    _config: &LoongClawConfig,
+    config: &LoongClawConfig,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
@@ -2891,12 +2919,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         .assistant_preface
                         .as_str(),
                     followup.clone(),
-                    user_input,
-                    loop_warning_reason.as_deref(),
                     current_continue_phase
                         .lane_execution
                         .tool_request_summary
                         .as_deref(),
+                    user_input,
+                    loop_warning_reason.as_deref(),
                 );
                 if current_continue_phase
                     .lane_execution
@@ -3026,8 +3054,12 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             provider_round_index = provider_round_index.saturating_add(1);
                             continue;
                         }
-                        ProviderTurnRequestAction::FinalizeInlineProviderError { .. }
-                        | ProviderTurnRequestAction::ReturnError { .. } => {
+                        ProviderTurnRequestAction::FinalizeInlineProviderError {
+                            reply: provider_error_text,
+                        }
+                        | ProviderTurnRequestAction::ReturnError {
+                            error: provider_error_text,
+                        } => {
                             emit_discovery_first_event(
                                 runtime,
                                 session_id,
@@ -3042,6 +3074,14 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                                         .lane_execution
                                         .raw_tool_output_requested,
                                 }),
+                                binding,
+                            )
+                            .await;
+                            emit_provider_failover_trust_event_if_needed(
+                                config,
+                                runtime,
+                                session_id,
+                                provider_error_text.as_str(),
                                 binding,
                             )
                             .await;
@@ -3114,8 +3154,8 @@ fn build_turn_reply_followup_messages(
         base_messages,
         assistant_preface,
         followup,
-        user_input,
         None,
+        user_input,
         None,
     )
 }
@@ -3124,9 +3164,9 @@ fn build_turn_reply_followup_messages_with_warning(
     base_messages: &[Value],
     assistant_preface: &str,
     followup: ToolDrivenFollowupPayload,
+    tool_request_summary: Option<&str>,
     user_input: &str,
     loop_warning_reason: Option<&str>,
-    tool_request_summary: Option<&str>,
 ) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
     messages.extend(build_tool_driven_followup_tail_with_request_summary(
@@ -3650,6 +3690,12 @@ async fn apply_resolved_provider_turn<R: ConversationRuntime + ?Sized>(
     binding: ConversationRuntimeBinding<'_>,
     observer: Option<&ConversationTurnObserverHandle>,
 ) -> CliResult<String> {
+    if let Some(error_text) = resolved.provider_error_text() {
+        emit_provider_failover_trust_event_if_needed(
+            config, runtime, session_id, error_text, binding,
+        )
+        .await;
+    }
     let terminal_phase = resolved.terminal_phase(&preparation.session);
     let completion_event = match &terminal_phase {
         ProviderTurnTerminalPhase::PersistReply(phase) => {
@@ -3943,6 +3989,8 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         &payload,
         config.tools.delegate.timeout_seconds,
     )?;
+    let subagent_identity =
+        crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
     let child_label = delegate_request.label.clone();
     let repo = SessionRepository::new(&MemoryRuntimeConfig::from_memory_config(&config.memory))?;
@@ -3962,31 +4010,21 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     let execution = constrained_subagent_execution_for_delegate(
                         config,
                         binding,
+                        subagent_identity.clone(),
                         ConstrainedSubagentMode::Inline,
                         delegate_request.timeout_seconds,
                         next_child_depth,
                         active_children,
                     );
-                    Ok((
-                        CreateSessionWithEventRequest {
-                            session: NewSessionRecord {
-                                session_id: child_session_id.clone(),
-                                kind: SessionKind::DelegateChild,
-                                parent_session_id: Some(session_context.session_id.clone()),
-                                label: child_label.clone(),
-                                state: SessionState::Running,
-                            },
-                            event_kind: "delegate_started".to_owned(),
-                            actor_session_id: Some(session_context.session_id.clone()),
-                            event_payload_json: execution
-                                .spawn_payload_with_runtime_self_continuity(
-                                    &delegate_request.task,
-                                    child_label.as_deref(),
-                                    runtime_self_continuity.as_ref(),
-                                ),
-                        },
-                        execution,
-                    ))
+                    let request = build_delegate_started_child_session_request(
+                        &session_context.session_id,
+                        &child_session_id,
+                        child_label.clone(),
+                        &delegate_request.task,
+                        runtime_self_continuity.as_ref(),
+                        &execution,
+                    );
+                    Ok((request, execution))
                 },
             )?;
 
@@ -4012,9 +4050,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
     session_context: &SessionContext,
-    task: String,
-    label: Option<String>,
-    timeout_seconds: u64,
+    delegate_request: crate::tools::delegate::DelegateRequest,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     if !config.tools.delegate.enabled {
@@ -4026,8 +4062,10 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let spawner = runtime
         .async_delegate_spawner(config)
         .ok_or_else(|| "delegate_async_not_configured".to_owned())?;
+    let subagent_identity =
+        crate::tools::delegate::subagent_identity_for_delegate_request(&delegate_request);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
-    let child_label = label.clone();
+    let child_label = delegate_request.label.clone();
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = SessionRepository::new(&memory_config)?;
 
@@ -4043,49 +4081,43 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
             let execution = constrained_subagent_execution_for_delegate(
                 config,
                 binding,
+                subagent_identity.clone(),
                 ConstrainedSubagentMode::Async,
-                timeout_seconds,
+                delegate_request.timeout_seconds,
                 next_child_depth,
                 active_children,
             );
-            let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
-                &task,
-                child_label.as_deref(),
+            let request = build_delegate_queued_child_session_request(
+                &session_context.session_id,
+                &child_session_id,
+                child_label.clone(),
+                &delegate_request.task,
                 runtime_self_continuity.as_ref(),
+                &execution,
             );
-            let session = NewSessionRecord {
-                session_id: child_session_id.clone(),
-                kind: SessionKind::DelegateChild,
-                parent_session_id: Some(session_context.session_id.clone()),
-                label: child_label.clone(),
-                state: SessionState::Ready,
-            };
-            let request = CreateSessionWithEventRequest {
-                session,
-                event_kind: "delegate_queued".to_owned(),
-                actor_session_id: Some(session_context.session_id.clone()),
-                event_payload_json,
-            };
             Ok((request, execution))
         },
     )?;
 
+    let queued_contract = execution.contract_view();
     let request = AsyncDelegateSpawnRequest {
         child_session_id: child_session_id.clone(),
         parent_session_id: session_context.session_id.clone(),
-        task,
+        task: delegate_request.task,
         label: child_label,
         execution,
         runtime_self_continuity,
-        timeout_seconds,
+        timeout_seconds: delegate_request.timeout_seconds,
         binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
     };
     spawn_async_delegate_detached(runtime_handle, memory_config, spawner, request);
 
     Ok(crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
-        label,
-        timeout_seconds,
+        Some(session_context.session_id.clone()),
+        delegate_request.label,
+        Some(&queued_contract),
+        delegate_request.timeout_seconds,
     ))
 }
 
@@ -4096,6 +4128,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     session_id: &str,
     task: &str,
     label: Option<String>,
+    specialization: Option<String>,
     timeout_seconds: Option<u64>,
     binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
@@ -4103,6 +4136,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     let delegate_request = crate::tools::delegate::normalize_delegate_request(
         task,
         label.as_deref(),
+        specialization.as_deref(),
         timeout_seconds,
         config.tools.delegate.timeout_seconds,
     )?;
@@ -4110,9 +4144,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
         config,
         runtime,
         &session_context,
-        delegate_request.task,
-        delegate_request.label,
-        delegate_request.timeout_seconds,
+        delegate_request,
         binding,
     )
     .await
@@ -4125,6 +4157,7 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     _session_id: &str,
     _task: &str,
     _label: Option<String>,
+    _specialization: Option<String>,
     _timeout_seconds: Option<u64>,
     _binding: ConversationRuntimeBinding<'_>,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
@@ -4147,16 +4180,8 @@ pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>
         &payload,
         config.tools.delegate.timeout_seconds,
     )?;
-    enqueue_delegate_async_with_runtime(
-        config,
-        runtime,
-        session_context,
-        delegate_request.task,
-        delegate_request.label,
-        delegate_request.timeout_seconds,
-        binding,
-    )
-    .await
+    enqueue_delegate_async_with_runtime(config, runtime, session_context, delegate_request, binding)
+        .await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -4219,9 +4244,12 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 .load_session_summary(child_session_id)?
                 .map(|session| session.turn_count)
                 .unwrap_or_default();
+            let subagent_contract = execution.contract_view();
             let outcome = crate::tools::delegate::delegate_success_outcome(
                 child_session_id.to_owned(),
+                Some(parent_session_id.to_owned()),
                 child_label,
+                Some(&subagent_contract),
                 final_output,
                 turn_count,
                 duration_ms,
@@ -4247,9 +4275,12 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
             Ok(outcome)
         }
         Ok(Ok(Err(error))) => {
+            let subagent_contract = execution.contract_view();
             let outcome = crate::tools::delegate::delegate_error_outcome(
                 child_session_id.to_owned(),
+                Some(parent_session_id.to_owned()),
                 child_label,
+                Some(&subagent_contract),
                 error.clone(),
                 duration_ms,
             );
@@ -4275,9 +4306,12 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
         }
         Ok(Err(panic_payload)) => {
             let panic_error = format_delegate_child_panic(panic_payload);
+            let subagent_contract = execution.contract_view();
             let outcome = crate::tools::delegate::delegate_error_outcome(
                 child_session_id.to_owned(),
+                Some(parent_session_id.to_owned()),
                 child_label,
+                Some(&subagent_contract),
                 panic_error.clone(),
                 duration_ms,
             );
@@ -4303,9 +4337,12 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
         }
         Err(_) => {
             let timeout_error = "delegate_timeout".to_owned();
+            let subagent_contract = execution.contract_view();
             let outcome = crate::tools::delegate::delegate_timeout_outcome(
                 child_session_id.to_owned(),
+                Some(parent_session_id.to_owned()),
                 child_label,
+                Some(&subagent_contract),
                 duration_ms,
             );
             finalize_delegate_child_terminal_with_recovery(
@@ -4341,9 +4378,12 @@ fn finalize_async_delegate_spawn_failure(
     error: String,
 ) -> Result<(), String> {
     let repo = SessionRepository::new(memory_config)?;
+    let subagent_contract = execution.contract_view();
     let outcome = crate::tools::delegate::delegate_error_outcome(
         child_session_id.to_owned(),
+        Some(parent_session_id.to_owned()),
         label,
+        Some(&subagent_contract),
         error.clone(),
         0,
     );
@@ -4493,11 +4533,17 @@ fn spawn_async_delegate_detached(
 fn constrained_subagent_execution_for_delegate(
     config: &LoongClawConfig,
     binding: ConversationRuntimeBinding<'_>,
+    subagent_identity: Option<ConstrainedSubagentIdentity>,
     mode: ConstrainedSubagentMode,
     timeout_seconds: u64,
     next_child_depth: usize,
     active_children: usize,
 ) -> ConstrainedSubagentExecution {
+    let subagent_profile = ConstrainedSubagentProfile::for_child_depth(
+        next_child_depth,
+        config.tools.delegate.max_depth,
+    );
+
     ConstrainedSubagentExecution {
         mode,
         depth: next_child_depth,
@@ -4509,6 +4555,8 @@ fn constrained_subagent_execution_for_delegate(
         child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
         runtime_narrowing: config.tools.delegate.child_runtime.runtime_narrowing(),
         kernel_bound: binding.is_kernel_bound(),
+        identity: subagent_identity,
+        profile: Some(subagent_profile),
     }
 }
 
@@ -4865,7 +4913,6 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
         tool_events,
     }
 }
-
 async fn execute_turn_with_safe_lane_plan<R: ConversationRuntime + ?Sized>(
     config: &LoongClawConfig,
     runtime: &R,
@@ -7543,12 +7590,10 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].tool_call_id, "call-shell");
         assert_eq!(events[0].state, ConversationTurnToolState::Denied);
-        let request_summary = events[0]
-            .request_summary
-            .as_deref()
-            .expect("request summary should be present");
+        let request_summary =
+            summarize_tool_event_request(&turn.tool_intents[0]).expect("request summary");
         let request_summary_json: Value =
-            serde_json::from_str(request_summary).expect("request summary should be valid json");
+            serde_json::from_str(&request_summary).expect("request summary should be valid json");
         assert_eq!(
             request_summary_json,
             json!({
@@ -7720,6 +7765,8 @@ mod tests {
             ],
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
+            identity: None,
+            profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
         };
         repo.create_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -7836,6 +7883,8 @@ mod tests {
             ],
             runtime_narrowing: crate::tools::runtime_config::ToolRuntimeNarrowing::default(),
             kernel_bound: false,
+            identity: None,
+            profile: Some(crate::conversation::ConstrainedSubagentProfile::for_child_depth(1, 1)),
         };
         repo.create_session(NewSessionRecord {
             session_id: "root-session".to_owned(),
@@ -8716,22 +8765,23 @@ mod tests {
             &fallback,
             ConversationRuntimeBinding::direct(),
         );
-        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
-            &approval_runtime,
-            crate::tools::approval::ApprovalResolutionRequest {
-                current_session_id: "root-session".to_owned(),
-                approval_request_id: "apr-auto-success".to_owned(),
-                decision: ApprovalDecision::ApproveOnce,
-                session_consent_mode: Some(ToolConsentMode::Auto),
-                visibility: crate::config::SessionVisibility::Children,
+        let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "approval_request_resolve".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-auto-success",
+                    "decision": "approve_once",
+                    "session_consent_mode": "auto",
+                }),
             },
+            "root-session",
+            &memory_config,
+            &ToolConfig::default(),
+            Some(&approval_runtime),
         )
         .await
         .expect("approval request resolve should succeed");
-        assert_eq!(
-            outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
-        );
+        assert_eq!(outcome.payload["approval_request"]["status"], "approved");
 
         let stored = repo
             .load_session_tool_consent("root-session")
@@ -8804,23 +8854,24 @@ mod tests {
             &fallback,
             ConversationRuntimeBinding::direct(),
         );
-        let outcome = crate::tools::approval::ApprovalResolutionRuntime::resolve_approval_request(
-            &approval_runtime,
-            crate::tools::approval::ApprovalResolutionRequest {
-                current_session_id: "root-session".to_owned(),
-                approval_request_id: "apr-auto-retry".to_owned(),
-                decision: ApprovalDecision::ApproveOnce,
-                session_consent_mode: Some(ToolConsentMode::Auto),
-                visibility: crate::config::SessionVisibility::Children,
+        let outcome = crate::tools::approval::execute_approval_tool_with_runtime_support(
+            loongclaw_contracts::ToolCoreRequest {
+                tool_name: "approval_request_resolve".to_owned(),
+                payload: json!({
+                    "approval_request_id": "apr-auto-retry",
+                    "decision": "approve_once",
+                    "session_consent_mode": "auto",
+                }),
             },
+            "root-session",
+            &memory_config,
+            &ToolConfig::default(),
+            Some(&approval_runtime),
         )
         .await
         .expect("approval request retry should succeed");
 
-        assert_eq!(
-            outcome.approval_request.status,
-            ApprovalRequestStatus::Approved
-        );
+        assert_eq!(outcome.payload["approval_request"]["status"], "approved");
 
         let stored = repo
             .load_session_tool_consent("root-session")

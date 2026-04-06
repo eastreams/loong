@@ -67,6 +67,7 @@ pub(super) const NOSTR_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogO
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: NOSTR_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 
@@ -77,6 +78,7 @@ pub(super) const NOSTR_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalog
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: NOSTR_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 

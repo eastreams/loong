@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::CliResult;
+use crate::channel::ChannelOutboundTarget;
 use crate::channel::feishu::api::resources::bitable;
 use crate::channel::feishu::api::resources::calendar::{
     self, FeishuCalendarFreebusyQuery, FeishuCalendarListQuery,
@@ -25,6 +26,7 @@ use crate::channel::feishu::api::{
     FeishuClient, FeishuGrant, FeishuMessageResourceType, FeishuTokenStore, FeishuUserPrincipal,
     map_user_info_to_principal,
 };
+use crate::channel::feishu::send::deliver_feishu_message_body;
 
 const FEISHU_MESSAGE_RESOURCE_ACCEPTED_SCOPES: &[&str] = &[
     "im:message:readonly",
@@ -4381,13 +4383,17 @@ fn execute_feishu_messages_send_tool_with_config(
             media.file_key.as_deref(),
         )?;
         let msg_type = body.msg_type().to_owned();
-        let delivery = messages::send_outbound_message(
+        let mut target = ChannelOutboundTarget::feishu_receive_id(receive_id.clone())
+            .with_feishu_receive_id_type(receive_id_type.clone());
+        if let Some(uuid) = uuid.as_ref() {
+            target = target.with_idempotency_key(uuid.clone());
+        }
+        let delivery = deliver_feishu_message_body(
             &context.client,
             &tenant_access_token,
-            &receive_id_type,
-            &receive_id,
+            context.receive_id_type.as_str(),
+            &target,
             &body,
-            uuid.as_deref(),
         )
         .await?;
 
@@ -4490,13 +4496,17 @@ fn execute_feishu_messages_reply_tool_with_config(
             media.file_key.as_deref(),
         )?;
         let msg_type = body.msg_type().to_owned();
-        let delivery = messages::reply_outbound_message(
+        let mut target = ChannelOutboundTarget::feishu_message_reply(message_id.clone())
+            .with_feishu_reply_in_thread(reply_in_thread);
+        if let Some(uuid) = uuid.as_ref() {
+            target = target.with_idempotency_key(uuid.clone());
+        }
+        let delivery = deliver_feishu_message_body(
             &context.client,
             &tenant_access_token,
-            &message_id,
+            context.receive_id_type.as_str(),
+            &target,
             &body,
-            reply_in_thread,
-            uuid.as_deref(),
         )
         .await?;
 
@@ -4789,6 +4799,7 @@ fn execute_feishu_messages_resource_get_tool_with_config(
                 &message_id,
                 &file_key,
                 resource_type,
+                media::FEISHU_MESSAGE_RESOURCE_DOWNLOAD_MAX_BYTES,
             )
             .await?;
             if let Some(parent) = save_path.parent() {

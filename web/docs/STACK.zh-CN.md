@@ -129,8 +129,20 @@ web/
 
 - `hooks/useChatSessions.ts`
 - `hooks/useChatStream.ts`
+- 会话列表已支持前端本地会话名覆写
+- 会话列表与当前会话头部会显示更友好的最近活跃时间
+- 当前正在生成的会话会在会话列表里给出显式状态提示
 
 ### `web/src/features/abilities/`
+
+当前第一版已落地：
+
+- `pages/AbilitiesPage.tsx`
+- `components/AbilitiesNav.tsx`
+- `components/PersonalizationPanel.tsx`
+- `components/ChannelsPanel.tsx`
+- `components/SkillsPanel.tsx`
+- `hooks/useAbilitiesData.ts`
 
 当前作为第三个大页面骨架，后续主要承接：
 

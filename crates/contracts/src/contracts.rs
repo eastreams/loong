@@ -14,6 +14,11 @@ pub enum Capability {
     FilesystemWrite,
     NetworkEgress,
     ObserveTelemetry,
+    ControlRead,
+    ControlWrite,
+    ControlApprovals,
+    ControlPairing,
+    ControlAcp,
 }
 
 impl Capability {
@@ -27,6 +32,11 @@ impl Capability {
             Self::FilesystemWrite => "filesystem_write",
             Self::NetworkEgress => "network_egress",
             Self::ObserveTelemetry => "observe_telemetry",
+            Self::ControlRead => "control_read",
+            Self::ControlWrite => "control_write",
+            Self::ControlApprovals => "control_approvals",
+            Self::ControlPairing => "control_pairing",
+            Self::ControlAcp => "control_acp",
         }
     }
 
@@ -40,6 +50,11 @@ impl Capability {
             "filesystem_write" => Some(Self::FilesystemWrite),
             "network_egress" => Some(Self::NetworkEgress),
             "observe_telemetry" => Some(Self::ObserveTelemetry),
+            "control_read" => Some(Self::ControlRead),
+            "control_write" => Some(Self::ControlWrite),
+            "control_approvals" => Some(Self::ControlApprovals),
+            "control_pairing" => Some(Self::ControlPairing),
+            "control_acp" => Some(Self::ControlAcp),
             _ => None,
         }
     }
@@ -122,6 +137,11 @@ mod tests {
             (Capability::FilesystemWrite, "filesystem_write"),
             (Capability::NetworkEgress, "network_egress"),
             (Capability::ObserveTelemetry, "observe_telemetry"),
+            (Capability::ControlRead, "control_read"),
+            (Capability::ControlWrite, "control_write"),
+            (Capability::ControlApprovals, "control_approvals"),
+            (Capability::ControlPairing, "control_pairing"),
+            (Capability::ControlAcp, "control_acp"),
         ];
 
         for (capability, expected_name) in fixtures {

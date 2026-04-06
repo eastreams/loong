@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+#[cfg(not(feature = "tool-file"))]
+use std::path::Path;
 use std::sync::OnceLock;
 
 use serde::Serialize;
@@ -6,6 +8,7 @@ use serde_json::{Value, json};
 
 use super::runtime_config::ToolRuntimeConfig;
 use crate::config::ToolConfig;
+use crate::conversation::{ConstrainedSubagentContractView, ConstrainedSubagentProfile};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ToolExecutionKind {
@@ -224,6 +227,7 @@ pub enum ToolVisibilityGate {
     BrowserCompanion,
     BashRuntime,
     ExternalSkills,
+    MemorySearchCorpus,
     MemoryFileRoot,
     WebFetch,
     WebSearch,
@@ -463,17 +467,17 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
-            name: "claw.migrate",
-            provider_name: "claw_migrate",
-            aliases: &[],
-            description: "Migrate legacy Claw configs into native LoongClaw settings",
+            name: "config.import",
+            provider_name: "config_import",
+            aliases: &["claw.migrate", "claw_migrate"],
+            description: "Import legacy agent workspace config, profile, and external-skills mapping state into native LoongClaw settings",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
-            provider_definition_builder: claw_migrate_definition,
+            provider_definition_builder: config_import_definition,
         },
         ToolDescriptor {
             name: "external_skills.fetch",
@@ -773,6 +777,19 @@ fn build_tool_catalog() -> ToolCatalog {
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: session_tool_policy_clear_definition,
+        },
+        ToolDescriptor {
+            name: "session_search",
+            provider_name: "session_search",
+            aliases: &[],
+            description: "Search visible canonical session history across transcript turns and session events",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::Sessions,
+            capability_action_class: CapabilityActionClass::ExecuteExisting,
+            policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_search_definition,
         },
         ToolDescriptor {
             name: "session_recover",
@@ -1137,11 +1154,11 @@ fn build_tool_catalog() -> ToolCatalog {
             name: "memory_search",
             provider_name: "memory_search",
             aliases: &[],
-            description: "Search durable workspace memory files with bounded citation-bearing snippets",
+            description: "Search durable workspace memory files and canonical cross-session recall with bounded snippets",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
             exposure: ToolExposureClass::Discoverable,
-            visibility_gate: ToolVisibilityGate::MemoryFileRoot,
+            visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
             provider_definition_builder: memory_search_definition,
@@ -1462,6 +1479,38 @@ pub fn delegate_child_tool_view_for_config(config: &ToolConfig) -> ToolView {
     delegate_child_tool_view_for_config_with_delegate(config, false)
 }
 
+pub fn delegate_child_tool_view_for_contract(
+    config: &ToolConfig,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let subagent_profile =
+        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
+    delegate_child_tool_view_for_profile(config, subagent_profile)
+}
+
+pub fn delegate_child_tool_view_for_runtime_config_and_contract(
+    config: &ToolConfig,
+    runtime_config: &ToolRuntimeConfig,
+    subagent_contract: Option<&ConstrainedSubagentContractView>,
+) -> ToolView {
+    let subagent_profile =
+        subagent_contract.and_then(ConstrainedSubagentContractView::resolved_profile);
+    let allow_delegate = subagent_profile
+        .map(ConstrainedSubagentProfile::allows_child_delegation)
+        .unwrap_or(false);
+    build_delegate_child_tool_view(config, Some(runtime_config), allow_delegate)
+}
+
+pub fn delegate_child_tool_view_for_profile(
+    config: &ToolConfig,
+    subagent_profile: Option<ConstrainedSubagentProfile>,
+) -> ToolView {
+    let allow_delegate = subagent_profile
+        .map(ConstrainedSubagentProfile::allows_child_delegation)
+        .unwrap_or(false);
+    build_delegate_child_tool_view(config, None, allow_delegate)
+}
+
 pub fn delegate_child_tool_view_for_runtime_config(
     config: &ToolConfig,
     runtime_config: &ToolRuntimeConfig,
@@ -1562,6 +1611,7 @@ fn tool_visibility_gate_enabled_for_delegate_child(
         | ToolVisibilityGate::Browser
         | ToolVisibilityGate::BrowserCompanion
         | ToolVisibilityGate::ExternalSkills
+        | ToolVisibilityGate::MemorySearchCorpus
         | ToolVisibilityGate::MemoryFileRoot
         | ToolVisibilityGate::WebFetch
         | ToolVisibilityGate::WebSearch => {
@@ -1637,13 +1687,32 @@ fn tool_visibility_gate_enabled_for_runtime_view(
         ToolVisibilityGate::BrowserCompanion => false,
         ToolVisibilityGate::BashRuntime => false,
         ToolVisibilityGate::ExternalSkills => external_skills_enabled,
+        ToolVisibilityGate::MemorySearchCorpus => config
+            .file_root
+            .as_deref()
+            .is_some_and(text_has_non_whitespace_segments),
         ToolVisibilityGate::MemoryFileRoot => config
             .file_root
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty()),
+            .is_some_and(text_has_non_whitespace_segments),
         ToolVisibilityGate::WebFetch => config.web.enabled,
         ToolVisibilityGate::WebSearch => config.web_search.enabled,
     }
+}
+
+fn text_has_non_whitespace_segments(value: &str) -> bool {
+    !value.trim().is_empty()
+}
+
+#[cfg(not(feature = "tool-file"))]
+fn path_has_non_whitespace_segments<P>(path: P) -> bool
+where
+    P: AsRef<Path>,
+{
+    let path_ref = path.as_ref();
+    let path_text = path_ref.as_os_str().to_string_lossy();
+
+    !path_text.trim().is_empty()
 }
 
 fn tool_visibility_gate_enabled_for_runtime_policy(
@@ -1675,16 +1744,7 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
         ToolVisibilityGate::BrowserCompanion => config.browser_companion.is_runtime_ready(),
         ToolVisibilityGate::BashRuntime => config.bash_exec.is_discoverable(),
         ToolVisibilityGate::ExternalSkills => config.external_skills.enabled,
-        ToolVisibilityGate::MemoryFileRoot => {
-            let has_file_root = config
-                .file_root
-                .as_ref()
-                .is_some_and(|value| !value.as_os_str().is_empty());
-
-            if !has_file_root {
-                return false;
-            }
-
+        ToolVisibilityGate::MemorySearchCorpus => {
             #[cfg(feature = "tool-file")]
             {
                 super::memory_tools::memory_corpus_available(config)
@@ -1692,7 +1752,24 @@ fn tool_visibility_gate_enabled_for_runtime_policy(
 
             #[cfg(not(feature = "tool-file"))]
             {
-                has_file_root
+                config
+                    .file_root
+                    .as_deref()
+                    .is_some_and(path_has_non_whitespace_segments)
+            }
+        }
+        ToolVisibilityGate::MemoryFileRoot => {
+            #[cfg(feature = "tool-file")]
+            {
+                super::memory_tools::workspace_memory_corpus_available(config)
+            }
+
+            #[cfg(not(feature = "tool-file"))]
+            {
+                config
+                    .file_root
+                    .as_deref()
+                    .is_some_and(path_has_non_whitespace_segments)
             }
         }
         ToolVisibilityGate::WebFetch => config.web_fetch.enabled,
@@ -2030,18 +2107,18 @@ fn tool_invoke_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
-fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
+fn config_import_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
         "function": {
             "name": descriptor.provider_name,
-            "description": "Import, discover, plan, merge, apply, and rollback legacy Claw workspace migration into native LoongClaw config.",
+            "description": "Import, discover, plan, merge, apply, and roll back legacy agent workspace config and related external-skills state into native LoongClaw config.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "input_path": {
                         "type": "string",
-                        "description": "Path to the legacy Claw workspace, config root, or portable migration file. Required for all modes except rollback_last_apply."
+                        "description": "Path to the legacy agent workspace, config root, or portable import file. Required for all modes except rollback_last_apply."
                     },
                     "mode": {
                         "type": "string",
@@ -2061,7 +2138,7 @@ fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
                     "source": {
                         "type": "string",
                         "enum": ["auto", "nanobot", "openclaw", "picoclaw", "zeroclaw", "nanoclaw"],
-                        "description": "Optional source hint for plan/apply modes. Defaults to automatic detection."
+                        "description": "Optional claw-family source hint for plan/apply modes. Defaults to automatic detection."
                     },
                     "source_id": {
                         "type": "string",
@@ -2089,7 +2166,7 @@ fn claw_migrate_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Target config path. Required in apply/apply_selected/rollback_last_apply modes."
+                        "description": "Optional target config path. In plan, when present, config.import reads this path to preview the merged result. Required in apply/apply_selected/rollback_last_apply modes."
                     },
                     "force": {
                         "type": "boolean",
@@ -2510,7 +2587,7 @@ fn memory_search_definition(descriptor: &ToolDescriptor) -> Value {
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Natural-language lookup query for durable workspace memory."
+                        "description": "Natural-language lookup query for durable workspace memory and canonical cross-session recall."
                     },
                     "max_results": {
                         "type": "integer",
@@ -2922,6 +2999,49 @@ fn session_events_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn session_search_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Natural-language search query over visible canonical session history."
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session id to narrow the search scope."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Optional maximum number of ranked hits to return. Defaults to 5."
+                    },
+                    "include_archived": {
+                        "type": "boolean",
+                        "description": "Include archived visible sessions when true. Defaults to false."
+                    },
+                    "include_turns": {
+                        "type": "boolean",
+                        "description": "Include transcript turn matches. Defaults to true."
+                    },
+                    "include_events": {
+                        "type": "boolean",
+                        "description": "Include session event matches. Defaults to true."
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     json!({
         "type": "function",
@@ -3291,6 +3411,10 @@ fn delegate_definition(descriptor: &ToolDescriptor) -> Value {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
                     },
+                    "specialization": {
+                        "type": "string",
+                        "description": "Optional bounded specialization hint carried on the child handle."
+                    },
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
@@ -3321,6 +3445,10 @@ fn delegate_async_definition(descriptor: &ToolDescriptor) -> Value {
                     "label": {
                         "type": "string",
                         "description": "Optional human-readable label for the child session."
+                    },
+                    "specialization": {
+                        "type": "string",
+                        "description": "Optional bounded specialization hint carried on the child handle."
                     },
                     "timeout_seconds": {
                         "type": "integer",
@@ -3485,7 +3613,9 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "feishu.whoami" => "account_id?:string,open_id?:string",
         "tool.search" => "query?:string,exact_tool_id?:string,limit?:integer",
         "tool.invoke" => "tool_id:string,lease:string,arguments:object",
-        "claw.migrate" => "input_path?:string,mode?:string,source?:string",
+        "config.import" => {
+            "input_path?:string,output_path?:string,mode?:string,source?:string,source_id?:string,primary_source_id?:string,safe_profile_merge?:boolean,apply_external_skills_plan?:boolean,force?:boolean"
+        }
         "external_skills.fetch" => {
             "reference?:string,url?:string,approval_granted?:boolean,save_as?:string,max_bytes?:integer"
         }
@@ -3518,13 +3648,18 @@ fn tool_argument_hint(name: &str) -> &'static str {
         "shell.exec" => "command:string,args?:string[],timeout_ms?:integer,cwd?:string",
         "bash.exec" => "command:string,cwd?:string,timeout_ms?:integer",
         "provider.switch" => "selector?:string",
-        "delegate" | "delegate_async" => "task:string,label?:string,timeout_seconds?:integer",
+        "delegate" | "delegate_async" => {
+            "task:string,label?:string,specialization?:string,timeout_seconds?:integer"
+        }
         "session_tool_policy_status" | "session_tool_policy_clear" => "session_id?:string",
         "session_tool_policy_set" => {
             "session_id?:string,tool_ids?:string[],runtime_narrowing?:object"
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
+        "session_search" => {
+            "query:string,session_id?:string,max_results?:integer,include_archived?:boolean,include_turns?:boolean,include_events?:boolean"
+        }
         "sessions_list" => "limit?:integer,offset?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
@@ -3851,10 +3986,16 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("lease", "string"),
             ("arguments", "object"),
         ],
-        "claw.migrate" => &[
+        "config.import" => &[
             ("input_path", "string"),
+            ("output_path", "string"),
             ("mode", "string"),
             ("source", "string"),
+            ("source_id", "string"),
+            ("primary_source_id", "string"),
+            ("safe_profile_merge", "boolean"),
+            ("apply_external_skills_plan", "boolean"),
+            ("force", "boolean"),
         ],
         "external_skills.fetch" => &[
             ("reference", "string"),
@@ -3937,6 +4078,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         "delegate" | "delegate_async" => &[
             ("task", "string"),
             ("label", "string"),
+            ("specialization", "string"),
             ("timeout_seconds", "integer"),
         ],
         "session_tool_policy_status" | "session_tool_policy_clear" => &[("session_id", "string")],
@@ -3951,6 +4093,14 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
             ("limit", "integer"),
             ("offset", "integer"),
             ("state", "string"),
+        ],
+        "session_search" => &[
+            ("query", "string"),
+            ("session_id", "string"),
+            ("max_results", "integer"),
+            ("include_archived", "boolean"),
+            ("include_turns", "boolean"),
+            ("include_events", "boolean"),
         ],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         "web.search" => &[
@@ -4027,6 +4177,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
+        "session_search" => &["query"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -4074,7 +4225,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         "feishu.whoami" => &["feishu", "identity", "read"],
         "tool.search" => &["core", "discover", "search"],
         "tool.invoke" => &["core", "dispatch", "invoke"],
-        "claw.migrate" => &["migration", "migrate", "config", "legacy"],
+        "config.import" => &["config", "import", "migration", "workspace", "legacy"],
         "external_skills.fetch" => &["skills", "download", "external", "fetch"],
         "external_skills.resolve" => &["skills", "resolve", "normalize", "external"],
         "external_skills.search" => &["skills", "search", "inventory", "discover"],
@@ -4110,6 +4261,7 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
         | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
             &["session", "history", "runtime"]
         }
+        "session_search" => &["session", "search", "history", "memory", "canonical"],
         "sessions_send" => &["session", "message", "channel"],
         "web.search" => &["web", "search", "discover", "external"],
         _ => &[],
@@ -4253,6 +4405,92 @@ mod tests {
     }
 
     #[test]
+    fn memory_file_root_visibility_gate_rejects_whitespace_only_paths() {
+        let view_config = ToolConfig {
+            file_root: Some("   ".to_owned()),
+            ..ToolConfig::default()
+        };
+        let runtime_config = ToolRuntimeConfig {
+            file_root: Some(std::path::PathBuf::from("   ")),
+            ..ToolRuntimeConfig::default()
+        };
+
+        assert!(!tool_visibility_gate_enabled_for_runtime_view(
+            ToolVisibilityGate::MemoryFileRoot,
+            &view_config,
+            false
+        ));
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &runtime_config
+        ));
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemorySearchCorpus,
+            &runtime_config
+        ));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn memory_search_corpus_visibility_gate_allows_canonical_memory_without_workspace_files() {
+        let runtime_dir = tempdir().expect("tempdir");
+        let db_path = runtime_dir.path().join("memory.sqlite3");
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        crate::memory::append_turn_direct(
+            "canonical-search-gate-session",
+            "assistant",
+            "Rollback checklist includes smoke tests and release notes.",
+            &memory_config,
+        )
+        .expect("append canonical turn");
+
+        let runtime = ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..ToolRuntimeConfig::default()
+        };
+        assert!(tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemorySearchCorpus,
+            &runtime
+        ));
+        assert!(!tool_visibility_gate_enabled_for_runtime_policy(
+            ToolVisibilityGate::MemoryFileRoot,
+            &runtime
+        ));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn runtime_tool_view_includes_memory_search_for_canonical_memory_without_workspace_files() {
+        let runtime_dir = tempdir().expect("tempdir");
+        let db_path = runtime_dir.path().join("memory.sqlite3");
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        crate::memory::append_turn_direct(
+            "canonical-view-session",
+            "assistant",
+            "Rollback checklist includes smoke tests and release notes.",
+            &memory_config,
+        )
+        .expect("append canonical turn");
+
+        let runtime = ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..ToolRuntimeConfig::default()
+        };
+        let tool_view = runtime_tool_view_for_runtime_config(&runtime);
+
+        assert!(tool_view.contains("memory_search"));
+        assert!(!tool_view.contains("memory_get"));
+    }
+
+    #[test]
     fn browser_visibility_gate_is_independent_from_companion_settings() {
         let mut config = ToolRuntimeConfig::default();
         config.browser.enabled = true;
@@ -4316,6 +4554,28 @@ mod tests {
         let child_view = delegate_child_tool_view_for_config(&config);
 
         assert!(!child_view.contains("web.fetch"));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_for_contract_fails_closed_without_profile() {
+        let config = ToolConfig::default();
+        let child_view = delegate_child_tool_view_for_contract(&config, None);
+
+        assert!(!child_view.contains("delegate"));
+        assert!(!child_view.contains("delegate_async"));
+    }
+
+    #[test]
+    fn delegate_child_tool_view_for_contract_allows_nested_delegate_when_profile_permits() {
+        let config = ToolConfig::default();
+        let contract = ConstrainedSubagentContractView::from_profile(ConstrainedSubagentProfile {
+            role: crate::conversation::ConstrainedSubagentRole::Orchestrator,
+            control_scope: crate::conversation::ConstrainedSubagentControlScope::Children,
+        });
+        let child_view = delegate_child_tool_view_for_contract(&config, Some(&contract));
+
+        assert!(child_view.contains("delegate"));
+        assert!(child_view.contains("delegate_async"));
     }
 
     #[cfg(feature = "tool-shell")]
@@ -4445,6 +4705,13 @@ mod tests {
         );
         assert_eq!(
             catalog
+                .descriptor("session_search")
+                .expect("session_search descriptor")
+                .scheduling_class(),
+            ToolSchedulingClass::ParallelSafe
+        );
+        assert_eq!(
+            catalog
                 .descriptor("delegate_async")
                 .expect("delegate_async descriptor")
                 .scheduling_class(),
@@ -4530,11 +4797,25 @@ mod tests {
     }
 
     #[test]
+    fn config_import_alias_resolves_descriptor_governance() {
+        let catalog = tool_catalog();
+        let descriptor = catalog
+            .descriptor("config.import")
+            .expect("config.import descriptor");
+        let expected_policy = governance_profile_for_descriptor(descriptor);
+        let legacy_alias_policy = governance_profile_for_tool_name("claw.migrate");
+
+        assert!(descriptor.aliases.contains(&"claw.migrate"));
+        assert!(descriptor.aliases.contains(&"claw_migrate"));
+        assert_eq!(legacy_alias_policy, expected_policy);
+    }
+
+    #[test]
     fn autonomy_capability_action_is_independent_from_governance_profile() {
         let catalog = tool_catalog();
         let migrate = catalog
-            .descriptor("claw.migrate")
-            .expect("claw.migrate descriptor");
+            .descriptor("config.import")
+            .expect("config.import descriptor");
         let provider_switch = catalog
             .descriptor("provider.switch")
             .expect("provider.switch descriptor");
@@ -4566,7 +4847,7 @@ mod tests {
             ("tool.search", CapabilityActionClass::Discover),
             ("tool_search", CapabilityActionClass::Discover),
             ("tool.invoke", CapabilityActionClass::ExecuteExisting),
-            ("claw.migrate", CapabilityActionClass::ExecuteExisting),
+            ("config.import", CapabilityActionClass::ExecuteExisting),
             (
                 "external_skills.fetch",
                 CapabilityActionClass::CapabilityFetch,
@@ -4605,6 +4886,7 @@ mod tests {
                 "session_tool_policy_clear",
                 CapabilityActionClass::PolicyMutation,
             ),
+            ("session_search", CapabilityActionClass::ExecuteExisting),
             ("session_recover", CapabilityActionClass::SessionMutation),
         ];
 

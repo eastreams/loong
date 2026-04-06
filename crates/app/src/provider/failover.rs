@@ -2,6 +2,8 @@ use serde_json::{Value, json};
 
 use super::contracts::ProviderApiError;
 
+const PROVIDER_FAILOVER_MARKER: &str = "provider_failover=";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ProviderFailoverReason {
     ModelMismatch,
@@ -63,6 +65,17 @@ impl ProviderFailoverStage {
             Self::ResponseDecode => "response_decode",
             Self::ResponseShapeInvalid => "response_shape_invalid",
             Self::ModelCandidateRejected => "model_candidate_rejected",
+        }
+    }
+
+    fn from_str(raw: &str) -> Option<Self> {
+        match raw {
+            "status_failure" => Some(Self::StatusFailure),
+            "transport_failure" => Some(Self::TransportFailure),
+            "response_decode" => Some(Self::ResponseDecode),
+            "response_shape_invalid" => Some(Self::ResponseShapeInvalid),
+            "model_candidate_rejected" => Some(Self::ModelCandidateRejected),
+            _ => None,
         }
     }
 }
@@ -130,11 +143,59 @@ pub(super) fn build_model_request_error(
     }
 }
 
+pub(crate) fn parse_provider_failover_snapshot_payload(error: &str) -> Option<Value> {
+    let (_prefix, payload_raw) = error.rsplit_once(PROVIDER_FAILOVER_MARKER)?;
+    let payload: Value = serde_json::from_str(payload_raw).ok()?;
+    validate_provider_failover_snapshot_payload(payload)
+}
+
+fn validate_provider_failover_snapshot_payload(payload: Value) -> Option<Value> {
+    let payload_object = payload.as_object()?;
+    let payload_has_status_code = payload_object.contains_key("status_code");
+    let expected_key_count = if payload_has_status_code { 6 } else { 5 };
+    let has_only_known_keys = payload_object.keys().all(|key| {
+        matches!(
+            key.as_str(),
+            "reason" | "stage" | "model" | "attempt" | "max_attempts" | "status_code"
+        )
+    });
+    if payload_object.len() != expected_key_count {
+        return None;
+    }
+    if !has_only_known_keys {
+        return None;
+    }
+
+    let reason_value = payload_object.get("reason")?;
+    let reason_raw = reason_value.as_str()?;
+    let _reason = ProviderFailoverReason::from_str(reason_raw)?;
+
+    let stage_value = payload_object.get("stage")?;
+    let stage_raw = stage_value.as_str()?;
+    let _stage = ProviderFailoverStage::from_str(stage_raw)?;
+
+    let model_value = payload_object.get("model")?;
+    let _model = model_value.as_str()?;
+
+    let attempt_value = payload_object.get("attempt")?;
+    let _attempt = attempt_value.as_u64()?;
+
+    let max_attempts_value = payload_object.get("max_attempts")?;
+    let _max_attempts = max_attempts_value.as_u64()?;
+
+    let status_code_value = payload_object.get("status_code");
+    if let Some(status_code_value) = status_code_value {
+        let _status_code = status_code_value.as_u64()?;
+    }
+
+    Some(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         ProviderFailoverReason, ProviderFailoverSnapshot, ProviderFailoverStage,
-        build_model_request_error,
+        build_model_request_error, parse_provider_failover_snapshot_payload,
     };
     use serde_json::json;
 
@@ -226,5 +287,63 @@ mod tests {
                 "status_code": 429
             })
         );
+    }
+
+    #[test]
+    fn parse_provider_failover_snapshot_payload_extracts_structured_suffix() {
+        let error = "provider request failed | provider_failover={\"reason\":\"transport_failure\",\"stage\":\"transport_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":2,\"max_attempts\":4}";
+
+        let payload = parse_provider_failover_snapshot_payload(error)
+            .expect("provider failover suffix should parse");
+
+        assert_eq!(
+            payload,
+            json!({
+                "reason": "transport_failure",
+                "stage": "transport_failure",
+                "model": "openai/gpt-4o",
+                "attempt": 2,
+                "max_attempts": 4
+            })
+        );
+    }
+
+    #[test]
+    fn parse_provider_failover_snapshot_payload_rejects_invalid_shape() {
+        let error = "provider request failed | provider_failover={\"reason\":\"unknown\",\"stage\":\"transport_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":2,\"max_attempts\":4}";
+
+        let payload = parse_provider_failover_snapshot_payload(error);
+
+        assert!(payload.is_none());
+    }
+
+    #[test]
+    fn parse_provider_failover_snapshot_payload_uses_last_marker() {
+        let error = concat!(
+            "provider request failed | provider_failover=",
+            "{\"reason\":\"rate_limited\",\"stage\":\"status_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":1,\"max_attempts\":3}",
+            " extra context | provider_failover=",
+            "{\"reason\":\"transport_failure\",\"stage\":\"transport_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":2,\"max_attempts\":4}",
+        );
+
+        let payload = parse_provider_failover_snapshot_payload(error)
+            .expect("provider failover suffix should parse from the last marker");
+
+        assert_eq!(payload["reason"], "transport_failure");
+        assert_eq!(payload["stage"], "transport_failure");
+        assert_eq!(payload["attempt"], 2);
+        assert_eq!(payload["max_attempts"], 4);
+    }
+
+    #[test]
+    fn parse_provider_failover_snapshot_payload_rejects_unknown_keys() {
+        let error = concat!(
+            "provider request failed | provider_failover=",
+            "{\"reason\":\"transport_failure\",\"stage\":\"transport_failure\",\"model\":\"openai/gpt-4o\",\"attempt\":2,\"max_attempts\":4,\"unexpected\":true}",
+        );
+
+        let payload = parse_provider_failover_snapshot_payload(error);
+
+        assert!(payload.is_none());
     }
 }

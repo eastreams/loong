@@ -334,6 +334,7 @@ pub struct ChannelOutboundDeliveryOptions {
     pub idempotency_key: Option<String>,
     pub feishu_receive_id_type: Option<String>,
     pub feishu_reply_in_thread: Option<bool>,
+    pub feishu_reply_chat_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -417,6 +418,11 @@ impl ChannelOutboundTarget {
         self
     }
 
+    pub fn with_feishu_reply_chat_id(mut self, chat_id: impl Into<String>) -> Self {
+        self.options.feishu_reply_chat_id = Some(chat_id.into());
+        self
+    }
+
     pub fn idempotency_key(&self) -> Option<&str> {
         self.options
             .idempotency_key
@@ -427,6 +433,14 @@ impl ChannelOutboundTarget {
 
     pub fn feishu_reply_in_thread(&self) -> Option<bool> {
         self.options.feishu_reply_in_thread
+    }
+
+    pub fn feishu_reply_chat_id(&self) -> Option<&str> {
+        self.options
+            .feishu_reply_chat_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
     }
 }
 

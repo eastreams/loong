@@ -4,8 +4,10 @@ pub mod channel;
 pub mod chat;
 pub mod config;
 pub mod context;
+pub mod control_plane;
 pub mod conversation;
 pub mod crypto;
+pub mod mcp;
 pub mod memory;
 pub mod migration;
 pub(crate) mod observability;
@@ -20,9 +22,12 @@ mod runtime_self_continuity;
 mod secrets;
 pub mod session;
 pub mod tools;
+pub(crate) mod trust;
 pub mod tui_surface;
 
 mod process_env;
+#[doc(hidden)]
+pub mod process_launch;
 #[allow(
     clippy::expect_used,
     clippy::panic,

@@ -55,6 +55,7 @@ pub fn authorize_connector_protocol_context(context: &mut ConnectorProtocolConte
         .authorize(
             &resolved_route,
             &RouteAuthorizationRequest {
+                authenticated: true,
                 capabilities: context.capabilities.clone(),
             },
         )

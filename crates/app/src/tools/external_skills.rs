@@ -2,7 +2,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{ErrorKind, Read},
+    io::{BufWriter, ErrorKind, Read, Write},
     path::{Path, PathBuf},
     sync::{OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -16,6 +16,7 @@ use serde_json::{Map, Value, json};
 use serde_yaml::Value as YamlValue;
 use sha2::{Digest, Sha256};
 use tar::Archive;
+use tempfile::Builder as TempFileBuilder;
 
 use super::external_skills_scan::{
     ExternalSkillSecurityDecision, parse_external_skill_security_decision, scan_external_skill_tree,
@@ -483,18 +484,8 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         "download",
     )?;
     let response = send_external_skill_get_request(&client, &validated_download_url, "download")?;
-
-    let mut body = Vec::new();
-    let mut limited_reader = response.take((max_bytes as u64).saturating_add(1));
-    limited_reader
-        .read_to_end(&mut body)
-        .map_err(|error| format!("failed to read external skills download body: {error}"))?;
-
-    if body.len() > max_bytes {
-        return Err(format!(
-            "external skills download exceeded max_bytes limit ({max_bytes} bytes)"
-        ));
-    }
+    let content_length = response.content_length();
+    let mut response = response;
 
     let output_dir = resolve_download_dir(config);
     fs::create_dir_all(&output_dir).map_err(|error| {
@@ -510,16 +501,14 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
         .filter(|value| !value.is_empty());
     let derived_name = requested_name
         .unwrap_or_else(|| derive_filename_from_url(&validated_download_url.parsed_url));
-    let output_path = unique_output_path(&output_dir, &derived_name);
-
-    fs::write(&output_path, &body).map_err(|error| {
-        format!(
-            "failed to write downloaded external skill artifact {}: {error}",
-            output_path.display()
-        )
-    })?;
-
-    let sha256 = hex::encode(Sha256::digest(&body));
+    let download = stream_download_to_unique_path(
+        &mut response,
+        content_length,
+        max_bytes,
+        &output_dir,
+        &derived_name,
+        "external skills download",
+    )?;
 
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
@@ -529,9 +518,9 @@ pub(super) fn execute_external_skills_fetch_tool_with_config(
             "reference": reference,
             "url": download_plan.artifact_url,
             "host": validated_download_url.host,
-            "saved_path": output_path.display().to_string(),
-            "bytes_downloaded": body.len(),
-            "sha256": sha256,
+            "saved_path": download.path.display().to_string(),
+            "bytes_downloaded": download.bytes_downloaded,
+            "sha256": download.sha256,
             "approval_required": policy.require_download_approval,
             "approval_granted": approval_granted,
             "max_bytes": max_bytes,
@@ -744,9 +733,15 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                         "external_skills.install does not recognize bundled skill `{bundled_skill_id}`"
                     )
                 })?;
+            let bundled_markdown =
+                super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
+            let bundled_dir = super::bundled_skills::bundled_external_skill_dir(&bundled)
+                .ok_or_else(|| {
+                    format!("missing bundled external skill directory for `{bundled_skill_id}`")
+                })?;
             let skill_id = normalize_skill_id(bundled.skill_id)?;
-            let display_name = derive_skill_display_name(bundled.instructions, bundled.skill_id);
-            let summary = derive_skill_summary(bundled.instructions);
+            let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
+            let summary = derive_skill_summary(bundled_markdown);
             let incoming_root = unique_managed_install_transition_path(
                 &install_root,
                 skill_id.as_str(),
@@ -759,14 +754,8 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                     incoming_root.display()
                 )
             })?;
-            let installed_skill_md_path = incoming_root.join(DEFAULT_SKILL_FILENAME);
-            fs::write(&installed_skill_md_path, bundled.instructions).map_err(|error| {
-                format!(
-                    "failed to write bundled external skill source {}: {error}",
-                    installed_skill_md_path.display()
-                )
-            })?;
-            let digest = hex::encode(Sha256::digest(bundled.instructions.as_bytes()));
+            copy_embedded_dir_recursive(bundled_dir, &incoming_root)?;
+            let digest = digest_embedded_dir(bundled_dir);
             incoming_cleanup.disarm();
             (
                 skill_id,
@@ -1211,6 +1200,10 @@ fn execute_external_skills_list_for_audience(
 ) -> Result<ToolCoreOutcome, String> {
     let inventory = discover_skill_inventory(config)?;
     let filtered = filter_inventory_for_audience(inventory, audience);
+    let bundled_packs = match audience {
+        SkillAudience::Operator => json!(super::bundled_skills::bundled_skill_packs()),
+        SkillAudience::Model => json!([]),
+    };
     Ok(ToolCoreOutcome {
         status: "ok".to_owned(),
         payload: json!({
@@ -1218,6 +1211,7 @@ fn execute_external_skills_list_for_audience(
             "tool_name": tool_name,
             "skills": serialize_skill_entries_for_audience(filtered.skills, audience),
             "shadowed_skills": serialize_skill_entries_for_audience(filtered.shadowed_skills, audience),
+            "bundled_packs": bundled_packs,
         }),
     })
 }
@@ -2567,6 +2561,107 @@ fn unique_output_path(dir: &Path, filename: &str) -> PathBuf {
     }
 }
 
+#[derive(Debug)]
+struct StreamedDownload {
+    path: PathBuf,
+    bytes_downloaded: usize,
+    sha256: String,
+}
+
+fn stream_download_to_unique_path<R: Read>(
+    reader: &mut R,
+    content_length: Option<u64>,
+    max_bytes: usize,
+    output_dir: &Path,
+    filename: &str,
+    surface_name: &str,
+) -> Result<StreamedDownload, String> {
+    const MAX_PERSIST_COLLISION_RETRIES: usize = 16;
+
+    let mut budget = super::download_guard::ByteBudget::new(max_bytes);
+
+    budget.reject_if_content_length_exceeds(content_length, surface_name)?;
+
+    let mut target_path = unique_output_path(output_dir, filename);
+    let mut temp_file = TempFileBuilder::new()
+        .prefix(".download-")
+        .tempfile_in(output_dir)
+        .map_err(|error| {
+            format!(
+                "failed to create temporary download file in {}: {error}",
+                output_dir.display()
+            )
+        })?;
+    let mut writer = BufWriter::new(temp_file.as_file_mut());
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8_192];
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {surface_name} body: {error}"))?;
+        if read == 0 {
+            break;
+        }
+
+        budget.try_consume(read, surface_name)?;
+        let chunk = buffer
+            .get(..read)
+            .ok_or_else(|| format!("failed to slice {surface_name} buffer"))?;
+
+        writer
+            .write_all(chunk)
+            .map_err(|error| format!("failed to write {surface_name} body: {error}"))?;
+        hasher.update(chunk);
+    }
+
+    writer
+        .flush()
+        .map_err(|error| format!("failed to flush {surface_name} body: {error}"))?;
+    drop(writer);
+
+    // Claim the final name without clobbering a sibling download that won the
+    // same derived filename race first.
+    for attempt in 0..MAX_PERSIST_COLLISION_RETRIES {
+        let persist_result = temp_file.persist_noclobber(&target_path);
+
+        match persist_result {
+            Ok(_) => {
+                break;
+            }
+            Err(error) if error.error.kind() == ErrorKind::AlreadyExists => {
+                let is_last_attempt = attempt + 1 == MAX_PERSIST_COLLISION_RETRIES;
+
+                if is_last_attempt {
+                    return Err(format!(
+                        "failed to persist downloaded artifact {} after {} name collisions",
+                        target_path.display(),
+                        MAX_PERSIST_COLLISION_RETRIES
+                    ));
+                }
+
+                temp_file = error.file;
+                target_path = unique_output_path(output_dir, filename);
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to persist downloaded artifact {}: {}",
+                    target_path.display(),
+                    error.error
+                ));
+            }
+        }
+    }
+
+    let sha256 = hex::encode(hasher.finalize());
+
+    Ok(StreamedDownload {
+        path: target_path,
+        bytes_downloaded: budget.consumed(),
+        sha256,
+    })
+}
+
 fn unique_managed_install_transition_path(
     install_root: &Path,
     skill_id: &str,
@@ -3265,7 +3360,16 @@ fn serialize_skill_entry_for_audience(
     audience: SkillAudience,
 ) -> Value {
     match audience {
-        SkillAudience::Operator => json!(entry),
+        SkillAudience::Operator => {
+            let mut value = serde_json::to_value(&entry).unwrap_or_else(|_| json!({}));
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "pack_memberships".to_owned(),
+                    pack_membership_payload_from_skill(entry.skill_id.as_str()),
+                );
+            }
+            value
+        }
         SkillAudience::Model => json!(DiscoveredSkillModelView::from(entry)),
     }
 }
@@ -3275,7 +3379,12 @@ fn serialize_skill_entries_for_audience(
     audience: SkillAudience,
 ) -> Value {
     match audience {
-        SkillAudience::Operator => json!(entries),
+        SkillAudience::Operator => json!(
+            entries
+                .into_iter()
+                .map(|entry| serialize_skill_entry_for_audience(entry, SkillAudience::Operator))
+                .collect::<Vec<_>>()
+        ),
         SkillAudience::Model => json!(
             entries
                 .into_iter()
@@ -3531,6 +3640,73 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn copy_embedded_dir_recursive(
+    source: &include_dir::Dir<'static>,
+    destination: &Path,
+) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|error| {
+        format!(
+            "failed to create bundled external skill destination {}: {error}",
+            destination.display()
+        )
+    })?;
+    for entry in source.entries() {
+        match entry {
+            include_dir::DirEntry::Dir(dir) => {
+                let Some(name) = dir.path().file_name() else {
+                    return Err(format!(
+                        "bundled external skill directory `{}` has no terminal name",
+                        dir.path().display()
+                    ));
+                };
+                copy_embedded_dir_recursive(dir, &destination.join(name))?;
+            }
+            include_dir::DirEntry::File(file) => {
+                let Some(name) = file.path().file_name() else {
+                    return Err(format!(
+                        "bundled external skill file `{}` has no terminal name",
+                        file.path().display()
+                    ));
+                };
+                fs::write(destination.join(name), file.contents()).map_err(|error| {
+                    format!(
+                        "failed to write bundled external skill file {}: {error}",
+                        destination.join(name).display()
+                    )
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn digest_embedded_dir(source: &include_dir::Dir<'static>) -> String {
+    fn update_dir(hasher: &mut Sha256, dir: &include_dir::Dir<'static>) {
+        for entry in dir.entries() {
+            match entry {
+                include_dir::DirEntry::Dir(child) => {
+                    hasher.update(b"dir:");
+                    hasher.update(child.path().to_string_lossy().as_bytes());
+                    hasher.update(b"\n");
+                    update_dir(hasher, child);
+                }
+                include_dir::DirEntry::File(file) => {
+                    hasher.update(b"file:");
+                    hasher.update(file.path().to_string_lossy().as_bytes());
+                    hasher.update(b"\n");
+                    hasher.update(file.contents());
+                    hasher.update(b"\n");
+                }
+            }
+        }
+    }
+
+    let mut hasher = Sha256::new();
+    update_dir(&mut hasher, source);
+    let digest = hasher.finalize();
+    hex::encode(digest)
+}
+
 fn load_installed_skill_index(root: &Path) -> Result<InstalledSkillIndex, String> {
     let index_path = root.join(DEFAULT_INDEX_FILENAME);
     if !index_path.exists() {
@@ -3689,6 +3865,22 @@ fn metadata_payload_from_skill(skill: &DiscoveredSkillEntry) -> Value {
         "allowed_tools": skill.allowed_tools,
         "blocked_tools": skill.blocked_tools,
     })
+}
+
+fn pack_membership_payload_from_skill(skill_id: &str) -> Value {
+    json!(
+        super::bundled_skills::bundled_skill_pack_memberships(skill_id)
+            .into_iter()
+            .map(|pack| {
+                json!({
+                    "pack_id": pack.pack_id,
+                    "display_name": pack.display_name,
+                    "onboarding_visible": pack.onboarding_visible,
+                    "recommended": pack.recommended,
+                })
+            })
+            .collect::<Vec<_>>()
+    )
 }
 
 fn runtime_config_selector_enabled(
@@ -4273,6 +4465,27 @@ mod tests {
         std::env::temp_dir().join(format!("{prefix}-{nanos}"))
     }
 
+    struct CountingReader {
+        inner: std::io::Cursor<Vec<u8>>,
+        reads: usize,
+    }
+
+    impl CountingReader {
+        fn new(bytes: &[u8]) -> Self {
+            Self {
+                inner: std::io::Cursor::new(bytes.to_vec()),
+                reads: 0,
+            }
+        }
+    }
+
+    impl Read for CountingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            self.inner.read(buf)
+        }
+    }
+
     struct ScopedHomeFixture {
         _env: crate::test_support::ScopedEnv,
         path: PathBuf,
@@ -4409,6 +4622,83 @@ mod tests {
             "https://wry-manatee-359.convex.site/api/v1/download?slug=hybrid-deep-search"
         );
         assert_eq!(plan.source_skill_id.as_deref(), Some("hybrid-deep-search"));
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_rejects_declared_content_length_before_reading() {
+        let output_dir = unique_temp_dir("ext-skills-download-precheck");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"tiny");
+
+        let error = stream_download_to_unique_path(
+            &mut reader,
+            Some(10),
+            4,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect_err("declared oversize content length should fail closed");
+
+        assert!(error.contains("Content-Length"));
+        assert_eq!(reader.reads, 0);
+        assert!(
+            fs::read_dir(&output_dir)
+                .expect("list output dir")
+                .next()
+                .is_none()
+        );
+        fs::remove_dir_all(output_dir).ok();
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_rejects_streamed_body_past_limit() {
+        let output_dir = unique_temp_dir("ext-skills-download-stream-limit");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"0123456789");
+
+        let error = stream_download_to_unique_path(
+            &mut reader,
+            None,
+            4,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect_err("streamed oversize body should fail closed");
+
+        assert!(error.contains("exceeded max_bytes limit"));
+        assert!(
+            fs::read_dir(&output_dir)
+                .expect("list output dir")
+                .next()
+                .is_none()
+        );
+        fs::remove_dir_all(output_dir).ok();
+    }
+
+    #[test]
+    fn stream_download_to_unique_path_writes_file_and_computes_digest() {
+        let output_dir = unique_temp_dir("ext-skills-download-success");
+        fs::create_dir_all(&output_dir).expect("create output dir");
+        let mut reader = CountingReader::new(b"skill-bytes");
+
+        let download = stream_download_to_unique_path(
+            &mut reader,
+            Some(11),
+            32,
+            &output_dir,
+            "demo.tgz",
+            "external skills download",
+        )
+        .expect("streamed download should succeed");
+
+        let persisted = fs::read(&download.path).expect("read persisted artifact");
+
+        assert_eq!(download.bytes_downloaded, 11);
+        assert_eq!(persisted, b"skill-bytes");
+        assert_eq!(download.sha256, hex::encode(Sha256::digest(b"skill-bytes")));
+        fs::remove_dir_all(output_dir).ok();
     }
 
     #[test]
@@ -4770,6 +5060,143 @@ mod tests {
             assert!(
                 installed_skill_body.contains("agent-browser"),
                 "bundled preview instructions should preserve the packaged browser companion guidance"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn install_from_bundled_skill_id_copies_packaged_reference_files() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-directory");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "agent-browser"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "agent-browser");
+
+            let installed_root = root.join("external-skills-installed").join("agent-browser");
+            assert!(
+                installed_root.join("SKILL.md").exists(),
+                "bundled install should keep SKILL.md"
+            );
+            assert!(
+                installed_root
+                    .join("references")
+                    .join("authentication.md")
+                    .exists(),
+                "bundled install should copy packaged references, not only SKILL.md"
+            );
+            assert!(
+                installed_root
+                    .join("templates")
+                    .join("authenticated-session.sh")
+                    .exists(),
+                "bundled install should copy packaged templates"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn install_from_bundled_skill_id_copies_packaged_templates_for_github_issues() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-github-issues");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "github-issues"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "github-issues");
+
+            let installed_root = root.join("external-skills-installed").join("github-issues");
+            assert!(
+                installed_root.join("SKILL.md").exists(),
+                "bundled install should keep SKILL.md"
+            );
+            assert!(
+                installed_root
+                    .join("templates")
+                    .join("bug-report.md")
+                    .exists(),
+                "bundled install should copy packaged templates for github-issues"
+            );
+            assert!(
+                installed_root
+                    .join("templates")
+                    .join("feature-request.md")
+                    .exists(),
+                "bundled install should copy all bundled templates"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn install_from_bundled_skill_id_copies_packaged_assets_for_minimax_docx() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-minimax-docx");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "minimax-docx"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "minimax-docx");
+
+            let installed_root = root.join("external-skills-installed").join("minimax-docx");
+            assert!(installed_root.join("SKILL.md").exists());
+            assert!(
+                installed_root
+                    .join("references")
+                    .join("design_principles.md")
+                    .exists(),
+                "minimax-docx should keep bundled references"
+            );
+            assert!(
+                installed_root.join("scripts").join("setup.sh").exists(),
+                "minimax-docx should keep bundled scripts"
+            );
+            assert!(
+                installed_root
+                    .join("assets")
+                    .join("styles")
+                    .join("default_styles.xml")
+                    .exists(),
+                "minimax-docx should keep bundled assets"
             );
 
             fs::remove_dir_all(&root).ok();
@@ -5139,6 +5566,7 @@ mod tests {
             assert_eq!(operator_skill["allowed_tools"], json!(["shell.exec"]));
             assert_eq!(operator_skill["blocked_tools"], json!(["web.fetch"]));
             assert_eq!(operator_skill["eligibility"]["available"], json!(true));
+            assert_eq!(operator_skill["pack_memberships"], json!([]));
 
             let inspect_outcome =
                 execute_external_skills_operator_inspect_tool_with_config("release-guard", &config)
@@ -5154,6 +5582,10 @@ mod tests {
             assert_eq!(
                 inspect_outcome.payload["skill"]["eligibility"]["available"],
                 json!(true)
+            );
+            assert_eq!(
+                inspect_outcome.payload["skill"]["pack_memberships"],
+                json!([])
             );
 
             let invoke_outcome = crate::tools::execute_tool_core_with_config(
@@ -5180,6 +5612,58 @@ mod tests {
                     .expect("invocation summary should be text")
                     .contains("allowed_tools=shell.exec"),
                 "tool restrictions should surface in invocation summary"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn operator_list_and_inspect_surface_pack_memberships_for_bundled_skills() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-pack-memberships");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "docx"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            let operator_list = execute_external_skills_operator_list_tool_with_config(&config)
+                .expect("operator list should succeed");
+            let operator_skill = operator_list.payload["skills"]
+                .as_array()
+                .expect("skills should be an array")
+                .iter()
+                .find(|skill| skill["skill_id"] == "docx")
+                .cloned()
+                .expect("docx should be listed");
+            assert!(
+                operator_skill["pack_memberships"]
+                    .as_array()
+                    .expect("pack memberships should be an array")
+                    .iter()
+                    .any(|pack| pack["pack_id"] == "anthropic-office"),
+                "bundled operator list should expose anthropic office pack membership"
+            );
+
+            let inspect_outcome =
+                execute_external_skills_operator_inspect_tool_with_config("docx", &config)
+                    .expect("operator inspect should succeed");
+            assert!(
+                inspect_outcome.payload["skill"]["pack_memberships"]
+                    .as_array()
+                    .expect("pack memberships should be an array")
+                    .iter()
+                    .any(|pack| pack["pack_id"] == "anthropic-office"),
+                "bundled operator inspect should expose anthropic office pack membership"
             );
 
             fs::remove_dir_all(&root).ok();

@@ -48,6 +48,12 @@ fn unique_temp_path(label: &str) -> PathBuf {
     ))
 }
 
+fn isolated_output_path(label: &str) -> PathBuf {
+    let output_root = unique_temp_path("output-root");
+    std::fs::create_dir_all(&output_root).expect("create isolated output root");
+    output_root.join(label)
+}
+
 fn provider_choice_input(kind: mvp::config::ProviderKind) -> String {
     let mut options = mvp::config::ProviderKind::all_sorted()
         .iter()
@@ -96,9 +102,31 @@ fn scripted_input_not_cancelled(raw: String) -> loongclaw_daemon::CliResult<Stri
     Ok(raw)
 }
 
+fn is_scripted_preinstalled_skill_input(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    trimmed.split(',').map(str::trim).all(|token| {
+        mvp::tools::bundled_preinstall_targets()
+            .iter()
+            .any(|target| target.install_id == token)
+    })
+}
+
 struct DetectedEnvironmentGuard {
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<OsString>)>,
+}
+
+fn isolated_loongclaw_home(label: &str) -> PathBuf {
+    let home = unique_temp_path(label);
+    std::fs::create_dir_all(&home).expect("create isolated loongclaw home");
+    home
+}
+
+fn isolated_sqlite_path(label: &str) -> PathBuf {
+    unique_temp_path(label).with_extension("sqlite3")
 }
 
 impl DetectedEnvironmentGuard {
@@ -135,6 +163,7 @@ impl DetectedEnvironmentGuard {
                 keys.insert((*env_name).to_owned());
             }
         }
+        keys.insert("LOONGCLAW_SQLITE_PATH".to_owned());
 
         let saved = keys
             .into_iter()
@@ -145,7 +174,23 @@ impl DetectedEnvironmentGuard {
                 }
                 (key, value)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        let isolated_home = isolated_loongclaw_home("detected-env-home");
+        let saved_loongclaw_home = std::env::var_os("LOONGCLAW_HOME");
+        unsafe {
+            std::env::set_var("LOONGCLAW_HOME", &isolated_home);
+        }
+        let isolated_sqlite = isolated_sqlite_path("detected-env-memory");
+        let saved_loongclaw_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH");
+        unsafe {
+            std::env::set_var("LOONGCLAW_SQLITE_PATH", &isolated_sqlite);
+        }
+        let mut saved = saved;
+        saved.push(("LOONGCLAW_HOME".to_owned(), saved_loongclaw_home));
+        saved.push((
+            "LOONGCLAW_SQLITE_PATH".to_owned(),
+            saved_loongclaw_sqlite_path,
+        ));
 
         Self { _lock: lock, saved }
     }
@@ -312,6 +357,29 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
         self.next_input(label)
     }
 
+    fn prompt_allow_empty(&mut self, label: &str) -> loongclaw_daemon::CliResult<String> {
+        self.outputs.push(format!("PROMPT {label}"));
+        match self.inputs.front() {
+            Some(value)
+                if label == "preinstalled skills"
+                    && !is_scripted_preinstalled_skill_input(value) =>
+            {
+                Ok(String::new())
+            }
+            Some(_) => Ok(self.inputs.pop_front().ok_or_else(|| {
+                format!(
+                    "missing scripted input for {label}; transcript so far:\n{}",
+                    self.outputs.join("\n")
+                )
+            })?),
+            None if label == "preinstalled skills" => Ok(String::new()),
+            None => Err(format!(
+                "missing scripted input for {label}; transcript so far:\n{}",
+                self.outputs.join("\n")
+            )),
+        }
+    }
+
     fn prompt_confirm(
         &mut self,
         message: &str,
@@ -392,8 +460,24 @@ async fn run_scripted_onboard_flow_with_context(
     inputs: impl IntoIterator<Item = impl Into<String>>,
     context: loongclaw_daemon::onboard_cli::OnboardRuntimeContext,
 ) -> loongclaw_daemon::CliResult<Vec<String>> {
+    let sqlite_override_guard = if std::env::var_os("LOONGCLAW_SQLITE_PATH").is_some() {
+        None
+    } else {
+        let sqlite_path = options
+            .output
+            .as_deref()
+            .map(PathBuf::from)
+            .map(|path| path.with_extension("sqlite3"))
+            .unwrap_or_else(|| isolated_sqlite_path("scripted-onboard-memory"));
+        let sqlite_path_text = sqlite_path.display().to_string();
+        Some(EnvVarGuard::set(
+            "LOONGCLAW_SQLITE_PATH",
+            sqlite_path_text.as_str(),
+        ))
+    };
     let mut ui = ScriptedOnboardUi::new(inputs);
     loongclaw_daemon::onboard_cli::run_onboard_cli_with_ui(options, &mut ui, &context).await?;
+    drop(sqlite_override_guard);
     Ok(ui.transcript())
 }
 
@@ -2478,6 +2562,92 @@ fn managed_bridge_onboard_preflight_passes_when_single_compatible_plugin_is_avai
                 && check.detail.contains("weixin-managed-bridge")
         }),
         "onboard preflight should pass when exactly one compatible managed bridge is ready: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_warns_when_bridge_contract_is_misconfigured_even_with_ready_plugin()
+ {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-contract-misconfigured");
+    let manifest = super::managed_bridge_manifest(
+        "weixin",
+        Some("channel"),
+        super::compatible_managed_bridge_metadata(
+            "wechat_clawbot_ilink_bridge",
+            "weixin_reply_loop",
+        ),
+    );
+    let mut config: mvp::config::LoongClawConfig = serde_json::from_value(json!({
+        "weixin": {
+            "enabled": true,
+            "bridge_access_token": "weixin-token",
+            "allowed_contact_ids": ["wxid_alice"]
+        }
+    }))
+    .expect("deserialize weixin config");
+
+    std::fs::create_dir_all(&install_root).expect("create managed bridge install root");
+    super::write_managed_bridge_manifest(
+        install_root.as_path(),
+        "weixin-managed-bridge",
+        &manifest,
+    );
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+
+    assert!(
+        checks.iter().any(|check| {
+            check.name == "weixin channel"
+                && check.level == loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+                && check.detail.contains("bridge_url is missing")
+        }),
+        "onboard preflight should keep bridge contract issues visible even when managed bridge discovery is ready: {checks:#?}"
+    );
+}
+
+#[test]
+fn managed_bridge_onboard_preflight_summarizes_mixed_multi_account_detail() {
+    let install_root = unique_temp_path("managed-bridge-onboard-preflight-multi-account-detail");
+    let mut config = super::mixed_account_weixin_plugin_bridge_config();
+
+    super::install_ready_weixin_managed_bridge(install_root.as_path());
+    config.external_skills.install_root = Some(install_root.display().to_string());
+
+    let checks = loongclaw_daemon::onboard_cli::collect_channel_preflight_checks(&config);
+    let weixin_check = checks
+        .iter()
+        .find(|check| check.name == "weixin channel")
+        .expect("weixin preflight check");
+    let detail = weixin_check.detail.as_str();
+
+    assert_eq!(
+        weixin_check.level,
+        loongclaw_daemon::onboard_cli::OnboardCheckLevel::Warn
+    );
+    assert!(
+        detail.contains("weixin-managed-bridge"),
+        "multi-account onboard preflight should keep the selected plugin identity visible: {checks:#?}"
+    );
+    assert!(
+        detail.contains("configured_account=ops"),
+        "multi-account onboard preflight should mention the ready default account: {checks:#?}"
+    );
+    assert!(
+        detail.contains("(default): ready"),
+        "multi-account onboard preflight should mark the default account as ready when it passes contract checks: {checks:#?}"
+    );
+    assert!(
+        detail.contains("configured_account=backup"),
+        "multi-account onboard preflight should mention blocked non-default accounts: {checks:#?}"
+    );
+    assert!(
+        detail.contains("bridge_url is missing"),
+        "multi-account onboard preflight should keep the blocking contract detail visible: {checks:#?}"
+    );
+    assert!(
+        detail.contains(super::MIXED_ACCOUNT_WEIXIN_PLUGIN_BRIDGE_SUMMARY),
+        "onboard preflight detail should keep the shared mixed-account summary inside the discovery-ready prefix: {checks:#?}"
     );
 }
 
@@ -6198,6 +6368,130 @@ async fn onboard_current_setup_shortcut_flow_skips_detailed_edit_screens() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_shortcut_can_install_selected_bundled_skills() {
+    let output_path = isolated_output_path("current-shortcut-preinstall-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "find-skills,agent-browser", "y", "y", "o"],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with bundled skill selection");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("preinstalled skills")),
+        "onboarding transcript should include the bundled skill selection step: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load written onboarding config");
+    assert!(
+        config.external_skills.enabled,
+        "selecting bundled skills should enable the external-skills runtime"
+    );
+    assert!(
+        config.external_skills.auto_expose_installed,
+        "selecting bundled skills should auto-expose installed skills"
+    );
+
+    let install_root = config
+        .external_skills
+        .resolved_install_root()
+        .expect("bundled skill selection should persist a managed install root");
+    assert!(
+        install_root.join("find-skills").join("SKILL.md").exists(),
+        "selected bundled skills should be installed into the managed runtime"
+    );
+    assert!(
+        install_root
+            .join("agent-browser")
+            .join("references")
+            .join("authentication.md")
+            .exists(),
+        "onboarding should install full bundled skill directories"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
+    let output_path = isolated_output_path("current-shortcut-minimax-office-config.toml");
+    let mut existing = mvp::config::LoongClawConfig::default();
+    existing.provider.model = "gpt-4.1".to_owned();
+    existing.provider.api_key = Some(loongclaw_contracts::SecretRef::Inline(
+        "inline-secret".to_owned(),
+    ));
+    mvp::config::write(output_path.to_str(), &existing, true).expect("write existing config");
+
+    let transcript = run_scripted_onboard_flow(
+        loongclaw_daemon::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: false,
+            accept_risk: true,
+            provider: None,
+            model: None,
+            api_key_env: None,
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: None,
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        ["1", "1", "minimax-office", "y", "y", "o"],
+        None,
+        None,
+    )
+    .await
+    .expect("run scripted onboarding with minimax office pack");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("preinstalled skills")),
+        "onboarding transcript should include the bundled skill selection step: {transcript:#?}"
+    );
+
+    let (_, config) =
+        mvp::config::load(output_path.to_str()).expect("load written onboarding config");
+    let install_root = config
+        .external_skills
+        .resolved_install_root()
+        .expect("minimax office pack should persist an install root");
+
+    for skill_id in ["minimax-docx", "minimax-pdf", "minimax-xlsx"] {
+        assert!(
+            install_root.join(skill_id).join("SKILL.md").exists(),
+            "minimax office pack should install `{skill_id}`"
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_shortcut_flow_skips_detailed_edit_screens() {
     let workspace_root = unique_temp_path("detected-shortcut-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
@@ -7685,7 +7979,10 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
         loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor,
         "plugin-backed channel setups should guide operators into diagnostics before the generic channel catalog: {summary:#?}"
     );
-    assert_eq!(summary.next_actions[0].label, "verify managed bridges");
+    assert_eq!(
+        summary.next_actions[0].label,
+        "verify weixin managed bridge"
+    );
     assert_eq!(
         summary.next_actions[0].command,
         format!(
@@ -7701,12 +7998,17 @@ fn onboarding_success_summary_uses_doctor_handoff_for_plugin_backed_channels_whe
     assert_eq!(summary.next_actions[1].label, "channels");
     assert!(
         lines.iter().any(|line| line == "start here")
+            && lines
+                .iter()
+                .any(|line| line.contains("verify weixin managed bridge"))
             && lines.iter().any(|line| {
-                line == &format!(
-                    "- verify managed bridges: {} doctor --config '/tmp/loongclaw-config.toml'",
-                    super::active_cli_command_name()
+                line.contains(
+                    format!("{} doctor --config", super::active_cli_command_name()).as_str(),
                 )
-            }),
+            })
+            && lines
+                .iter()
+                .any(|line| line.contains("/tmp/loongclaw-config.toml")),
         "success summary should render the managed bridge verification handoff as the primary action: {lines:#?}"
     );
 }
@@ -7740,7 +8042,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     });
     let doctor_position = summary.next_actions.iter().position(|action| {
         action.kind == loongclaw_daemon::onboard_cli::OnboardingActionKind::Doctor
-            && action.label == "verify managed bridges"
+            && action.label == "verify weixin managed bridge"
     });
     let catalog_position = summary
         .next_actions
@@ -7774,7 +8076,7 @@ fn onboarding_success_summary_lists_doctor_followup_for_plugin_backed_channels_w
     );
     assert!(
         lines.iter().any(|line| {
-            line.contains("verify managed bridges")
+            line.contains("verify weixin managed bridge")
                 && line.contains(
                     format!(
                         "{} doctor --config '/tmp/loongclaw-config.toml'",

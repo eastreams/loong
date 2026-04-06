@@ -46,7 +46,7 @@ pub struct MockToolExtension;
 pub struct MockCoreMemory;
 pub struct MockMemoryExtension;
 pub struct NoNetworkEgressPolicyExtension;
-pub const TEST_CAPABILITY_VARIANTS: [Capability; 8] = [
+pub const TEST_CAPABILITY_VARIANTS: [Capability; 13] = [
     Capability::InvokeTool,
     Capability::InvokeConnector,
     Capability::MemoryRead,
@@ -55,6 +55,11 @@ pub const TEST_CAPABILITY_VARIANTS: [Capability; 8] = [
     Capability::FilesystemWrite,
     Capability::NetworkEgress,
     Capability::ObserveTelemetry,
+    Capability::ControlRead,
+    Capability::ControlWrite,
+    Capability::ControlApprovals,
+    Capability::ControlPairing,
+    Capability::ControlAcp,
 ];
 pub const TEST_CAPABILITY_VARIANT_COUNT: u8 = TEST_CAPABILITY_VARIANTS.len() as u8;
 #[derive(Debug, Clone, Copy)]

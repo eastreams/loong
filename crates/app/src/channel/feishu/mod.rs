@@ -12,7 +12,7 @@ use crate::CliResult;
 use crate::KernelContext;
 #[cfg(feature = "channel-feishu")]
 use crate::channel::{
-    ChannelAdapter, ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
+    ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
     runtime_state::ChannelOperationRuntimeTracker,
 };
 #[cfg(feature = "channel-feishu")]
@@ -26,6 +26,8 @@ pub mod api;
 #[cfg(feature = "channel-feishu")]
 mod payload;
 #[cfg(feature = "channel-feishu")]
+pub(crate) mod send;
+#[cfg(feature = "channel-feishu")]
 mod webhook;
 #[cfg(feature = "channel-feishu")]
 mod websocket;
@@ -34,6 +36,8 @@ mod websocket;
 use adapter::FeishuAdapter;
 #[cfg(feature = "channel-feishu")]
 use payload::normalize_webhook_path;
+#[cfg(feature = "channel-feishu")]
+use send::send_channel_message_via_message_send_api;
 #[cfg(feature = "channel-feishu")]
 use webhook::{FeishuWebhookState, feishu_webhook_handler};
 
@@ -105,7 +109,9 @@ pub(super) async fn run_feishu_send(
             },
         )
         .await?;
-    adapter.send_message(&target, &message).await
+    send_channel_message_via_message_send_api(&adapter, &target, message)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(feature = "channel-feishu")]

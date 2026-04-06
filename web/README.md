@@ -11,6 +11,11 @@ LoongClaw 的本地优先 Web Console。
 - `Abilities`
 - `Onboarding`
 - `Debug Console`
+
+当前补充进度：
+
+- `Chat` 已支持多会话、本地会话名覆写、最近活跃时间展示与生成中状态提示
+- `Abilities` 已接入第一版只读/轻编辑能力页：`Personalization / Channels / Skills`
 - 中英文切换
 - 明暗主题切换
 

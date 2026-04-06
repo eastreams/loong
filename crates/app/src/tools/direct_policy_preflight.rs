@@ -13,13 +13,16 @@ pub(super) fn run(
         return Ok(());
     };
 
-    let tool_name = request.tool_name.as_str();
+    let tool_name = super::canonical_tool_name(request.tool_name.as_str());
 
     if tool_name == "shell.exec" {
         return shell_policy_ext::authorize_direct_shell_payload(payload, config);
     }
 
-    let is_file_tool = matches!(tool_name, "file.read" | "file.write" | "file.edit");
+    let is_file_tool = matches!(
+        tool_name,
+        "file.read" | "file.write" | "file.edit" | "config.import"
+    );
     if is_file_tool {
         return file_policy_ext::authorize_direct_file_payload(tool_name, payload, config);
     }
@@ -38,6 +41,7 @@ mod tests {
 
     use super::run;
     use super::runtime_config;
+    use super::shell_policy_ext::ShellPolicyDefault;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -54,6 +58,7 @@ mod tests {
     fn run_reuses_shared_shell_policy_default_deny() {
         let config = runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::new(),
+            shell_default_mode: ShellPolicyDefault::Deny,
             ..runtime_config::ToolRuntimeConfig::default()
         };
 
@@ -95,6 +100,39 @@ mod tests {
         assert!(
             error.contains("policy extension file-policy denied request"),
             "expected shared file policy prefix, got: {error}"
+        );
+        assert!(
+            error.contains("escapes file root"),
+            "expected shared file policy denial, got: {error}"
+        );
+    }
+
+    #[test]
+    fn run_reuses_shared_config_import_output_path_guard() {
+        let root = unique_temp_dir("direct-policy-preflight-import");
+        let config = runtime_config::ToolRuntimeConfig {
+            file_root: Some(root),
+            ..runtime_config::ToolRuntimeConfig::default()
+        };
+
+        let request = ToolCoreRequest {
+            tool_name: "config.import".to_owned(),
+            payload: json!({
+                "mode": "apply",
+                "input_path": "legacy-config.toml",
+                "output_path": "../outside.toml"
+            }),
+        };
+
+        let error = run(&request, &config).expect_err("escaped import output path should deny");
+
+        assert!(
+            error.starts_with("policy_denied: "),
+            "expected policy_denied prefix, got: {error}"
+        );
+        assert!(
+            error.contains("outside.toml"),
+            "expected escaped output path in error, got: {error}"
         );
         assert!(
             error.contains("escapes file root"),

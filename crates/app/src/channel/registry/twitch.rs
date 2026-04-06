@@ -48,6 +48,7 @@ const TWITCH_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TWITCH_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const TWITCH_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -57,6 +58,7 @@ const TWITCH_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: TWITCH_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 

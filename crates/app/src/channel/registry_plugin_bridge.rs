@@ -65,13 +65,45 @@ impl ChannelPluginBridgeDiscoveryStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ChannelPluginBridgeDiscoveryAmbiguityStatus {
     MultipleCompatiblePlugins,
+    DuplicateCompatiblePluginIds,
 }
 
 impl ChannelPluginBridgeDiscoveryAmbiguityStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MultipleCompatiblePlugins => "multiple_compatible_plugins",
+            Self::DuplicateCompatiblePluginIds => "duplicate_compatible_plugin_ids",
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPluginBridgeSelectionStatus {
+    NotConfigured,
+    SingleCompatibleMatch,
+    SelectedCompatible,
+    ConfiguredPluginNotFound,
+    ConfiguredPluginIdDuplicated,
+    ConfiguredPluginIncomplete,
+    ConfiguredPluginIncompatible,
+}
+
+impl ChannelPluginBridgeSelectionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotConfigured => "not_configured",
+            Self::SingleCompatibleMatch => "single_compatible_match",
+            Self::SelectedCompatible => "selected_compatible",
+            Self::ConfiguredPluginNotFound => "configured_plugin_not_found",
+            Self::ConfiguredPluginIdDuplicated => "configured_plugin_id_duplicated",
+            Self::ConfiguredPluginIncomplete => "configured_plugin_incomplete",
+            Self::ConfiguredPluginIncompatible => "configured_plugin_incompatible",
+        }
+    }
+
+    pub fn selects_ready_plugin(self) -> bool {
+        matches!(self, Self::SingleCompatibleMatch | Self::SelectedCompatible)
     }
 }
 
@@ -122,12 +154,21 @@ pub struct ChannelPluginBridgeDiscovery {
     pub managed_install_root: Option<String>,
     pub status: ChannelPluginBridgeDiscoveryStatus,
     pub scan_issue: Option<String>,
+    pub configured_plugin_id: Option<String>,
+    pub selected_plugin_id: Option<String>,
+    pub selection_status: Option<ChannelPluginBridgeSelectionStatus>,
     pub ambiguity_status: Option<ChannelPluginBridgeDiscoveryAmbiguityStatus>,
     pub compatible_plugins: usize,
     pub compatible_plugin_ids: Vec<String>,
     pub incomplete_plugins: usize,
     pub incompatible_plugins: usize,
     pub plugins: Vec<ChannelDiscoveredPluginBridge>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChannelPluginBridgeResolvedSelection {
+    selected_plugin_id: Option<String>,
+    selection_status: Option<ChannelPluginBridgeSelectionStatus>,
 }
 
 pub(super) fn plugin_bridge_contract_from_descriptor(
@@ -175,7 +216,7 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
     let plugin_backed_channel_ids = plugin_backed_channel_ids(channel_catalog);
     let managed_install_root = config.external_skills.resolved_install_root();
     let Some(managed_install_root) = managed_install_root else {
-        return build_not_configured_discovery_by_id(&plugin_backed_channel_ids);
+        return build_not_configured_discovery_by_id(config, &plugin_backed_channel_ids);
     };
 
     let managed_install_root_display = managed_install_root.display().to_string();
@@ -186,6 +227,7 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
         Err(error) => {
             let scan_issue = error.to_string();
             return build_scan_failed_discovery_by_id(
+                config,
                 &plugin_backed_channel_ids,
                 managed_install_root_display,
                 scan_issue,
@@ -202,6 +244,7 @@ pub(super) fn channel_surface_plugin_bridge_discovery_by_id(
     );
 
     build_matches_discovery_by_id(
+        config,
         &plugin_backed_channel_ids,
         managed_install_root_display,
         grouped_matches,
@@ -288,15 +331,20 @@ fn plugin_backed_channel_ids(channel_catalog: &[ChannelCatalogEntry]) -> Vec<&'s
 }
 
 fn build_not_configured_discovery_by_id(
+    config: &LoongClawConfig,
     plugin_backed_channel_ids: &[&'static str],
 ) -> BTreeMap<&'static str, ChannelPluginBridgeDiscovery> {
     let mut discovery_by_id = BTreeMap::new();
 
     for channel_id in plugin_backed_channel_ids {
+        let configured_plugin_id = configured_managed_bridge_plugin_id(config, channel_id);
         let discovery = ChannelPluginBridgeDiscovery {
             managed_install_root: None,
             status: ChannelPluginBridgeDiscoveryStatus::NotConfigured,
             scan_issue: None,
+            configured_plugin_id,
+            selected_plugin_id: None,
+            selection_status: None,
             ambiguity_status: None,
             compatible_plugins: 0,
             compatible_plugin_ids: Vec::new(),
@@ -312,6 +360,7 @@ fn build_not_configured_discovery_by_id(
 }
 
 fn build_scan_failed_discovery_by_id(
+    config: &LoongClawConfig,
     plugin_backed_channel_ids: &[&'static str],
     managed_install_root: String,
     scan_issue: String,
@@ -319,10 +368,14 @@ fn build_scan_failed_discovery_by_id(
     let mut discovery_by_id = BTreeMap::new();
 
     for channel_id in plugin_backed_channel_ids {
+        let configured_plugin_id = configured_managed_bridge_plugin_id(config, channel_id);
         let discovery = ChannelPluginBridgeDiscovery {
             managed_install_root: Some(managed_install_root.clone()),
             status: ChannelPluginBridgeDiscoveryStatus::ScanFailed,
             scan_issue: Some(scan_issue.clone()),
+            configured_plugin_id,
+            selected_plugin_id: None,
+            selection_status: None,
             ambiguity_status: None,
             compatible_plugins: 0,
             compatible_plugin_ids: Vec::new(),
@@ -338,6 +391,7 @@ fn build_scan_failed_discovery_by_id(
 }
 
 fn build_matches_discovery_by_id(
+    config: &LoongClawConfig,
     plugin_backed_channel_ids: &[&'static str],
     managed_install_root: String,
     grouped_matches: BTreeMap<&'static str, Vec<ChannelDiscoveredPluginBridge>>,
@@ -347,9 +401,16 @@ fn build_matches_discovery_by_id(
     for channel_id in plugin_backed_channel_ids {
         let grouped_plugins = grouped_matches.get(channel_id);
         let plugins = grouped_plugins.cloned().unwrap_or_default();
+        let configured_plugin_id = configured_managed_bridge_plugin_id(config, channel_id);
         let compatible_plugins = count_compatible_plugins(&plugins);
         let compatible_plugin_ids = compatible_plugin_ids(&plugins);
-        let ambiguity_status = discovery_ambiguity_status(&compatible_plugin_ids);
+        let selection = resolve_discovery_selection(
+            configured_plugin_id.as_deref(),
+            &compatible_plugin_ids,
+            &plugins,
+        );
+        let ambiguity_status =
+            discovery_ambiguity_status(configured_plugin_id.as_deref(), &compatible_plugin_ids);
         let incomplete_plugins = count_incomplete_plugins(&plugins);
         let incompatible_plugins = count_incompatible_plugins(&plugins);
         let has_plugins = !plugins.is_empty();
@@ -361,6 +422,9 @@ fn build_matches_discovery_by_id(
             managed_install_root: Some(managed_install_root.clone()),
             status,
             scan_issue: None,
+            configured_plugin_id,
+            selected_plugin_id: selection.selected_plugin_id,
+            selection_status: selection.selection_status,
             ambiguity_status,
             compatible_plugins,
             compatible_plugin_ids,
@@ -408,8 +472,22 @@ fn compatible_plugin_ids(plugins: &[ChannelDiscoveredPluginBridge]) -> Vec<Strin
 }
 
 fn discovery_ambiguity_status(
+    configured_plugin_id: Option<&str>,
     compatible_plugin_ids: &[String],
 ) -> Option<ChannelPluginBridgeDiscoveryAmbiguityStatus> {
+    let has_configured_plugin_id = configured_plugin_id.is_some();
+
+    if has_configured_plugin_id {
+        return None;
+    }
+
+    let has_duplicate_compatible_plugin_ids =
+        collection_has_duplicate_string_values(compatible_plugin_ids);
+
+    if has_duplicate_compatible_plugin_ids {
+        return Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::DuplicateCompatiblePluginIds);
+    }
+
     let has_multiple_compatible_plugins = compatible_plugin_ids.len() > 1;
 
     if !has_multiple_compatible_plugins {
@@ -417,6 +495,143 @@ fn discovery_ambiguity_status(
     }
 
     Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::MultipleCompatiblePlugins)
+}
+
+fn configured_managed_bridge_plugin_id(
+    config: &LoongClawConfig,
+    channel_id: &str,
+) -> Option<String> {
+    let configured_plugin_id = match channel_id {
+        "weixin" => config.weixin.managed_bridge_plugin_id.as_deref(),
+        "qqbot" => config.qqbot.managed_bridge_plugin_id.as_deref(),
+        "onebot" => config.onebot.managed_bridge_plugin_id.as_deref(),
+        _ => None,
+    };
+
+    normalize_configured_managed_bridge_plugin_id(configured_plugin_id)
+}
+
+fn normalize_configured_managed_bridge_plugin_id(raw_plugin_id: Option<&str>) -> Option<String> {
+    let plugin_id = raw_plugin_id.map(str::trim);
+    let plugin_id = plugin_id.filter(|value| !value.is_empty());
+
+    plugin_id.map(str::to_owned)
+}
+
+fn resolve_discovery_selection(
+    configured_plugin_id: Option<&str>,
+    compatible_plugin_ids: &[String],
+    plugins: &[ChannelDiscoveredPluginBridge],
+) -> ChannelPluginBridgeResolvedSelection {
+    let configured_plugin_id = configured_plugin_id.map(str::to_owned);
+    let Some(configured_plugin_id) = configured_plugin_id else {
+        return resolve_unconfigured_discovery_selection(compatible_plugin_ids);
+    };
+
+    let configured_plugins =
+        find_discovered_plugin_bridges_by_id(plugins, configured_plugin_id.as_str());
+    let configured_plugin_count = configured_plugins.len();
+
+    if configured_plugin_count == 0 {
+        return ChannelPluginBridgeResolvedSelection {
+            selected_plugin_id: None,
+            selection_status: Some(ChannelPluginBridgeSelectionStatus::ConfiguredPluginNotFound),
+        };
+    }
+
+    if configured_plugin_count > 1 {
+        return ChannelPluginBridgeResolvedSelection {
+            selected_plugin_id: None,
+            selection_status: Some(
+                ChannelPluginBridgeSelectionStatus::ConfiguredPluginIdDuplicated,
+            ),
+        };
+    }
+
+    let configured_plugin = configured_plugins.first().copied();
+    let Some(configured_plugin) = configured_plugin else {
+        return ChannelPluginBridgeResolvedSelection {
+            selected_plugin_id: None,
+            selection_status: Some(ChannelPluginBridgeSelectionStatus::ConfiguredPluginNotFound),
+        };
+    };
+
+    let selection_status = match configured_plugin.status {
+        ChannelDiscoveredPluginBridgeStatus::CompatibleReady => {
+            ChannelPluginBridgeSelectionStatus::SelectedCompatible
+        }
+        ChannelDiscoveredPluginBridgeStatus::CompatibleIncompleteContract
+        | ChannelDiscoveredPluginBridgeStatus::MissingSetupSurface => {
+            ChannelPluginBridgeSelectionStatus::ConfiguredPluginIncomplete
+        }
+        ChannelDiscoveredPluginBridgeStatus::UnsupportedChannelSurface => {
+            ChannelPluginBridgeSelectionStatus::ConfiguredPluginIncompatible
+        }
+    };
+
+    let selected_plugin_id = match selection_status.selects_ready_plugin() {
+        true => Some(configured_plugin.plugin_id.clone()),
+        false => None,
+    };
+
+    ChannelPluginBridgeResolvedSelection {
+        selected_plugin_id,
+        selection_status: Some(selection_status),
+    }
+}
+
+fn resolve_unconfigured_discovery_selection(
+    compatible_plugin_ids: &[String],
+) -> ChannelPluginBridgeResolvedSelection {
+    let single_plugin_id = compatible_plugin_ids.first().cloned();
+    let has_single_compatible_plugin = compatible_plugin_ids.len() == 1;
+
+    if has_single_compatible_plugin {
+        return ChannelPluginBridgeResolvedSelection {
+            selected_plugin_id: single_plugin_id,
+            selection_status: Some(ChannelPluginBridgeSelectionStatus::SingleCompatibleMatch),
+        };
+    }
+
+    ChannelPluginBridgeResolvedSelection {
+        selected_plugin_id: None,
+        selection_status: Some(ChannelPluginBridgeSelectionStatus::NotConfigured),
+    }
+}
+
+fn find_discovered_plugin_bridges_by_id<'a>(
+    plugins: &'a [ChannelDiscoveredPluginBridge],
+    plugin_id: &str,
+) -> Vec<&'a ChannelDiscoveredPluginBridge> {
+    let mut matching_plugins = Vec::new();
+
+    for plugin in plugins {
+        let matches_plugin_id = plugin.plugin_id == plugin_id;
+
+        if !matches_plugin_id {
+            continue;
+        }
+
+        matching_plugins.push(plugin);
+    }
+
+    matching_plugins
+}
+
+fn collection_has_duplicate_string_values(values: &[String]) -> bool {
+    let mut seen_values = BTreeSet::new();
+
+    for value in values {
+        let inserted = seen_values.insert(value.as_str());
+
+        if inserted {
+            continue;
+        }
+
+        return true;
+    }
+
+    false
 }
 
 fn count_incomplete_plugins(plugins: &[ChannelDiscoveredPluginBridge]) -> usize {

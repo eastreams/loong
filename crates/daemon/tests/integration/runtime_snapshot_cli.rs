@@ -119,6 +119,26 @@ fn write_runtime_snapshot_config(root: &Path) -> (PathBuf, mvp::config::LoongCla
     config.acp.dispatch.enabled = true;
     config.acp.default_agent = Some("codex".to_owned());
     config.acp.allowed_agents = vec!["codex".to_owned(), "planner".to_owned()];
+    config.mcp.servers.insert(
+        "docs".to_owned(),
+        mvp::mcp::McpServerConfig {
+            transport: mvp::mcp::McpServerTransportConfig::Stdio {
+                command: "uvx".to_owned(),
+                args: vec!["context7-mcp".to_owned()],
+                env: std::collections::BTreeMap::from([(
+                    "API_TOKEN".to_owned(),
+                    "secret".to_owned(),
+                )]),
+                cwd: Some(root.join("workspace")),
+            },
+            enabled: true,
+            required: false,
+            startup_timeout_ms: Some(15_000),
+            tool_timeout_ms: Some(120_000),
+            enabled_tools: vec!["search".to_owned()],
+            disabled_tools: vec!["write".to_owned()],
+        },
+    );
     config.providers.insert(
         "openai-main".to_owned(),
         mvp::config::ProviderProfileConfig {
@@ -498,6 +518,8 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
     assert!(rendered.contains("context_engine selected="));
     assert!(rendered.contains("memory selected="));
     assert!(rendered.contains("acp enabled=true"));
+    assert!(rendered.contains("acp mcp_servers=1"));
+    assert!(rendered.contains("acp_mcp docs status=pending"));
     assert!(rendered.contains("tools visible_count="));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));

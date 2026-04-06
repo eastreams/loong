@@ -37,9 +37,10 @@ mod browser;
 mod browser_companion;
 mod bundled_skills;
 mod catalog;
-mod claw_migrate;
+mod config_import;
 pub(crate) mod delegate;
 mod direct_policy_preflight;
+pub(crate) mod download_guard;
 mod external_skills;
 mod external_skills_scan;
 mod external_skills_sources;
@@ -54,8 +55,12 @@ pub(crate) mod messaging;
 mod payload;
 mod process_exec;
 mod provider_switch;
+#[cfg(test)]
+mod required_capabilities_tests;
 pub mod runtime_config;
 mod session;
+#[cfg(feature = "memory-sqlite")]
+mod session_search;
 mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
@@ -72,7 +77,9 @@ pub use catalog::{
     ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
     ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
     capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
-    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
+    delegate_child_tool_view_for_profile, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_and_contract,
     delegate_child_tool_view_for_runtime_config_with_delegate, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
     runtime_tool_view, runtime_tool_view_for_config,
@@ -95,6 +102,11 @@ pub(crate) const BROWSER_SESSION_SCOPE_FIELD: &str = "__loongclaw_browser_scope"
 pub const BROWSER_COMPANION_PREVIEW_SKILL_ID: &str =
     bundled_skills::BROWSER_COMPANION_PREVIEW_SKILL_ID;
 pub const BROWSER_COMPANION_COMMAND: &str = bundled_skills::BROWSER_COMPANION_COMMAND;
+pub use bundled_skills::{
+    BundledPreinstallTarget, BundledPreinstallTargetKind, BundledSkillPack,
+    bundled_preinstall_targets, bundled_skill_pack, bundled_skill_pack_memberships,
+    bundled_skill_packs,
+};
 
 const BROWSER_COMPANION_TOOL_PREFIX: &str = "browser.companion.";
 const DELEGATE_ASYNC_TOOL_NAME: &str = "delegate_async";
@@ -319,6 +331,7 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "session_tool_policy_clear"
         | "session_status"
         | "session_events"
+        | "session_search"
         | "session_archive"
         | "session_cancel"
         | "session_recover" => session::execute_session_tool_with_policies(
@@ -386,7 +399,7 @@ pub async fn wait_for_session_with_config(
 /// - `..` past the filesystem root (or volume root on Windows) is silently dropped.
 /// - Relative paths preserve leading `..` components (e.g. `../../foo` stays as-is).
 ///
-/// All three path-handling modules (`file`, `claw_migrate`, `file_policy_ext`) use
+/// All three path-handling modules (`file`, `config_import`, `file_policy_ext`) use
 /// this single implementation to avoid divergence.
 pub(super) fn normalize_without_fs(path: &Path) -> PathBuf {
     use std::path::Component;
@@ -481,6 +494,15 @@ fn required_capabilities_for_tool_name_and_payload(
         "memory_search" | "memory_get" => {
             caps.insert(Capability::FilesystemRead);
         }
+        "sessions_list"
+        | "sessions_history"
+        | "session_status"
+        | "session_events"
+        | "session_wait"
+        | "session_search"
+        | "session_tool_policy_status" => {
+            caps.insert(Capability::MemoryRead);
+        }
         "file.write" | "file.edit" => {
             caps.insert(Capability::FilesystemWrite);
         }
@@ -489,9 +511,11 @@ fn required_capabilities_for_tool_name_and_payload(
             caps.insert(Capability::FilesystemWrite);
             caps.insert(Capability::NetworkEgress);
         }
-        "claw.migrate" => {
+        config_import::CONFIG_IMPORT_TOOL_NAME => {
             caps.insert(Capability::FilesystemRead);
-            if claw_migrate_mode_requires_write(payload) {
+            let mode_requires_write =
+                config_import::config_import_mode_requires_write_value(payload);
+            if mode_requires_write {
                 caps.insert(Capability::FilesystemWrite);
             }
         }
@@ -516,18 +540,6 @@ fn invoked_discoverable_tool_request(payload: &Value) -> Option<(&str, &Value)> 
         resolved.canonical_name,
         payload.get("arguments").unwrap_or(payload),
     ))
-}
-
-fn claw_migrate_mode_requires_write(payload: &Value) -> bool {
-    matches!(
-        payload
-            .get("mode")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("plan"),
-        "apply" | "apply_selected" | "rollback_last_apply"
-    )
 }
 
 fn tool_requires_network_egress(tool_name: &str) -> bool {
@@ -576,17 +588,11 @@ pub fn runtime_tool_view_from_loongclaw_config(
     runtime_tool_view_with_runtime_config(&config.tools, &runtime_config)
 }
 
-fn build_runtime_tool_view_for_runtime_config(
-    runtime_config: &runtime_config::ToolRuntimeConfig,
-) -> ToolView {
-    runtime_tool_view_for_runtime_config(runtime_config)
-}
-
 pub(crate) fn runtime_tool_view_with_runtime_config(
     _tool_config: &crate::config::ToolConfig,
     runtime_config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
-    build_runtime_tool_view_for_runtime_config(runtime_config)
+    runtime_tool_view_for_runtime_config(runtime_config)
 }
 
 /// Build a tool view from runtime config (respecting runtime toggles) plus
@@ -595,7 +601,7 @@ pub(crate) fn runtime_tool_view_with_runtime_config(
 fn full_runtime_tool_view_for_runtime_config(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> ToolView {
-    build_runtime_tool_view_for_runtime_config(config)
+    runtime_tool_view_for_runtime_config(config)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -626,11 +632,6 @@ pub fn execute_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
-    ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
-        request.tool_name.as_str(),
-        &request.payload,
-        "payload",
-    )?;
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
@@ -643,7 +644,6 @@ pub fn execute_tool_core_with_config(
             &payload,
             "payload",
         )?;
-
         let request = ToolCoreRequest {
             tool_name: canonical_name.clone(),
             payload,
@@ -674,19 +674,49 @@ pub fn execute_tool_core_with_config(
             );
         }
         Err(error) => {
-            tracing::warn!(
-                target: "loongclaw.tools",
-                requested_tool_name = %requested_tool_name,
-                canonical_tool_name = %canonical_name,
-                payload_kind,
-                payload_keys = ?payload_keys,
-                duration_ms,
-                error = %crate::observability::summarize_error(error),
-                "tool execution failed"
-            );
+            if is_expected_tool_request_error(error) {
+                tracing::debug!(
+                    target: "loongclaw.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution rejected"
+                );
+            } else {
+                tracing::warn!(
+                    target: "loongclaw.tools",
+                    requested_tool_name = %requested_tool_name,
+                    canonical_tool_name = %canonical_name,
+                    payload_kind,
+                    payload_keys = ?payload_keys,
+                    duration_ms,
+                    error = %crate::observability::summarize_error(error),
+                    "tool execution failed"
+                );
+            }
         }
     }
+
     result
+}
+
+fn is_expected_tool_request_error(error: &str) -> bool {
+    if error.starts_with("tool_not_found:") {
+        return true;
+    }
+    if error.starts_with("app_tool_not_found:") {
+        return true;
+    }
+    if error.starts_with("invalid_tool_lease:") {
+        return true;
+    }
+    if error.starts_with("invalid_internal_runtime_narrowing:") {
+        return true;
+    }
+    error.contains("payload._loongclaw is reserved for trusted internal tool context")
 }
 
 fn trusted_runtime_narrowing_from_payload(
@@ -739,6 +769,7 @@ fn execute_discoverable_tool_core_with_config(
     request: ToolCoreRequest,
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
+    let request = normalize_shell_request_for_execution(request);
     let tool_name = request.tool_name.clone();
     direct_policy_preflight::run(&request, config)?;
     let timeout_seconds = config.tool_execution.timeout_for_tool(&tool_name);
@@ -783,7 +814,9 @@ fn dispatch_tool_request(
     config: &runtime_config::ToolRuntimeConfig,
 ) -> Result<ToolCoreOutcome, String> {
     match request.tool_name.as_str() {
-        "claw.migrate" => claw_migrate::execute_claw_migrate_tool_with_config(request, config),
+        config_import::CONFIG_IMPORT_TOOL_NAME => {
+            config_import::execute_config_import_tool_with_config(request, config)
+        }
         "external_skills.resolve" => {
             external_skills::execute_external_skills_resolve_tool_with_config(request, config)
         }
@@ -1284,7 +1317,9 @@ fn tool_search_entry_is_runtime_usable(
         | "external_skills.list"
         | "external_skills.remove" => config.external_skills.enabled,
         #[cfg(feature = "tool-file")]
-        "memory_search" | "memory_get" => memory_tools::memory_corpus_available(config),
+        "memory_search" => memory_tools::memory_corpus_available(config),
+        #[cfg(feature = "tool-file")]
+        "memory_get" => memory_tools::workspace_memory_corpus_available(config),
         _ => true,
     }
 }
@@ -1559,7 +1594,7 @@ fn tool_function_name(tool: &Value) -> &str {
 fn _shape_examples() -> BTreeMap<&'static str, Value> {
     let mut shapes = BTreeMap::from([
         (
-            "claw.migrate",
+            "config.import",
             json!({
                 "input_path": "/tmp/nanobot-workspace",
                 "mode": "plan",
@@ -1747,6 +1782,26 @@ mod tests {
         }
     }
 
+    #[test]
+    fn expected_tool_request_error_classifies_validation_failures() {
+        assert!(super::is_expected_tool_request_error(
+            "tool_not_found: unknown tool `missing`"
+        ));
+        assert!(super::is_expected_tool_request_error(
+            "invalid_tool_lease: malformed lease"
+        ));
+        assert!(super::is_expected_tool_request_error(
+            "tool `tool.invoke` payload._loongclaw is reserved for trusted internal tool context; retry without that field"
+        ));
+    }
+
+    #[test]
+    fn expected_tool_request_error_leaves_runtime_failures_as_warnable() {
+        assert!(!super::is_expected_tool_request_error(
+            "network_error: remote tool execution failed"
+        ));
+    }
+
     fn unique_tool_temp_dir(prefix: &str) -> PathBuf {
         unique_temp_dir(prefix)
     }
@@ -1912,7 +1967,7 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(snapshot.contains("Non-core tools are intentionally hidden"));
-        assert!(!snapshot.contains("claw.migrate"));
+        assert!(!snapshot.contains("config.import"));
         assert!(!snapshot.contains("external_skills.fetch"));
         assert!(!snapshot.contains("file.read"));
         assert!(!snapshot.contains("shell.exec"));
@@ -1944,7 +1999,7 @@ mod tests {
             "browser.click",
             "browser.extract",
             "browser.open",
-            "claw.migrate",
+            "config.import",
             "delegate",
             "delegate_async",
             "external_skills.policy",
@@ -1954,6 +2009,7 @@ mod tests {
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -1986,7 +2042,7 @@ mod tests {
             "browser.click",
             "browser.extract",
             "browser.open",
-            "claw.migrate",
+            "config.import",
             "delegate",
             "delegate_async",
             "external_skills.policy",
@@ -1996,6 +2052,7 @@ mod tests {
             "provider.switch",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -2028,19 +2085,19 @@ mod tests {
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn capability_snapshot_for_view_stays_core_only_under_restricted_view() {
-        let view = ToolView::from_tool_names(["claw.migrate", "shell.exec"]);
+        let view = ToolView::from_tool_names(["config.import", "shell.exec"]);
         let snapshot = capability_snapshot_for_view(&view);
 
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
-        assert!(!snapshot.contains("- claw.migrate:"));
+        assert!(!snapshot.contains("- config.import:"));
         assert!(!snapshot.contains("- shell.exec:"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
     fn try_provider_tool_definitions_for_view_returns_core_only_subset() {
-        let view = ToolView::from_tool_names(["shell.exec", "claw.migrate"]);
+        let view = ToolView::from_tool_names(["shell.exec", "config.import"]);
         let defs = try_provider_tool_definitions_for_view(&view)
             .expect("restricted runtime view should still expose provider-core schemas");
         let names: Vec<&str> = defs
@@ -2066,6 +2123,7 @@ mod tests {
             "delegate_async",
             "session_events",
             "session_tool_policy_status",
+            "session_search",
             "session_status",
             "session_wait",
             "sessions_history",
@@ -2409,7 +2467,9 @@ mod tests {
     fn canonical_tool_name_maps_known_aliases() {
         assert_eq!(canonical_tool_name("tool_search"), "tool.search");
         assert_eq!(canonical_tool_name("tool_invoke"), "tool.invoke");
-        assert_eq!(canonical_tool_name("claw_migrate"), "claw.migrate");
+        assert_eq!(canonical_tool_name("claw.migrate"), "config.import");
+        assert_eq!(canonical_tool_name("claw_migrate"), "config.import");
+        assert_eq!(canonical_tool_name("config_import"), "config.import");
         assert_eq!(
             canonical_tool_name("external_skills_policy"),
             "external_skills.policy"
@@ -2470,213 +2530,6 @@ mod tests {
             "feishu.calendar.freebusy"
         );
         assert_eq!(canonical_tool_name("file.read"), "file.read");
-    }
-
-    #[test]
-    fn required_capabilities_follow_effective_tool_request() {
-        let direct_file_read = ToolCoreRequest {
-            tool_name: "file.read".to_owned(),
-            payload: json!({"path": "README.md"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_file_read),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let direct_file_write = ToolCoreRequest {
-            tool_name: "file.write".to_owned(),
-            payload: json!({"path": "notes.txt", "content": "hello"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_file_write),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
-        );
-
-        let direct_file_edit = ToolCoreRequest {
-            tool_name: "file.edit".to_owned(),
-            payload: json!({"path": "notes.txt", "old_string": "a", "new_string": "b"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_file_edit),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemWrite])
-        );
-
-        let direct_memory_search = ToolCoreRequest {
-            tool_name: "memory_search".to_owned(),
-            payload: json!({"query": "deploy freeze"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_memory_search),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let direct_memory_get = ToolCoreRequest {
-            tool_name: "memory_get".to_owned(),
-            payload: json!({"path": "MEMORY.md"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_memory_get),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let direct_web_fetch = ToolCoreRequest {
-            tool_name: "web.fetch".to_owned(),
-            payload: json!({"url": "https://example.com"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_web_fetch),
-            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
-        );
-
-        let direct_web_search = ToolCoreRequest {
-            tool_name: "web.search".to_owned(),
-            payload: json!({"query": "loongclaw"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_web_search),
-            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
-        );
-
-        let direct_browser_open = ToolCoreRequest {
-            tool_name: "browser.open".to_owned(),
-            payload: json!({"url": "https://example.com"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_browser_open),
-            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
-        );
-
-        let direct_browser_extract = ToolCoreRequest {
-            tool_name: "browser.extract".to_owned(),
-            payload: json!({"mode": "page_text"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_browser_extract),
-            BTreeSet::from([Capability::InvokeTool])
-        );
-
-        let direct_browser_click = ToolCoreRequest {
-            tool_name: "browser.click".to_owned(),
-            payload: json!({"id": 1}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_browser_click),
-            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
-        );
-
-        let direct_bash_exec = ToolCoreRequest {
-            tool_name: "bash.exec".to_owned(),
-            payload: json!({"command": "printf ok"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&direct_bash_exec),
-            BTreeSet::from([
-                Capability::InvokeTool,
-                Capability::FilesystemRead,
-                Capability::FilesystemWrite,
-                Capability::NetworkEgress,
-            ])
-        );
-
-        let invoked_file_read = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "file.read",
-                "lease": "unused",
-                "arguments": {"path": "README.md"}
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_file_read),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let invoked_memory_search = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "memory_search",
-                "lease": "unused",
-                "arguments": {"query": "deploy freeze"}
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_memory_search),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let invoked_web_fetch = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "web.fetch",
-                "lease": "unused",
-                "arguments": {"url": "https://example.com"}
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_web_fetch),
-            BTreeSet::from([Capability::InvokeTool, Capability::NetworkEgress])
-        );
-
-        let invoked_bash_exec = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "bash.exec",
-                "lease": "unused",
-                "arguments": {"command": "printf ok"}
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_bash_exec),
-            BTreeSet::from([
-                Capability::InvokeTool,
-                Capability::FilesystemRead,
-                Capability::FilesystemWrite,
-                Capability::NetworkEgress,
-            ])
-        );
-
-        let invoked_claw_plan = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "claw.migrate",
-                "lease": "unused",
-                "arguments": {"mode": "plan", "input_path": "imports/nanobot"}
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_claw_plan),
-            BTreeSet::from([Capability::InvokeTool, Capability::FilesystemRead])
-        );
-
-        let invoked_claw_apply = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({
-                "tool_id": "claw.migrate",
-                "lease": "unused",
-                "arguments": {
-                    "mode": "apply",
-                    "input_path": "imports/nanobot",
-                    "output_path": "loongclaw.toml"
-                }
-            }),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&invoked_claw_apply),
-            BTreeSet::from([
-                Capability::InvokeTool,
-                Capability::FilesystemRead,
-                Capability::FilesystemWrite,
-            ])
-        );
-
-        let malformed_invoke = ToolCoreRequest {
-            tool_name: "tool.invoke".to_owned(),
-            payload: json!({"lease": "unused"}),
-        };
-        assert_eq!(
-            required_capabilities_for_request(&malformed_invoke),
-            BTreeSet::from([Capability::InvokeTool])
-        );
     }
 
     #[cfg(feature = "tool-file")]
@@ -2878,6 +2731,12 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| !value.is_empty())),
             "expected non-empty snippets: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["source"] == "workspace_file"),
+            "expected workspace-file results only: {results:?}"
         );
     }
 
@@ -3090,7 +2949,7 @@ mod tests {
         assert!(
             results
                 .iter()
-                .all(|entry| entry["tool_id"] != "claw.migrate")
+                .all(|entry| entry["tool_id"] != "config.import")
         );
 
         std::fs::remove_dir_all(&root).ok();
@@ -3877,6 +3736,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_start_issues_managed_session_id_and_records_request() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-start");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
@@ -3964,6 +3824,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_protocol_surfaces_invalid_json_from_command() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-invalid-json");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
@@ -4023,6 +3884,7 @@ mod tests {
     #[cfg(feature = "tool-browser")]
     #[test]
     fn browser_companion_app_tool_click_uses_current_session_scope() {
+        let _subprocess_guard = crate::test_support::acquire_subprocess_test_guard();
         let root = unique_tool_temp_dir("loongclaw-browser-companion-app-click");
         std::fs::create_dir_all(&root).expect("create fixture root");
         let log_path = root.join("request.json");
@@ -4152,14 +4014,14 @@ mod tests {
         let mut config = test_tool_runtime_config(std::env::temp_dir());
         config.sessions_enabled = false;
 
-        let injected = ToolView::from_tool_names(["sessions_list", "claw.migrate"]);
+        let injected = ToolView::from_tool_names(["sessions_list", "config.import"]);
         let names = runtime_discoverable_tool_entries(&config, Some(&injected))
             .into_iter()
             .map(|entry| entry.canonical_name)
             .collect::<Vec<_>>();
 
         assert!(
-            names.contains(&"claw.migrate".to_owned()),
+            names.contains(&"config.import".to_owned()),
             "expected enabled injected tool to remain visible: {names:?}"
         );
         assert!(
@@ -4773,6 +4635,8 @@ mod tests {
 
     #[test]
     fn is_known_tool_name_accepts_canonical_and_alias_forms() {
+        assert!(is_known_tool_name("config.import"));
+        assert!(is_known_tool_name("config_import"));
         assert!(is_known_tool_name("claw.migrate"));
         assert!(is_known_tool_name("claw_migrate"));
         assert!(is_known_tool_name("external_skills.policy"));
@@ -13883,7 +13747,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_plan_mode_returns_nativeized_preview() {
+    fn config_import_plan_mode_returns_nativeized_preview() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -13925,7 +13789,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "plan",
                     "source": "nanobot",
@@ -13934,10 +13798,10 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate plan should succeed");
+        .expect("config import plan should succeed");
 
         assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["tool_name"], "claw.migrate");
+        assert_eq!(outcome.payload["tool_name"], "config.import");
         assert_eq!(outcome.payload["mode"], "plan");
         assert_eq!(outcome.payload["source"], "nanobot");
         assert_eq!(
@@ -13966,7 +13830,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_apply_mode_writes_target_config() {
+    fn config_import_apply_mode_writes_target_config() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14007,41 +13871,45 @@ mod tests {
             file_root: Some(root.clone()),
             ..runtime_config::ToolRuntimeConfig::default()
         };
-        let outcome = execute_tool_core_with_config(
-            ToolCoreRequest {
-                tool_name: "claw_migrate".to_owned(),
-                payload: json!({
-                    "mode": "apply",
-                    "source": "nanobot",
-                    "input_path": ".",
-                    "output_path": "generated/loongclaw.toml",
-                    "force": true
-                }),
-            },
-            &config,
-        )
-        .expect("claw migrate apply should succeed");
+        let tool_names = ["claw_migrate", "claw.migrate"];
 
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["mode"], "apply");
-        assert_eq!(outcome.payload["config_written"], true);
-        assert_eq!(
-            outcome.payload["next_step"]
-                .as_str()
-                .expect("next_step should be present")
-                .split_whitespace()
-                .next(),
-            Some("loong")
-        );
-        assert_eq!(
-            outcome.payload["output_path"]
-                .as_str()
-                .expect("output path should exist"),
-            fs::canonicalize(&output_path)
-                .expect("output path should canonicalize")
-                .display()
-                .to_string()
-        );
+        for tool_name in tool_names {
+            let outcome = execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: tool_name.to_owned(),
+                    payload: json!({
+                        "mode": "apply",
+                        "source": "nanobot",
+                        "input_path": ".",
+                        "output_path": "generated/loongclaw.toml",
+                        "force": true
+                    }),
+                },
+                &config,
+            )
+            .expect("config import apply should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["mode"], "apply");
+            assert_eq!(outcome.payload["config_written"], true);
+            assert_eq!(
+                outcome.payload["next_step"]
+                    .as_str()
+                    .expect("next_step should be present")
+                    .split_whitespace()
+                    .next(),
+                Some("loong")
+            );
+            assert_eq!(
+                outcome.payload["output_path"]
+                    .as_str()
+                    .expect("output path should exist"),
+                fs::canonicalize(&output_path)
+                    .expect("output path should canonicalize")
+                    .display()
+                    .to_string()
+            );
+        }
 
         let raw = fs::read_to_string(&output_path).expect("output config should exist");
         assert!(raw.contains("prompt_pack_id = \"loongclaw-core-v1\""));
@@ -14052,7 +13920,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_discover_mode_returns_detected_sources() {
+    fn config_import_discover_mode_returns_detected_sources() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14097,7 +13965,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "discover",
                     "input_path": "."
@@ -14105,7 +13973,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate discover should succeed");
+        .expect("config import discover should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "discover");
@@ -14115,7 +13983,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_plan_many_mode_returns_source_summaries_and_recommendation() {
+    fn config_import_plan_many_mode_returns_source_summaries_and_recommendation() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14168,7 +14036,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "plan_many",
                     "input_path": "."
@@ -14176,7 +14044,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate plan_many should succeed");
+        .expect("config import plan_many should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "plan_many");
@@ -14187,7 +14055,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_merge_profiles_mode_preserves_prompt_owner() {
+    fn config_import_merge_profiles_mode_preserves_prompt_owner() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14240,7 +14108,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "merge_profiles",
                     "input_path": "."
@@ -14248,7 +14116,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate merge_profiles should succeed");
+        .expect("config import merge_profiles should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "merge_profiles");
@@ -14267,7 +14135,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_map_external_skills_mode_returns_mapping_plan() {
+    fn config_import_map_external_skills_mode_returns_mapping_plan() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14301,7 +14169,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "map_external_skills",
                     "input_path": "."
@@ -14309,7 +14177,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate map_external_skills should succeed");
+        .expect("config import map_external_skills should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "map_external_skills");
@@ -14333,7 +14201,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_apply_selected_mode_writes_manifest_and_backup() {
+    fn config_import_apply_selected_mode_writes_manifest_and_backup() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14383,7 +14251,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
@@ -14393,7 +14261,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate apply_selected should succeed");
+        .expect("config import apply_selected should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload["mode"], "apply_selected");
@@ -14418,7 +14286,7 @@ mod tests {
     }
 
     #[test]
-    fn claw_migrate_apply_selected_mode_can_apply_external_skills_plan() {
+    fn config_import_apply_selected_mode_can_apply_external_skills_plan() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14471,7 +14339,7 @@ mod tests {
         };
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
@@ -14482,7 +14350,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate apply_selected with external skills should succeed");
+        .expect("config import apply_selected with external skills should succeed");
 
         assert_eq!(outcome.status, "ok");
         assert_eq!(
@@ -14514,14 +14382,14 @@ mod tests {
                 .join("release-guard")
                 .join("SKILL.md")
                 .exists(),
-            "claw.migrate should bridge installable local skills into the managed runtime"
+            "config.import should bridge installable local skills into the managed runtime"
         );
 
         fs::remove_dir_all(&root).ok();
     }
 
     #[test]
-    fn claw_migrate_rollback_last_apply_restores_original_config() {
+    fn config_import_rollback_last_apply_restores_original_config() {
         use std::{
             fs,
             path::{Path, PathBuf},
@@ -14571,7 +14439,7 @@ mod tests {
         };
         execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "apply_selected",
                     "input_path": ".",
@@ -14581,11 +14449,11 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate apply_selected should succeed");
+        .expect("config import apply_selected should succeed");
 
         let rollback = execute_tool_core_with_config(
             ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload: json!({
                     "mode": "rollback_last_apply",
                     "output_path": "loongclaw.toml"
@@ -14593,7 +14461,7 @@ mod tests {
             },
             &config,
         )
-        .expect("claw migrate rollback_last_apply should succeed");
+        .expect("config import rollback_last_apply should succeed");
 
         assert_eq!(rollback.status, "ok");
         assert!(

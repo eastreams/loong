@@ -1,0 +1,244 @@
+﻿{
+    "abilities":  {
+                      "navLabel":  "能力页分区",
+                      "common":  {
+                                     "loading":  "正在加载当前数据...",
+                                     "loadFailed":  "当前分区暂时无法加载。",
+                                     "retry":  "重试",
+                                     "noData":  "暂时没有可显示的数据。",
+                                     "notConfigured":  "暂未配置",
+                                     "notAvailable":  "暂无",
+                                     "enabled":  "已启用",
+                                     "disabled":  "已禁用",
+                                     "yes":  "是",
+                                     "no":  "否"
+                                 },
+                      "sections":  {
+                                       "personalization":  {
+                                                               "title":  "个性化",
+                                                               "summary":  "User偏好与长期风格的编辑与展示。",
+                                                               "description":  "这里展示 daemon 当前真实的个性化偏好与长期风格默认值。"
+                                                           },
+                                       "channels":  {
+                                                        "title":  "Channels",
+                                                        "summary":  "Channel surface、bridge 来源与 readiness。",
+                                                        "description":  "这里展示 channel inventory、已配置账号，以及 service-backed 路径当前是否可用。"
+                                                    },
+                                       "skills":  {
+                                                      "title":  "Skills",
+                                                      "summary":  "Skills、external skills 与能力来源。",
+                                                      "description":  "这里展示运行时可见工具、浏览器助手状态，以及 external skills 当前的治理配置。"
+                                                  },
+                                       "mascot":  {
+                                                      "title":  "小宠物",
+                                                      "summary":  "实验性的聊天宠物显示开关。",
+                                                      "description":  "控制聊天页实验性小宠物的显示。"
+                                                  }
+                                   },
+                      "mascot":  {
+                                     "introTitle":  "小宠物",
+                                     "settingsTitle":  "显示设置",
+                                     "helper":  "这是一个实验功能，默认关闭。开启后才会在聊天页显示。",
+                                     "fields":  {
+                                                    "display":  "显示聊天小宠物"
+                                                },
+                                     "actions":  {
+                                                     "show":  "显示小宠物",
+                                                     "hide":  "隐藏小宠物"
+                                                 }
+                                 },
+                      "personalization":  {
+                                              "introTitle":  "个性化",
+                                              "snapshotTitle":  "当前个性化",
+                                              "statusTitle":  "提示与画像状态",
+                                              "fields":  {
+                                                             "currentState":  "当前状态",
+                                                             "preferredName":  "偏好称呼",
+                                                             "responseDensity":  "回答密度",
+                                                             "initiativeLevel":  "主动程度",
+                                                             "standingBoundaries":  "长期边界",
+                                                             "locale":  "语言区域",
+                                                             "timezone":  "时区",
+                                                             "profileState":  "画像状态",
+                                                             "operatorPreferences":  "操作员偏好",
+                                                             "promptState":  "提示状态",
+                                                             "suggestions":  "建议提示",
+                                                             "updatedAt":  "最近更新时间"
+                                                         },
+                                              "actions":  {
+                                                              "edit":  "编辑",
+                                                              "cancel":  "返回",
+                                                              "save":  "保存",
+                                                              "savePending":  "保存中...",
+                                                              "saved":  "个性化已保存。",
+                                                              "saveFailed":  "个性化保存失败。"
+                                                          },
+                                              "values":  {
+                                                             "stateConfigured":  "已配置",
+                                                             "stateDeferred":  "已延后",
+                                                             "stateSuppressed":  "已抑制",
+                                                             "statePending":  "待提示",
+                                                             "profileConfigured":  "已配置",
+                                                             "profilePending":  "待补全",
+                                                             "preferencesPresent":  "已存在",
+                                                             "preferencesAbsent":  "尚未采集",
+                                                             "suggestionsActive":  "正常提示",
+                                                             "suggestionsSuppressed":  "已抑制",
+                                                             "promptConfigured":  "已配置",
+                                                             "promptSuppressed":  "已抑制",
+                                                             "promptDeferred":  "已延后",
+                                                             "promptPending":  "待提示",
+                                                             "responseDensityConcise":  "简洁",
+                                                             "responseDensityBalanced":  "平衡",
+                                                             "responseDensityThorough":  "详细",
+                                                             "initiativeAskBeforeActing":  "先询问再行动",
+                                                             "initiativeBalanced":  "平衡",
+                                                             "initiativeHigh":  "高主动",
+                                                             "unset":  "留空不设"
+                                                         }
+                                          },
+                      "channels":  {
+                                       "introTitle":  "Channels",
+                                       "summaryTitle":  "Channel 摘要",
+                                       "surfacesTitle":  "Channel surfaces",
+                                       "defaultAccount":  "默认账号：{{accountId}}",
+                                       "noSurfaces":  "当前没有发现可展示的 channel surface。",
+                                       "fields":  {
+                                                      "catalogChannels":  "Catalog channels",
+                                                      "configuredChannels":  "已配置 channel",
+                                                      "configuredAccounts":  "已配置账号",
+                                                      "enabledAccounts":  "已启用账号",
+                                                      "misconfiguredAccounts":  "配置异常账号",
+                                                      "runtimeBackedChannels":  "Runtime-backed channel",
+                                                      "serviceEnabledChannels":  "已启用 service 的 channel",
+                                                      "serviceReadyChannels":  "service 已就绪的 channel"
+                                                  },
+                                       "values":  {
+                                                      "runtimeBacked":  "Runtime-backed",
+                                                      "pluginBacked":  "Plugin-backed",
+                                                      "stub":  "Stub"
+                                                  },
+                                       "surfaceFacts":  {
+                                                            "accounts":  "{{count}} 个账号",
+                                                            "enabled":  "{{count}} 个启用",
+                                                            "sendReady":  "{{count}} 个可发送",
+                                                            "serveReady":  "{{count}} 个可服务",
+                                                            "misconfigured":  "{{count}} 个异常",
+                                                            "clean":  "暂无异常",
+                                                            "serviceReady":  "service 已就绪",
+                                                            "serviceEnabled":  "service 已启用",
+                                                            "serviceDisabled":  "service 未启用"
+                                                        }
+                                   },
+                      "skills":  {
+                                     "introTitle":  "Skills",
+                                     "runtimeTitle":  "运行时能力",
+                                     "externalTitle":  "External skills",
+                                     "visibleToolsTitle":  "当前可见工具",
+                                     "noVisibleTools":  "当前没有报告可见工具。",
+                                     "sources":  {
+                                                     "session":  "会话",
+                                                     "execution":  "执行",
+                                                     "browser":  "浏览器",
+                                                     "local":  "本地",
+                                                     "provider":  "Provider",
+                                                     "delegation":  "委派",
+                                                     "approval":  "审批",
+                                                     "external":  "外部技能",
+                                                     "system":  "系统",
+                                                     "runtime":  "运行时"
+                                                 },
+                                     "toolLabels":  {
+                                                        "approvalRequestResolve":  "Approval resolve",
+                                                        "approvalRequestStatus":  "Approval status",
+                                                        "approvalRequestsList":  "Approval list",
+                                                        "bashExec":  "Bash execution",
+                                                        "browserClick":  "Browser click",
+                                                        "browserExtract":  "Browser extract",
+                                                        "browserOpen":  "Browser open",
+                                                        "clawMigrate":  "Claw migrate",
+                                                        "delegate":  "Delegate",
+                                                        "delegateAsync":  "Async delegate",
+                                                        "externalSkillsPolicy":  "External skills policy",
+                                                        "fileEdit":  "File edit",
+                                                        "fileRead":  "File read",
+                                                        "fileWrite":  "File write",
+                                                        "providerSwitch":  "Provider switch",
+                                                        "sessionEvents":  "Session events",
+                                                        "sessionSearch":  "Session search",
+                                                        "sessionStatus":  "Session status",
+                                                        "sessionToolPolicyStatus":  "Session tool policy",
+                                                        "sessionWait":  "Session wait",
+                                                        "sessionsHistory":  "Session history",
+                                                        "sessionsList":  "Session list",
+                                                        "shellExec":  "Shell execution",
+                                                        "toolInvoke":  "Tool invoke",
+                                                        "toolSearch":  "Tool search",
+                                                        "webFetch":  "Web fetch",
+                                                        "webSearch":  "Web search"
+                                                    },
+                                     "toolSummaries":  {
+                                                           "approvalRequestResolve":  "处理待审批的运行时动作请求。",
+                                                           "approvalRequestStatus":  "查看单条审批请求当前状态。",
+                                                           "approvalRequestsList":  "列出当前可见的审批请求。",
+                                                           "bashExec":  "执行受治理约束的 Bash 命令。",
+                                                           "browserClick":  "在浏览器页面中执行点击动作。",
+                                                           "browserExtract":  "从浏览器页面提取结构化内容。",
+                                                           "browserOpen":  "打开并导航浏览器页面。",
+                                                           "clawMigrate":  "执行系统迁移或兼容性修复动作。",
+                                                           "delegate":  "将任务委派给子会话执行。",
+                                                           "delegateAsync":  "以异步方式启动委派子会话。",
+                                                           "externalSkillsPolicy":  "查看或调整外部技能暴露策略。",
+                                                           "fileEdit":  "在允许范围内编辑本地文件。",
+                                                           "fileRead":  "读取允许范围内的本地文件。",
+                                                           "fileWrite":  "在允许范围内写入本地文件。",
+                                                           "providerSwitch":  "切换当前活跃 provider。",
+                                                           "sessionEvents":  "查看会话中的事件记录。",
+                                                           "sessionSearch":  "检索当前可见的历史会话与事件。",
+                                                           "sessionStatus":  "查看某个可见会话的当前状态。",
+                                                           "sessionToolPolicyStatus":  "查看会话工具策略与可见性限制。",
+                                                           "sessionWait":  "等待异步会话进入下一状态。",
+                                                           "sessionsHistory":  "读取会话历史内容。",
+                                                           "sessionsList":  "列出当前可见的会话。",
+                                                           "shellExec":  "执行 shell 命令入口。",
+                                                           "toolInvoke":  "调用某个已发现的工具。",
+                                                           "toolSearch":  "搜索当前可用工具目录。",
+                                                           "webFetch":  "抓取并读取网页内容。",
+                                                           "webSearch":  "通过搜索 provider 执行网页搜索。"
+                                                       },
+                                     "fields":  {
+                                                    "visibleRuntimeTools":  "可见运行时工具",
+                                                    "browserCompanionEnabled":  "浏览器助手已启用",
+                                                    "browserCompanionReady":  "浏览器助手已就绪",
+                                                    "commandConfigured":  "命令已配置",
+                                                    "executionTier":  "执行层级",
+                                                    "expectedVersion":  "期望版本",
+                                                    "timeoutSeconds":  "超时时间",
+                                                    "externalSkillsEnabled":  "External skills 已启用",
+                                                    "inventoryStatus":  "Inventory 状态",
+                                                    "resolvedSkillCount":  "已解析技能",
+                                                    "shadowedSkillCount":  "被遮蔽技能",
+                                                    "requireDownloadApproval":  "下载需要审批",
+                                                    "autoExposeInstalled":  "自动暴露已安装技能",
+                                                    "overrideActive":  "Override 已生效",
+                                                    "allowedDomainCount":  "允许域名数",
+                                                    "blockedDomainCount":  "阻止域名数",
+                                                    "installRoot":  "安装根目录",
+                                                    "inventoryError":  "Inventory 错误"
+                                                },
+                                     "values":  {
+                                                    "ready":  "已就绪",
+                                                    "notReady":  "未就绪",
+                                                    "executionLocal":  "本地运行时",
+                                                    "executionBrowserCompanion":  "浏览器助手",
+                                                    "inventoryOk":  "正常",
+                                                    "inventoryMissing":  "缺失",
+                                                    "inventoryError":  "错误",
+                                                    "inventoryDisabled":  "已禁用",
+                                                    "toolSummaryFallback":  "当前运行时暴露的能力：{{tool}}",
+                                                    "timeoutSeconds_one":  "{{count}} 秒",
+                                                    "timeoutSeconds_other":  "{{count}} 秒"
+                                                }
+                                 }
+                  }
+}

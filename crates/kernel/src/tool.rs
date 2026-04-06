@@ -49,10 +49,10 @@ impl ToolPlane {
 
     pub fn register_core_adapter<A: CoreToolAdapter + 'static>(&mut self, adapter: A) {
         let name = adapter.name().to_owned();
-        self.core_adapters.insert(name.clone(), Arc::new(adapter));
         if self.default_core_adapter.is_none() {
-            self.default_core_adapter = Some(name);
+            self.default_core_adapter = Some(name.clone());
         }
+        self.core_adapters.insert(name, Arc::new(adapter));
     }
 
     pub fn register_extension_adapter<A: ToolExtensionAdapter + 'static>(&mut self, adapter: A) {
@@ -79,17 +79,19 @@ impl ToolPlane {
         request: ToolCoreRequest,
     ) -> Result<ToolCoreOutcome, ToolPlaneError> {
         let resolved_name = if let Some(name) = core_name {
-            name.to_owned()
+            name
         } else {
             self.default_core_adapter
-                .clone()
+                .as_deref()
                 .ok_or(ToolPlaneError::NoDefaultCoreAdapter)?
         };
 
         let adapter = self
             .core_adapters
-            .get(&resolved_name)
-            .ok_or(ToolPlaneError::CoreAdapterNotFound(resolved_name))?
+            .get(resolved_name)
+            .ok_or(ToolPlaneError::CoreAdapterNotFound(
+                resolved_name.to_owned(),
+            ))?
             .clone();
 
         return adapter.execute_core_tool(request).await;
@@ -108,17 +110,19 @@ impl ToolPlane {
             .clone();
 
         let resolved_core_name = if let Some(name) = core_name {
-            name.to_owned()
+            name
         } else {
             self.default_core_adapter
-                .clone()
+                .as_deref()
                 .ok_or(ToolPlaneError::NoDefaultCoreAdapter)?
         };
 
         let core = self
             .core_adapters
-            .get(&resolved_core_name)
-            .ok_or(ToolPlaneError::CoreAdapterNotFound(resolved_core_name))?
+            .get(resolved_core_name)
+            .ok_or(ToolPlaneError::CoreAdapterNotFound(
+                resolved_core_name.to_owned(),
+            ))?
             .clone();
 
         return extension

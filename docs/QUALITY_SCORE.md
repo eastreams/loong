@@ -17,7 +17,7 @@ Domain grades for LoongClaw. Updated periodically to track gaps, prioritize clea
 | Plugin IR (L7) | B- | 2026-03-13 | Bridge inference works; multi-language support limited |
 | Self-Awareness (L8) | B- | 2026-03-13 | Snapshots generated but not continuous; no drift detection agent |
 | Bootstrap (L9) | B | 2026-03-13 | Activation plans work; no policy-bounded bootstrap validation |
-| Context/Memory | C | 2026-03-29 | Typed scopes and staged retrieval substrate now exist, but built-in retrieval is still session-summary-only; no operator-visible provenance contract; no FTS5/local search surface |
+| Context/Memory | B- | 2026-04-05 | Canonical recall now has scope/kind/metadata-backed FTS retrieval, the operator-facing `memory_search` surface spans workspace and cross-session recall, but trust scoring, TTL/hash, and richer derived-memory ranking are still limited |
 | Documentation | A- | 2026-03-13 | Strong coverage across design docs, security, product sense, and quality tracking |
 | CI/Enforcement | A | 2026-03-13 | 8 CI workflows, convention-engineering (14 files, 11 checks), check:harness mirror gate |
 | Contributor Experience | A- | 2026-03-13 | Clear tracks and recipes; could add more examples |

@@ -24,7 +24,7 @@ use crate::CliResult;
 use crate::KernelContext;
 use crate::channel::feishu::api::{FeishuClient, resources::cards};
 use crate::channel::{
-    ChannelAdapter, ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
+    ChannelInboundMessage, ChannelOutboundTarget, ChannelTurnFeedbackPolicy,
     process_inbound_with_provider, runtime_state::ChannelOperationRuntimeTracker,
 };
 use crate::config::{LoongClawConfig, ResolvedFeishuChannelConfig};
@@ -32,6 +32,7 @@ use crate::crypto::timing_safe_eq;
 
 use super::adapter::{FeishuAdapter, outbound_reply_message_from_text};
 use super::payload::{FeishuCardCallbackEvent, FeishuWebhookAction};
+use super::send::send_channel_message_via_message_send_api;
 
 const FEISHU_CALLBACK_RESPONSE_MARKER: &str = "[feishu_callback_response]";
 
@@ -623,7 +624,10 @@ async fn handle_feishu_inbound_event(
         let outbound = outbound_reply_message_from_text(reply);
 
         let mut adapter = state.adapter.lock().await;
-        if let Err(first_error) = adapter.send_message(&reply_target, &outbound).await {
+        if let Err(first_error) =
+            send_channel_message_via_message_send_api(&*adapter, &reply_target, outbound.clone())
+                .await
+        {
             adapter.refresh_tenant_token().await.map_err(|error| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -632,8 +636,7 @@ async fn handle_feishu_inbound_event(
                     ),
                 )
             })?;
-            adapter
-                .send_message(&reply_target, &outbound)
+            send_channel_message_via_message_send_api(&*adapter, &reply_target, outbound)
                 .await
                 .map_err(|error| {
                     (
@@ -765,8 +768,14 @@ fn build_feishu_card_callback_inbound_message(
     event: &FeishuCardCallbackEvent,
 ) -> ChannelInboundMessage {
     let reply_target = if let Some(message_id) = event.context.open_message_id.as_deref() {
-        ChannelOutboundTarget::feishu_message_reply(message_id.to_owned())
-            .with_feishu_reply_in_thread(true)
+        let mut target = ChannelOutboundTarget::feishu_message_reply(message_id.to_owned())
+            .with_feishu_reply_in_thread(true);
+        if let Some(chat_id) = event.context.open_chat_id.as_deref() {
+            target = target.with_feishu_reply_chat_id(chat_id.to_owned());
+        } else {
+            target = target.with_feishu_reply_chat_id(event.session.conversation_id.clone());
+        }
+        target
     } else if let Some(chat_id) = event.context.open_chat_id.as_deref() {
         ChannelOutboundTarget::feishu_receive_id(chat_id.to_owned())
             .with_feishu_receive_id_type("chat_id")

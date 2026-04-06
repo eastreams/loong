@@ -15,9 +15,14 @@ const MAX_MEMORY_GET_LINES: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MemorySearchResult {
-    path: String,
-    start_line: usize,
-    end_line: usize,
+    source: &'static str,
+    path: Option<String>,
+    session_id: Option<String>,
+    scope: Option<String>,
+    kind: Option<String>,
+    role: Option<String>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
     snippet: String,
     score: u32,
 }
@@ -60,29 +65,38 @@ pub(super) fn execute_memory_search_tool_with_config(
         Some(MAX_MEMORY_SEARCH_RESULTS),
     )?;
 
-    let workspace_root = workspace_root_from_config(config)?;
-    let locations = collect_workspace_memory_document_locations(workspace_root)?;
     let query_normalized = query.to_ascii_lowercase();
     let query_tokens = tokenize_memory_query(query_normalized.as_str());
 
     let mut results = Vec::new();
-    for location in locations {
-        let maybe_result = search_memory_location(
-            query_normalized.as_str(),
-            query_tokens.as_slice(),
-            &location,
-        )?;
-        let Some(result) = maybe_result else {
-            continue;
-        };
-        results.push(result);
+    if let Some(workspace_root) = config.file_root.as_deref() {
+        let locations = collect_workspace_memory_document_locations(workspace_root)?;
+        for location in locations {
+            let maybe_result = search_memory_location(
+                query_normalized.as_str(),
+                query_tokens.as_slice(),
+                &location,
+            )?;
+            let Some(result) = maybe_result else {
+                continue;
+            };
+            results.push(result);
+        }
     }
+    results.extend(search_canonical_memory_results(
+        query_normalized.as_str(),
+        query_tokens.as_slice(),
+        max_results,
+        config,
+    )?);
 
     results.sort_by(|left, right| {
         right
             .score
             .cmp(&left.score)
+            .then(left.source.cmp(right.source))
             .then(left.path.cmp(&right.path))
+            .then(left.session_id.cmp(&right.session_id))
             .then(left.start_line.cmp(&right.start_line))
     });
 
@@ -180,16 +194,35 @@ pub(super) fn execute_memory_get_tool_with_config(
 }
 
 pub(super) fn memory_corpus_available(config: &super::runtime_config::ToolRuntimeConfig) -> bool {
-    let Some(workspace_root) = config.file_root.as_deref() else {
-        return false;
-    };
+    let workspace_memory_available = workspace_memory_corpus_available(config);
 
-    let result = collect_workspace_memory_document_locations(workspace_root);
-    let Ok(locations) = result else {
-        return false;
-    };
+    if workspace_memory_available {
+        return true;
+    }
 
-    !locations.is_empty()
+    config
+        .memory_sqlite_path
+        .as_deref()
+        .is_some_and(|path| path.exists())
+}
+
+pub(super) fn workspace_memory_corpus_available(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> bool {
+    config
+        .file_root
+        .as_deref()
+        .and_then(|workspace_root| collect_workspace_memory_document_locations(workspace_root).ok())
+        .is_some_and(|locations| !locations.is_empty())
+}
+
+fn workspace_root_from_config(
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<&Path, String> {
+    config.file_root.as_deref().ok_or_else(|| {
+        "memory tools require a configured safe file root before they can access workspace durable memory"
+            .to_owned()
+    })
 }
 
 fn read_memory_file_window(
@@ -239,15 +272,6 @@ fn read_memory_file_window(
     };
 
     Ok(file_window)
-}
-
-fn workspace_root_from_config(
-    config: &super::runtime_config::ToolRuntimeConfig,
-) -> Result<&Path, String> {
-    config.file_root.as_deref().ok_or_else(|| {
-        "memory tools require a configured safe file root before they can access workspace durable memory"
-            .to_owned()
-    })
 }
 
 fn parse_optional_usize_field(
@@ -347,9 +371,14 @@ fn search_memory_location(
     let snippet = snippet_lines.join("\n");
 
     let result = MemorySearchResult {
-        path: location.label.clone(),
-        start_line,
-        end_line,
+        source: "workspace_file",
+        path: Some(location.label.clone()),
+        session_id: None,
+        scope: None,
+        kind: None,
+        role: None,
+        start_line: Some(start_line),
+        end_line: Some(end_line),
         snippet,
         score: best_match.score,
     };
@@ -456,9 +485,83 @@ fn normalized_existing_path_key(path: &Path) -> Result<String, String> {
     Ok(canonical_path.display().to_string())
 }
 
+fn search_canonical_memory_results(
+    query: &str,
+    query_tokens: &[String],
+    max_results: usize,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<Vec<MemorySearchResult>, String> {
+    let Some(sqlite_path) = config.memory_sqlite_path.as_ref() else {
+        return Ok(Vec::new());
+    };
+    if !sqlite_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+        sqlite_path: Some(sqlite_path.clone()),
+        ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+    };
+    let hits = crate::memory::search_canonical_memory(query, max_results, None, &memory_config)?;
+
+    Ok(hits
+        .into_iter()
+        .map(|hit| {
+            let score = canonical_memory_match_score(query, query_tokens, &hit);
+            let scope = hit.record.scope.as_str().to_owned();
+            let kind = hit.record.kind.as_str().to_owned();
+            MemorySearchResult {
+                source: "canonical_session",
+                path: None,
+                session_id: Some(hit.record.session_id),
+                scope: Some(scope),
+                kind: Some(kind),
+                role: hit.record.role,
+                start_line: None,
+                end_line: None,
+                snippet: hit.record.content,
+                score,
+            }
+        })
+        .collect())
+}
+
+fn canonical_memory_match_score(
+    query: &str,
+    query_tokens: &[String],
+    hit: &crate::memory::CanonicalMemorySearchHit,
+) -> u32 {
+    let content_score = line_match_score(query, query_tokens, hit.record.content.as_str());
+    let session_id_score = line_match_score(query, query_tokens, hit.record.session_id.as_str());
+    let scope_score = line_match_score(query, query_tokens, hit.record.scope.as_str());
+    let kind_score = line_match_score(query, query_tokens, hit.record.kind.as_str());
+    let role_score = hit
+        .record
+        .role
+        .as_deref()
+        .map(|value| line_match_score(query, query_tokens, value))
+        .unwrap_or(0);
+    let metadata_text = hit.record.metadata.to_string();
+    let metadata_score = line_match_score(query, query_tokens, metadata_text.as_str());
+
+    let strongest_metadata_score = session_id_score
+        .max(scope_score)
+        .max(kind_score)
+        .max(role_score)
+        .max(metadata_score);
+    let strongest_score = content_score.max(strongest_metadata_score);
+
+    strongest_score.max(1)
+}
+
 fn memory_search_result_payload(result: &MemorySearchResult) -> Value {
     json!({
+        "source": result.source,
         "path": result.path,
+        "session_id": result.session_id,
+        "scope": result.scope,
+        "kind": result.kind,
+        "role": result.role,
         "start_line": result.start_line,
         "end_line": result.end_line,
         "snippet": result.snippet,
@@ -470,4 +573,130 @@ fn trim_trailing_line_endings(line: &str) -> &str {
     let without_newline = line.strip_suffix('\n').unwrap_or(line);
     let without_carriage_return = without_newline.strip_suffix('\r');
     without_carriage_return.unwrap_or(without_newline)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::unique_temp_dir;
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_returns_cross_session_canonical_hits_without_workspace_root() {
+        let root = unique_temp_dir("loongclaw-memory-search-canonical");
+        let db_path = root.join("memory.sqlite3");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        crate::memory::append_turn_direct(
+            "release-session",
+            "assistant",
+            "Deployment cutoff is 17:00 Beijing time and requires a release note.",
+            &memory_config,
+        )
+        .expect("append canonical assistant turn");
+
+        let runtime_config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deployment cutoff release note",
+                    "max_results": 4
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["source"], "canonical_session");
+        assert_eq!(results[0]["session_id"], "release-session");
+        assert_eq!(results[0]["scope"], "session");
+        assert_eq!(results[0]["kind"], "assistant_turn");
+        assert_eq!(results[0]["role"], "assistant");
+        assert!(
+            results[0]["path"].is_null(),
+            "canonical search should not synthesize a file path: {results:?}"
+        );
+        assert!(
+            results[0]["start_line"].is_null() && results[0]["end_line"].is_null(),
+            "canonical search should not report line windows: {results:?}"
+        );
+        assert!(
+            results[0]["snippet"]
+                .as_str()
+                .is_some_and(|value| value.contains("17:00 Beijing time")),
+            "expected canonical snippet in result payload: {results:?}"
+        );
+    }
+
+    #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
+    #[test]
+    fn memory_search_tool_preserves_metadata_only_canonical_hits() {
+        let root = unique_temp_dir("loongclaw-memory-search-canonical-metadata");
+        let db_path = root.join("memory.sqlite3");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+
+        let memory_config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        let payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "release checklist",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+        crate::memory::append_turn_direct(
+            "metadata-session",
+            "assistant",
+            &payload,
+            &memory_config,
+        )
+        .expect("append structured canonical turn");
+
+        let runtime_config = super::super::runtime_config::ToolRuntimeConfig {
+            file_root: None,
+            memory_sqlite_path: Some(db_path),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        };
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "workspace-import",
+                    "max_results": 4
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory search should succeed");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["source"], "canonical_session");
+        assert_eq!(results[0]["session_id"], "metadata-session");
+        assert_eq!(results[0]["scope"], "workspace");
+        assert_eq!(results[0]["kind"], "imported_profile");
+        assert!(
+            results[0]["score"].as_u64().is_some_and(|value| value > 0),
+            "metadata-only matches should keep a stable score: {results:?}"
+        );
+    }
 }

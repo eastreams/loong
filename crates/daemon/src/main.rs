@@ -51,18 +51,29 @@ fn error_code(error: &str) -> String {
     "unclassified".to_owned()
 }
 
+fn redacted_command_name(command: &Commands) -> &'static str {
+    command.command_kind_for_logging()
+}
+
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
     let cli = parse_cli();
+    let command_source = if cli.command.is_some() {
+        "explicit"
+    } else {
+        "default"
+    };
     let command = cli.command.unwrap_or_else(resolve_default_entry_command);
     let command_kind = command.command_kind_for_logging();
+    let redacted_command = redacted_command_name(&command);
     tracing::debug!(
         target: "loongclaw.daemon",
-        command_kind,
-        "parsed CLI command"
+        command_source,
+        command = %redacted_command,
+        "resolved CLI command"
     );
     let result = match command {
         Commands::Welcome => run_welcome_cli(),
@@ -264,6 +275,20 @@ async fn main() {
             })
             .await
         }
+        Commands::ControlPlaneServe {
+            config,
+            session,
+            bind,
+            port,
+        } => {
+            run_control_plane_serve_cli(
+                config.as_deref(),
+                session.as_deref(),
+                bind.as_deref(),
+                port,
+            )
+            .await
+        }
         Commands::Audit {
             config,
             json,
@@ -354,6 +379,12 @@ async fn main() {
         }
         Commands::ListMemorySystems { config, json } => {
             run_list_memory_systems_cli(config.as_deref(), json)
+        }
+        Commands::ListMcpServers { config, json } => {
+            run_list_mcp_servers_cli(config.as_deref(), json)
+        }
+        Commands::ShowMcpServer { config, name, json } => {
+            run_show_mcp_server_cli(config.as_deref(), name.as_str(), json)
         }
         Commands::ListAcpBackends { config, json } => {
             run_list_acp_backends_cli(config.as_deref(), json)
@@ -1030,7 +1061,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::error_code;
+    use super::{error_code, redacted_command_name};
     use loongclaw_daemon::{Commands, MultiChannelServeChannelAccount};
 
     #[test]
@@ -1068,5 +1099,24 @@ mod tests {
 
         assert_eq!(error_code(stable_error), "config_file_missing");
         assert_eq!(error_code(unstable_error), "unclassified");
+    }
+
+    #[test]
+    fn redacted_command_name_omits_struct_field_values() {
+        let command = Commands::RunTask {
+            objective: "ship feature".to_owned(),
+            payload: "{\"secret\":\"value\"}".to_owned(),
+        };
+
+        let redacted = redacted_command_name(&command);
+
+        assert_eq!(redacted, "run_task");
+    }
+
+    #[test]
+    fn redacted_command_name_handles_unit_variants() {
+        let redacted = redacted_command_name(&Commands::Welcome);
+
+        assert_eq!(redacted, "welcome");
     }
 }

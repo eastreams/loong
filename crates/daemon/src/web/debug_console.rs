@@ -45,65 +45,208 @@ fn build_debug_console_blocks(
     let now = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
     let active_provider = snapshot.config.active_provider_id().unwrap_or("none");
     let active_model = snapshot.config.provider.model.as_str();
-    let personality = prompt_personality_id(snapshot.config.cli.resolved_personality());
-    let prompt_mode = if snapshot.config.cli.uses_native_prompt_pack() {
-        "native_prompt_pack"
-    } else {
-        "inline_prompt"
-    };
-    let memory_profile = snapshot.config.memory.resolved_profile().as_str();
     let enabled_tool_count = build_tool_items(&snapshot.config, runtime)
         .into_iter()
         .filter(|item| item.enabled)
         .count();
 
-    let mut blocks = vec![DashboardDebugConsoleBlockPayload {
-        id: "runtime-snapshot".to_owned(),
-        kind: "runtime",
-        started_at: now.clone(),
-        header: format!("{now} runtime snapshot"),
-        lines: vec![
-            format!(
-                "{now} [runtime] ready source=local_daemon provider={active_provider} model={active_model}"
-            ),
-            format!(
-                "{now} [config] prompt={prompt_mode} personality={} memory_profile={memory_profile}",
-                personality
-            ),
-            format!(
-                "{now} [provider] endpoint={}",
-                snapshot.config.provider.endpoint()
-            ),
-            format!(
-                "{now} [tools] enabled={} approval={} shell_default={}",
-                enabled_tool_count,
-                approval_mode_label(snapshot.config.tools.approval.mode),
-                snapshot.config.tools.shell_default_mode
-            ),
-        ],
-    }];
-
-    blocks.extend(
-        debug_state
-            .recent_blocks
-            .iter()
-            .rev()
-            .take(6)
-            .rev()
-            .map(|block| DashboardDebugConsoleBlockPayload {
-                id: block.id.clone(),
-                kind: block.kind,
-                started_at: block.started_at.clone(),
-                header: block.header.clone(),
-                lines: block.lines.clone(),
-            }),
-    );
+    let mut blocks = vec![
+        build_turn_summary_block(
+            &now,
+            snapshot,
+            debug_state,
+            active_provider,
+            active_model,
+            enabled_tool_count,
+        ),
+        build_recent_tool_activity_block(&now, debug_state),
+        build_last_failure_block(&now, debug_state),
+    ];
 
     if let Some(log_block) = build_log_output_block() {
         blocks.push(log_block);
     }
 
+    blocks.push(build_raw_events_block(&now, debug_state));
+
     blocks
+}
+
+fn build_turn_summary_block(
+    now: &str,
+    snapshot: &WebSnapshot,
+    debug_state: &DebugConsoleRuntimeState,
+    active_provider: &str,
+    active_model: &str,
+    enabled_tool_count: usize,
+) -> DashboardDebugConsoleBlockPayload {
+    let latest_turn = debug_state
+        .recent_blocks
+        .iter()
+        .rev()
+        .find(|block| block.kind == "turn");
+
+    let status = latest_turn.map(|turn| turn.status).unwrap_or("idle");
+    let turn_id = latest_turn
+        .map(|turn| turn.id.trim_start_matches("turn:"))
+        .unwrap_or("none");
+    let session_id = latest_turn
+        .and_then(|turn| turn.session_id.as_deref())
+        .unwrap_or("none");
+    let mut lines = vec![
+        format!("[turn] status={status} session={session_id} turn={turn_id}"),
+        format!("[provider] ready kind={active_provider} model={active_model}"),
+        format!(
+            "[tools] active={} recent={} enabled={}",
+            debug_state.active_tool_starts.len(),
+            debug_state.recent_tool_activity.len(),
+            enabled_tool_count
+        ),
+        format!(
+            "[memory] profile={} window={} summary_max_chars={}",
+            snapshot.config.memory.resolved_profile().as_str(),
+            snapshot.config.memory.sliding_window,
+            snapshot.config.memory.summary_max_chars
+        ),
+    ];
+
+    if let Some(turn) = latest_turn {
+        let first_token = turn
+            .first_delta_at_ms
+            .map(|at| format_duration_ms(at.saturating_sub(turn.started_at_ms)))
+            .unwrap_or_else(|| "n/a".to_owned());
+        let total = turn
+            .finished_at_ms
+            .map(|at| format_duration_ms(at.saturating_sub(turn.started_at_ms)))
+            .unwrap_or_else(|| "in_progress".to_owned());
+        lines.push(format!(
+            "[latency] first_token={first_token} total={total} tool_calls={}",
+            turn.tool_calls
+        ));
+    }
+
+    lines.push(format!(
+        "[hint] {}",
+        latest_turn
+            .map(turn_summary_hint)
+            .unwrap_or("idle and waiting for the next turn")
+    ));
+
+    DashboardDebugConsoleBlockPayload {
+        id: "turn-summary".to_owned(),
+        kind: "summary",
+        started_at: now.to_owned(),
+        header: format!("{now} TURN SUMMARY"),
+        lines,
+    }
+}
+
+fn build_recent_tool_activity_block(
+    now: &str,
+    debug_state: &DebugConsoleRuntimeState,
+) -> DashboardDebugConsoleBlockPayload {
+    let mut lines = debug_state
+        .recent_tool_activity
+        .iter()
+        .rev()
+        .take(5)
+        .rev()
+        .map(|activity| {
+            let duration = activity
+                .duration_ms
+                .map(|value| format!(" duration={}", format_duration_ms(value)))
+                .unwrap_or_default();
+            format!(
+                "[tool] {} status={}{} detail={}",
+                activity.label, activity.outcome, duration, activity.detail
+            )
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push("[tool] none recent_tool_activity=empty".to_owned());
+    }
+    DashboardDebugConsoleBlockPayload {
+        id: "recent-tool-activity".to_owned(),
+        kind: "tools",
+        started_at: now.to_owned(),
+        header: format!("{now} RECENT TOOL ACTIVITY"),
+        lines,
+    }
+}
+
+fn build_last_failure_block(
+    now: &str,
+    debug_state: &DebugConsoleRuntimeState,
+) -> DashboardDebugConsoleBlockPayload {
+    let lines = if let Some(failure) = debug_state.last_failure.as_ref() {
+        vec![
+            format!("[error] category={} at={}", failure.category, failure.at),
+            format!("[detail] {}", failure.detail),
+            format!("[hint] {}", failure.hint),
+        ]
+    } else {
+        vec![
+            "[error] none recent_failure=none".to_owned(),
+            "[hint] no recent failure was recorded".to_owned(),
+        ]
+    };
+    DashboardDebugConsoleBlockPayload {
+        id: "last-failure".to_owned(),
+        kind: "error",
+        started_at: now.to_owned(),
+        header: format!("{now} LAST FAILURE"),
+        lines,
+    }
+}
+
+fn build_raw_events_block(
+    now: &str,
+    debug_state: &DebugConsoleRuntimeState,
+) -> DashboardDebugConsoleBlockPayload {
+    let mut raw_lines = debug_state
+        .recent_blocks
+        .iter()
+        .flat_map(|block| block.lines.iter().cloned())
+        .collect::<Vec<_>>();
+    if raw_lines.len() > 18 {
+        raw_lines.drain(0..(raw_lines.len() - 18));
+    }
+    let lines = if raw_lines.is_empty() {
+        vec!["[event] none raw_event_buffer=empty".to_owned()]
+    } else {
+        raw_lines
+            .into_iter()
+            .map(|line| format!("[event] {line}"))
+            .collect()
+    };
+    DashboardDebugConsoleBlockPayload {
+        id: "raw-events".to_owned(),
+        kind: "events",
+        started_at: now.to_owned(),
+        header: format!("{now} RAW EVENTS"),
+        lines,
+    }
+}
+
+fn format_duration_ms(duration_ms: i64) -> String {
+    if duration_ms < 1_000 {
+        format!("{duration_ms}ms")
+    } else {
+        format!("{:.2}s", duration_ms as f64 / 1_000.0)
+    }
+}
+
+fn turn_summary_hint(turn: &DebugConsoleBlock) -> &'static str {
+    match turn.status {
+        "running" if turn.tool_calls > 0 && turn.first_delta_at_ms.is_none() => {
+            "waiting_for_tool_result"
+        }
+        "running" if turn.first_delta_at_ms.is_some() => "streaming_response",
+        "running" => "thinking",
+        "completed" => "turn_completed",
+        "failed" => "review_last_failure",
+        _ => "idle and waiting for the next turn",
+    }
 }
 
 fn snapshot_debug_state(state: &WebApiState) -> DebugConsoleRuntimeState {
@@ -139,6 +282,7 @@ fn build_log_output_block() -> Option<DashboardDebugConsoleBlockPayload> {
         default_web_log_root().join("web-dev.err.log"),
         8,
     );
+    let lines = normalize_process_output_lines(lines);
 
     (!lines.is_empty()).then(|| DashboardDebugConsoleBlockPayload {
         id: "process-output".to_owned(),
@@ -150,6 +294,42 @@ fn build_log_output_block() -> Option<DashboardDebugConsoleBlockPayload> {
         ),
         lines,
     })
+}
+
+fn normalize_process_output_lines(lines: Vec<String>) -> Vec<String> {
+    let mut filtered = Vec::with_capacity(lines.len());
+    let mut suppressed_optional_repo_note_warnings = 0usize;
+
+    for line in lines {
+        if is_optional_repo_note_probe_warning(line.as_str()) {
+            suppressed_optional_repo_note_warnings += 1;
+            continue;
+        }
+        filtered.push(line);
+    }
+
+    if suppressed_optional_repo_note_warnings > 0 {
+        filtered.insert(
+            0,
+            format!(
+                "[web-api:noise] suppressed={} optional repo note lookup warnings",
+                suppressed_optional_repo_note_warnings
+            ),
+        );
+    }
+
+    filtered
+}
+
+fn is_optional_repo_note_probe_warning(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized.contains("[web-api:err]")
+        && normalized.contains("requested_tool_name=file.read")
+        && normalized.contains("canonical_tool_name=file.read")
+        && normalized.contains("os error 2")
+        && ["tools.md", "soul.md", "identity.md", "user.md"]
+            .iter()
+            .any(|needle| normalized.contains(needle))
 }
 
 fn default_web_log_root() -> PathBuf {

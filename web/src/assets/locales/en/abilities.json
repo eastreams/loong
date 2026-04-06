@@ -1,0 +1,244 @@
+﻿{
+    "abilities":  {
+                      "navLabel":  "Abilities sections",
+                      "common":  {
+                                     "loading":  "Loading current data...",
+                                     "loadFailed":  "This section could not be loaded right now.",
+                                     "retry":  "Retry",
+                                     "noData":  "No data available yet.",
+                                     "notConfigured":  "Not configured yet",
+                                     "notAvailable":  "Not available",
+                                     "enabled":  "Enabled",
+                                     "disabled":  "Disabled",
+                                     "yes":  "Yes",
+                                     "no":  "No"
+                                 },
+                      "sections":  {
+                                       "personalization":  {
+                                                               "title":  "Personalization",
+                                                               "summary":  "Operator preferences and long-running style defaults.",
+                                                               "description":  "Current operator preference values and long-running style defaults."
+                                                           },
+                                       "channels":  {
+                                                        "title":  "Channels",
+                                                        "summary":  "Channel surfaces, bridge sources, and readiness.",
+                                                        "description":  "A read-only snapshot of channel surfaces, configured accounts, and service readiness."
+                                                    },
+                                       "skills":  {
+                                                      "title":  "Skills",
+                                                      "summary":  "Skills, external skills, and capability sources.",
+                                                      "description":  "Visible runtime tools, browser companion status, and external skill policy are summarized here."
+                                                  },
+                                       "mascot":  {
+                                                      "title":  "Mascot",
+                                                      "summary":  "Experimental chat mascot visibility toggle.",
+                                                      "description":  "Control whether the experimental chat mascot is shown."
+                                                  }
+                                   },
+                      "mascot":  {
+                                     "introTitle":  "Mascot",
+                                     "settingsTitle":  "Display settings",
+                                     "helper":  "This is an experimental feature and stays off by default.",
+                                     "fields":  {
+                                                    "display":  "Show chat mascot"
+                                                },
+                                     "actions":  {
+                                                    "show":  "Show mascot",
+                                                    "hide":  "Hide mascot"
+                                                }
+                                 },
+                      "personalization":  {
+                                              "introTitle":  "Personalization",
+                                              "snapshotTitle":  "Current personalization",
+                                              "statusTitle":  "Prompt and profile state",
+                                              "fields":  {
+                                                             "currentState":  "Current state",
+                                                             "preferredName":  "Preferred name",
+                                                             "responseDensity":  "Response density",
+                                                             "initiativeLevel":  "Initiative level",
+                                                             "standingBoundaries":  "Standing boundaries",
+                                                             "locale":  "Locale",
+                                                             "timezone":  "Timezone",
+                                                             "profileState":  "Profile state",
+                                                             "operatorPreferences":  "Operator preferences",
+                                                             "promptState":  "Prompt state",
+                                                             "suggestions":  "Suggestions",
+                                                             "updatedAt":  "Last updated"
+                                                         },
+                                              "actions":  {
+                                                              "edit":  "Edit",
+                                                              "cancel":  "Return",
+                                                              "save":  "Save",
+                                                              "savePending":  "Saving...",
+                                                              "saved":  "Personalization saved.",
+                                                              "saveFailed":  "Personalization could not be saved."
+                                                          },
+                                              "values":  {
+                                                             "stateConfigured":  "Configured",
+                                                             "stateDeferred":  "Deferred",
+                                                             "stateSuppressed":  "Suppressed",
+                                                             "statePending":  "Pending",
+                                                             "profileConfigured":  "Configured",
+                                                             "profilePending":  "Pending",
+                                                             "preferencesPresent":  "Present",
+                                                             "preferencesAbsent":  "Not captured",
+                                                             "suggestionsActive":  "Active",
+                                                             "suggestionsSuppressed":  "Suppressed",
+                                                             "promptConfigured":  "Configured",
+                                                             "promptSuppressed":  "Suppressed",
+                                                             "promptDeferred":  "Deferred",
+                                                             "promptPending":  "Pending",
+                                                             "responseDensityConcise":  "Concise",
+                                                             "responseDensityBalanced":  "Balanced",
+                                                             "responseDensityThorough":  "Thorough",
+                                                             "initiativeAskBeforeActing":  "Ask before acting",
+                                                             "initiativeBalanced":  "Balanced",
+                                                             "initiativeHigh":  "High initiative",
+                                                             "unset":  "Leave unset"
+                                                         }
+                                          },
+                      "channels":  {
+                                       "introTitle":  "Channels",
+                                       "summaryTitle":  "Channel summary",
+                                       "surfacesTitle":  "Channel surfaces",
+                                       "defaultAccount":  "Default account: {{accountId}}",
+                                       "noSurfaces":  "No channel surfaces were discovered.",
+                                       "fields":  {
+                                                      "catalogChannels":  "Catalog channels",
+                                                      "configuredChannels":  "Configured channels",
+                                                      "configuredAccounts":  "Configured accounts",
+                                                      "enabledAccounts":  "Enabled accounts",
+                                                      "misconfiguredAccounts":  "Misconfigured accounts",
+                                                      "runtimeBackedChannels":  "Runtime-backed channels",
+                                                      "serviceEnabledChannels":  "Service-enabled channels",
+                                                      "serviceReadyChannels":  "Service-ready channels"
+                                                  },
+                                       "values":  {
+                                                      "runtimeBacked":  "Runtime-backed",
+                                                      "pluginBacked":  "Plugin-backed",
+                                                      "stub":  "Stub"
+                                                  },
+                                       "surfaceFacts":  {
+                                                            "accounts":  "{{count}} accounts",
+                                                            "enabled":  "{{count}} enabled",
+                                                            "sendReady":  "{{count}} send-ready",
+                                                            "serveReady":  "{{count}} serve-ready",
+                                                            "misconfigured":  "{{count}} misconfigured",
+                                                            "clean":  "No misconfiguration",
+                                                            "serviceReady":  "Service ready",
+                                                            "serviceEnabled":  "Service enabled",
+                                                            "serviceDisabled":  "Service disabled"
+                                                        }
+                                   },
+                      "skills":  {
+                                     "introTitle":  "Skills",
+                                     "runtimeTitle":  "Runtime skills",
+                                     "externalTitle":  "External skills",
+                                     "visibleToolsTitle":  "Visible runtime tools",
+                                     "noVisibleTools":  "No visible runtime tools were reported.",
+                                     "sources":  {
+                                                     "session":  "Session",
+                                                     "execution":  "Execution",
+                                                     "browser":  "Browser",
+                                                     "local":  "Local",
+                                                     "provider":  "Provider",
+                                                     "delegation":  "Delegation",
+                                                     "approval":  "Approval",
+                                                     "external":  "External skills",
+                                                     "system":  "System",
+                                                     "runtime":  "Runtime"
+                                                 },
+                                     "toolLabels":  {
+                                                        "approvalRequestResolve":  "Approval resolve",
+                                                        "approvalRequestStatus":  "Approval status",
+                                                        "approvalRequestsList":  "Approval list",
+                                                        "bashExec":  "Bash execution",
+                                                        "browserClick":  "Browser click",
+                                                        "browserExtract":  "Browser extract",
+                                                        "browserOpen":  "Browser open",
+                                                        "clawMigrate":  "Claw migrate",
+                                                        "delegate":  "Delegate",
+                                                        "delegateAsync":  "Async delegate",
+                                                        "externalSkillsPolicy":  "External skills policy",
+                                                        "fileEdit":  "File edit",
+                                                        "fileRead":  "File read",
+                                                        "fileWrite":  "File write",
+                                                        "providerSwitch":  "Provider switch",
+                                                        "sessionEvents":  "Session events",
+                                                        "sessionSearch":  "Session search",
+                                                        "sessionStatus":  "Session status",
+                                                        "sessionToolPolicyStatus":  "Session tool policy",
+                                                        "sessionWait":  "Session wait",
+                                                        "sessionsHistory":  "Session history",
+                                                        "sessionsList":  "Session list",
+                                                        "shellExec":  "Shell execution",
+                                                        "toolInvoke":  "Tool invoke",
+                                                        "toolSearch":  "Tool search",
+                                                        "webFetch":  "Web fetch",
+                                                        "webSearch":  "Web search"
+                                                    },
+                                     "toolSummaries":  {
+                                                           "approvalRequestResolve":  "Resolve pending approval requests for runtime actions.",
+                                                           "approvalRequestStatus":  "Inspect the current state of an approval request.",
+                                                           "approvalRequestsList":  "List approval requests visible to the current operator.",
+                                                           "bashExec":  "Execute Bash commands under tool governance.",
+                                                           "browserClick":  "Perform click actions in a browser page.",
+                                                           "browserExtract":  "Extract structured content from a browser page.",
+                                                           "browserOpen":  "Open and navigate browser pages.",
+                                                           "clawMigrate":  "Run migration or compatibility repair actions.",
+                                                           "delegate":  "Delegate work to a child session.",
+                                                           "delegateAsync":  "Start delegated child sessions asynchronously.",
+                                                           "externalSkillsPolicy":  "Inspect or adjust external skill exposure policy.",
+                                                           "fileEdit":  "Edit local files within the allowed root.",
+                                                           "fileRead":  "Read local files within the allowed root.",
+                                                           "fileWrite":  "Write local files within the allowed root.",
+                                                           "providerSwitch":  "Switch the active provider.",
+                                                           "sessionEvents":  "Inspect recorded session events.",
+                                                           "sessionSearch":  "Search visible historical sessions and events.",
+                                                           "sessionStatus":  "Inspect the current state of a visible session.",
+                                                           "sessionToolPolicyStatus":  "Inspect session tool policy and visibility limits.",
+                                                           "sessionWait":  "Wait for an async session to reach its next state.",
+                                                           "sessionsHistory":  "Read conversation history from visible sessions.",
+                                                           "sessionsList":  "List currently visible sessions.",
+                                                           "shellExec":  "Execute through the shell command surface.",
+                                                           "toolInvoke":  "Invoke a discovered runtime tool.",
+                                                           "toolSearch":  "Search the currently visible tool catalog.",
+                                                           "webFetch":  "Fetch and read web page content.",
+                                                           "webSearch":  "Run web search through the configured provider."
+                                                       },
+                                     "fields":  {
+                                                    "visibleRuntimeTools":  "Visible runtime tools",
+                                                    "browserCompanionEnabled":  "Browser companion enabled",
+                                                    "browserCompanionReady":  "Browser companion ready",
+                                                    "commandConfigured":  "Command configured",
+                                                    "executionTier":  "Execution tier",
+                                                    "expectedVersion":  "Expected version",
+                                                    "timeoutSeconds":  "Timeout",
+                                                    "externalSkillsEnabled":  "External skills enabled",
+                                                    "inventoryStatus":  "Inventory status",
+                                                    "resolvedSkillCount":  "Resolved skills",
+                                                    "shadowedSkillCount":  "Shadowed skills",
+                                                    "requireDownloadApproval":  "Download approval required",
+                                                    "autoExposeInstalled":  "Auto-expose installed",
+                                                    "overrideActive":  "Override active",
+                                                    "allowedDomainCount":  "Allowed domains",
+                                                    "blockedDomainCount":  "Blocked domains",
+                                                    "installRoot":  "Install root",
+                                                    "inventoryError":  "Inventory error"
+                                                },
+                                     "values":  {
+                                                    "ready":  "Ready",
+                                                    "notReady":  "Not ready",
+                                                    "executionLocal":  "Local runtime",
+                                                    "executionBrowserCompanion":  "Browser companion",
+                                                    "inventoryOk":  "Healthy",
+                                                    "inventoryMissing":  "Missing",
+                                                    "inventoryError":  "Error",
+                                                    "inventoryDisabled":  "Disabled",
+                                                    "toolSummaryFallback":  "Runtime capability surfaced as {{tool}}.",
+                                                    "timeoutSeconds_one":  "{{count}} second",
+                                                    "timeoutSeconds_other":  "{{count}} seconds"
+                                                }
+                                 }
+                  }
+}

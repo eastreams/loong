@@ -21,13 +21,46 @@ function classifyDebugLine(line: string): DebugLineTone {
   if (/^\[[^\]]+\]$/.test(trimmed)) {
     return "section";
   }
+  if (/^\[error\]/i.test(trimmed)) {
+    return "error";
+  }
+  if (/^\[hint\]/i.test(trimmed)) {
+    return "muted";
+  }
+  if (/^\[detail\]/i.test(trimmed)) {
+    return "plain";
+  }
+  if (/^\[latency\]/i.test(trimmed)) {
+    return "path";
+  }
+  if (/^\[event\]/i.test(trimmed)) {
+    return "muted";
+  }
+  if (/^\[web-api:noise\]/i.test(trimmed)) {
+    return "muted";
+  }
+  if (/^\[tool\]/i.test(trimmed)) {
+    if (/status=(ok|completed)/i.test(trimmed)) {
+      return "success";
+    }
+    if (/status=(error|failed|timeout)/i.test(trimmed)) {
+      return "error";
+    }
+    return "warn";
+  }
+  if (/^\[turn\]/i.test(trimmed)) {
+    if (/status=(completed|success)/i.test(trimmed)) {
+      return "success";
+    }
+    if (/status=(failed|error)/i.test(trimmed)) {
+      return "error";
+    }
+    return "warn";
+  }
   if (/\[(provider:error|web-api:err|web-dev:err)\]/i.test(trimmed)) {
     return "error";
   }
-  if (/\[(turn|tool)\]/i.test(trimmed)) {
-    return "warn";
-  }
-  if (/\[(runtime|config|provider|tools|web-api|web-dev)\]/i.test(trimmed)) {
+  if (/\[(runtime|config|provider|tools|web-api|web-dev|memory)\]/i.test(trimmed)) {
     return "section";
   }
   if (trimmed.startsWith("path=") || trimmed.includes(" path=")) {

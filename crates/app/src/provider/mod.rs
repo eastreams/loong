@@ -42,6 +42,7 @@ mod runtime_binding;
 mod shape;
 mod transport;
 
+pub(crate) use failover::parse_provider_failover_snapshot_payload;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{

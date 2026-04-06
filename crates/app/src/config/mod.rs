@@ -10,6 +10,7 @@ mod runtime;
 mod shared;
 mod tools;
 
+pub use crate::mcp::{McpConfig, McpServerConfig, McpServerTransportConfig};
 #[allow(unused_imports)]
 pub use audit::{AuditConfig, AuditMode};
 #[allow(unused_imports)]
@@ -93,11 +94,11 @@ pub use provider::{
 pub use runtime::{
     AcpBackendProfilesConfig, AcpConfig, AcpConversationRoutingMode, AcpDispatchConfig,
     AcpDispatchThreadRoutingMode, AcpxBackendConfig, AcpxMcpServerConfig,
-    ConfigValidationDiagnostic, LoongClawConfig, PROVIDER_SELECTOR_COMPACT_NOTE,
-    PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE, PROVIDER_SELECTOR_PLACEHOLDER,
-    PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef, ProviderSelectorResolution,
-    accepted_provider_selectors, default_config_path, default_loongclaw_home,
-    describe_provider_selector_target, load, normalize_validation_locale,
+    ConfigValidationDiagnostic, ControlPlaneConfig, LoongClawConfig,
+    PROVIDER_SELECTOR_COMPACT_NOTE, PROVIDER_SELECTOR_HUMAN_SUMMARY, PROVIDER_SELECTOR_NOTE,
+    PROVIDER_SELECTOR_PLACEHOLDER, PROVIDER_SELECTOR_TARGET_SUMMARY, ProviderSelectorProfileRef,
+    ProviderSelectorResolution, accepted_provider_selectors, default_config_path,
+    default_loongclaw_home, describe_provider_selector_target, load, normalize_validation_locale,
     preferred_provider_selector, provider_selector_catalog, provider_selector_recommendation_hint,
     render, resolve_provider_selector, supported_validation_locales, validate_file,
     validate_file_with_locale, write, write_template,
@@ -2749,6 +2750,13 @@ MCP_LOG = "warn"
         assert!(!config.emit_runtime_events);
         assert!(!config.allow_mcp_server_injection);
         assert!(config.acpx_profile().is_none());
+    }
+
+    #[test]
+    fn control_plane_defaults_are_loopback_safe() {
+        let config = ControlPlaneConfig::default();
+        assert!(!config.allow_remote);
+        assert_eq!(config.resolved_shared_token(), Ok(None));
     }
 
     #[test]

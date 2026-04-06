@@ -39,6 +39,7 @@ use tokio::{
 
 use crate::{CliResult, mvp, with_graceful_shutdown};
 
+mod abilities;
 mod auth;
 mod chat;
 mod dashboard;
@@ -47,6 +48,9 @@ mod install;
 mod onboarding;
 mod serve;
 
+use abilities::{
+    abilities_channels, abilities_personalization, abilities_personalization_save, abilities_skills,
+};
 use auth::{
     build_clear_pairing_cookie, build_clear_same_origin_session_cookie, build_pairing_cookie,
     build_same_origin_session_cookie, extract_allowed_local_origin, extract_request_token,
@@ -129,33 +133,103 @@ struct WebTurnEventSink {
 #[derive(Debug, Default, Clone)]
 struct DebugConsoleRuntimeState {
     recent_blocks: Vec<DebugConsoleBlock>,
+    recent_tool_activity: Vec<DebugToolActivity>,
+    active_tool_starts: HashMap<String, i64>,
+    last_failure: Option<DebugConsoleFailure>,
 }
 
 #[derive(Debug, Clone)]
 struct DebugConsoleBlock {
     id: String,
     kind: &'static str,
-    header: String,
-    started_at: String,
     lines: Vec<String>,
     tool_calls: usize,
     delta_chunks: usize,
     delta_chars: usize,
+    started_at_ms: i64,
+    first_delta_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    status: &'static str,
+    session_id: Option<String>,
+    failure_code: Option<String>,
+    failure_message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct DebugToolActivity {
+    id: String,
+    label: String,
+    outcome: &'static str,
+    detail: String,
+    duration_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct DebugConsoleFailure {
+    at: String,
+    category: &'static str,
+    detail: String,
+    hint: &'static str,
 }
 
 impl DebugConsoleBlock {
-    fn operation(id: String, kind: &'static str, header: String) -> Self {
-        let started_at = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
+    fn operation(id: String, kind: &'static str, _header: String) -> Self {
+        let started_at_ms = current_timestamp_ms();
         Self {
             id,
             kind,
-            header,
-            started_at,
             lines: Vec::new(),
             tool_calls: 0,
             delta_chunks: 0,
             delta_chars: 0,
+            started_at_ms,
+            first_delta_at_ms: None,
+            finished_at_ms: None,
+            status: "info",
+            session_id: None,
+            failure_code: None,
+            failure_message: None,
         }
+    }
+}
+
+fn current_timestamp_ms() -> i64 {
+    (OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64
+}
+
+fn upsert_debug_tool_activity(
+    activities: &mut Vec<DebugToolActivity>,
+    activity: DebugToolActivity,
+) {
+    if let Some(index) = activities.iter().position(|existing| existing.id == activity.id) {
+        activities.remove(index);
+    }
+    activities.push(activity);
+    if activities.len() > 8 {
+        let overflow = activities.len() - 8;
+        activities.drain(0..overflow);
+    }
+}
+
+fn classify_failure(code: &str, message: &str) -> (&'static str, &'static str) {
+    let normalized = format!("{code} {message}").to_lowercase();
+    if normalized.contains("policy") || normalized.contains("denied") {
+        ("policy", "review policy or approval settings")
+    } else if normalized.contains("timeout")
+        || normalized.contains("transport")
+        || normalized.contains("dns")
+        || normalized.contains("network")
+    {
+        ("network", "check route, proxy, or endpoint reachability")
+    } else if normalized.contains("runtime")
+        || normalized.contains("unavailable")
+        || normalized.contains("not ready")
+    {
+        ("runtime", "check runtime readiness and companion availability")
+    } else if normalized.contains("provider") || normalized.contains("credential") {
+        ("provider", "check provider endpoint and credentials")
+    } else {
+        ("turn", "inspect recent tool activity and raw events")
     }
 }
 
@@ -305,6 +379,100 @@ struct DashboardToolsPayload {
     shell_allow_count: usize,
     shell_deny_count: usize,
     items: Vec<DashboardToolItemPayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesPersonalizationPayload {
+    configured: bool,
+    has_operator_preferences: bool,
+    suppressed: bool,
+    prompt_state: &'static str,
+    updated_at: Option<String>,
+    preferred_name: Option<String>,
+    response_density: Option<&'static str>,
+    initiative_level: Option<&'static str>,
+    standing_boundaries: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesPersonalizationWriteRequest {
+    preferred_name: Option<String>,
+    response_density: Option<String>,
+    initiative_level: Option<String>,
+    standing_boundaries: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
+    prompt_state: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesChannelsPayload {
+    catalog_channel_count: usize,
+    configured_channel_count: usize,
+    configured_account_count: usize,
+    enabled_account_count: usize,
+    misconfigured_account_count: usize,
+    runtime_backed_channel_count: usize,
+    enabled_service_channel_count: usize,
+    ready_service_channel_count: usize,
+    surfaces: Vec<AbilitiesChannelSurfacePayload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesChannelSurfacePayload {
+    id: String,
+    label: String,
+    source: &'static str,
+    configured_account_count: usize,
+    enabled_account_count: usize,
+    misconfigured_account_count: usize,
+    ready_send_account_count: usize,
+    ready_serve_account_count: usize,
+    default_configured_account_id: Option<String>,
+    service_enabled: bool,
+    service_ready: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesSkillsPayload {
+    visible_runtime_tool_count: usize,
+    visible_runtime_tools: Vec<String>,
+    browser_companion: AbilitiesBrowserCompanionPayload,
+    external_skills: AbilitiesExternalSkillsPayload,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesBrowserCompanionPayload {
+    enabled: bool,
+    ready: bool,
+    command_configured: bool,
+    expected_version: Option<String>,
+    execution_tier: String,
+    timeout_seconds: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AbilitiesExternalSkillsPayload {
+    enabled: bool,
+    override_active: bool,
+    inventory_status: String,
+    inventory_error: Option<String>,
+    require_download_approval: bool,
+    auto_expose_installed: bool,
+    install_root: Option<String>,
+    allowed_domain_count: usize,
+    blocked_domain_count: usize,
+    resolved_skill_count: usize,
+    shadowed_skill_count: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -583,7 +751,7 @@ fn build_tool_items(
                 "discoverable"
             },
             detail: format!(
-                "{} visibility, list {} / history {}",
+                "{} visibility, list {} / history {} / search / status / events / wait",
                 match config.tools.sessions.visibility {
                     mvp::config::SessionVisibility::SelfOnly => "self",
                     mvp::config::SessionVisibility::Children => "children",
@@ -1198,6 +1366,8 @@ fn record_turn_started(state: &Arc<WebApiState>, session_id: &str, turn_id: &str
         "turn",
         format!("{started_at} dialogue {turn_id}"),
     );
+    block.status = "running";
+    block.session_id = Some(session_id.to_owned());
     block.lines.push(format!(
         "{started_at} turn.started session={session_id} turn={turn_id}"
     ));
@@ -1217,6 +1387,7 @@ fn record_message_delta(state: &Arc<WebApiState>, turn_id: &str, delta: &str) {
     last_turn.delta_chunks += 1;
     last_turn.delta_chars += delta.chars().count();
     if last_turn.delta_chunks == 1 {
+        last_turn.first_delta_at_ms = Some(current_timestamp_ms());
         last_turn.lines.push(format!(
             "{} message.delta first_chunk chars={}",
             format_timestamp(OffsetDateTime::now_utc().unix_timestamp()),
@@ -1235,6 +1406,10 @@ fn record_tool_started(
     let Ok(mut debug) = state.debug_state.lock() else {
         return;
     };
+    let tool_key = format!("{turn_id}:{tool_id}");
+    debug
+        .active_tool_starts
+        .insert(tool_key.clone(), current_timestamp_ms());
     if let Some(last_turn) =
         find_debug_block_mut(&mut debug.recent_blocks, &format!("turn:{turn_id}"))
     {
@@ -1246,6 +1421,16 @@ fn record_tool_started(
             tool_id
         ));
     }
+    upsert_debug_tool_activity(
+        &mut debug.recent_tool_activity,
+        DebugToolActivity {
+            id: tool_key,
+            label: label.to_owned(),
+            outcome: "running",
+            detail: "started".to_owned(),
+            duration_ms: None,
+        },
+    );
     let _ = session_id;
 }
 
@@ -1261,6 +1446,10 @@ fn record_tool_finished(
         return;
     };
     let at = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
+    let duration_ms = debug
+        .active_tool_starts
+        .remove(&format!("{turn_id}:{tool_id}"))
+        .map(|started_at| current_timestamp_ms().saturating_sub(started_at));
     if let Some(last_turn) =
         find_debug_block_mut(&mut debug.recent_blocks, &format!("turn:{turn_id}"))
     {
@@ -1268,6 +1457,20 @@ fn record_tool_finished(
             "{at} tool.finished {label} ({tool_id}) outcome={outcome}"
         ));
     }
+    upsert_debug_tool_activity(
+        &mut debug.recent_tool_activity,
+        DebugToolActivity {
+            id: format!("{turn_id}:{tool_id}"),
+            label: label.to_owned(),
+            outcome: if outcome == "ok" { "ok" } else { "error" },
+            detail: if outcome == "ok" {
+                "completed".to_owned()
+            } else {
+                format!("failed outcome={outcome}")
+            },
+            duration_ms,
+        },
+    );
     let _ = session_id;
 }
 
@@ -1280,6 +1483,8 @@ fn record_turn_completed(state: &Arc<WebApiState>, turn_id: &str) {
     else {
         return;
     };
+    last_turn.status = "completed";
+    last_turn.finished_at_ms = Some(current_timestamp_ms());
     last_turn.lines.push(format!(
         "{} turn.completed delta_chunks={} delta_chars={} tool_calls={}",
         format_timestamp(OffsetDateTime::now_utc().unix_timestamp()),
@@ -1293,6 +1498,9 @@ fn record_turn_completed(state: &Arc<WebApiState>, turn_id: &str) {
             format_timestamp(OffsetDateTime::now_utc().unix_timestamp())
         ));
     }
+    debug
+        .active_tool_starts
+        .retain(|key, _| !key.starts_with(&format!("{turn_id}:")));
 }
 
 fn record_turn_failed(
@@ -1306,9 +1514,14 @@ fn record_turn_failed(
         return;
     };
     let at = format_timestamp(OffsetDateTime::now_utc().unix_timestamp());
+    let (category, hint) = classify_failure(code, message);
     if let Some(last_turn) =
         find_debug_block_mut(&mut debug.recent_blocks, &format!("turn:{turn_id}"))
     {
+        last_turn.status = "failed";
+        last_turn.finished_at_ms = Some(current_timestamp_ms());
+        last_turn.failure_code = Some(code.to_owned());
+        last_turn.failure_message = Some(message.to_owned());
         last_turn.lines.push(format!(
             "{} turn.failed code={} tool_calls={} message={}",
             at,
@@ -1323,6 +1536,33 @@ fn record_turn_failed(
             ));
         }
     }
+    let interrupted_keys = debug
+        .active_tool_starts
+        .iter()
+        .filter_map(|(key, started_at)| {
+            key.starts_with(&format!("{turn_id}:"))
+                .then_some((key.clone(), *started_at))
+        })
+        .collect::<Vec<_>>();
+    for (tool_key, started_at) in interrupted_keys {
+        debug.active_tool_starts.remove(&tool_key);
+        upsert_debug_tool_activity(
+            &mut debug.recent_tool_activity,
+            DebugToolActivity {
+                id: tool_key,
+                label: "tool".to_owned(),
+                outcome: "error",
+                detail: "interrupted".to_owned(),
+                duration_ms: Some(current_timestamp_ms().saturating_sub(started_at)),
+            },
+        );
+    }
+    debug.last_failure = Some(DebugConsoleFailure {
+        at,
+        category,
+        detail: truncate_debug_value(message, 180),
+        hint,
+    });
     let _ = session_id;
 }
 

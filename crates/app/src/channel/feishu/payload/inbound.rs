@@ -210,7 +210,8 @@ pub(in crate::channel::feishu) fn parse_feishu_inbound_payload(
         .map(str::to_owned)
         .unwrap_or_else(|| format!("message:{message_id}"));
 
-    let mut reply_target = ChannelOutboundTarget::feishu_message_reply(message_id.to_owned());
+    let mut reply_target = ChannelOutboundTarget::feishu_message_reply(message_id.to_owned())
+        .with_feishu_reply_chat_id(chat_id.to_owned());
     if thread_id.is_some() {
         reply_target = reply_target.with_feishu_reply_in_thread(true);
     }

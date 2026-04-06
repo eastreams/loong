@@ -10,7 +10,9 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("clock should be after epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp_dir = dunce::canonicalize(&temp_dir).unwrap_or(temp_dir);
+    canonical_temp_dir.join(format!("{prefix}-{nanos}"))
 }
 
 fn isolated_home_guard(prefix: &str) -> (PathBuf, MigrationEnvironmentGuard) {
@@ -333,8 +335,8 @@ fn run_migrate_cli_apply_mode_rejects_output_path_outside_configured_file_root()
     .expect_err("policy root should deny writing outside configured file root");
 
     assert!(
-        error.contains("policy_denied"),
-        "expected policy denial, got: {error}"
+        error.starts_with("policy_denied: "),
+        "expected normalized policy denial prefix, got: {error}"
     );
 
     fs::remove_dir_all(&policy_root).ok();
@@ -386,5 +388,20 @@ fn migrate_cli_ux_help_mentions_mode_specific_required_flags() {
     assert!(
         stdout.contains("rollback_last_apply: requires `--output`"),
         "help should mention rollback requirements, got: {stdout}"
+    );
+}
+
+#[test]
+fn root_help_lists_migrate_with_config_import_wording() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_loongclaw"))
+        .arg("--help")
+        .output()
+        .expect("run loongclaw --help");
+
+    assert!(output.status.success(), "help should succeed");
+    let stdout = String::from_utf8(output.stdout).expect("help output should be utf8");
+    assert!(
+        stdout.contains("Preview or apply config import modes explicitly"),
+        "root help should expose the updated migrate summary, got: {stdout}"
     );
 }

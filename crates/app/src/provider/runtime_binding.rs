@@ -54,13 +54,14 @@ impl<'a> ProviderRuntimeBinding<'a> {
 
 #[cfg(test)]
 mod tests {
+    use crate::context::bootstrap_test_kernel_context;
+
     use super::ProviderRuntimeBinding;
 
     #[test]
     fn provider_runtime_binding_labels_are_stable() {
-        let kernel_context =
-            crate::context::bootstrap_test_kernel_context("runtime-binding-test", 60)
-                .expect("kernel context should bootstrap");
+        let kernel_context = bootstrap_test_kernel_context("runtime-binding-test", 60)
+            .expect("kernel context should bootstrap");
         let binding = ProviderRuntimeBinding::kernel(&kernel_context);
 
         assert_eq!(ProviderRuntimeBinding::direct().as_str(), "advisory_only");

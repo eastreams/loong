@@ -9,8 +9,8 @@
 //! tools/ (generic handlers)
 //!     ↓ uses dyn Trait
 //! channel/traits/ (this module)
-//!     - MessagingApi
-//!     - DocumentsApi  
+//!     - MessageSendApi / MessageQueryApi / ...
+//!     - MessagingApi / DocumentsApi compatibility surfaces
 //!     - CalendarApi
 //!     ↓ implemented by
 //! channel/{platform}/ (platform implementations)
@@ -27,6 +27,7 @@
 //! 5. **Send + Sync**: All trait objects are thread-safe for runtime use
 //! 6. **Routing reuse**: Messaging traits reuse normalized channel targets and sessions
 //!    instead of introducing a second routing vocabulary
+//! 7. **Additive refinement**: Narrow capability traits coexist with wider compatibility traits
 
 pub mod calendar;
 pub mod documents;
@@ -35,8 +36,12 @@ pub mod messaging;
 
 // Re-export commonly used types
 pub use calendar::{Availability, CalendarApi, CalendarEvent, TimeRange};
-pub use documents::{Document, DocumentContent, DocumentsApi};
+pub use documents::{
+    Document, DocumentAppendApi, DocumentContent, DocumentCreateApi, DocumentReadApi,
+    DocumentSearchApi, DocumentsApi,
+};
 pub use error::{ApiError, ApiResult};
 pub use messaging::{
-    Message, MessageContent, MessagingApi, Pagination, RichMessagingApi, SendOptions,
+    Message, MessageContent, MessageDeleteApi, MessageEditApi, MessageQueryApi, MessageSendApi,
+    MessagingApi, Pagination, RichMessagingApi, SendOptions,
 };

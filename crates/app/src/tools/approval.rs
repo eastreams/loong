@@ -15,7 +15,8 @@ use crate::operator::approval_runtime::OperatorApprovalRuntime;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalDecision, ApprovalGrantRecord, ApprovalRequestRecord, ApprovalRequestStatus,
-    SessionRepository,
+    NewApprovalGrantRecord, NewSessionToolConsentRecord, SessionRepository,
+    TransitionApprovalRequestIfCurrentRequest,
 };
 
 #[cfg(feature = "memory-sqlite")]
@@ -55,10 +56,24 @@ pub(crate) struct ApprovalResolutionOutcome {
 #[cfg(feature = "memory-sqlite")]
 #[async_trait]
 pub(crate) trait ApprovalResolutionRuntime: Send + Sync {
-    async fn resolve_approval_request(
+    fn can_replay_approved_request(&self) -> bool {
+        true
+    }
+
+    fn ensure_resolution_binding_allows_decision(
         &self,
-        request: ApprovalResolutionRequest,
-    ) -> Result<ApprovalResolutionOutcome, String>;
+        approval_request: &ApprovalRequestRecord,
+        decision: ApprovalDecision,
+    ) -> Result<(), String> {
+        let _ = approval_request;
+        let _ = decision;
+        Ok(())
+    }
+
+    async fn replay_approved_request(
+        &self,
+        approval_request: &ApprovalRequestRecord,
+    ) -> Result<ToolCoreOutcome, String>;
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -532,15 +547,15 @@ async fn execute_approval_request_resolve(
     runtime: &(dyn ApprovalResolutionRuntime + '_),
 ) -> Result<ToolCoreOutcome, String> {
     let request = parse_approval_request_resolve_request(&payload)?;
-    let outcome = runtime
-        .resolve_approval_request(ApprovalResolutionRequest {
-            current_session_id: current_session_id.to_owned(),
-            approval_request_id: request.approval_request_id,
-            decision: request.decision,
-            session_consent_mode: request.session_consent_mode,
-            visibility: tool_config.sessions.visibility,
-        })
-        .await?;
+    let resolution_request = ApprovalResolutionRequest {
+        current_session_id: current_session_id.to_owned(),
+        approval_request_id: request.approval_request_id,
+        decision: request.decision,
+        session_consent_mode: request.session_consent_mode,
+        visibility: tool_config.sessions.visibility,
+    };
+    let outcome =
+        resolve_approval_request_with_runtime(config, runtime, resolution_request).await?;
     let repo = SessionRepository::new(config)?;
     let attention = derive_attention_view(&repo, &outcome.approval_request)?;
 
@@ -552,6 +567,379 @@ async fn execute_approval_request_resolve(
             "resumed_tool_output": outcome.resumed_tool_output,
         }),
     })
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn resolve_approval_request_with_runtime(
+    config: &MemoryRuntimeConfig,
+    runtime: &(dyn ApprovalResolutionRuntime + '_),
+    request: ApprovalResolutionRequest,
+) -> Result<ApprovalResolutionOutcome, String> {
+    let repo = SessionRepository::new(config)?;
+    let approval_request = load_visible_approval_request(&repo, &request)?;
+
+    runtime.ensure_resolution_binding_allows_decision(&approval_request, request.decision)?;
+
+    match request.decision {
+        ApprovalDecision::Deny => {
+            resolve_denied_approval_request(&repo, &request, &approval_request)
+        }
+        ApprovalDecision::ApproveOnce => {
+            let approved = transition_approval_request_to_approved(
+                &repo,
+                &request,
+                ApprovalDecision::ApproveOnce,
+                approval_request,
+            )?;
+            persist_session_consent_if_requested(
+                &repo,
+                &approved,
+                &request.current_session_id,
+                request.session_consent_mode,
+            )?;
+            finish_approved_resolution(&repo, runtime, approved).await
+        }
+        ApprovalDecision::ApproveAlways => {
+            let approved = transition_approval_request_to_approved(
+                &repo,
+                &request,
+                ApprovalDecision::ApproveAlways,
+                approval_request,
+            )?;
+            persist_runtime_grant_for_approved_request(
+                &repo,
+                &approved,
+                &request.current_session_id,
+            )?;
+            finish_approved_resolution(&repo, runtime, approved).await
+        }
+    }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn load_visible_approval_request(
+    repo: &SessionRepository,
+    request: &ApprovalResolutionRequest,
+) -> Result<ApprovalRequestRecord, String> {
+    let approval_request = repo
+        .load_approval_request(&request.approval_request_id)?
+        .ok_or_else(|| {
+            format!(
+                "approval_request_not_found: `{}`",
+                request.approval_request_id
+            )
+        })?;
+
+    let is_visible = match request.visibility {
+        SessionVisibility::SelfOnly => request.current_session_id == approval_request.session_id,
+        SessionVisibility::Children => {
+            let current_session_id = request.current_session_id.as_str();
+            let target_session_id = approval_request.session_id.as_str();
+            let same_session = current_session_id == target_session_id;
+            if same_session {
+                true
+            } else {
+                repo.is_session_visible(current_session_id, target_session_id)?
+            }
+        }
+    };
+
+    if !is_visible {
+        let current_session_id = request.current_session_id.as_str();
+        let target_session_id = approval_request.session_id.as_str();
+        let error = format!(
+            "visibility_denied: session `{target_session_id}` is not visible from `{current_session_id}`"
+        );
+        return Err(error);
+    }
+
+    Ok(approval_request)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_not_pending_error(approval_request: &ApprovalRequestRecord) -> String {
+    let approval_request_id = approval_request.approval_request_id.as_str();
+    let status = approval_request.status.as_str();
+    format!("approval_request_not_pending: `{approval_request_id}` is already {status}")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn transition_approval_request_to_approved(
+    repo: &SessionRepository,
+    request: &ApprovalResolutionRequest,
+    expected_decision: ApprovalDecision,
+    approval_request: ApprovalRequestRecord,
+) -> Result<ApprovalRequestRecord, String> {
+    let approval_request_id = request.approval_request_id.as_str();
+    let resolved_by_session_id = request.current_session_id.clone();
+    let updated = repo.transition_approval_request_if_current(
+        approval_request_id,
+        TransitionApprovalRequestIfCurrentRequest {
+            expected_status: ApprovalRequestStatus::Pending,
+            next_status: ApprovalRequestStatus::Approved,
+            decision: Some(expected_decision),
+            resolved_by_session_id: Some(resolved_by_session_id),
+            executed_at: None,
+            last_error: None,
+        },
+    )?;
+
+    let Some(approved) = updated else {
+        return resume_existing_approved_request(
+            repo,
+            request,
+            approval_request,
+            expected_decision,
+        );
+    };
+
+    Ok(approved)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resume_existing_approved_request(
+    repo: &SessionRepository,
+    request: &ApprovalResolutionRequest,
+    approval_request: ApprovalRequestRecord,
+    expected_decision: ApprovalDecision,
+) -> Result<ApprovalRequestRecord, String> {
+    if approval_request.status != ApprovalRequestStatus::Approved {
+        let error = approval_request_not_pending_error(&approval_request);
+        return Err(error);
+    }
+
+    let recorded_decision = approval_request.decision.ok_or_else(|| {
+        let approval_request_id = request.approval_request_id.as_str();
+        format!("approval_request_missing_decision: `{approval_request_id}` is approved")
+    })?;
+
+    if recorded_decision != expected_decision {
+        let approval_request_id = request.approval_request_id.as_str();
+        let recorded_decision_name = recorded_decision.as_str();
+        let expected_decision_name = expected_decision.as_str();
+        let error = format!(
+            "approval_request_decision_mismatch: `{approval_request_id}` is already `{recorded_decision_name}`, expected `{expected_decision_name}`"
+        );
+        return Err(error);
+    }
+
+    if expected_decision == ApprovalDecision::ApproveAlways {
+        persist_runtime_grant_for_approved_request(
+            repo,
+            &approval_request,
+            &request.current_session_id,
+        )?;
+    }
+
+    persist_session_consent_if_requested(
+        repo,
+        &approval_request,
+        &request.current_session_id,
+        request.session_consent_mode,
+    )?;
+
+    Ok(approval_request)
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn resolve_denied_approval_request(
+    repo: &SessionRepository,
+    request: &ApprovalResolutionRequest,
+    approval_request: &ApprovalRequestRecord,
+) -> Result<ApprovalResolutionOutcome, String> {
+    if approval_request.status != ApprovalRequestStatus::Pending {
+        let error = approval_request_not_pending_error(approval_request);
+        return Err(error);
+    }
+
+    let approval_request_id = request.approval_request_id.as_str();
+    let resolved_by_session_id = request.current_session_id.clone();
+    let denied = repo.transition_approval_request_if_current(
+        approval_request_id,
+        TransitionApprovalRequestIfCurrentRequest {
+            expected_status: ApprovalRequestStatus::Pending,
+            next_status: ApprovalRequestStatus::Denied,
+            decision: Some(ApprovalDecision::Deny),
+            resolved_by_session_id: Some(resolved_by_session_id),
+            executed_at: None,
+            last_error: None,
+        },
+    )?;
+
+    let Some(denied) = denied else {
+        let latest = repo
+            .load_approval_request(approval_request_id)?
+            .ok_or_else(|| {
+                format!(
+                    "approval_request_not_found: `{}`",
+                    request.approval_request_id
+                )
+            })?;
+        let error = approval_request_not_pending_error(&latest);
+        return Err(error);
+    };
+
+    Ok(ApprovalResolutionOutcome {
+        approval_request: denied,
+        resumed_tool_output: None,
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_runtime_grant_for_approved_request(
+    repo: &SessionRepository,
+    approval_request: &ApprovalRequestRecord,
+    current_session_id: &str,
+) -> Result<(), String> {
+    let scope_session_id = approval_request_scope_session_id(repo, approval_request)?;
+
+    let grant_record = NewApprovalGrantRecord {
+        scope_session_id,
+        approval_key: approval_request.approval_key.clone(),
+        created_by_session_id: Some(current_session_id.to_owned()),
+    };
+
+    repo.upsert_approval_grant(grant_record)?;
+
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn persist_session_consent_if_requested(
+    repo: &SessionRepository,
+    approval_request: &ApprovalRequestRecord,
+    current_session_id: &str,
+    session_consent_mode: Option<ToolConsentMode>,
+) -> Result<(), String> {
+    let Some(session_consent_mode) = session_consent_mode else {
+        return Ok(());
+    };
+
+    let scope_session_id = approval_request_scope_session_id(repo, approval_request)?;
+
+    let consent_record = NewSessionToolConsentRecord {
+        scope_session_id,
+        mode: session_consent_mode,
+        updated_by_session_id: Some(current_session_id.to_owned()),
+    };
+
+    repo.upsert_session_tool_consent(consent_record)?;
+
+    Ok(())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_parent_session_id(approval_request: &ApprovalRequestRecord) -> Option<&str> {
+    let parent_session_value = approval_request
+        .request_payload_json
+        .get("parent_session_id")
+        .and_then(Value::as_str);
+    let parent_session_value = parent_session_value.map(str::trim);
+
+    parent_session_value.filter(|parent_session_id| !parent_session_id.is_empty())
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn approval_request_scope_session_id(
+    repo: &SessionRepository,
+    approval_request: &ApprovalRequestRecord,
+) -> Result<String, String> {
+    let approval_runtime = OperatorApprovalRuntime::new(repo);
+    let parent_session_id = approval_request_parent_session_id(approval_request);
+    approval_runtime.grant_scope_session_id(&approval_request.session_id, parent_session_id)
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn finish_approved_resolution(
+    repo: &SessionRepository,
+    runtime: &(dyn ApprovalResolutionRuntime + '_),
+    approved: ApprovalRequestRecord,
+) -> Result<ApprovalResolutionOutcome, String> {
+    if !runtime.can_replay_approved_request() {
+        return Ok(ApprovalResolutionOutcome {
+            approval_request: approved,
+            resumed_tool_output: None,
+        });
+    }
+
+    let approval_request_id = approved.approval_request_id;
+    execute_approved_request(repo, runtime, approval_request_id.as_str()).await
+}
+
+#[cfg(feature = "memory-sqlite")]
+async fn execute_approved_request(
+    repo: &SessionRepository,
+    runtime: &(dyn ApprovalResolutionRuntime + '_),
+    approval_request_id: &str,
+) -> Result<ApprovalResolutionOutcome, String> {
+    let executing = repo.transition_approval_request_if_current(
+        approval_request_id,
+        TransitionApprovalRequestIfCurrentRequest {
+            expected_status: ApprovalRequestStatus::Approved,
+            next_status: ApprovalRequestStatus::Executing,
+            decision: None,
+            resolved_by_session_id: None,
+            executed_at: None,
+            last_error: None,
+        },
+    )?;
+
+    let Some(executing) = executing else {
+        let error =
+            format!("approval_request_not_approved: `{approval_request_id}` is no longer approved");
+        return Err(error);
+    };
+
+    let replay_result = runtime.replay_approved_request(&executing).await;
+    match replay_result {
+        Ok(resumed_tool_output) => {
+            let executed = repo.transition_approval_request_if_current(
+                approval_request_id,
+                TransitionApprovalRequestIfCurrentRequest {
+                    expected_status: ApprovalRequestStatus::Executing,
+                    next_status: ApprovalRequestStatus::Executed,
+                    decision: None,
+                    resolved_by_session_id: None,
+                    executed_at: Some(unix_ts_now()),
+                    last_error: None,
+                },
+            )?;
+
+            let Some(executed) = executed else {
+                let error = format!(
+                    "approval_request_not_executing: `{approval_request_id}` is no longer executing"
+                );
+                return Err(error);
+            };
+
+            Ok(ApprovalResolutionOutcome {
+                approval_request: executed,
+                resumed_tool_output: Some(resumed_tool_output),
+            })
+        }
+        Err(error) => {
+            let executed = repo.transition_approval_request_if_current(
+                approval_request_id,
+                TransitionApprovalRequestIfCurrentRequest {
+                    expected_status: ApprovalRequestStatus::Executing,
+                    next_status: ApprovalRequestStatus::Executed,
+                    decision: None,
+                    resolved_by_session_id: None,
+                    executed_at: Some(unix_ts_now()),
+                    last_error: Some(error.clone()),
+                },
+            )?;
+
+            if executed.is_none() {
+                let combined_error = format!(
+                    "approval_request_not_executing: `{approval_request_id}` is no longer executing; original replay error: {error}"
+                );
+                return Err(combined_error);
+            }
+
+            Err(error)
+        }
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -948,13 +1336,17 @@ fn parse_approval_decision(value: &str) -> Result<ApprovalDecision, String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::{Arc, Mutex};
 
+    use async_trait::async_trait;
+    use loongclaw_contracts::ToolCoreOutcome;
     use loongclaw_contracts::ToolCoreRequest;
     #[cfg(feature = "memory-sqlite")]
     use rusqlite::{Connection, params};
     use serde_json::Value;
     use serde_json::json;
 
+    use super::*;
     use crate::config::ToolConfig;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
@@ -1113,6 +1505,78 @@ mod tests {
             params![session_id],
         )
         .expect("delete session row");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[derive(Clone)]
+    struct MockApprovalResolutionRuntime {
+        binding_error: Option<String>,
+        can_replay: bool,
+        replay_result: Result<ToolCoreOutcome, String>,
+        replayed_request_ids: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    impl MockApprovalResolutionRuntime {
+        fn succeeds_with(payload: Value) -> Self {
+            let outcome = ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload,
+            };
+            Self {
+                binding_error: None,
+                can_replay: true,
+                replay_result: Ok(outcome),
+                replayed_request_ids: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn without_replay(mut self) -> Self {
+            self.can_replay = false;
+            self
+        }
+
+        fn replayed_request_ids(&self) -> Vec<String> {
+            let guard = self
+                .replayed_request_ids
+                .lock()
+                .expect("replayed request ids lock");
+            guard.clone()
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ApprovalResolutionRuntime for MockApprovalResolutionRuntime {
+        fn can_replay_approved_request(&self) -> bool {
+            self.can_replay
+        }
+
+        fn ensure_resolution_binding_allows_decision(
+            &self,
+            _approval_request: &ApprovalRequestRecord,
+            _decision: ApprovalDecision,
+        ) -> Result<(), String> {
+            match &self.binding_error {
+                Some(binding_error) => Err(binding_error.clone()),
+                None => Ok(()),
+            }
+        }
+
+        async fn replay_approved_request(
+            &self,
+            approval_request: &ApprovalRequestRecord,
+        ) -> Result<ToolCoreOutcome, String> {
+            let approval_request_id = approval_request.approval_request_id.clone();
+            let mut guard = self
+                .replayed_request_ids
+                .lock()
+                .expect("replayed request ids lock");
+            guard.push(approval_request_id);
+            drop(guard);
+
+            self.replay_result.clone()
+        }
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -1772,5 +2236,207 @@ mod tests {
         assert_eq!(grant_review["scope_session_id"], "root-session");
         assert_eq!(grant_review["grant_exists"], true);
         assert_eq!(grant_attention["needs_attention"], false);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_approve_once_transitions_and_replays_in_tools_runtime() {
+        let config = isolated_memory_config("approval-resolve-once");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-resolve-once",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_approval",
+        );
+
+        let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
+            "tool": "delegate_async",
+            "ok": true,
+        }));
+        let outcome = resolve_approval_request_with_runtime(
+            &config,
+            &runtime,
+            ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-resolve-once".to_owned(),
+                decision: ApprovalDecision::ApproveOnce,
+                session_consent_mode: None,
+                visibility: SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve outcome");
+
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Executed
+        );
+        assert_eq!(
+            outcome
+                .resumed_tool_output
+                .as_ref()
+                .map(|outcome| outcome.payload["tool"].clone()),
+            Some(json!("delegate_async"))
+        );
+        assert_eq!(
+            runtime.replayed_request_ids(),
+            vec!["apr-resolve-once".to_owned()]
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_approve_always_persists_runtime_grant_without_session_row() {
+        let config = isolated_memory_config("approval-resolve-always-missing-session-row");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-resolve-always",
+            "root-session",
+            "delegate",
+            "governed_tool_requires_approval",
+        );
+        delete_session_row(&config, "root-session");
+
+        let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
+            "tool": "delegate",
+            "ok": true,
+        }))
+        .without_replay();
+        let outcome = resolve_approval_request_with_runtime(
+            &config,
+            &runtime,
+            ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-resolve-always".to_owned(),
+                decision: ApprovalDecision::ApproveAlways,
+                session_consent_mode: None,
+                visibility: SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve outcome");
+
+        let grant = repo
+            .load_approval_grant("root-session", "tool:delegate")
+            .expect("load approval grant");
+
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Approved
+        );
+        assert!(
+            grant.is_some(),
+            "expected root-session grant to be persisted"
+        );
+        assert!(runtime.replayed_request_ids().is_empty());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_approve_once_retries_existing_approved_request_and_persists_consent()
+     {
+        let config = isolated_memory_config("approval-resolve-existing-approved");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-resolve-retry",
+            "root-session",
+            "sessions_list",
+            "governed_tool_requires_approval",
+        );
+        repo.transition_approval_request_if_current(
+            "apr-resolve-retry",
+            TransitionApprovalRequestIfCurrentRequest {
+                expected_status: ApprovalRequestStatus::Pending,
+                next_status: ApprovalRequestStatus::Approved,
+                decision: Some(ApprovalDecision::ApproveOnce),
+                resolved_by_session_id: Some("root-session".to_owned()),
+                executed_at: None,
+                last_error: None,
+            },
+        )
+        .expect("transition approval request")
+        .expect("approval request should be pending");
+
+        let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
+            "tool": "sessions_list",
+            "ok": true,
+        }))
+        .without_replay();
+        let outcome = resolve_approval_request_with_runtime(
+            &config,
+            &runtime,
+            ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-resolve-retry".to_owned(),
+                decision: ApprovalDecision::ApproveOnce,
+                session_consent_mode: Some(ToolConsentMode::Auto),
+                visibility: SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve retry outcome");
+
+        let stored = repo
+            .load_session_tool_consent("root-session")
+            .expect("load session tool consent")
+            .expect("session tool consent row");
+
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Approved
+        );
+        assert_eq!(stored.mode, ToolConsentMode::Auto);
+        assert!(runtime.replayed_request_ids().is_empty());
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn approval_request_resolve_deny_stays_terminal_without_replay() {
+        let config = isolated_memory_config("approval-resolve-deny");
+        let repo = SessionRepository::new(&config).expect("repository");
+
+        seed_session(&repo, "root-session", SessionKind::Root, None);
+        seed_request(
+            &repo,
+            "apr-resolve-deny",
+            "root-session",
+            "delegate_async",
+            "governed_tool_requires_approval",
+        );
+
+        let runtime = MockApprovalResolutionRuntime::succeeds_with(json!({
+            "tool": "delegate_async",
+            "ok": true,
+        }));
+        let outcome = resolve_approval_request_with_runtime(
+            &config,
+            &runtime,
+            ApprovalResolutionRequest {
+                current_session_id: "root-session".to_owned(),
+                approval_request_id: "apr-resolve-deny".to_owned(),
+                decision: ApprovalDecision::Deny,
+                session_consent_mode: None,
+                visibility: SessionVisibility::Children,
+            },
+        )
+        .await
+        .expect("approval request resolve outcome");
+
+        assert_eq!(
+            outcome.approval_request.status,
+            ApprovalRequestStatus::Denied
+        );
+        assert!(outcome.resumed_tool_output.is_none());
+        assert!(runtime.replayed_request_ids().is_empty());
     }
 }

@@ -474,13 +474,15 @@ impl FeishuClient {
         path: &str,
         bearer_token: Option<&str>,
         query_pairs: &[(String, String)],
+        max_bytes: usize,
     ) -> CliResult<FeishuBinaryResponse> {
         let url = self.build_open_api_url_with_query(path, query_pairs)?;
         let request = self.authorized(self.http.get(url), bearer_token).header(
             reqwest::header::CONTENT_TYPE,
             "application/json; charset=utf-8",
         );
-        self.send_binary_request_with_retry(request).await
+        self.send_binary_request_with_retry(request, max_bytes)
+            .await
     }
 
     fn authorized(
@@ -605,6 +607,7 @@ impl FeishuClient {
     async fn send_binary_request_with_retry(
         &self,
         request: RequestBuilder,
+        max_bytes: usize,
     ) -> CliResult<FeishuBinaryResponse> {
         let max_attempts = self.retry_policy.max_attempts.max(1);
         let mut current_request = Some(request);
@@ -620,16 +623,29 @@ impl FeishuClient {
             };
 
             match request.send().await {
-                Ok(response) => {
+                Ok(mut response) => {
                     let status = response.status();
                     let headers = response.headers().clone();
-                    let bytes = response
-                        .bytes()
+                    let mut budget = crate::tools::download_guard::ByteBudget::new(max_bytes);
+
+                    budget.reject_if_content_length_exceeds(
+                        response.content_length(),
+                        "feishu http binary response",
+                    )?;
+
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = response
+                        .chunk()
                         .await
-                        .map_err(|error| format!("feishu http response decode failed: {error}"))?;
+                        .map_err(|error| format!("feishu http response decode failed: {error}"))?
+                    {
+                        budget.try_consume(chunk.len(), "feishu http binary response")?;
+                        bytes.extend_from_slice(&chunk);
+                    }
+
                     if status.is_success() {
                         return Ok(FeishuBinaryResponse {
-                            bytes: bytes.to_vec(),
+                            bytes,
                             content_type: header_value(headers.get(reqwest::header::CONTENT_TYPE)),
                             content_disposition: header_value(
                                 headers.get(reqwest::header::CONTENT_DISPOSITION),
@@ -1115,7 +1131,7 @@ mod tests {
         client.retry_policy.max_backoff_ms = 0;
 
         let payload = client
-            .get_binary("/open-apis/test", Some("tenant-token"), &[])
+            .get_binary("/open-apis/test", Some("tenant-token"), &[], 1_024)
             .await
             .expect("binary request should retry and succeed");
 

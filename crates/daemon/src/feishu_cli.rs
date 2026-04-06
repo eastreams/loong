@@ -1632,6 +1632,7 @@ pub async fn execute_feishu_messages_resource(
         &args.message_id,
         &args.file_key,
         args.resource_type.as_resource_type(),
+        mvp::channel::feishu::api::resources::media::FEISHU_MESSAGE_RESOURCE_DOWNLOAD_MAX_BYTES,
     )
     .await?;
     let output = args.output.trim();

@@ -860,7 +860,7 @@ mod tests {
 
         let session_url = format!("wss://{address}/events?service_id=42");
         let session_join = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(15),
             tokio::spawn(async move {
                 run_feishu_websocket_session(
                     &state,

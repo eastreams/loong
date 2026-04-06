@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::Path};
+use std::path::Path;
 
 use serde::Serialize;
 
@@ -51,6 +51,25 @@ mod surface_support;
 #[path = "registry_plugin_bridge_tests.rs"]
 mod plugin_bridge_tests;
 
+pub use super::catalog::{
+    CHANNEL_OPERATION_SEND_ID, CHANNEL_OPERATION_SERVE_ID, ChannelCapability,
+    ChannelCatalogCommandFamilyDescriptor, ChannelCatalogImplementationStatus,
+    ChannelCatalogOperation, ChannelCatalogOperationAvailability,
+    ChannelCatalogOperationRequirement, ChannelCommandFamilyDescriptor, ChannelDoctorCheckSpec,
+    ChannelDoctorCheckTrigger, ChannelDoctorOperationSpec, ChannelOnboardingDescriptor,
+    ChannelOnboardingStrategy, ChannelOperationDescriptor, ChannelRuntimeCommandDescriptor,
+    FEISHU_RUNTIME_COMMAND_DESCRIPTOR, MATRIX_RUNTIME_COMMAND_DESCRIPTOR,
+    TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR, WECOM_RUNTIME_COMMAND_DESCRIPTOR,
+    WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR, catalog_only_channel_entries, list_channel_catalog,
+    normalize_channel_catalog_id, normalize_channel_platform,
+    resolve_channel_catalog_command_family_descriptor, resolve_channel_catalog_entry,
+    resolve_channel_catalog_operation, resolve_channel_command_family_descriptor,
+    resolve_channel_doctor_operation_spec, resolve_channel_onboarding_descriptor,
+    resolve_channel_operation_descriptor, resolve_channel_runtime_command_descriptor,
+};
+pub(crate) use super::catalog::{
+    catalog_only_channel_entries_from, resolve_channel_selection_order,
+};
 use bridge::{
     ONEBOT_CHANNEL_REGISTRY_DESCRIPTOR, QQBOT_CHANNEL_REGISTRY_DESCRIPTOR,
     WEIXIN_CHANNEL_REGISTRY_DESCRIPTOR,
@@ -63,15 +82,12 @@ pub use plugin_bridge::{
     ChannelPluginBridgeContract, ChannelPluginBridgeDiscovery,
     ChannelPluginBridgeDiscoveryAmbiguityStatus, ChannelPluginBridgeDiscoveryStatus,
     ChannelPluginBridgeManifestStatus, ChannelPluginBridgeManifestValidation,
-    ChannelPluginBridgeStableTarget,
+    ChannelPluginBridgeSelectionStatus, ChannelPluginBridgeStableTarget,
 };
 use plugin_bridge::{
     channel_surface_plugin_bridge_discovery_by_id, plugin_bridge_contract_from_descriptor,
 };
 use surface_support::build_channel_surfaces;
-
-pub const CHANNEL_OPERATION_SEND_ID: &str = "send";
-pub const CHANNEL_OPERATION_SERVE_ID: &str = "serve";
 
 const DISCORD_APPLICATION_ID_ENV: &str = "DISCORD_APPLICATION_ID";
 const SLACK_APP_TOKEN_ENV: &str = "SLACK_APP_TOKEN";
@@ -89,220 +105,6 @@ const ZALO_APP_SECRET_ENV: &str = "ZALO_APP_SECRET";
 const ZALO_PERSONAL_ACCESS_TOKEN_ENV: &str = "ZALO_PERSONAL_ACCESS_TOKEN";
 const WEBCHAT_PUBLIC_BASE_URL_ENV: &str = "WEBCHAT_PUBLIC_BASE_URL";
 const WEBCHAT_SESSION_SIGNING_SECRET_ENV: &str = "WEBCHAT_SESSION_SIGNING_SECRET";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelRuntimeCommandDescriptor {
-    pub channel_id: &'static str,
-    pub platform: ChannelPlatform,
-    pub serve_bootstrap_agent_id: &'static str,
-}
-
-pub const TELEGRAM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
-    ChannelRuntimeCommandDescriptor {
-        channel_id: "telegram",
-        platform: ChannelPlatform::Telegram,
-        serve_bootstrap_agent_id: "channel-telegram",
-    };
-
-pub const FEISHU_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
-    ChannelRuntimeCommandDescriptor {
-        channel_id: "feishu",
-        platform: ChannelPlatform::Feishu,
-        serve_bootstrap_agent_id: "channel-feishu",
-    };
-
-pub const MATRIX_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
-    ChannelRuntimeCommandDescriptor {
-        channel_id: "matrix",
-        platform: ChannelPlatform::Matrix,
-        serve_bootstrap_agent_id: "channel-matrix",
-    };
-
-pub const WECOM_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
-    ChannelRuntimeCommandDescriptor {
-        channel_id: "wecom",
-        platform: ChannelPlatform::Wecom,
-        serve_bootstrap_agent_id: "channel-wecom",
-    };
-
-pub const WHATSAPP_RUNTIME_COMMAND_DESCRIPTOR: ChannelRuntimeCommandDescriptor =
-    ChannelRuntimeCommandDescriptor {
-        channel_id: "whatsapp",
-        platform: ChannelPlatform::WhatsApp,
-        serve_bootstrap_agent_id: "channel-whatsapp",
-    };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelCommandFamilyDescriptor {
-    pub runtime: ChannelRuntimeCommandDescriptor,
-    pub catalog: ChannelCatalogCommandFamilyDescriptor,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelCatalogCommandFamilyDescriptor {
-    pub channel_id: &'static str,
-    pub default_send_target_kind: ChannelCatalogTargetKind,
-    pub send: ChannelCatalogOperation,
-    pub serve: ChannelCatalogOperation,
-}
-
-impl ChannelCommandFamilyDescriptor {
-    pub fn channel_id(self) -> &'static str {
-        self.catalog.channel_id
-    }
-
-    pub fn default_send_target_kind(self) -> ChannelCatalogTargetKind {
-        self.catalog.default_send_target_kind
-    }
-
-    pub fn send(self) -> ChannelCatalogOperation {
-        self.catalog.send
-    }
-
-    pub fn serve(self) -> ChannelCatalogOperation {
-        self.catalog.serve
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ChannelCatalogOperation {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub command: &'static str,
-    pub availability: ChannelCatalogOperationAvailability,
-    pub tracks_runtime: bool,
-    pub requirements: &'static [ChannelCatalogOperationRequirement],
-    pub supported_target_kinds: &'static [ChannelCatalogTargetKind],
-}
-
-impl ChannelCatalogOperation {
-    pub fn supports_target_kind(self, kind: ChannelCatalogTargetKind) -> bool {
-        self.supported_target_kinds.contains(&kind)
-    }
-
-    pub fn default_target_kind(self) -> Option<ChannelCatalogTargetKind> {
-        self.supported_target_kinds.first().copied()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ChannelCatalogOperationRequirement {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub config_paths: &'static [&'static str],
-    pub env_pointer_paths: &'static [&'static str],
-    pub default_env_var: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelCatalogOperationAvailability {
-    Implemented,
-    Stub,
-}
-
-impl ChannelCatalogOperationAvailability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Implemented => "implemented",
-            Self::Stub => "stub",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelCapability {
-    RuntimeBacked,
-    PluginBacked,
-    MultiAccount,
-    Send,
-    Serve,
-    RuntimeTracking,
-}
-
-impl ChannelCapability {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RuntimeBacked => "runtime_backed",
-            Self::PluginBacked => "plugin_backed",
-            Self::MultiAccount => "multi_account",
-            Self::Send => "send",
-            Self::Serve => "serve",
-            Self::RuntimeTracking => "runtime_tracking",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelOnboardingStrategy {
-    ManualConfig,
-    PluginBridge,
-    Planned,
-}
-
-impl ChannelOnboardingStrategy {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ManualConfig => "manual_config",
-            Self::PluginBridge => "plugin_bridge",
-            Self::Planned => "planned",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ChannelOnboardingDescriptor {
-    pub strategy: ChannelOnboardingStrategy,
-    pub setup_hint: &'static str,
-    pub status_command: &'static str,
-    pub repair_command: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelDoctorCheckTrigger {
-    OperationHealth,
-    ReadyRuntime,
-    PluginBridgeHealth,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelDoctorCheckSpec {
-    pub name: &'static str,
-    pub trigger: ChannelDoctorCheckTrigger,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelDoctorOperationSpec {
-    pub checks: &'static [ChannelDoctorCheckSpec],
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChannelOperationDescriptor {
-    pub operation: ChannelCatalogOperation,
-    pub doctor: Option<ChannelDoctorOperationSpec>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelCatalogImplementationStatus {
-    RuntimeBacked,
-    ConfigBacked,
-    PluginBacked,
-    Stub,
-}
-
-impl ChannelCatalogImplementationStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RuntimeBacked => "runtime_backed",
-            Self::ConfigBacked => "config_backed",
-            Self::PluginBacked => "plugin_backed",
-            Self::Stub => "stub",
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChannelCatalogEntry {
@@ -407,13 +209,13 @@ pub struct ChannelSurface {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelRuntimeDescriptor {
-    family: ChannelCommandFamilyDescriptor,
+    pub(super) family: ChannelCommandFamilyDescriptor,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelRegistryOperationDescriptor {
-    operation: ChannelCatalogOperation,
-    doctor_checks: &'static [ChannelDoctorCheckSpec],
+    pub(super) operation: ChannelCatalogOperation,
+    pub(super) doctor_checks: &'static [ChannelDoctorCheckSpec],
 }
 
 pub(crate) type ChannelSnapshotBuilder =
@@ -421,10 +223,10 @@ pub(crate) type ChannelSnapshotBuilder =
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChannelRegistryDescriptor {
-    id: &'static str,
-    runtime: Option<ChannelRuntimeDescriptor>,
+    pub(super) id: &'static str,
+    pub(super) runtime: Option<ChannelRuntimeDescriptor>,
     snapshot_builder: Option<ChannelSnapshotBuilder>,
-    selection_order: u16,
+    pub(super) selection_order: u16,
     selection_label: &'static str,
     blurb: &'static str,
     implementation_status: ChannelCatalogImplementationStatus,
@@ -432,8 +234,8 @@ pub(crate) struct ChannelRegistryDescriptor {
     label: &'static str,
     aliases: &'static [&'static str],
     transport: &'static str,
-    onboarding: ChannelOnboardingDescriptor,
-    operations: &'static [ChannelRegistryOperationDescriptor],
+    pub(super) onboarding: ChannelOnboardingDescriptor,
+    pub(super) operations: &'static [ChannelRegistryOperationDescriptor],
 }
 
 const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -443,6 +245,7 @@ const TELEGRAM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TELEGRAM_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -453,6 +256,7 @@ const TELEGRAM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: TELEGRAM_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -552,6 +356,7 @@ const FEISHU_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: FEISHU_SEND_REQUIREMENTS,
+    default_target_kind: Some(ChannelCatalogTargetKind::ReceiveId),
     supported_target_kinds: &[
         ChannelCatalogTargetKind::ReceiveId,
         ChannelCatalogTargetKind::MessageReply,
@@ -565,6 +370,7 @@ const FEISHU_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: FEISHU_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::MessageReply],
 };
 
@@ -716,6 +522,7 @@ const MATRIX_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATRIX_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -726,6 +533,7 @@ const MATRIX_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: MATRIX_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -750,6 +558,7 @@ const WECOM_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WECOM_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -760,6 +569,7 @@ const WECOM_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WECOM_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -965,6 +775,7 @@ const DISCORD_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DISCORD_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -975,6 +786,7 @@ const DISCORD_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: DISCORD_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -1074,6 +886,7 @@ const SLACK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SLACK_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -1084,6 +897,7 @@ const SLACK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: SLACK_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -1164,6 +978,7 @@ const LINE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: LINE_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1173,6 +988,7 @@ const LINE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: LINE_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 pub const LINE_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -1357,6 +1173,7 @@ const DINGTALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: DINGTALK_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 const DINGTALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1366,6 +1183,7 @@ const DINGTALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: DINGTALK_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 pub const DINGTALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -1475,6 +1293,7 @@ const WHATSAPP_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WHATSAPP_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1484,6 +1303,7 @@ const WHATSAPP_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: true,
     requirements: WHATSAPP_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 pub const WHATSAPP_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -1644,6 +1464,7 @@ const EMAIL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: EMAIL_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const EMAIL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1653,6 +1474,7 @@ const EMAIL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: EMAIL_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const EMAIL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -1742,6 +1564,7 @@ const WEBHOOK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: WEBHOOK_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1751,6 +1574,7 @@ const WEBHOOK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: WEBHOOK_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 
@@ -1819,6 +1643,7 @@ const GOOGLE_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperat
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: GOOGLE_CHAT_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 const GOOGLE_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1828,6 +1653,7 @@ const GOOGLE_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOpera
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: GOOGLE_CHAT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 pub const GOOGLE_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -1917,6 +1743,7 @@ const SIGNAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SIGNAL_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const SIGNAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -1926,6 +1753,7 @@ const SIGNAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: SIGNAL_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 pub const SIGNAL_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2031,6 +1859,7 @@ const TEAMS_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TEAMS_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Endpoint],
 };
 const TEAMS_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2040,6 +1869,7 @@ const TEAMS_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: TEAMS_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const TEAMS_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2134,6 +1964,7 @@ const MATTERMOST_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperati
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: MATTERMOST_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const MATTERMOST_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2143,6 +1974,7 @@ const MATTERMOST_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperat
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: MATTERMOST_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const MATTERMOST_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2225,6 +2057,7 @@ const NEXTCLOUD_TALK_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOpe
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: NEXTCLOUD_TALK_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const NEXTCLOUD_TALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2234,6 +2067,7 @@ const NEXTCLOUD_TALK_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOp
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: NEXTCLOUD_TALK_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const NEXTCLOUD_TALK_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2328,6 +2162,7 @@ const SYNOLOGY_CHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOper
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: SYNOLOGY_CHAT_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const SYNOLOGY_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2337,6 +2172,7 @@ const SYNOLOGY_CHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOpe
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: SYNOLOGY_CHAT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 pub const SYNOLOGY_CHAT_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2414,6 +2250,7 @@ const IRC_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IRC_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const IRC_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2423,6 +2260,7 @@ const IRC_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: IRC_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const IRC_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2514,6 +2352,7 @@ const IMESSAGE_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: IMESSAGE_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const IMESSAGE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2523,6 +2362,7 @@ const IMESSAGE_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperatio
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: IMESSAGE_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const IMESSAGE_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2599,6 +2439,7 @@ const TLON_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Implemented,
     tracks_runtime: false,
     requirements: TLON_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const TLON_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2608,6 +2449,7 @@ const TLON_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: TLON_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 pub const TLON_CATALOG_COMMAND_FAMILY_DESCRIPTOR: ChannelCatalogCommandFamilyDescriptor =
@@ -2693,6 +2535,7 @@ const ZALO_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: ZALO_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const ZALO_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2702,6 +2545,7 @@ const ZALO_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: ZALO_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const ZALO_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -2773,6 +2617,7 @@ const ZALO_PERSONAL_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOper
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: ZALO_PERSONAL_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const ZALO_PERSONAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2782,6 +2627,7 @@ const ZALO_PERSONAL_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOpe
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: ZALO_PERSONAL_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Address],
 };
 const ZALO_PERSONAL_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -2867,6 +2713,7 @@ const WEBCHAT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: WEBCHAT_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const WEBCHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
@@ -2876,6 +2723,7 @@ const WEBCHAT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: WEBCHAT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 const WEBCHAT_OPERATIONS: &[ChannelRegistryOperationDescriptor] = &[
@@ -3316,7 +3164,9 @@ const CHANNEL_REGISTRY: &[ChannelRegistryDescriptor] = &[
     },
 ];
 
-fn find_channel_registry_descriptor(raw: &str) -> Option<&'static ChannelRegistryDescriptor> {
+pub(super) fn find_channel_registry_descriptor(
+    raw: &str,
+) -> Option<&'static ChannelRegistryDescriptor> {
     let normalized = raw.trim().to_ascii_lowercase();
     if normalized.is_empty() {
         return None;
@@ -3332,13 +3182,13 @@ fn find_channel_registry_descriptor(raw: &str) -> Option<&'static ChannelRegistr
     })
 }
 
-fn sorted_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
+pub(super) fn sorted_channel_registry_descriptors() -> Vec<&'static ChannelRegistryDescriptor> {
     let mut descriptors = CHANNEL_REGISTRY.iter().collect::<Vec<_>>();
     descriptors.sort_by_key(|descriptor| (descriptor.selection_order, descriptor.id));
     descriptors
 }
 
-fn channel_catalog_entry_from_descriptor(
+pub(super) fn channel_catalog_entry_from_descriptor(
     descriptor: &ChannelRegistryDescriptor,
 ) -> ChannelCatalogEntry {
     let mut supported_target_kinds = Vec::new();
@@ -3371,128 +3221,6 @@ fn channel_catalog_entry_from_descriptor(
             .map(|descriptor| descriptor.operation)
             .collect(),
     }
-}
-
-pub fn resolve_channel_onboarding_descriptor(raw: &str) -> Option<ChannelOnboardingDescriptor> {
-    find_channel_registry_descriptor(raw).map(|descriptor| descriptor.onboarding)
-}
-
-pub fn list_channel_catalog() -> Vec<ChannelCatalogEntry> {
-    sorted_channel_registry_descriptors()
-        .into_iter()
-        .map(channel_catalog_entry_from_descriptor)
-        .collect()
-}
-
-pub(crate) fn resolve_channel_selection_order(raw: &str) -> Option<u16> {
-    let descriptor = find_channel_registry_descriptor(raw)?;
-    Some(descriptor.selection_order)
-}
-
-pub fn normalize_channel_catalog_id(raw: &str) -> Option<&'static str> {
-    find_channel_registry_descriptor(raw).map(|descriptor| descriptor.id)
-}
-
-pub fn resolve_channel_catalog_entry(raw: &str) -> Option<ChannelCatalogEntry> {
-    find_channel_registry_descriptor(raw).map(channel_catalog_entry_from_descriptor)
-}
-
-pub fn resolve_channel_catalog_operation(
-    raw_channel_id: &str,
-    operation_id: &str,
-) -> Option<ChannelCatalogOperation> {
-    resolve_channel_operation_descriptor(raw_channel_id, operation_id)
-        .map(|descriptor| descriptor.operation)
-}
-
-pub fn resolve_channel_operation_descriptor(
-    raw_channel_id: &str,
-    operation_id: &str,
-) -> Option<ChannelOperationDescriptor> {
-    let descriptor = find_channel_registry_descriptor(raw_channel_id)?
-        .operations
-        .iter()
-        .find(|descriptor| descriptor.operation.id == operation_id)?;
-    Some(ChannelOperationDescriptor {
-        operation: descriptor.operation,
-        doctor: (!descriptor.doctor_checks.is_empty()).then_some(ChannelDoctorOperationSpec {
-            checks: descriptor.doctor_checks,
-        }),
-    })
-}
-
-pub fn resolve_channel_doctor_operation_spec(
-    raw_channel_id: &str,
-    operation_id: &str,
-) -> Option<ChannelDoctorOperationSpec> {
-    resolve_channel_operation_descriptor(raw_channel_id, operation_id)
-        .and_then(|descriptor| descriptor.doctor)
-}
-
-pub fn catalog_only_channel_entries(
-    snapshots: &[ChannelStatusSnapshot],
-) -> Vec<ChannelCatalogEntry> {
-    let catalog = list_channel_catalog();
-    catalog_only_channel_entries_from(&catalog, snapshots)
-}
-
-fn catalog_only_channel_entries_from(
-    catalog: &[ChannelCatalogEntry],
-    snapshots: &[ChannelStatusSnapshot],
-) -> Vec<ChannelCatalogEntry> {
-    let snapshot_ids = snapshots
-        .iter()
-        .map(|snapshot| snapshot.id)
-        .collect::<BTreeSet<_>>();
-    catalog
-        .iter()
-        .filter(|entry| !snapshot_ids.contains(entry.id))
-        .cloned()
-        .collect()
-}
-
-pub fn normalize_channel_platform(raw: &str) -> Option<ChannelPlatform> {
-    find_channel_registry_descriptor(raw).and_then(|descriptor| {
-        descriptor
-            .runtime
-            .map(|runtime| runtime.family.runtime.platform)
-    })
-}
-
-pub fn resolve_channel_command_family_descriptor(
-    raw: &str,
-) -> Option<ChannelCommandFamilyDescriptor> {
-    find_channel_registry_descriptor(raw)
-        .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.family))
-}
-
-pub fn resolve_channel_catalog_command_family_descriptor(
-    raw: &str,
-) -> Option<ChannelCatalogCommandFamilyDescriptor> {
-    let descriptor = find_channel_registry_descriptor(raw)?;
-    let send = descriptor
-        .operations
-        .iter()
-        .find(|descriptor| descriptor.operation.id == CHANNEL_OPERATION_SEND_ID)?
-        .operation;
-    let serve = descriptor
-        .operations
-        .iter()
-        .find(|descriptor| descriptor.operation.id == CHANNEL_OPERATION_SERVE_ID)?
-        .operation;
-    Some(ChannelCatalogCommandFamilyDescriptor {
-        channel_id: descriptor.id,
-        default_send_target_kind: send.default_target_kind()?,
-        send,
-        serve,
-    })
-}
-
-pub fn resolve_channel_runtime_command_descriptor(
-    raw: &str,
-) -> Option<ChannelRuntimeCommandDescriptor> {
-    find_channel_registry_descriptor(raw)
-        .and_then(|descriptor| descriptor.runtime.map(|runtime| runtime.family.runtime))
 }
 
 pub fn channel_inventory(config: &LoongClawConfig) -> ChannelInventory {
@@ -8657,6 +8385,32 @@ mod tests {
     }
 
     #[test]
+    fn multi_target_channel_catalog_operations_declare_explicit_default_target_kind() {
+        let catalog = list_channel_catalog();
+        for entry in catalog {
+            for operation in entry.operations {
+                if operation.supported_target_kinds.len() < 2 {
+                    continue;
+                }
+
+                let default_target_kind = operation.default_target_kind.unwrap_or_else(|| {
+                    panic!(
+                        "{}:{} must declare an explicit default_target_kind",
+                        entry.id, operation.id
+                    )
+                });
+
+                assert!(
+                    operation.supports_target_kind(default_target_kind),
+                    "{}:{} default target kind must be supported by the operation",
+                    entry.id,
+                    operation.id
+                );
+            }
+        }
+    }
+
+    #[test]
     fn channel_catalog_surfaces_expose_union_of_supported_target_kinds() {
         let catalog = list_channel_catalog();
         let telegram = catalog
@@ -9528,6 +9282,7 @@ mod tests {
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
+                        default_target_kind: None,
                         supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
                     },
                     ChannelCatalogOperation {
@@ -9537,6 +9292,7 @@ mod tests {
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: true,
                         requirements: &[],
+                        default_target_kind: None,
                         supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
                     },
                 ],
@@ -9562,6 +9318,7 @@ mod tests {
                         availability: ChannelCatalogOperationAvailability::Implemented,
                         tracks_runtime: false,
                         requirements: &[],
+                        default_target_kind: None,
                         supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
                     },
                     ChannelCatalogOperation {
@@ -9571,6 +9328,7 @@ mod tests {
                         availability: ChannelCatalogOperationAvailability::Stub,
                         tracks_runtime: false,
                         requirements: &[],
+                        default_target_kind: None,
                         supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
                     },
                 ],

@@ -3,7 +3,10 @@ use kernel::{ToolCoreOutcome, ToolCoreRequest};
 use loongclaw_app as mvp;
 use loongclaw_spec::CliResult;
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 const DEFAULT_SKILLS_SEARCH_LIMIT: usize = 5;
 const DEFAULT_SKILLS_RECOMMEND_LIMIT: usize = 3;
@@ -203,11 +206,15 @@ fn execute_non_policy_skills_command(
         }
         SkillsCommands::Info { skill_id } => {
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            let inspect_outcome = mvp::tools::external_skills_operator_inspect_with_config(
-                &skill_id,
-                &tool_runtime_config,
-            )?;
-            decorate_skill_info_outcome(inspect_outcome, resolved_path)
+            if let Some(pack) = mvp::tools::bundled_skill_pack(&skill_id) {
+                execute_bundled_pack_inspect_command(resolved_path, config, pack)
+            } else {
+                let inspect_outcome = mvp::tools::external_skills_operator_inspect_with_config(
+                    &skill_id,
+                    &tool_runtime_config,
+                )?;
+                decorate_skill_info_outcome(inspect_outcome, resolved_path)
+            }
         }
         SkillsCommands::Fetch {
             url,
@@ -231,10 +238,7 @@ fn execute_non_policy_skills_command(
             replace,
         ),
         SkillsCommands::InstallBundled { skill_id, replace } => {
-            let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
-            let install_outcome =
-                execute_install_bundled_skill_command(resolved_path, config, &skill_id, replace)?;
-            decorate_skill_install_outcome(install_outcome, resolved_path, &tool_runtime_config)
+            execute_install_bundled_target_command(resolved_path, config, &skill_id, replace)
         }
         SkillsCommands::Install { .. } => {
             let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
@@ -838,6 +842,158 @@ fn execute_install_bundled_skill_command(
     mvp::tools::execute_tool_core_with_config(request, &tool_runtime_config)
 }
 
+fn execute_install_bundled_target_command(
+    resolved_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    skill_or_pack_id: &str,
+    replace: bool,
+) -> CliResult<ToolCoreOutcome> {
+    if let Some(pack) = mvp::tools::bundled_skill_pack(skill_or_pack_id) {
+        return execute_install_bundled_pack_command(resolved_path, config, pack, replace);
+    }
+    let tool_runtime_config = tool_runtime_config_for_skills_command(config, resolved_path);
+    let install_outcome =
+        execute_install_bundled_skill_command(resolved_path, config, skill_or_pack_id, replace)?;
+    decorate_skill_install_outcome(install_outcome, resolved_path, &tool_runtime_config)
+}
+
+fn execute_install_bundled_pack_command(
+    resolved_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    pack: &mvp::tools::BundledSkillPack,
+    replace: bool,
+) -> CliResult<ToolCoreOutcome> {
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        config,
+        Some(resolved_path),
+    );
+    let existing = mvp::tools::external_skills_operator_list_with_config(&tool_runtime_config)?;
+    let installed_ids = existing
+        .payload
+        .get("skills")
+        .and_then(Value::as_array)
+        .map(|skills| {
+            skills
+                .iter()
+                .filter_map(|skill| skill.get("skill_id").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+
+    let mut installed_members = Vec::new();
+    let mut skipped_members = Vec::new();
+    let mut newly_installed = Vec::new();
+
+    for skill_id in pack.skill_ids {
+        if installed_ids.contains(*skill_id) && !replace {
+            skipped_members.push(json!({ "skill_id": skill_id }));
+            continue;
+        }
+
+        match execute_install_bundled_skill_command(resolved_path, config, skill_id, replace) {
+            Ok(outcome) => {
+                newly_installed.push((*skill_id).to_owned());
+                installed_members.push(outcome.payload);
+            }
+            Err(error) => {
+                for installed_skill_id in newly_installed.iter().rev() {
+                    let _ = mvp::tools::execute_tool_core_with_config(
+                        ToolCoreRequest {
+                            tool_name: "external_skills.remove".to_owned(),
+                            payload: json!({ "skill_id": installed_skill_id }),
+                        },
+                        &tool_runtime_config,
+                    );
+                }
+                return Err(format!(
+                    "failed to install bundled pack `{}` member `{skill_id}`: {error}",
+                    pack.pack_id
+                ));
+            }
+        }
+    }
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": "bundled_skill_pack.install",
+            "pack": serialize_bundled_skill_pack(pack),
+            "installed_members": installed_members,
+            "skipped_members": skipped_members,
+        }),
+    })
+}
+
+fn execute_bundled_pack_inspect_command(
+    resolved_path: &Path,
+    config: &mvp::config::LoongClawConfig,
+    pack: &mvp::tools::BundledSkillPack,
+) -> CliResult<ToolCoreOutcome> {
+    let tool_runtime_config = mvp::tools::runtime_config::ToolRuntimeConfig::from_loongclaw_config(
+        config,
+        Some(resolved_path),
+    );
+    let existing = mvp::tools::external_skills_operator_list_with_config(&tool_runtime_config)?;
+    let discovered_map = existing
+        .payload
+        .get("skills")
+        .and_then(Value::as_array)
+        .map(|skills| {
+            skills
+                .iter()
+                .filter_map(|skill| {
+                    skill
+                        .get("skill_id")
+                        .and_then(Value::as_str)
+                        .map(|skill_id| (skill_id.to_owned(), skill.clone()))
+                })
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+
+    let members = pack
+        .skill_ids
+        .iter()
+        .map(|skill_id| {
+            discovered_map.get(*skill_id).cloned().unwrap_or_else(|| {
+                json!({
+                    "skill_id": skill_id,
+                    "installed": false,
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "adapter": "core-tools",
+            "tool_name": "bundled_skill_pack.inspect",
+            "pack": {
+                "pack_id": pack.pack_id,
+                "display_name": pack.display_name,
+                "summary": pack.summary,
+                "onboarding_visible": pack.onboarding_visible,
+                "recommended": pack.recommended,
+                "members": members,
+            },
+        }),
+    })
+}
+
+fn serialize_bundled_skill_pack(pack: &mvp::tools::BundledSkillPack) -> Value {
+    json!({
+        "pack_id": pack.pack_id,
+        "display_name": pack.display_name,
+        "summary": pack.summary,
+        "skill_ids": pack.skill_ids,
+        "onboarding_visible": pack.onboarding_visible,
+        "recommended": pack.recommended,
+    })
+}
+
 fn execute_enable_browser_preview_command(
     resolved_path: &Path,
     config: &mut mvp::config::LoongClawConfig,
@@ -1002,6 +1158,43 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
                 lines.push("shadowed skills:".to_owned());
                 for skill in shadowed {
                     lines.push(format!("- {}", render_skill_summary_line(skill)));
+                }
+            }
+            let packs = payload
+                .get("bundled_packs")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_else(|| {
+                    mvp::tools::bundled_skill_packs()
+                        .iter()
+                        .map(serialize_bundled_skill_pack)
+                        .collect()
+                });
+            if !packs.is_empty() {
+                lines.push("bundled packs:".to_owned());
+                for pack in packs {
+                    lines.push(format!(
+                        "- {} display_name={} onboarding_visible={} recommended={} members={}",
+                        pack.get("pack_id").and_then(Value::as_str).unwrap_or("-"),
+                        pack.get("display_name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("-"),
+                        pack.get("onboarding_visible")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        pack.get("recommended")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                        pack.get("skill_ids")
+                            .and_then(Value::as_array)
+                            .map(|ids| {
+                                ids.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            })
+                            .unwrap_or_else(|| "-".to_owned())
+                    ));
                 }
             }
         }
@@ -1420,6 +1613,91 @@ pub fn render_skills_cli_text(execution: &SkillsCommandExecution) -> CliResult<S
             render_optional_string_section(&mut lines, "next steps:", payload.get("next_steps"))?;
             render_optional_recipe_section(&mut lines, "recipes:", payload.get("recipes"))?;
         }
+        "bundled_skill_pack.inspect" => {
+            let pack = payload
+                .get("pack")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    "bundled skill pack info payload missing `pack` object".to_owned()
+                })?;
+            lines.push(format!(
+                "pack_id={}",
+                pack.get("pack_id").and_then(Value::as_str).unwrap_or("-")
+            ));
+            lines.push(format!(
+                "display_name={}",
+                pack.get("display_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+            ));
+            lines.push(format!(
+                "summary={}",
+                pack.get("summary").and_then(Value::as_str).unwrap_or("-")
+            ));
+            lines.push(format!(
+                "onboarding_visible={}",
+                pack.get("onboarding_visible")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            ));
+            lines.push(format!(
+                "recommended={}",
+                pack.get("recommended")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            ));
+            lines.push("members:".to_owned());
+            for member in pack
+                .get("members")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    "bundled skill pack info payload missing `pack.members` array".to_owned()
+                })?
+            {
+                lines.push(format!("- {}", render_skill_summary_line(member)));
+            }
+        }
+        "bundled_skill_pack.install" => {
+            let pack = payload
+                .get("pack")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    "bundled skill pack install payload missing `pack` object".to_owned()
+                })?;
+            lines.push(format!(
+                "installed pack_id={}",
+                pack.get("pack_id").and_then(Value::as_str).unwrap_or("-")
+            ));
+            lines.push(format!(
+                "display_name={}",
+                pack.get("display_name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-")
+            ));
+            lines.push("installed members:".to_owned());
+            for member in payload
+                .get("installed_members")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    "bundled skill pack install payload missing `installed_members` array"
+                        .to_owned()
+                })?
+            {
+                lines.push(format!("- {}", render_skill_summary_line(member)));
+            }
+            let skipped = payload
+                .get("skipped_members")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    "bundled skill pack install payload missing `skipped_members` array".to_owned()
+                })?;
+            if !skipped.is_empty() {
+                lines.push("skipped members:".to_owned());
+                for member in skipped {
+                    lines.push(format!("- {}", render_skill_summary_line(member)));
+                }
+            }
+        }
         "external_skills.install" | "skills.enable-browser-preview" => {
             lines.push(format!(
                 "installed skill_id={}",
@@ -1783,7 +2061,23 @@ fn render_skill_summary_line(skill: &Value) -> String {
                 .and_then(Value::as_str)
         })
         .unwrap_or("model");
+    let packs = skill
+        .get("pack_memberships")
+        .and_then(Value::as_array)
+        .map(|packs| {
+            packs
+                .iter()
+                .filter_map(|pack| pack.get("pack_id").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default();
+    let packs_suffix = if packs.is_empty() {
+        String::new()
+    } else {
+        format!(" packs={packs}")
+    };
     format!(
-        "{skill_id} [{active}] scope={scope} model_visibility={model_visibility} eligible={eligible} invocation_policy={invocation_policy} display_name={display_name} summary={summary}"
+        "{skill_id} [{active}] scope={scope} model_visibility={model_visibility} eligible={eligible} invocation_policy={invocation_policy} display_name={display_name} summary={summary}{packs_suffix}"
     )
 }

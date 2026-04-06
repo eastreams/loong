@@ -309,6 +309,58 @@ fn bash_exec_runs_command_string_via_bash_runtime() {
 
 #[cfg(all(feature = "tool-shell", unix))]
 #[test]
+fn bash_exec_falls_back_to_file_root_when_current_dir_is_unavailable() {
+    use std::fs;
+
+    let root = unique_tool_temp_dir("loongclaw-bash-exec-missing-cwd");
+    let deleted_cwd = root.join("deleted-cwd");
+    let fallback_root = root.join("fallback-root");
+    fs::create_dir_all(&deleted_cwd).expect("create deleted cwd");
+    fs::create_dir_all(&fallback_root).expect("create fallback root");
+
+    let log_path = fallback_root.join("bash-args.log");
+    let runtime_path = write_fake_bash_runtime(&fallback_root, "fake-bash", &log_path);
+
+    let mut config = test_tool_runtime_config(fallback_root);
+    config.shell_default_mode = shell_policy_ext::ShellPolicyDefault::Allow;
+    config.bash_exec = runtime_config::BashExecRuntimePolicy {
+        available: true,
+        command: Some(runtime_path),
+        ..runtime_config::BashExecRuntimePolicy::default()
+    };
+
+    let cwd_guard = ScopedCurrentDir::new(&deleted_cwd);
+    fs::remove_dir_all(&deleted_cwd).expect("remove deleted cwd");
+
+    let outcome = execute_tool_core_with_config(
+        ToolCoreRequest {
+            tool_name: "bash.exec".to_owned(),
+            payload: json!({"command": "printf fallback-from-file-root"}),
+        },
+        &config,
+    )
+    .expect("bash command should succeed when current dir is unavailable");
+
+    drop(cwd_guard);
+
+    let logged_args = fs::read_to_string(&log_path).expect("read fake bash args");
+    assert_eq!(outcome.status, "ok");
+    assert_eq!(
+        outcome.payload["stdout"].as_str(),
+        Some("fallback-from-file-root")
+    );
+    assert!(
+        logged_args
+            .lines()
+            .eq(["-c", "printf fallback-from-file-root"].into_iter()),
+        "expected bash invocation to keep command args when current dir is missing, got: {logged_args:?}"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[cfg(all(feature = "tool-shell", unix))]
+#[test]
 fn bash_exec_allows_plain_command_when_prefix_rule_allows() {
     use std::fs;
 
@@ -358,6 +410,7 @@ fn bash_exec_uses_loongclaw_home_rules_dir_even_when_runtime_is_built_without_co
 
     let mut env = ScopedEnv::new();
     env.set("HOME", &home);
+    env.remove("LOONGCLAW_HOME");
     let _cwd = ScopedCurrentDir::new(&workspace);
 
     let mut runtime = runtime_config::ToolRuntimeConfig::from_loongclaw_config(

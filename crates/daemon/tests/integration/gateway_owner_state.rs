@@ -73,6 +73,15 @@ fn telegram_loaded_config_fixture() -> LoadedSupervisorConfig {
     }
 }
 
+fn plugin_backed_loaded_config_fixture() -> LoadedSupervisorConfig {
+    let config = super::mixed_account_weixin_plugin_bridge_config();
+
+    LoadedSupervisorConfig {
+        resolved_path: PathBuf::from("/tmp/loongclaw.toml"),
+        config,
+    }
+}
+
 fn idle_background_channel_runner() -> TestBackgroundChannelRunner {
     Arc::new(|request| {
         boxed_cli_result(async move {
@@ -694,4 +703,93 @@ async fn gateway_owner_state_local_client_discovers_owner_reads_summary_and_stop
         .expect("stopped gateway status should be present");
     assert_eq!(stopped_status.phase, "stopped");
     assert!(!stopped_status.running);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn gateway_owner_state_local_client_channels_and_operator_summary_keep_plugin_backed_parity()
+{
+    let runtime_dir = unique_runtime_dir("plugin-backed-parity");
+    let hooks = SupervisorRuntimeHooks {
+        load_config: Arc::new(|_| Ok(plugin_backed_loaded_config_fixture())),
+        initialize_runtime_environment: Arc::new(|_| {}),
+        run_cli_host: Arc::new(|_| {
+            panic!("headless gateway run should not start the concurrent CLI host")
+        }),
+        background_channel_runners: BTreeMap::new(),
+        wait_for_shutdown: Arc::new(pending_shutdown_future),
+        observe_state: Arc::new(|_| Ok(())),
+    };
+
+    let runtime_dir_for_run = runtime_dir.clone();
+    let run = tokio::spawn(async move {
+        run_gateway_run_with_hooks_for_test(
+            None,
+            None,
+            Vec::new(),
+            runtime_dir_for_run.as_path(),
+            hooks,
+        )
+        .await
+    });
+
+    let _running_status = wait_for_gateway_control_surface(runtime_dir.as_path()).await;
+    let client =
+        GatewayLocalClient::discover(runtime_dir.as_path()).expect("discover gateway local client");
+    let channels = client.channels().await.expect("read gateway channels");
+    let operator_summary = client
+        .operator_summary()
+        .await
+        .expect("read gateway operator summary");
+    let channel_surfaces = channels["channel_surfaces"]
+        .as_array()
+        .expect("channel surfaces array");
+    let weixin_channels_surface = channel_surfaces
+        .iter()
+        .find(|surface| {
+            surface["catalog"]["id"]
+                .as_str()
+                .map(|channel_id| channel_id == "weixin")
+                .unwrap_or(false)
+        })
+        .expect("weixin channels surface");
+    let weixin_operator_surface = operator_summary
+        .channels
+        .surfaces
+        .iter()
+        .find(|surface| surface.channel_id == "weixin")
+        .expect("weixin operator surface");
+    let expected_summary = super::MIXED_ACCOUNT_WEIXIN_PLUGIN_BRIDGE_SUMMARY;
+
+    assert_eq!(
+        weixin_channels_surface["catalog"]["implementation_status"]
+            .as_str()
+            .expect("implementation status string"),
+        "plugin_backed"
+    );
+    assert_eq!(
+        weixin_channels_surface["plugin_bridge_account_summary"]
+            .as_str()
+            .expect("plugin bridge account summary string"),
+        expected_summary
+    );
+    assert_eq!(
+        weixin_operator_surface.implementation_status,
+        "plugin_backed"
+    );
+    assert_eq!(
+        weixin_operator_surface
+            .plugin_bridge_account_summary
+            .as_deref(),
+        Some(expected_summary)
+    );
+
+    let stop = client.stop().await.expect("request gateway stop");
+    assert_eq!(stop.outcome, GatewayStopResponseOutcome::Requested);
+
+    let supervisor = timeout(GATEWAY_OWNER_TEST_TIMEOUT, run)
+        .await
+        .expect("gateway run should stop after local client stop")
+        .expect("join gateway run after local client stop")
+        .expect("gateway run should return supervisor state");
+    assert!(supervisor.final_exit_result().is_ok());
 }

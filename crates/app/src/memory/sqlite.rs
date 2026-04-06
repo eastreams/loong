@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION, MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW,
-    WindowTurn, runtime_config::MemoryRuntimeConfig,
+    CanonicalMemoryKind, CanonicalMemoryRecord, MEMORY_OP_APPEND_TURN, MEMORY_OP_CLEAR_SESSION,
+    MEMORY_OP_REPLACE_TURNS, MEMORY_OP_WINDOW, MemoryScope, WindowTurn,
+    canonical_memory_record_from_persisted_turn, runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,8 +110,9 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 7;
-const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 11;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 9;
+const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
+const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
@@ -123,10 +125,61 @@ const SQL_UPSERT_SESSION_TURN_COUNT: &str =
                  turn_count = memory_session_state.turn_count + 1
              RETURNING turn_count";
 const SQL_DELETE_SESSION_STATE: &str = "DELETE FROM memory_session_state WHERE session_id = ?1";
+const SQL_DELETE_CANONICAL_RECORDS_FOR_SESSION: &str =
+    "DELETE FROM memory_canonical_records WHERE session_id = ?1";
 const SQL_SET_SESSION_TURN_COUNT: &str = "INSERT INTO memory_session_state(session_id, turn_count)
              VALUES (?1, ?2)
              ON CONFLICT(session_id) DO UPDATE SET
-                 turn_count = excluded.turn_count";
+             turn_count = excluded.turn_count";
+const SQL_INSERT_CANONICAL_RECORD: &str = "INSERT INTO memory_canonical_records(
+             session_id,
+             session_turn_index,
+             scope,
+             kind,
+             role,
+             content,
+             metadata_json,
+             ts
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)";
+const SQL_SELECT_TURNS_FOR_CANONICAL_REBUILD: &str =
+    "SELECT id, session_id, session_turn_index, role, content, ts
+             FROM turns
+             WHERE id > ?1
+             ORDER BY id ASC
+             LIMIT ?2";
+const SQL_COUNT_TURNS: &str = "SELECT COUNT(*) FROM turns";
+const SQL_COUNT_CANONICAL_RECORDS: &str = "SELECT COUNT(*) FROM memory_canonical_records";
+const SQL_COUNT_CANONICAL_FTS_ROWS: &str = "SELECT COUNT(*) FROM memory_canonical_records_fts";
+const SQL_SEARCH_CANONICAL_RECORDS: &str = "SELECT record.session_id,
+             record.session_turn_index,
+             record.scope,
+             record.kind,
+             record.role,
+             record.content,
+             record.metadata_json,
+             record.ts
+             FROM memory_canonical_records_fts AS fts
+             JOIN memory_canonical_records AS record
+               ON record.record_id = fts.rowid
+             LEFT JOIN sessions AS session
+               ON session.session_id = record.session_id
+             LEFT JOIN (
+                SELECT session_id, MAX(ts) AS archived_at
+                FROM session_events
+                WHERE event_kind = 'session_archived'
+                GROUP BY session_id
+             ) AS archived
+               ON archived.session_id = record.session_id
+             WHERE memory_canonical_records_fts MATCH ?1
+               AND (?2 IS NULL OR record.session_id <> ?2)
+               AND record.kind <> 'user_turn'
+               AND record.session_id NOT LIKE 'delegate:%'
+               AND (
+                    session.session_id IS NULL
+                    OR (session.kind = 'root' AND archived.archived_at IS NULL)
+               )
+             ORDER BY bm25(memory_canonical_records_fts), record.ts DESC, record.record_id DESC
+             LIMIT ?3";
 const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_turn_index
              FROM turns
              WHERE session_id = ?1
@@ -154,6 +207,8 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                         'memory_session_state',
                         'memory_summary_checkpoints',
                         'memory_summary_checkpoint_bodies',
+                        'memory_canonical_records',
+                        'memory_canonical_records_fts',
                         'approval_requests',
                         'approval_grants',
                         'session_tool_consent',
@@ -162,7 +217,14 @@ const SQL_COUNT_CURRENT_SCHEMA_OBJECTS: &str = "SELECT COUNT(*)
                 OR (type = 'index' AND name IN (
                         'idx_turns_session_id',
                         'idx_turns_session_turn_index',
+                        'idx_memory_canonical_records_scope_kind_ts',
+                        'idx_memory_canonical_records_session_turn',
                         'idx_approval_requests_session_status_requested_at'
+                    ))
+                OR (type = 'trigger' AND name IN (
+                        'memory_canonical_records_ai',
+                        'memory_canonical_records_ad',
+                        'memory_canonical_records_au'
                     ))";
 const SQL_QUERY_RECENT_PROMPT_TURNS_WITH_CHECKPOINT_META: &str = "SELECT turns.id,
              turns.role,
@@ -348,6 +410,12 @@ struct SummaryAppendMaintenanceState {
 struct AppendTurnResult {
     db_path: PathBuf,
     ts: i64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CanonicalMemorySearchHit {
+    pub record: CanonicalMemoryRecord,
+    pub session_turn_index: Option<i64>,
 }
 
 struct WindowLoadResult {
@@ -537,6 +605,7 @@ pub(super) fn clear_session(
                 .execute(rusqlite::params![session_id])
                 .map_err(|error| format!("clear memory session failed: {error}"))?
         };
+        delete_canonical_records_for_session(&tx, session_id)?;
         delete_session_state(&tx, session_id)?;
         delete_summary_checkpoint(&tx, session_id)?;
         tx.commit()
@@ -811,6 +880,21 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
 ) -> Result<(PathBuf, SqliteBootstrapDiagnostics), String> {
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
     let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
+    runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
+        let user_version = read_sqlite_user_version(conn)?;
+        let current_schema_ready = user_version == SQLITE_MEMORY_SCHEMA_VERSION
+            && sqlite_current_schema_objects_ready(conn)?;
+        if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
+            ensure_turn_session_index_and_state_metadata(conn)?;
+            ensure_approval_lifecycle_tables(conn)?;
+            ensure_session_tool_consent_storage(conn)?;
+            ensure_session_tool_policy_storage(conn)?;
+            ensure_summary_checkpoint_storage_layout(conn)?;
+            ensure_canonical_record_storage(conn)?;
+            write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+        }
+        Ok(())
+    })?;
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
 
@@ -986,6 +1070,10 @@ fn append_turn_internal(
                 ])
                 .map_err(|error| format!("insert memory turn failed: {error}"))?;
         }
+        insert_canonical_record(
+            &tx,
+            build_canonical_insert_input(session_id, next_session_turn_index, role, content, ts),
+        )?;
 
         let summary_window_size = default_window_size(config);
         if matches!(config.mode, crate::config::MemoryMode::WindowPlusSummary)
@@ -1017,6 +1105,58 @@ fn append_turn_internal(
     })?;
 
     Ok(AppendTurnResult { db_path: path, ts })
+}
+
+struct CanonicalInsertInput {
+    session_id: String,
+    session_turn_index: i64,
+    scope: MemoryScope,
+    kind: CanonicalMemoryKind,
+    role: Option<String>,
+    content: String,
+    metadata_json: String,
+    ts: i64,
+}
+
+fn build_canonical_insert_input(
+    session_id: &str,
+    session_turn_index: i64,
+    role: &str,
+    content: &str,
+    ts: i64,
+) -> CanonicalInsertInput {
+    let record = canonical_memory_record_from_persisted_turn(session_id, role, content);
+    CanonicalInsertInput {
+        session_id: session_id.to_owned(),
+        session_turn_index,
+        scope: record.scope,
+        kind: record.kind,
+        role: record.role,
+        content: record.content,
+        metadata_json: record.metadata.to_string(),
+        ts,
+    }
+}
+
+fn insert_canonical_record(conn: &Connection, input: CanonicalInsertInput) -> Result<(), String> {
+    let mut insert_record = prepare_cached_sqlite_statement(
+        conn,
+        SQL_INSERT_CANONICAL_RECORD,
+        "prepare canonical memory insert failed",
+    )?;
+    insert_record
+        .execute(rusqlite::params![
+            input.session_id,
+            input.session_turn_index,
+            input.scope.as_str(),
+            input.kind.as_str(),
+            input.role,
+            input.content,
+            input.metadata_json,
+            input.ts,
+        ])
+        .map(|_| ())
+        .map_err(|error| format!("insert canonical memory record failed: {error}"))
 }
 
 fn replace_turns_internal(
@@ -1061,6 +1201,7 @@ fn replace_turns_internal(
 
             delete_session_state(&tx, session_id)?;
             delete_summary_checkpoint(&tx, session_id)?;
+            delete_canonical_records_for_session(&tx, session_id)?;
 
             if !turns.is_empty() {
                 {
@@ -1088,6 +1229,16 @@ fn replace_turns_internal(
                             .map_err(|error| {
                                 format!("insert replaced memory turn failed: {error}")
                             })?;
+                        insert_canonical_record(
+                            &tx,
+                            build_canonical_insert_input(
+                                session_id,
+                                (index + 1) as i64,
+                                role,
+                                &turn.content,
+                                ts,
+                            ),
+                        )?;
                     }
                 }
 
@@ -1348,6 +1499,120 @@ fn open_sqlite_connection_with_diagnostics(
                 REFERENCES memory_summary_checkpoints(session_id) ON DELETE CASCADE,
               summary_body TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS memory_canonical_records(
+              record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              session_turn_index INTEGER NOT NULL,
+              scope TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              role TEXT NULL,
+              content TEXT NOT NULL,
+              metadata_json TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_canonical_records_session_turn
+              ON memory_canonical_records(session_id, session_turn_index);
+            CREATE INDEX IF NOT EXISTS idx_memory_canonical_records_scope_kind_ts
+              ON memory_canonical_records(scope, kind, ts DESC, record_id);
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_canonical_records_fts
+              USING fts5(
+                content,
+                session_id,
+                scope,
+                kind,
+                role,
+                metadata_json,
+                content='memory_canonical_records',
+                content_rowid='record_id'
+              );
+            CREATE TRIGGER IF NOT EXISTS memory_canonical_records_ai
+              AFTER INSERT ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(
+                rowid,
+                content,
+                session_id,
+                scope,
+                kind,
+                role,
+                metadata_json
+              )
+              VALUES (
+                new.record_id,
+                new.content,
+                new.session_id,
+                new.scope,
+                new.kind,
+                COALESCE(new.role, ''),
+                new.metadata_json
+              );
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_canonical_records_ad
+              AFTER DELETE ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(
+                memory_canonical_records_fts,
+                rowid,
+                content,
+                session_id,
+                scope,
+                kind,
+                role,
+                metadata_json
+              )
+              VALUES (
+                'delete',
+                old.record_id,
+                old.content,
+                old.session_id,
+                old.scope,
+                old.kind,
+                COALESCE(old.role, ''),
+                old.metadata_json
+              );
+            END;
+            CREATE TRIGGER IF NOT EXISTS memory_canonical_records_au
+              AFTER UPDATE ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(
+                memory_canonical_records_fts,
+                rowid,
+                content,
+                session_id,
+                scope,
+                kind,
+                role,
+                metadata_json
+              )
+              VALUES (
+                'delete',
+                old.record_id,
+                old.content,
+                old.session_id,
+                old.scope,
+                old.kind,
+                COALESCE(old.role, ''),
+                old.metadata_json
+              );
+              INSERT INTO memory_canonical_records_fts(
+                rowid,
+                content,
+                session_id,
+                scope,
+                kind,
+                role,
+                metadata_json
+              )
+              VALUES (
+                new.record_id,
+                new.content,
+                new.session_id,
+                new.scope,
+                new.kind,
+                COALESCE(new.role, ''),
+                new.metadata_json
+              );
+            END;
             CREATE TABLE IF NOT EXISTS approval_requests(
               approval_request_id TEXT PRIMARY KEY,
               session_id TEXT NOT NULL,
@@ -1394,14 +1659,16 @@ fn open_sqlite_connection_with_diagnostics(
         diagnostics.schema_init_ms = elapsed_ms(schema_init_started_at);
     }
 
-    if user_version < SQLITE_MEMORY_SCHEMA_VERSION {
+    if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
         ensure_turn_session_index_and_state_metadata(&conn)?;
         ensure_approval_lifecycle_tables(&conn)?;
         ensure_session_tool_consent_storage(&mut conn)?;
         ensure_session_tool_policy_storage(&conn)?;
         ensure_summary_checkpoint_storage_layout(&conn)?;
+        ensure_canonical_record_storage(&conn)?;
         write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
     }
+    ensure_control_plane_pairing_tables(&conn)?;
     diagnostics.schema_upgrade_ms = elapsed_ms(schema_upgrade_started_at);
 
     #[cfg(test)]
@@ -1434,11 +1701,15 @@ fn write_sqlite_user_version(conn: &Connection, version: i64) -> Result<(), Stri
 }
 
 fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String> {
-    conn.query_row(SQL_COUNT_CURRENT_SCHEMA_OBJECTS, [], |row| {
-        row.get::<_, i64>(0)
-    })
-    .map(|count| count == SQLITE_CURRENT_SCHEMA_OBJECT_COUNT)
-    .map_err(|error| format!("probe sqlite current schema objects failed: {error}"))
+    let object_count = conn
+        .query_row(SQL_COUNT_CURRENT_SCHEMA_OBJECTS, [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("probe sqlite current schema objects failed: {error}"))?;
+    let object_count_ready = object_count == SQLITE_CURRENT_SCHEMA_OBJECT_COUNT;
+    let canonical_fts_ready = !canonical_record_fts_needs_rebuild(conn)?;
+
+    Ok(object_count_ready && canonical_fts_ready)
 }
 
 fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(), String> {
@@ -1574,6 +1845,49 @@ fn ensure_approval_lifecycle_tables(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_control_plane_pairing_tables(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("control_plane_pairing");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS control_plane_pairing_requests(
+          pairing_request_id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          client_id TEXT NOT NULL,
+          public_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          requested_scopes_json TEXT NOT NULL,
+          status TEXT NOT NULL,
+          requested_at_ms INTEGER NOT NULL,
+          resolved_at_ms INTEGER NULL,
+          issued_token_id TEXT NULL,
+          last_error TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS control_plane_device_tokens(
+          token_id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL UNIQUE,
+          public_key TEXT NOT NULL,
+          role TEXT NOT NULL,
+          approved_scopes_json TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          issued_at_ms INTEGER NOT NULL,
+          expires_at_ms INTEGER NULL,
+          revoked_at_ms INTEGER NULL,
+          last_used_at_ms INTEGER NULL,
+          pairing_request_id TEXT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_control_plane_pairing_requests_status_requested_at
+          ON control_plane_pairing_requests(status, requested_at_ms DESC, pairing_request_id);
+        CREATE INDEX IF NOT EXISTS idx_control_plane_device_tokens_device_id
+          ON control_plane_device_tokens(device_id);
+        ",
+    )
+    .map_err(|error| format!("ensure control-plane pairing storage failed: {error}"))?;
+
+    Ok(())
+}
+
 fn ensure_session_tool_consent_storage(conn: &mut Connection) -> Result<(), String> {
     #[cfg(test)]
     test_support::record_sqlite_schema_repair("session_tool_consent");
@@ -1618,6 +1932,317 @@ fn ensure_session_tool_policy_storage(conn: &Connection) -> Result<(), String> {
         ",
     )
     .map_err(|error| format!("ensure session tool policy storage failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_canonical_record_storage(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("canonical_records");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS memory_canonical_records(
+          record_id INTEGER PRIMARY KEY AUTOINCREMENT,
+          session_id TEXT NOT NULL,
+          session_turn_index INTEGER NOT NULL,
+          scope TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          role TEXT NULL,
+          content TEXT NOT NULL,
+          metadata_json TEXT NOT NULL,
+          ts INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_canonical_records_session_turn
+          ON memory_canonical_records(session_id, session_turn_index);
+        CREATE INDEX IF NOT EXISTS idx_memory_canonical_records_scope_kind_ts
+          ON memory_canonical_records(scope, kind, ts DESC, record_id);
+        CREATE VIRTUAL TABLE IF NOT EXISTS memory_canonical_records_fts
+          USING fts5(
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json,
+            content='memory_canonical_records',
+            content_rowid='record_id'
+          );
+        CREATE TRIGGER IF NOT EXISTS memory_canonical_records_ai
+          AFTER INSERT ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            new.record_id,
+            new.content,
+            new.session_id,
+            new.scope,
+            new.kind,
+            COALESCE(new.role, ''),
+            new.metadata_json
+          );
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_canonical_records_ad
+          AFTER DELETE ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            memory_canonical_records_fts,
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            'delete',
+            old.record_id,
+            old.content,
+            old.session_id,
+            old.scope,
+            old.kind,
+            COALESCE(old.role, ''),
+            old.metadata_json
+          );
+        END;
+        CREATE TRIGGER IF NOT EXISTS memory_canonical_records_au
+          AFTER UPDATE ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            memory_canonical_records_fts,
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            'delete',
+            old.record_id,
+            old.content,
+            old.session_id,
+            old.scope,
+            old.kind,
+            COALESCE(old.role, ''),
+            old.metadata_json
+          );
+          INSERT INTO memory_canonical_records_fts(
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            new.record_id,
+            new.content,
+            new.session_id,
+            new.scope,
+            new.kind,
+            COALESCE(new.role, ''),
+            new.metadata_json
+          );
+        END;
+        ",
+    )
+    .map_err(|error| format!("ensure canonical memory storage failed: {error}"))?;
+
+    let needs_canonical_fts_rebuild = canonical_record_fts_needs_rebuild(conn)?;
+    if needs_canonical_fts_rebuild {
+        rebuild_canonical_record_storage(conn)?;
+        return Ok(());
+    }
+
+    rebuild_canonical_record_storage_if_needed(conn)?;
+
+    Ok(())
+}
+
+fn canonical_record_fts_needs_rebuild(conn: &Connection) -> Result<bool, String> {
+    let columns = sqlite_table_columns(conn, "memory_canonical_records_fts")?;
+    if columns.is_empty() {
+        return Ok(false);
+    }
+
+    let required_columns = [
+        "content",
+        "session_id",
+        "scope",
+        "kind",
+        "role",
+        "metadata_json",
+    ];
+    let has_all_required_columns = required_columns.iter().all(|required_column| {
+        columns
+            .iter()
+            .any(|current_column| current_column == required_column)
+    });
+
+    Ok(!has_all_required_columns)
+}
+
+fn drop_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        DROP TRIGGER IF EXISTS memory_canonical_records_ai;
+        DROP TRIGGER IF EXISTS memory_canonical_records_ad;
+        DROP TRIGGER IF EXISTS memory_canonical_records_au;
+        DROP TABLE IF EXISTS memory_canonical_records_fts;
+        ",
+    )
+    .map_err(|error| format!("drop canonical memory FTS index failed: {error}"))?;
+
+    Ok(())
+}
+
+fn create_canonical_record_fts_index(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "
+        CREATE VIRTUAL TABLE memory_canonical_records_fts
+          USING fts5(
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json,
+            content='memory_canonical_records',
+            content_rowid='record_id'
+          );
+        CREATE TRIGGER memory_canonical_records_ai
+          AFTER INSERT ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            new.record_id,
+            new.content,
+            new.session_id,
+            new.scope,
+            new.kind,
+            COALESCE(new.role, ''),
+            new.metadata_json
+          );
+        END;
+        CREATE TRIGGER memory_canonical_records_ad
+          AFTER DELETE ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            memory_canonical_records_fts,
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            'delete',
+            old.record_id,
+            old.content,
+            old.session_id,
+            old.scope,
+            old.kind,
+            COALESCE(old.role, ''),
+            old.metadata_json
+          );
+        END;
+        CREATE TRIGGER memory_canonical_records_au
+          AFTER UPDATE ON memory_canonical_records
+        BEGIN
+          INSERT INTO memory_canonical_records_fts(
+            memory_canonical_records_fts,
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            'delete',
+            old.record_id,
+            old.content,
+            old.session_id,
+            old.scope,
+            old.kind,
+            COALESCE(old.role, ''),
+            old.metadata_json
+          );
+          INSERT INTO memory_canonical_records_fts(
+            rowid,
+            content,
+            session_id,
+            scope,
+            kind,
+            role,
+            metadata_json
+          )
+          VALUES (
+            new.record_id,
+            new.content,
+            new.session_id,
+            new.scope,
+            new.kind,
+            COALESCE(new.role, ''),
+            new.metadata_json
+          );
+        END;
+        ",
+    )
+    .map_err(|error| format!("recreate canonical memory FTS index failed: {error}"))?;
+
+    Ok(())
+}
+
+fn rebuild_canonical_record_fts_index_contents(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "
+        INSERT INTO memory_canonical_records_fts(
+          rowid,
+          content,
+          session_id,
+          scope,
+          kind,
+          role,
+          metadata_json
+        )
+        SELECT
+          record_id,
+          content,
+          session_id,
+          scope,
+          kind,
+          COALESCE(role, ''),
+          metadata_json
+        FROM memory_canonical_records
+        ",
+        [],
+    )
+    .map(|_| ())
+    .map_err(|error| format!("rebuild canonical memory FTS index contents failed: {error}"))?;
 
     Ok(())
 }
@@ -2958,6 +3583,240 @@ fn delete_session_state(conn: &Connection, session_id: &str) -> Result<(), Strin
         .execute(rusqlite::params![session_id])
         .map(|_| ())
         .map_err(|error| format!("delete session-state failed: {error}"))
+}
+
+fn delete_canonical_records_for_session(conn: &Connection, session_id: &str) -> Result<(), String> {
+    let mut delete_records = prepare_cached_sqlite_statement(
+        conn,
+        SQL_DELETE_CANONICAL_RECORDS_FOR_SESSION,
+        "prepare canonical-record delete failed",
+    )?;
+    delete_records
+        .execute(rusqlite::params![session_id])
+        .map(|_| ())
+        .map_err(|error| format!("delete canonical records failed: {error}"))
+}
+
+fn rebuild_canonical_record_storage(conn: &Connection) -> Result<(), String> {
+    #[derive(Debug)]
+    struct PersistedTurnRow {
+        turn_id: i64,
+        session_id: String,
+        session_turn_index: i64,
+        role: String,
+        content: String,
+        ts: i64,
+    }
+
+    conn.execute_batch("SAVEPOINT canonical_rebuild")
+        .map_err(|error| format!("begin canonical rebuild savepoint failed: {error}"))?;
+
+    let rebuild_result = (|| {
+        drop_canonical_record_fts_index(conn)?;
+        conn.execute("DELETE FROM memory_canonical_records", [])
+            .map_err(|error| format!("clear canonical records before rebuild failed: {error}"))?;
+        let mut last_turn_id = 0_i64;
+
+        loop {
+            let mut select_turns = prepare_cached_sqlite_statement(
+                conn,
+                SQL_SELECT_TURNS_FOR_CANONICAL_REBUILD,
+                "prepare canonical rebuild turn query failed",
+            )?;
+            let rows = select_turns
+                .query_map(
+                    rusqlite::params![last_turn_id, CANONICAL_REBUILD_BATCH_SIZE],
+                    |row| {
+                        Ok(PersistedTurnRow {
+                            turn_id: row.get(0)?,
+                            session_id: row.get(1)?,
+                            session_turn_index: row.get(2)?,
+                            role: row.get(3)?,
+                            content: row.get(4)?,
+                            ts: row.get(5)?,
+                        })
+                    },
+                )
+                .map_err(|error| format!("query canonical rebuild turns failed: {error}"))?;
+            let turns = rows
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| format!("read canonical rebuild turns failed: {error}"))?;
+            drop(select_turns);
+
+            if turns.is_empty() {
+                break;
+            }
+
+            for turn in &turns {
+                last_turn_id = turn.turn_id;
+                insert_canonical_record(
+                    conn,
+                    build_canonical_insert_input(
+                        turn.session_id.as_str(),
+                        turn.session_turn_index,
+                        turn.role.as_str(),
+                        turn.content.as_str(),
+                        turn.ts,
+                    ),
+                )?;
+            }
+        }
+
+        create_canonical_record_fts_index(conn)?;
+        rebuild_canonical_record_fts_index_contents(conn)?;
+
+        Ok(())
+    })();
+
+    match rebuild_result {
+        Ok(()) => conn
+            .execute_batch("RELEASE canonical_rebuild")
+            .map_err(|error| format!("commit canonical rebuild savepoint failed: {error}")),
+        Err(error) => {
+            let _ = conn.execute_batch(
+                "ROLLBACK TO canonical_rebuild;
+                 RELEASE canonical_rebuild;",
+            );
+            Err(error)
+        }
+    }
+}
+
+fn rebuild_canonical_record_storage_if_needed(conn: &Connection) -> Result<(), String> {
+    let turn_count = conn
+        .query_row(SQL_COUNT_TURNS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count persisted turns for canonical rebuild failed: {error}"))?;
+    let canonical_count = conn
+        .query_row(SQL_COUNT_CANONICAL_RECORDS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical records failed: {error}"))?;
+    let canonical_fts_count = conn
+        .query_row(SQL_COUNT_CANONICAL_FTS_ROWS, [], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("count canonical FTS rows failed: {error}"))?;
+
+    if canonical_count == turn_count && canonical_fts_count == canonical_count {
+        return Ok(());
+    }
+
+    rebuild_canonical_record_storage(conn)
+}
+
+fn build_canonical_fts_query(query: &str) -> Option<String> {
+    let mut terms = Vec::new();
+    let mut current = String::new();
+    let push_term = |value: &mut String, terms: &mut Vec<String>| {
+        let trimmed = value.trim();
+        if trimmed.chars().count() >= 2 {
+            let candidate = trimmed.to_owned();
+            if !terms.contains(&candidate) {
+                terms.push(candidate);
+            }
+        }
+        value.clear();
+    };
+
+    for ch in query.chars() {
+        if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+            current.push(ch);
+        } else if !current.is_empty() {
+            push_term(&mut current, &mut terms);
+        }
+    }
+    if !current.is_empty() {
+        push_term(&mut current, &mut terms);
+    }
+
+    if terms.is_empty() {
+        return None;
+    }
+
+    let query = terms
+        .into_iter()
+        .take(6)
+        .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    if query.is_empty() { None } else { Some(query) }
+}
+
+pub(super) fn search_canonical_records_for_recall(
+    query: &str,
+    limit: usize,
+    exclude_session_id: Option<&str>,
+    config: &MemoryRuntimeConfig,
+) -> Result<Vec<CanonicalMemorySearchHit>, String> {
+    let Some(match_query) = build_canonical_fts_query(query) else {
+        return Ok(Vec::new());
+    };
+
+    let runtime = acquire_memory_runtime(config)?;
+    runtime.with_connection("memory.search_canonical_records", |conn| {
+        let mut stmt = prepare_cached_sqlite_statement(
+            conn,
+            SQL_SEARCH_CANONICAL_RECORDS,
+            "prepare canonical memory search statement failed",
+        )?;
+        let mut rows = stmt
+            .query(rusqlite::params![
+                match_query,
+                exclude_session_id,
+                limit.clamp(1, 16) as i64
+            ])
+            .map_err(|error| format!("query canonical memory search failed: {error}"))?;
+        let mut hits = Vec::new();
+
+        while let Some(row) = rows
+            .next()
+            .map_err(|error| format!("read canonical memory search row failed: {error}"))?
+        {
+            let session_id = row.get::<_, String>(0).map_err(|error| {
+                format!("decode canonical memory search session id failed: {error}")
+            })?;
+            let session_turn_index = row.get::<_, i64>(1).map_err(|error| {
+                format!("decode canonical memory search turn index failed: {error}")
+            })?;
+            let scope_text = row
+                .get::<_, String>(2)
+                .map_err(|error| format!("decode canonical memory search scope failed: {error}"))?;
+            let kind_text = row
+                .get::<_, String>(3)
+                .map_err(|error| format!("decode canonical memory search kind failed: {error}"))?;
+            let role = row
+                .get::<_, Option<String>>(4)
+                .map_err(|error| format!("decode canonical memory search role failed: {error}"))?;
+            let content = row.get::<_, String>(5).map_err(|error| {
+                format!("decode canonical memory search content failed: {error}")
+            })?;
+            let metadata_json = row.get::<_, String>(6).map_err(|error| {
+                format!("decode canonical memory search metadata failed: {error}")
+            })?;
+            let _ts = row.get::<_, i64>(7).map_err(|error| {
+                format!("decode canonical memory search timestamp failed: {error}")
+            })?;
+
+            let Some(scope) = MemoryScope::parse_id(scope_text.as_str()) else {
+                continue;
+            };
+            let Some(kind) = CanonicalMemoryKind::parse_id(kind_text.as_str()) else {
+                continue;
+            };
+            let metadata =
+                serde_json::from_str::<Value>(metadata_json.as_str()).unwrap_or_else(|_| json!({}));
+
+            hits.push(CanonicalMemorySearchHit {
+                record: CanonicalMemoryRecord {
+                    session_id,
+                    scope,
+                    kind,
+                    role,
+                    content,
+                    metadata,
+                },
+                session_turn_index: Some(session_turn_index),
+            });
+        }
+
+        Ok(hits)
+    })
 }
 
 fn maintain_summary_checkpoint_after_append(
@@ -7577,6 +8436,362 @@ mod tests {
             0,
             "expected known-overflow summary snapshots to avoid a second checkpoint metadata lookup after the window query already proved overflow"
         );
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn canonical_memory_search_returns_prior_session_hits_and_excludes_current_session() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-canonical-memory-search-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("canonical-search.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct(
+            "prior-session",
+            "assistant",
+            "Deployment cutoff is 17:00 Beijing time and requires a release note.",
+            &config,
+        )
+        .expect("append prior session recall candidate");
+        append_turn_direct(
+            "active-session",
+            "assistant",
+            "Deployment cutoff draft that should not be recalled from the active session.",
+            &config,
+        )
+        .expect("append active session recall candidate");
+        append_turn_direct(
+            "delegate-child",
+            "assistant",
+            "Delegate child turn that should stay out of root-session recall.",
+            &config,
+        )
+        .expect("append delegate child recall candidate");
+        append_turn_direct(
+            "root-archived",
+            "assistant",
+            "Archived root turn that should stay out of resumable recall.",
+            &config,
+        )
+        .expect("append archived root recall candidate");
+
+        let runtime = acquire_memory_runtime(&config).expect("acquire memory runtime");
+        runtime
+            .with_connection_mut("test.seed_canonical_search_session_metadata", |conn| {
+                conn.execute_batch(
+                    "
+                    INSERT INTO sessions(session_id, kind, parent_session_id, label, state, created_at, updated_at, last_error)
+                    VALUES
+                      ('prior-session', 'root', NULL, NULL, 'ready', 100, 100, NULL),
+                      ('delegate-child', 'delegate_child', 'prior-session', NULL, 'ready', 200, 200, NULL),
+                      ('root-archived', 'root', NULL, NULL, 'ready', 300, 300, NULL);
+                    INSERT INTO session_events(session_id, event_kind, actor_session_id, payload_json, ts)
+                    VALUES ('root-archived', 'session_archived', NULL, '{}', 400);
+                    ",
+                )
+                .map_err(|error| format!("seed canonical search session metadata failed: {error}"))?;
+                Ok(())
+            })
+            .expect("seed canonical search session metadata");
+
+        let hits = search_canonical_records_for_recall(
+            "deployment cutoff release note",
+            4,
+            Some("active-session"),
+            &config,
+        )
+        .expect("search canonical memory");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.session_id, "prior-session");
+        assert_eq!(hits[0].record.kind, CanonicalMemoryKind::AssistantTurn);
+        assert_eq!(hits[0].record.scope, MemoryScope::Session);
+        assert_eq!(hits[0].session_turn_index, Some(1));
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn canonical_memory_search_preserves_structured_scope_and_kind_metadata() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-canonical-memory-structured-search-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("canonical-structured-search.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "Workspace release checklist includes rollback and smoke test steps.",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+
+        append_turn_direct("workspace-session", "assistant", &payload, &config)
+            .expect("append structured canonical payload");
+
+        let hits = search_canonical_records_for_recall("rollback smoke test", 4, None, &config)
+            .expect("search canonical memory");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.scope, MemoryScope::Workspace);
+        assert_eq!(hits[0].record.kind, CanonicalMemoryKind::ImportedProfile);
+        assert_eq!(hits[0].record.metadata["source"], "workspace-import");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn canonical_memory_search_matches_metadata_only_queries() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-canonical-memory-metadata-only-search-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("canonical-metadata-only-search.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+
+        let payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "release checklist",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+
+        append_turn_direct("workspace-session", "assistant", &payload, &config)
+            .expect("append structured canonical payload");
+
+        let hits = search_canonical_records_for_recall("workspace-import", 4, None, &config)
+            .expect("search canonical memory by metadata");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.scope, MemoryScope::Workspace);
+        assert_eq!(hits[0].record.kind, CanonicalMemoryKind::ImportedProfile);
+        assert_eq!(hits[0].record.metadata["source"], "workspace-import");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_repairs_stale_canonical_fts_metadata_schema() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-canonical-memory-stale-fts-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("stale-canonical-fts.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
+
+        let conn = Connection::open(&db_path).expect("open sqlite db");
+        conn.execute_batch(
+            "
+            DROP TRIGGER IF EXISTS memory_canonical_records_ai;
+            DROP TRIGGER IF EXISTS memory_canonical_records_ad;
+            DROP TRIGGER IF EXISTS memory_canonical_records_au;
+            DROP TABLE IF EXISTS memory_canonical_records_fts;
+            CREATE VIRTUAL TABLE memory_canonical_records_fts
+              USING fts5(content, content='memory_canonical_records', content_rowid='record_id');
+            CREATE TRIGGER memory_canonical_records_ai
+              AFTER INSERT ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(rowid, content)
+              VALUES (new.record_id, new.content);
+            END;
+            CREATE TRIGGER memory_canonical_records_ad
+              AFTER DELETE ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
+              VALUES ('delete', old.record_id, old.content);
+            END;
+            CREATE TRIGGER memory_canonical_records_au
+              AFTER UPDATE ON memory_canonical_records
+            BEGIN
+              INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
+              VALUES ('delete', old.record_id, old.content);
+              INSERT INTO memory_canonical_records_fts(rowid, content)
+              VALUES (new.record_id, new.content);
+            END;
+            PRAGMA user_version = 8;
+            ",
+        )
+        .expect("degrade canonical FTS schema");
+        drop(conn);
+
+        let payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "release checklist",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+        append_turn_direct("workspace-session", "assistant", &payload, &config)
+            .expect("append structured canonical payload");
+
+        ensure_memory_db_ready(None, &config).expect("repair stale canonical FTS schema");
+
+        let hits = search_canonical_records_for_recall("workspace-import", 4, None, &config)
+            .expect("search canonical memory after repair");
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.metadata["source"], "workspace-import");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_backfills_canonical_records_for_legacy_turns() {
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-canonical-memory-migration-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("legacy-canonical.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("open legacy sqlite db");
+        conn.execute_batch(
+            "
+            PRAGMA user_version = 4;
+            CREATE TABLE turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              session_turn_index INTEGER,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE INDEX idx_turns_session_id ON turns(session_id, id);
+            CREATE UNIQUE INDEX idx_turns_session_turn_index
+              ON turns(session_id, session_turn_index);
+            CREATE TABLE memory_session_state(
+              session_id TEXT PRIMARY KEY,
+              turn_count INTEGER NOT NULL
+            );
+            CREATE TABLE memory_summary_checkpoints(
+              session_id TEXT PRIMARY KEY,
+              summarized_through_turn_id INTEGER NOT NULL,
+              summary_before_turn_id INTEGER,
+              summary_body_bytes INTEGER NOT NULL DEFAULT 0,
+              summary_budget_chars INTEGER NOT NULL,
+              summary_window_size INTEGER NOT NULL,
+              summary_format_version INTEGER NOT NULL,
+              updated_at_ts INTEGER NOT NULL
+            );
+            CREATE TABLE memory_summary_checkpoint_bodies(
+              session_id TEXT PRIMARY KEY
+                REFERENCES memory_summary_checkpoints(session_id) ON DELETE CASCADE,
+              summary_body TEXT NOT NULL
+            );
+            CREATE TABLE approval_requests(
+              approval_request_id TEXT PRIMARY KEY,
+              session_id TEXT NOT NULL,
+              turn_id TEXT NOT NULL,
+              tool_call_id TEXT NOT NULL,
+              tool_name TEXT NOT NULL,
+              approval_key TEXT NOT NULL,
+              status TEXT NOT NULL,
+              decision TEXT NULL,
+              request_payload_json TEXT NOT NULL,
+              governance_snapshot_json TEXT NOT NULL,
+              requested_at INTEGER NOT NULL,
+              resolved_at INTEGER NULL,
+              resolved_by_session_id TEXT NULL,
+              executed_at INTEGER NULL,
+              last_error TEXT NULL
+            );
+            CREATE TABLE approval_grants(
+              scope_session_id TEXT NOT NULL,
+              approval_key TEXT NOT NULL,
+              created_by_session_id TEXT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              PRIMARY KEY(scope_session_id, approval_key)
+            );
+            CREATE INDEX idx_approval_requests_session_status_requested_at
+              ON approval_requests(session_id, status, requested_at DESC, approval_request_id);
+            ",
+        )
+        .expect("create legacy schema");
+        conn.execute(
+            "INSERT INTO turns(session_id, session_turn_index, role, content, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "legacy-session",
+                1_i64,
+                "assistant",
+                "Legacy rollout fix includes rollback and smoke test verification.",
+                1_717_000_000_i64
+            ],
+        )
+        .expect("insert legacy turn");
+        conn.execute(
+            "INSERT INTO memory_session_state(session_id, turn_count)
+             VALUES (?1, ?2)",
+            rusqlite::params!["legacy-session", 1_i64],
+        )
+        .expect("insert session state");
+        drop(conn);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        let _ = ensure_memory_db_ready(None, &config).expect("upgrade legacy sqlite db");
+
+        let hits = search_canonical_records_for_recall("rollback smoke test", 4, None, &config)
+            .expect("search canonical memory after migration");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.session_id, "legacy-session");
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

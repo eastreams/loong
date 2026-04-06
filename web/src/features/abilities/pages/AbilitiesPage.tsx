@@ -1,21 +1,73 @@
-import { useTranslation } from "react-i18next";
+import { useState } from "react";
+import "../../../styles/abilities.css";
+import { useWebConnection } from "../../../hooks/useWebConnection";
+import { ChannelsPanel } from "../components/ChannelsPanel";
+import { MascotPanel } from "../components/MascotPanel";
+import { PersonalizationPanel } from "../components/PersonalizationPanel";
+import { SkillsPanel } from "../components/SkillsPanel";
+import { AbilitiesNav, type AbilitiesSection } from "../components/AbilitiesNav";
+import { useAbilitiesData } from "../hooks/useAbilitiesData";
 
 export default function AbilitiesPage() {
-  const { t } = useTranslation();
+  const connection = useWebConnection();
+  const { canAccessProtectedApi, authRevision, markUnauthorized } = connection;
+  const [activeSection, setActiveSection] = useState<AbilitiesSection>("personalization");
+  const { personalization, channels, skills, reloadSection, replacePersonalization } =
+    useAbilitiesData({
+    activeSection,
+    canAccessProtectedApi,
+    authRevision,
+    markUnauthorized,
+    });
+
+  const renderSection = () => {
+    if (activeSection === "personalization") {
+      return (
+        <PersonalizationPanel
+          data={personalization.data}
+          loading={personalization.loading}
+          error={personalization.error}
+          onRetry={() => reloadSection("personalization")}
+          onSaved={replacePersonalization}
+        />
+      );
+    }
+
+    if (activeSection === "channels") {
+      return (
+        <ChannelsPanel
+          data={channels.data}
+          loading={channels.loading}
+          error={channels.error}
+          onRetry={() => reloadSection("channels")}
+        />
+      );
+    }
+
+    if (activeSection === "mascot") {
+      return <MascotPanel />;
+    }
+
+    return (
+      <SkillsPanel
+        data={skills.data}
+        loading={skills.loading}
+        error={skills.error}
+        onRetry={() => reloadSection("skills")}
+      />
+    );
+  };
 
   return (
-    <div className="page">
-      <section className="hero-block">
-        <div className="hero-eyebrow">{t("abilities.eyebrow")}</div>
-        <h1 className="hero-title">{t("abilities.title")}</h1>
-        <p className="hero-subtitle">{t("abilities.subtitle")}</p>
-      </section>
-
-      <section className="panel">
-        <div className="panel-body">
-          <p className="panel-copy">{t("abilities.placeholder")}</p>
-        </div>
-      </section>
+    <div className="page page-abilities">
+      <div className="abilities-shell">
+        <aside className="abilities-sidebar">
+          <AbilitiesNav activeSection={activeSection} onChange={setActiveSection} />
+        </aside>
+        <section className="abilities-main">
+          {renderSection()}
+        </section>
+      </div>
     </div>
   );
 }

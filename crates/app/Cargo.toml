@@ -103,6 +103,7 @@ tokio-rustls = { version = "0.26.4", optional = true }
 libc = "0.2"
 tracing.workspace = true
 zip.workspace = true
+include_dir = "0.7"
 
 [dev-dependencies]
 axum.workspace = true

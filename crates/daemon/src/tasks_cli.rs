@@ -225,6 +225,7 @@ async fn execute_create_command(
         current_session_id,
         task,
         label,
+        None,
         timeout_seconds,
         binding,
     )

@@ -1,4 +1,4 @@
-import { useTranslation } from "react-i18next";
+﻿import { useTranslation } from "react-i18next";
 import { RefreshCw } from "lucide-react";
 import { ChoiceField } from "../../../components/inputs/ChoiceField";
 import { Panel } from "../../../components/surfaces/Panel";
@@ -188,13 +188,13 @@ function buildToolMeta(
   item: DashboardToolItem,
   t: ReturnType<typeof useTranslation>["t"],
 ): string {
-  return [
+  const segments = [
     formatToolSource(item.source, t),
     formatToolCapabilityState(item.capabilityState, t),
     item.detail,
-  ]
-    .filter((part) => part && part.trim().length > 0)
-    .join(" ? ");
+  ].filter((part) => part && part.trim().length > 0);
+
+  return segments.join(" · ");
 }
 
 function buildConnectivityCopy(
@@ -489,13 +489,14 @@ export default function DashboardPage() {
                   <div className="hero-eyebrow">{t("dashboard.eyebrow")}</div>
                   <h1 className="hero-title">
                     {showDebugConsole
-                      ? t("dashboard.debug.title", { defaultValue: "调试控制台" })
+                      ? t("dashboard.debug.title", { defaultValue: "调试终端" })
                       : t("dashboard.title")}
                   </h1>
                   <p className="hero-subtitle">
                     {showDebugConsole
                       ? t("dashboard.debug.subtitle", {
-                        defaultValue: "在一个只读的终端视图里查看当前 runtime、provider、工具与配置快照。",
+                        defaultValue:
+                          "以只读终端视图查看当前轮次、工具活动与进程输出。",
                       })
                       : t("dashboard.subtitle")}
                   </p>
@@ -508,7 +509,7 @@ export default function DashboardPage() {
                 >
                   {showDebugConsole
                     ? t("dashboard.debug.back", { defaultValue: "返回状态" })
-                    : t("dashboard.debug.open", { defaultValue: "Debug Console" })}
+                    : t("dashboard.debug.open", { defaultValue: "Debug Terminal" })}
                 </button>
               </div>
             </section>
@@ -517,8 +518,8 @@ export default function DashboardPage() {
               <section className="dashboard-debug-shell">
                 <Panel
                   className="dashboard-debug-panel"
-                  eyebrow={t("dashboard.debug.eyebrow", { defaultValue: "Runtime / Debug Console" })}
-                  title={t("dashboard.debug.panelTitle", { defaultValue: "只读调试视图" })}
+                  eyebrow={t("dashboard.debug.eyebrow", { defaultValue: "Runtime / Debug Terminal" })}
+                  title=""
                 >
                   <DebugConsolePanel
                     command={debugConsoleCommand}
@@ -536,7 +537,6 @@ export default function DashboardPage() {
 
                 <section className="dashboard-settings">
                   <Panel
-                    eyebrow={t("dashboard.settings.eyebrow")}
                     title={t("dashboard.settings.title")}
                   >
 

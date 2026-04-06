@@ -735,6 +735,16 @@ LoongClaw's external-skills runtime is operator-visible now instead of staying h
 loong skills list
 loong skills info release-guard
 
+# Install one bundled first-party skill into the managed runtime
+loongclaw skills install-bundled github-issues
+
+# Inspect a bundled-only skill before installing it
+loongclaw skills info native-mcp
+
+# Inspect or install a bundled pack
+loongclaw skills info anthropic-office
+loongclaw skills install-bundled anthropic-office
+
 # Download a remote skill package under the external-skills policy boundary
 loong skills fetch https://skills.sh/release-guard.tgz --approve-download
 
@@ -748,6 +758,37 @@ loong skills fetch https://skills.sh/release-guard.tgz \
 restrictions. `loong skills fetch --install --replace` gives operators a thin update path over
 the existing managed install lifecycle without bypassing the same runtime policy checks that govern
 downloads and installed skill execution.
+
+Bundled first-party skills now ship with the repository and binary distribution
+as local packaged assets. `loongclaw onboard` can preinstall a lightweight
+subset directly during guided setup, while heavier or dependency-sensitive
+bundled skills remain available through `loongclaw skills install-bundled`.
+
+Current onboarding-exposed preinstalled skills include:
+
+- `github-issues`
+- `systematic-debugging`
+- `plan`
+- `Anthropic Office pack`
+- `Minimax Office pack`
+
+Current bundled-only skills that do not appear in onboarding by default include:
+
+- `native-mcp`
+- `mcporter`
+
+The Office packs keep overlapping document skills out of the first-run choice
+list while still shipping both families as bundled assets:
+
+- `Anthropic Office pack` installs `docx`, `pdf`, `pptx`, and `xlsx`
+- `Minimax Office pack` installs `minimax-docx`, `minimax-pdf`, and `minimax-xlsx`
+- `skill-creator` stays separate and is not part of the Office pack grouping
+
+Pack ids are first-class for operator workflows now:
+
+- `loongclaw skills info anthropic-office`
+- `loongclaw skills install-bundled anthropic-office`
+- `loongclaw skills info minimax-office`
 
 <a id="core-capabilities"></a>
 
@@ -775,7 +816,8 @@ downloads and installed skill execution.
   lifecycle hooks
 - ACP acts as a separate control plane for backend, binding, registry, runtime, and related
   coordination work
-- profiles, summaries, migration, and canonical history together support long-lived context
+- profiles, summaries, migration, canonical history, and runtime-visible recall tools such as
+  `session_search`, `memory_search`, and `memory_get` together support long-lived context
 
 ### Delivery Surfaces
 
@@ -839,7 +881,7 @@ For the full layered execution model, see [ARCHITECTURE.md](ARCHITECTURE.md) and
 | [SDK Docs](docs/sdk/index.md)                               | Capability authoring, internal integration seams, validator meaning, and promotion-oriented SDK references  |
 | [Roadmap](docs/ROADMAP.md)                                  | Stage-based milestones and direction                                                                        |
 | [Product Sense](docs/PRODUCT_SENSE.md)                      | Current product contract and user journey                                                                   |
-| [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, and memory                                  |
+| [Product Specs](docs/product-specs/index.md)                | User-facing requirements for onboarding, ask, doctor, channels, memory, and session recall                  |
 | [Contribution Areas](docs/references/contribution-areas.md) | The kinds of design, engineering, docs, and community help that would make the biggest difference right now |
 | [Reliability](docs/RELIABILITY.md)                          | Build and kernel invariants                                                                                 |
 | [Security](SECURITY.md)                                     | Security policy and disclosure path                                                                         |

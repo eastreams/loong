@@ -3452,7 +3452,7 @@ impl ToolExtensionAdapter for ClawMigrationToolExtension {
 
         let core_outcome = core
             .execute_core_tool(ToolCoreRequest {
-                tool_name: "claw.migrate".to_owned(),
+                tool_name: "config.import".to_owned(),
                 payload,
             })
             .await?;

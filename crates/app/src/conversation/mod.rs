@@ -20,6 +20,7 @@ mod session_history;
 mod subagent;
 mod tool_discovery_state;
 mod tool_result_compaction;
+mod trust_projection;
 mod turn_budget;
 mod turn_checkpoint;
 mod turn_coordinator;
@@ -88,7 +89,13 @@ pub use session_history::{
     load_turn_checkpoint_event_summary,
 };
 pub use subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentBudgetSnapshot, ConstrainedSubagentContractView,
+    ConstrainedSubagentControlScope, ConstrainedSubagentCoordinationAction,
+    ConstrainedSubagentCoordinationActionKind, ConstrainedSubagentExecution,
+    ConstrainedSubagentHandle, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
+    ConstrainedSubagentProfile, ConstrainedSubagentRole, ConstrainedSubagentRuntimeBinding,
+    ConstrainedSubagentTerminalReason, coordination_actions_for_subagent_handle,
+    subagent_surface_fields,
 };
 pub(crate) use tool_discovery_state::latest_tool_discovery_state_from_assistant_contents;
 pub use turn_budget::SafeLaneFailureRouteReason;

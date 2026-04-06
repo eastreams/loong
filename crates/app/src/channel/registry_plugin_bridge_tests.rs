@@ -82,6 +82,19 @@ fn sample_channel_bridge_manifest_with_setup(
     }
 }
 
+fn sample_channel_bridge_manifest_with_plugin_id(
+    plugin_id: &str,
+    channel_id: Option<&str>,
+    metadata: BTreeMap<String, String>,
+    setup: Option<loongclaw_kernel::PluginSetup>,
+) -> loongclaw_kernel::PluginManifest {
+    let mut manifest = sample_channel_bridge_manifest_with_setup(channel_id, metadata, setup);
+
+    manifest.plugin_id = plugin_id.to_owned();
+
+    manifest
+}
+
 fn write_plugin_package_manifest(
     root: &Path,
     directory_name: &str,
@@ -498,12 +511,14 @@ fn channel_inventory_reports_managed_bridge_ambiguity_and_setup_guidance() {
         vec!["https://example.test/docs/weixin-bridge"],
         Some("Run the ClawBot setup flow before enabling this bridge."),
     );
-    let first_manifest = sample_channel_bridge_manifest_with_setup(
+    let first_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-a",
         Some("weixin"),
         compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         Some(compatible_setup.clone()),
     );
-    let second_manifest = sample_channel_bridge_manifest_with_setup(
+    let second_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-b",
         Some("weixin"),
         compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
         Some(compatible_setup),
@@ -539,5 +554,270 @@ fn channel_inventory_reports_managed_bridge_ambiguity_and_setup_guidance() {
     assert_eq!(
         first_plugin.setup_remediation.as_deref(),
         Some("Run the ClawBot setup flow before enabling this bridge.")
+    );
+}
+
+#[test]
+fn channel_inventory_reports_duplicate_compatible_plugin_ids_as_distinct_ambiguity() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let first_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-shared",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-shared",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+
+    assert_eq!(
+        discovery.ambiguity_status,
+        Some(ChannelPluginBridgeDiscoveryAmbiguityStatus::DuplicateCompatiblePluginIds)
+    );
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::NotConfigured)
+    );
+    assert_eq!(
+        discovery.compatible_plugin_ids,
+        vec![
+            "weixin-bridge-shared".to_owned(),
+            "weixin-bridge-shared".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn channel_inventory_reports_duplicate_configured_plugin_id_selection_failure() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let first_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-shared",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-shared",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.weixin.managed_bridge_plugin_id = Some("weixin-bridge-shared".to_owned());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+
+    assert_eq!(discovery.ambiguity_status, None);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::ConfiguredPluginIdDuplicated)
+    );
+    assert_eq!(
+        discovery.configured_plugin_id.as_deref(),
+        Some("weixin-bridge-shared")
+    );
+    assert_eq!(discovery.selected_plugin_id, None);
+}
+
+#[test]
+fn channel_inventory_resolves_managed_bridge_selection_from_configured_plugin_id() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let first_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-a",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-b",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.weixin.managed_bridge_plugin_id = Some("weixin-bridge-b".to_owned());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+
+    assert_eq!(discovery.ambiguity_status, None);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::SelectedCompatible)
+    );
+    assert_eq!(
+        discovery.configured_plugin_id.as_deref(),
+        Some("weixin-bridge-b")
+    );
+    assert_eq!(
+        discovery.selected_plugin_id.as_deref(),
+        Some("weixin-bridge-b")
+    );
+}
+
+#[test]
+fn channel_inventory_reports_missing_configured_managed_bridge_plugin_id() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let first_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-a",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let second_manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-b",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-a", &first_manifest);
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-b", &second_manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+    config.weixin.managed_bridge_plugin_id = Some("missing-plugin".to_owned());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+
+    assert_eq!(discovery.ambiguity_status, None);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::ConfiguredPluginNotFound)
+    );
+    assert_eq!(
+        discovery.configured_plugin_id.as_deref(),
+        Some("missing-plugin")
+    );
+    assert_eq!(discovery.selected_plugin_id, None);
+}
+
+#[test]
+fn channel_inventory_marks_single_compatible_plugin_without_explicit_selection() {
+    let install_root = TempDir::new().expect("create managed install root");
+    let manifest = sample_channel_bridge_manifest_with_plugin_id(
+        "weixin-bridge-only",
+        Some("weixin"),
+        compatible_bridge_metadata("wechat_clawbot_ilink_bridge", "weixin_reply_loop"),
+        Some(bridge_setup_with_docs_and_remediation(
+            "channel",
+            Vec::new(),
+            None,
+        )),
+    );
+    let mut config = LoongClawConfig::default();
+
+    write_plugin_package_manifest(install_root.path(), "weixin-bridge-only", &manifest);
+
+    config.external_skills.install_root = Some(install_root.path().display().to_string());
+
+    let inventory = channel_inventory(&config);
+    let weixin = inventory
+        .channel_surfaces
+        .iter()
+        .find(|surface| surface.catalog.id == "weixin")
+        .expect("weixin surface");
+    let discovery = weixin
+        .plugin_bridge_discovery
+        .as_ref()
+        .expect("weixin managed discovery");
+
+    assert_eq!(discovery.ambiguity_status, None);
+    assert_eq!(
+        discovery.selection_status,
+        Some(ChannelPluginBridgeSelectionStatus::SingleCompatibleMatch)
+    );
+    assert_eq!(discovery.configured_plugin_id, None);
+    assert_eq!(
+        discovery.selected_plugin_id.as_deref(),
+        Some("weixin-bridge-only")
     );
 }

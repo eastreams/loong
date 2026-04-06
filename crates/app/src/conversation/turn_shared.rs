@@ -232,7 +232,6 @@ fn first_failed_provider_lane_tool_call_id(trace: &ToolBatchExecutionTrace) -> O
     let tool_call_id = failed_outcome.tool_call_id.as_str();
     Some(tool_call_id)
 }
-
 fn tool_followup_request_entry(intent: &ToolIntent) -> Value {
     let tool_name = effective_followup_tool_name(intent);
     let request = effective_followup_request(intent);
@@ -1141,6 +1140,7 @@ pub fn build_tool_followup_user_prompt(
     loop_warning_reason: Option<&str>,
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
+    _tool_request_summary: Option<&str>,
 ) -> String {
     build_tool_followup_user_prompt_with_context(
         user_input,
@@ -1548,6 +1548,7 @@ where
             loop_warning_reason,
             Some(tool_result_text),
             Some(bounded_result.as_str()),
+            None,
         ),
     }));
     messages
@@ -1558,6 +1559,7 @@ where
 pub fn build_tool_failure_followup_tail<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
+    tool_request_summary: Option<&str>,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     payload_mapper: F,
@@ -1570,7 +1572,7 @@ where
         tool_failure_reason,
         user_input,
         loop_warning_reason,
-        None,
+        tool_request_summary,
         payload_mapper,
     )
 }
@@ -1588,14 +1590,13 @@ where
 {
     let mut messages = Vec::new();
     append_followup_preface(&mut messages, assistant_preface);
-
     if let Some(tool_request_summary) = tool_request_summary {
+        let bounded_request = payload_mapper("tool_request", tool_request_summary);
         messages.push(serde_json::json!({
             "role": "assistant",
-            "content": format!("[tool_request]\n{tool_request_summary}"),
+            "content": format!("[tool_request]\n{bounded_request}"),
         }));
     }
-
     let repair_guidance =
         render_tool_failure_repair_guidance(tool_failure_reason, tool_request_summary);
     let bounded_failure = payload_mapper("tool_failure", tool_failure_reason);
@@ -1627,6 +1628,7 @@ where
 pub fn build_tool_driven_followup_tail<F>(
     assistant_preface: &str,
     payload: &ToolDrivenFollowupPayload,
+    tool_request_summary: Option<&str>,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     payload_mapper: F,
@@ -1639,7 +1641,7 @@ where
         payload,
         user_input,
         loop_warning_reason,
-        None,
+        tool_request_summary,
         payload_mapper,
     )
 }
@@ -2488,6 +2490,7 @@ mod tests {
         let tail = build_tool_failure_followup_tail(
             "preface",
             "tool_timeout ...(truncated 200 chars)",
+            None,
             "summarize note.md",
             Some("warning"),
             |_, _| "bounded-failure".to_owned(),
@@ -2518,6 +2521,7 @@ mod tests {
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
+            None,
             "summarize note.md",
             Some("warning"),
             |_, _| "bounded-result".to_owned(),
@@ -2548,6 +2552,7 @@ mod tests {
         let tail = build_tool_driven_followup_tail(
             "preface",
             &payload,
+            None,
             "summarize note.md",
             Some("warning"),
             |_, _| "bounded-failure".to_owned(),
@@ -2568,6 +2573,42 @@ mod tests {
             .expect("user followup prompt should exist");
         assert!(!user_prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
         assert!(user_prompt.contains("Loop warning:\nwarning"));
+    }
+
+    #[test]
+    fn tool_driven_followup_tail_preserves_request_summary_for_failure_payloads() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "payload.command contains path separators".to_owned(),
+        };
+        let tool_request_summary =
+            r#"{"tool":"shell.exec","request":{"command":"C:\\Windows\\System32\\RM.EXE"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "summarize note.md",
+            Some("warning"),
+            |label, _| match label {
+                "tool_request" => "bounded-request".to_owned(),
+                _ => "bounded-failure".to_owned(),
+            },
+        );
+
+        assert!(tail.iter().any(|message| {
+            message.get("role") == Some(&Value::String("assistant".to_owned()))
+                && message
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|content| content == "[tool_request]\nbounded-request")
+                    .unwrap_or(false)
+        }));
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("retry with `rm.exe`"));
     }
 
     #[test]
@@ -2681,6 +2722,7 @@ mod tests {
             None,
             Some(r#"[ok] {"payload_truncated":true}"#),
             None,
+            None,
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
         assert!(prompt.contains("Original request:\nsummarize this result"));
@@ -2693,6 +2735,7 @@ mod tests {
             None,
             Some(r#"[ok] {"payload_truncated":false}"#),
             Some(r#"[ok] {"payload_truncated":true}"#),
+            None,
         );
         assert!(prompt.contains(TOOL_TRUNCATION_HINT_PROMPT));
         assert!(prompt.contains("Original request:\nsummarize this result"));
@@ -2726,6 +2769,7 @@ mod tests {
             "find the latest ai news and summarize it",
             None,
             Some(tool_result.as_str()),
+            None,
             None,
         );
 

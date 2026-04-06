@@ -86,6 +86,7 @@ const WEIXIN_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: WEIXIN_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -96,6 +97,7 @@ const WEIXIN_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: WEIXIN_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -192,6 +194,7 @@ const QQBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: QQBOT_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -202,6 +205,7 @@ const QQBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: QQBOT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -304,6 +308,7 @@ const ONEBOT_SEND_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation {
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: false,
     requirements: ONEBOT_SEND_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 
@@ -314,6 +319,7 @@ const ONEBOT_SERVE_OPERATION: ChannelCatalogOperation = ChannelCatalogOperation 
     availability: ChannelCatalogOperationAvailability::Stub,
     tracks_runtime: true,
     requirements: ONEBOT_SERVE_REQUIREMENTS,
+    default_target_kind: None,
     supported_target_kinds: &[ChannelCatalogTargetKind::Conversation],
 };
 

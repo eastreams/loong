@@ -83,9 +83,9 @@ All decisions from the research repository. Status reflects implementation reali
 | ID | Decision | Implementation Status |
 |----|----------|---------------------|
 | D-016 | MemoryStore trait (4 typed async methods) | Not started — using string dispatch (TD-008) |
-| D-017 | MemoryScope enum (Task, Session, Agent, Global) | Partial — scoped memory vocabulary now exists in app runtime as `Session`, `User`, `Agent`, and `Workspace`, but the original task/global vocabulary was not adopted and retrieval is not yet productized |
-| D-018 | SQLite + FTS5 default backend (WAL, feature-gated sqlite-vec) | Partial — SQLite canonical store, memory-system registry, and staged retrieval orchestration ship on `dev`, but FTS5/search are not yet present |
-| D-019 | Mandatory provenance fields (10 fields: UUID, trust_tier, hash, agent, TTL...) | Partial — canonical records already carry typed scope/kind/session metadata, but a stable operator-visible provenance contract for retrieval results is still missing |
+| D-017 | MemoryScope enum (Task, Session, Agent, Global) | Partial — scoped memory vocabulary now exists in the app runtime as `Session`, `User`, `Agent`, and `Workspace`, and canonical recall now persists those scopes, but the original task/global vocabulary was not adopted |
+| D-018 | SQLite + FTS5 default backend (WAL, feature-gated sqlite-vec) | Partial — SQLite canonical store, WAL, operator-facing canonical FTS recall, and staged retrieval orchestration ship on `dev`, but sqlite-vec and richer ranking are not started |
+| D-019 | Mandatory provenance fields (10 fields: UUID, trust_tier, hash, agent, TTL...) | Partial — canonical records and operator-facing recall now surface scope/kind/metadata/timestamp provenance, but UUID/trust tier/hash/TTL are not yet enforced |
 | D-020 | Configurable trust scoring (Tier 0-3) | Not started |
 | D-021 | Blake3 content hashing (feature-gated `pure` mode) | Not started |
 | D-022 | Capability-scoped deletion (tombstone audit trail) | Not started |

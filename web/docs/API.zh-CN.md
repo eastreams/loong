@@ -262,6 +262,10 @@
 
 删除会话。
 
+补充说明：
+- 当前没有独立的“重命名会话”后端接口
+- Web 里的会话名修改目前是前端本地覆写，不会写回 daemon session 模型
+
 ### `GET /api/chat/sessions/{id}/history`
 
 读取会话历史。

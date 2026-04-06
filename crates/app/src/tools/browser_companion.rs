@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use wait_timeout::ChildExt;
 
+use crate::process_launch::resolve_command_invocation;
+
 const DEFAULT_BROWSER_COMPANION_SCOPE_ID: &str = "__global";
 const BROWSER_COMPANION_PROTOCOL: &str = "loongclaw.browser_companion.v1";
 const BROWSER_COMPANION_SPAWN_RETRY_ATTEMPTS: usize = 20;
@@ -129,8 +131,10 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
         let encoded = serde_json::to_vec(request)
             .map_err(|error| format!("browser_companion_request_encode_failed: {error}"))?;
         let mut child = retry_executable_file_busy(|| {
-            let mut process = Command::new(command);
+            let invocation = resolve_command_invocation(command, std::iter::empty::<&str>());
+            let mut process = Command::new(&invocation.program);
             process
+                .args(&invocation.args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());

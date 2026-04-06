@@ -261,6 +261,37 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
         Ok(token)
     }
 
+    pub fn issue_scoped_token(
+        &self,
+        pack_id: &str,
+        agent_id: &str,
+        allowed_capabilities: &BTreeSet<Capability>,
+        ttl_s: u64,
+    ) -> Result<CapabilityToken, KernelError> {
+        let pack = self
+            .packs
+            .get(pack_id)
+            .ok_or_else(|| KernelError::PackNotFound(pack_id.to_owned()))?;
+        self.assert_pack_grants(pack, allowed_capabilities)?;
+
+        let now = self.clock.now_epoch_s();
+        let mut scoped_pack = pack.clone();
+        scoped_pack.granted_capabilities = allowed_capabilities.clone();
+        let token = self
+            .policy
+            .issue_token(&scoped_pack, agent_id, now, ttl_s)?;
+
+        self.audit.record(self.new_event(
+            now,
+            Some(agent_id.to_owned()),
+            AuditEventKind::TokenIssued {
+                token: token.clone(),
+            },
+        ))?;
+
+        Ok(token)
+    }
+
     pub fn revoke_token(
         &self,
         token_id: &str,
@@ -292,6 +323,38 @@ impl<P: PolicyEngine> LoongClawKernel<P> {
             agent_id.map(std::string::ToString::to_string),
             kind,
         ))?;
+        Ok(())
+    }
+
+    pub fn authorize_operation(
+        &self,
+        pack_id: &str,
+        token: &CapabilityToken,
+        plane: ExecutionPlane,
+        tier: PlaneTier,
+        primary_adapter: &str,
+        delegated_core_adapter: Option<&str>,
+        operation: &str,
+        required_capabilities: &BTreeSet<Capability>,
+    ) -> Result<(), KernelError> {
+        let pack = self.get_pack(pack_id)?;
+        let now = self.authorize_pack_operation(pack, token, required_capabilities, None)?;
+
+        let primary_adapter = primary_adapter.to_owned();
+        let delegated_core_adapter = delegated_core_adapter.map(std::string::ToString::to_string);
+        let operation = operation.to_owned();
+        let record = PlaneInvocationRecord {
+            timestamp_epoch_s: now,
+            agent_id: token.agent_id.as_str(),
+            pack_id: pack.pack_id.as_str(),
+            plane,
+            tier,
+            primary_adapter,
+            delegated_core_adapter,
+            operation,
+            required_capabilities,
+        };
+        self.record_plane_invocation(record)?;
         Ok(())
     }
 

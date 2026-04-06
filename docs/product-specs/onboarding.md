@@ -33,6 +33,17 @@ next.
 - [ ] Interactive onboarding lets the user choose a default web search provider
       and asks for a web-search credential env source immediately when that
       provider requires a key.
+- [ ] Interactive onboarding can offer a curated bundled-skill preinstall step
+      for low-friction first-party skills, while leaving heavier bundled skills
+      available for later manual installation through the skills CLI.
+- [ ] When multiple bundled skill families overlap in capability, onboarding
+      can surface pack-level choices instead of every individual skill, so the
+      first-run selection list stays readable.
+- [ ] Bundled pack ids remain available outside onboarding through the skills
+      CLI, including pack-level `info` and `install-bundled` flows.
+- [ ] When the user selects bundled skills during onboarding, the flow persists
+      the managed external-skills runtime settings and installs the selected
+      skills before reporting success.
 - [ ] Non-interactive onboarding supports `--web-search-provider` and
       `--web-search-api-key`, and explicit web-search choices are not silently
       replaced by heuristic fallbacks.

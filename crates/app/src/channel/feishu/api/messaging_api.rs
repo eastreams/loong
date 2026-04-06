@@ -48,12 +48,24 @@ pub(crate) fn convert_message_content_to_feishu(
             Ok(FeishuOutboundMessageBody::MarkdownCard(text.clone()))
         }
         MessageContent::Rich { content } => Ok(FeishuOutboundMessageBody::Post(content.clone())),
-        MessageContent::Image { .. } => Err(ApiError::NotSupported(
-            "Image upload not yet supported".to_owned(),
-        )),
-        MessageContent::File { .. } => Err(ApiError::NotSupported(
-            "File upload not yet supported".to_owned(),
-        )),
+        MessageContent::Image { url, .. } => {
+            let image_key = url.trim();
+            if image_key.is_empty() {
+                return Err(ApiError::InvalidRequest(
+                    "Image content requires a non-empty image key".to_owned(),
+                ));
+            }
+            Ok(FeishuOutboundMessageBody::Image(image_key.to_owned()))
+        }
+        MessageContent::File { url, .. } => {
+            let file_key = url.trim();
+            if file_key.is_empty() {
+                return Err(ApiError::InvalidRequest(
+                    "File content requires a non-empty file key".to_owned(),
+                ));
+            }
+            Ok(FeishuOutboundMessageBody::File(file_key.to_owned()))
+        }
         MessageContent::Audio { .. } => Err(ApiError::NotSupported(
             "Audio upload not yet supported".to_owned(),
         )),
@@ -393,15 +405,29 @@ mod tests {
     }
 
     #[test]
-    fn convert_image_content_not_supported() {
+    fn convert_image_content_with_valid_key() {
         let content = MessageContent::Image {
-            url: "http://example.com/image.png".to_owned(),
+            url: "img_v2_123456".to_owned(),
+            width: None,
+            height: None,
+        };
+        let result = convert_message_content_to_feishu(&content);
+        assert!(result.is_ok());
+        assert!(
+            matches!(result.unwrap(), FeishuOutboundMessageBody::Image(key) if key == "img_v2_123456")
+        );
+    }
+
+    #[test]
+    fn convert_image_content_with_empty_key_returns_error() {
+        let content = MessageContent::Image {
+            url: "".to_owned(),
             width: None,
             height: None,
         };
         let result = convert_message_content_to_feishu(&content);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ApiError::NotSupported(_)));
+        assert!(matches!(result.unwrap_err(), ApiError::InvalidRequest(_)));
     }
 
     #[test]

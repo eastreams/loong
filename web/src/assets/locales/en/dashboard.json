@@ -1,7 +1,7 @@
 {
   "eyebrow": "Status",
-  "title": "Runtime console",
-  "subtitle": "Check provider, runtime, tools, and local config in one place.",
+  "title": "Runtime",
+  "subtitle": "Inspect the current provider, tools, sessions, and runtime state.",
   "cards": {
     "runtime": "Runtime",
     "provider": "Provider",
@@ -145,9 +145,9 @@
     "helper": "These actions are still a UI shell. The controlled write path will be wired in a later phase."
   },
   "debug": {
-    "title": "Debug Console",
-    "subtitle": "Inspect recent runtime operations in a read-only console view.",
-    "open": "Debug Console",
+    "title": "Debug Terminal",
+    "subtitle": "Inspect the current turn, tool activity, and process output in a read-only terminal view.",
+    "open": "Debug Terminal",
     "back": "Back to Status",
     "eyebrow": "Runtime / Debug Console",
     "panelTitle": "Read-only debug view",

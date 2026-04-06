@@ -1959,6 +1959,68 @@ fn execute_skills_command_installs_bundled_browser_companion_preview() {
 }
 
 #[test]
+fn execute_skills_command_installs_bundled_pack_members() {
+    let root = unique_temp_dir("loongclaw-skills-cli-bundled-pack-install");
+    let _env = SkillsCliEnvironmentGuard::set(&[]);
+    let config_path = write_external_skills_config(&root, true);
+
+    let install = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::InstallBundled {
+                skill_id: "anthropic-office".to_owned(),
+                replace: false,
+            },
+        },
+    )
+    .expect("bundled pack install should succeed");
+
+    assert_eq!(
+        install.outcome.payload["pack"]["pack_id"],
+        "anthropic-office"
+    );
+    let installed_members = install.outcome.payload["installed_members"]
+        .as_array()
+        .expect("installed members should be an array");
+    assert!(
+        installed_members
+            .iter()
+            .any(|member| member["skill_id"] == "docx"),
+        "anthropic office pack should install docx"
+    );
+    assert!(
+        installed_members
+            .iter()
+            .any(|member| member["skill_id"] == "xlsx"),
+        "anthropic office pack should install xlsx"
+    );
+
+    let info = loongclaw_daemon::skills_cli::execute_skills_command(
+        loongclaw_daemon::skills_cli::SkillsCommandOptions {
+            config: Some(config_path.display().to_string()),
+            json: false,
+            command: loongclaw_daemon::skills_cli::SkillsCommands::Info {
+                skill_id: "anthropic-office".to_owned(),
+            },
+        },
+    )
+    .expect("bundled pack info should succeed");
+
+    assert_eq!(info.outcome.payload["pack"]["pack_id"], "anthropic-office");
+    assert!(
+        info.outcome.payload["pack"]["members"]
+            .as_array()
+            .expect("pack members should be an array")
+            .iter()
+            .any(|member| member["skill_id"] == "pptx"),
+        "pack info should include member listing"
+    );
+
+    fs::remove_dir_all(&root).ok();
+}
+
+#[test]
 fn execute_skills_command_policy_round_trips_persisted_config() {
     let root = unique_temp_dir("loongclaw-skills-cli-policy");
     let config_path = write_external_skills_config(&root, false);

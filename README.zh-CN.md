@@ -110,6 +110,11 @@ LoongClaw 的目标不只是个人助手。
 
 这个方向也不只停留在软件工作流里。再往后看，我们也关心硬件、机器人以及具身智能相关的延展空间。对我们来说，LoongClaw 的价值不单单是把模型接进聊天界面，而是逐步长成一个能够连接数字世界与真实行动的基础层。
 
+补充一点：围绕长期上下文，LoongClaw 现在已经把回忆能力真实暴露到运行时工具面里。
+`session_search` 用来检索 canonical session history，也就是有序、权威的 session turns 和 events；
+`memory_search` 与 `memory_get` 则分别负责检索和读取 workspace durable memory。
+这样后续工作不必再靠人工翻 transcript，同时也能保持不同 recall surface 的边界清晰。
+
 <a id="why-teams-build-on-loongclaw"></a>
 
 ## 为什么团队会选择 LoongClaw
@@ -479,6 +484,68 @@ loong migrate --mode rollback_last_apply --output ~/.loongclaw/config.toml
 ```
 
 更深一层的迁移模式还包括 `merge_profiles` 和 `map_external_skills`，分别用于多来源 profile 合并和外部 skills 工件映射。
+
+<a id="manage-external-skills"></a>
+## 管理外部技能
+
+LoongClaw 现在把 external-skills runtime 明确暴露给操作者，而不是只藏在迁移辅助流程里。
+
+```bash
+# 查看当前可解析的 managed / user / project skills
+loongclaw skills list
+loongclaw skills info release-guard
+
+# 把一个仓库内置 bundled skill 安装到 managed runtime
+loongclaw skills install-bundled github-issues
+
+# 对 bundled-only 技能先做检查，再决定是否安装
+loongclaw skills info native-mcp
+
+# 查看或安装一个 bundled pack
+loongclaw skills info anthropic-office
+loongclaw skills install-bundled anthropic-office
+
+# 在显式审批边界内下载远端 skill 包
+loongclaw skills fetch https://skills.sh/release-guard.tgz --approve-download
+
+# 下载后直接同步安装到 managed runtime
+loongclaw skills fetch https://skills.sh/release-guard.tgz \
+  --approve-download --install --replace
+```
+
+`loongclaw skills list` 和 `loongclaw skills info` 会显示每个 skill 的
+`invocation_policy`、所需环境变量或二进制、需要的运行时配置门槛，以及声明的工具限制。
+
+现在还存在一层区分：
+
+- `bundled skills`：跟随仓库和二进制一起分发，不需要运行时再去下载
+- `onboard 预装选择`：在 `loongclaw onboard` 里直接给用户勾选并安装的那一小部分 bundled skills
+
+当前会在 onboarding 里直接暴露的预装技能包括：
+
+- `github-issues`
+- `systematic-debugging`
+- `plan`
+- `Anthropic Office pack`
+- `Minimax Office pack`
+
+当前已经 bundled、但默认不在 onboarding 首屏暴露的技能包括：
+
+- `native-mcp`
+- `mcporter`
+
+文档类技能现在也做了 pack 分层，避免在首轮 onboarding 里出现两套
+重复的 `docx/pdf/xlsx` 单项：
+
+- `Anthropic Office pack` 会安装 `docx`、`pdf`、`pptx`、`xlsx`
+- `Minimax Office pack` 会安装 `minimax-docx`、`minimax-pdf`、`minimax-xlsx`
+- `skill-creator` 仍然保持独立，不会并入 Office pack
+
+现在 pack id 也已经是一等的操作者入口：
+
+- `loongclaw skills info anthropic-office`
+- `loongclaw skills install-bundled anthropic-office`
+- `loongclaw skills info minimax-office`
 
 <a id="core-capabilities"></a>
 ## 核心能力

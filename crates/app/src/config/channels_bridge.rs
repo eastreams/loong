@@ -161,6 +161,8 @@ pub struct WeixinChannelConfig {
     #[serde(default)]
     pub default_account: Option<String>,
     #[serde(default)]
+    pub managed_bridge_plugin_id: Option<String>,
+    #[serde(default)]
     pub bridge_url: Option<String>,
     #[serde(default = "default_weixin_bridge_url_env")]
     pub bridge_url_env: Option<String>,
@@ -184,6 +186,8 @@ pub struct QqbotChannelConfig {
     #[serde(default)]
     pub default_account: Option<String>,
     #[serde(default)]
+    pub managed_bridge_plugin_id: Option<String>,
+    #[serde(default)]
     pub app_id: Option<SecretRef>,
     #[serde(default = "default_qqbot_app_id_env")]
     pub app_id_env: Option<String>,
@@ -206,6 +210,8 @@ pub struct OnebotChannelConfig {
     pub account_id: Option<String>,
     #[serde(default)]
     pub default_account: Option<String>,
+    #[serde(default)]
+    pub managed_bridge_plugin_id: Option<String>,
     #[serde(default)]
     pub websocket_url: Option<String>,
     #[serde(default = "default_onebot_websocket_url_env")]
@@ -343,6 +349,7 @@ impl WeixinChannelConfig {
                 .and_then(|account| account.account_id.clone())
                 .or_else(|| self.account_id.clone()),
             default_account: None,
+            managed_bridge_plugin_id: self.managed_bridge_plugin_id.clone(),
             bridge_url: account_override
                 .and_then(|account| account.bridge_url.clone())
                 .or_else(|| self.bridge_url.clone()),
@@ -543,6 +550,7 @@ impl QqbotChannelConfig {
                 .and_then(|account| account.account_id.clone())
                 .or_else(|| self.account_id.clone()),
             default_account: None,
+            managed_bridge_plugin_id: self.managed_bridge_plugin_id.clone(),
             app_id: account_override
                 .and_then(|account| account.app_id.clone())
                 .or_else(|| self.app_id.clone()),
@@ -751,6 +759,7 @@ impl OnebotChannelConfig {
                 .and_then(|account| account.account_id.clone())
                 .or_else(|| self.account_id.clone()),
             default_account: None,
+            managed_bridge_plugin_id: self.managed_bridge_plugin_id.clone(),
             websocket_url: account_override
                 .and_then(|account| account.websocket_url.clone())
                 .or_else(|| self.websocket_url.clone()),
@@ -1162,6 +1171,30 @@ mod tests {
             config.access_token_env.as_deref(),
             Some(ONEBOT_ACCESS_TOKEN_ENV)
         );
+    }
+
+    #[test]
+    fn weixin_deserializes_managed_bridge_plugin_id() {
+        let config: WeixinChannelConfig = serde_json::from_value(json!({
+            "managed_bridge_plugin_id": "weixin-clawbot"
+        }))
+        .expect("deserialize weixin config");
+
+        assert_eq!(
+            config.managed_bridge_plugin_id.as_deref(),
+            Some("weixin-clawbot")
+        );
+    }
+
+    #[test]
+    fn plugin_backed_channel_defaults_keep_managed_bridge_plugin_id_empty() {
+        let weixin = WeixinChannelConfig::default();
+        let qqbot = QqbotChannelConfig::default();
+        let onebot = OnebotChannelConfig::default();
+
+        assert_eq!(weixin.managed_bridge_plugin_id, None);
+        assert_eq!(qqbot.managed_bridge_plugin_id, None);
+        assert_eq!(onebot.managed_bridge_plugin_id, None);
     }
 
     #[test]

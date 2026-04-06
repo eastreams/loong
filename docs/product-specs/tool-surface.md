@@ -12,6 +12,9 @@ and I do not get routed into disabled or still-planned capabilities.
       are derived from the same runtime-visible tool policy.
 - [ ] Tools that are compiled out, disabled by config, or unavailable on the
       current surface are not advertised as callable.
+- [ ] Recall surfaces distinguish canonical session history tools such as
+      `session_search` from workspace durable-memory tools such as
+      `memory_search` and `memory_get`.
 - [ ] Tools that remain visible in order to unlock a capability, such as
       `external_skills.policy`, are explicitly treated as enablement surfaces,
       while the corresponding lifecycle or invoke tools remain hidden until that

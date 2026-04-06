@@ -194,6 +194,61 @@ impl<T> PaginatedResult<T> {
     }
 }
 
+/// Trait for message sending capabilities.
+#[async_trait]
+pub trait MessageSendApi: Send + Sync {
+    /// Send a message to a normalized channel target.
+    async fn send_message(
+        &self,
+        target: &ChannelOutboundTarget,
+        content: &MessageContent,
+        options: Option<SendOptions>,
+    ) -> ApiResult<Message>;
+
+    /// Reply to an existing message.
+    async fn reply(
+        &self,
+        target: &ChannelOutboundTarget,
+        content: &MessageContent,
+        options: Option<SendOptions>,
+    ) -> ApiResult<Message>;
+}
+
+/// Trait for message query capabilities.
+#[async_trait]
+pub trait MessageQueryApi: Send + Sync {
+    /// Get a message by ID.
+    async fn get_message(&self, id: &str) -> ApiResult<Option<Message>>;
+
+    /// List messages for a normalized channel session.
+    async fn list_messages(
+        &self,
+        session: &ChannelSession,
+        pagination: Option<Pagination>,
+    ) -> ApiResult<PaginatedResult<Message>>;
+
+    /// Search messages.
+    async fn search_messages(
+        &self,
+        query: &str,
+        pagination: Option<Pagination>,
+    ) -> ApiResult<PaginatedResult<Message>>;
+}
+
+/// Trait for message edit capabilities.
+#[async_trait]
+pub trait MessageEditApi: Send + Sync {
+    /// Edit/update an existing message.
+    async fn edit_message(&self, id: &str, content: &MessageContent) -> ApiResult<Message>;
+}
+
+/// Trait for message deletion capabilities.
+#[async_trait]
+pub trait MessageDeleteApi: Send + Sync {
+    /// Delete a message.
+    async fn delete_message(&self, id: &str) -> ApiResult<()>;
+}
+
 /// Trait for messaging capabilities
 ///
 /// Implement this trait for channels that support sending and receiving messages.
@@ -293,5 +348,82 @@ mod tests {
         let pagination = Pagination::with_limit(1001);
 
         assert_eq!(pagination.limit, Some(1000));
+    }
+
+    fn assert_message_send_api<T: super::MessageSendApi>() {}
+    fn assert_message_query_api<T: super::MessageQueryApi>() {}
+    fn assert_message_edit_api<T: super::MessageEditApi>() {}
+    fn assert_message_delete_api<T: super::MessageDeleteApi>() {}
+
+    #[test]
+    fn narrow_trait_assertions_compile() {
+        struct TestMessagingApi;
+
+        #[async_trait::async_trait]
+        impl super::MessageSendApi for TestMessagingApi {
+            async fn send_message(
+                &self,
+                _target: &crate::channel::ChannelOutboundTarget,
+                _content: &super::MessageContent,
+                _options: Option<super::SendOptions>,
+            ) -> super::ApiResult<super::Message> {
+                panic!("compile-time assertion only")
+            }
+
+            async fn reply(
+                &self,
+                _target: &crate::channel::ChannelOutboundTarget,
+                _content: &super::MessageContent,
+                _options: Option<super::SendOptions>,
+            ) -> super::ApiResult<super::Message> {
+                panic!("compile-time assertion only")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl super::MessageQueryApi for TestMessagingApi {
+            async fn get_message(&self, _id: &str) -> super::ApiResult<Option<super::Message>> {
+                panic!("compile-time assertion only")
+            }
+
+            async fn list_messages(
+                &self,
+                _session: &crate::channel::ChannelSession,
+                _pagination: Option<super::Pagination>,
+            ) -> super::ApiResult<super::PaginatedResult<super::Message>> {
+                panic!("compile-time assertion only")
+            }
+
+            async fn search_messages(
+                &self,
+                _query: &str,
+                _pagination: Option<super::Pagination>,
+            ) -> super::ApiResult<super::PaginatedResult<super::Message>> {
+                panic!("compile-time assertion only")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl super::MessageEditApi for TestMessagingApi {
+            async fn edit_message(
+                &self,
+                _id: &str,
+                _content: &super::MessageContent,
+            ) -> super::ApiResult<super::Message> {
+                panic!("compile-time assertion only")
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl super::MessageDeleteApi for TestMessagingApi {
+            async fn delete_message(&self, _id: &str) -> super::ApiResult<()> {
+                panic!("compile-time assertion only")
+            }
+        }
+
+        assert_message_send_api::<TestMessagingApi>();
+        assert_message_query_api::<TestMessagingApi>();
+        assert_message_edit_api::<TestMessagingApi>();
+        assert_message_delete_api::<TestMessagingApi>();
     }
 }

@@ -94,7 +94,7 @@ pub(super) fn execute_bash_tool_with_config(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "bash.exec requires payload.command".to_owned())?;
-        let cwd = parse_bash_cwd(payload)?;
+        let cwd = parse_bash_cwd(payload, config)?;
         let timeout_ms = parse_bash_timeout_ms(payload)?;
 
         if !config.bash_exec.is_runtime_ready() {
@@ -175,13 +175,27 @@ fn reject_unknown_bash_exec_fields(payload: &serde_json::Map<String, Value>) -> 
 }
 
 #[cfg(feature = "tool-shell")]
-fn parse_bash_cwd(payload: &serde_json::Map<String, Value>) -> Result<PathBuf, String> {
+fn parse_bash_cwd(
+    payload: &serde_json::Map<String, Value>,
+    config: &super::runtime_config::ToolRuntimeConfig,
+) -> Result<PathBuf, String> {
     match payload.get("cwd") {
         Some(cwd) => cwd
             .as_str()
             .map(PathBuf::from)
             .ok_or_else(|| "bash.exec payload.cwd must be a string".to_owned()),
-        None => Ok(std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))),
+        None => {
+            let current_dir = std::env::current_dir();
+            if let Ok(current_dir) = current_dir {
+                return Ok(current_dir);
+            }
+
+            if let Some(file_root) = config.file_root.clone() {
+                return Ok(file_root);
+            }
+
+            Ok(PathBuf::from("."))
+        }
     }
 }
 

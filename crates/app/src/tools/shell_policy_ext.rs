@@ -8,6 +8,20 @@ const SHELL_INTERNAL_APPROVAL_CONTEXT_KEY: &str = "shell_approval";
 const SHELL_INTERNAL_APPROVAL_KEY_FIELD: &str = "approval_key";
 const REPAIRABLE_TOOL_INPUT_PREFIX: &str = "repairable_tool_input: ";
 
+fn repairable_tool_input_reason(reason: String) -> String {
+    format!("{REPAIRABLE_TOOL_INPUT_PREFIX}{reason}")
+}
+
+pub(crate) fn is_repairable_tool_input_reason(reason: &str) -> bool {
+    reason.starts_with(REPAIRABLE_TOOL_INPUT_PREFIX)
+}
+
+pub(crate) fn strip_repairable_tool_input_prefix(reason: &str) -> &str {
+    reason
+        .strip_prefix(REPAIRABLE_TOOL_INPUT_PREFIX)
+        .unwrap_or(reason)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellPolicyDefault {
     Deny,
@@ -66,28 +80,25 @@ impl ToolPolicyExtension {
             return Ok(());
         }
 
-        let normalized_command =
-            validate_shell_command_name(trimmed_command).map_err(|reason| {
-                PolicyError::ToolCallDenied {
-                    tool_name: tool_name.to_owned(),
-                    reason,
-                }
-            })?;
-
-        if self.hard_deny.contains(normalized_command.as_str()) {
-            let reason = format!("command `{normalized_command}` is blocked by shell policy");
-            return Err(PolicyError::ToolCallDenied {
+        let basename = validate_shell_command_name(trimmed_command).map_err(|reason| {
+            PolicyError::ToolCallDenied {
                 tool_name: tool_name.to_owned(),
                 reason,
+            }
+        })?;
+
+        if self.hard_deny.contains(basename.as_str()) {
+            return Err(PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason: format!("command `{basename}` is blocked by shell policy"),
             });
         }
 
-        if self.allow.contains(normalized_command.as_str()) {
+        if self.allow.contains(basename.as_str()) {
             return Ok(());
         }
 
-        let approval_key =
-            shell_exec_approval_key_for_normalized_command(normalized_command.as_str());
+        let approval_key = shell_exec_approval_key_for_normalized_command(basename.as_str());
         let approved_by_internal_context =
             shell_exec_matches_trusted_internal_approval(payload, approval_key.as_str());
         if approved_by_internal_context {
@@ -96,15 +107,12 @@ impl ToolPolicyExtension {
 
         match self.default_mode {
             ShellPolicyDefault::Allow => Ok(()),
-            ShellPolicyDefault::Deny => {
-                let reason = format!(
-                    "command `{normalized_command}` is not in the allow list (default-deny policy)"
-                );
-                Err(PolicyError::ToolCallDenied {
-                    tool_name: tool_name.to_owned(),
-                    reason,
-                })
-            }
+            ShellPolicyDefault::Deny => Err(PolicyError::ToolCallDenied {
+                tool_name: tool_name.to_owned(),
+                reason: format!(
+                    "command `{basename}` is not in the allow list (default-deny policy)"
+                ),
+            }),
         }
     }
 }
@@ -117,25 +125,6 @@ pub(crate) fn authorize_direct_shell_payload(
     extension
         .authorize_shell_payload("shell.exec", payload)
         .map_err(|error| format!("policy_denied: {error}"))
-}
-
-fn repairable_tool_input_reason(reason: String) -> String {
-    let prefixed_reason = format!("{REPAIRABLE_TOOL_INPUT_PREFIX}{reason}");
-    prefixed_reason
-}
-
-#[cfg(test)]
-fn is_repairable_tool_input_reason(reason: &str) -> bool {
-    reason.starts_with(REPAIRABLE_TOOL_INPUT_PREFIX)
-}
-
-#[cfg(test)]
-fn strip_repairable_tool_input_prefix(reason: &str) -> &str {
-    if let Some(stripped_reason) = reason.strip_prefix(REPAIRABLE_TOOL_INPUT_PREFIX) {
-        return stripped_reason;
-    }
-
-    reason
 }
 
 pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, String> {
@@ -156,16 +145,18 @@ pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, Strin
     }
 
     if trimmed.contains(char::is_whitespace) {
-        return Err(
-            "policy_denied: shell command must not contain embedded whitespace; use `args` instead"
-                .to_owned(),
+        let reason = repairable_tool_input_reason(
+            "shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
         );
+        return Err(reason);
     }
 
     if trimmed.contains('/') || trimmed.contains('\\') {
-        return Err(format!(
-            "policy_denied: shell command `{trimmed}` must be a bare command name without path separators"
-        ));
+        let reason = format!(
+            "shell.exec payload.command `{trimmed}` must be a bare lowercase executable name without path separators."
+        );
+        let reason = repairable_tool_input_reason(reason);
+        return Err(reason);
     }
 
     let normalized = trimmed.to_ascii_lowercase();
@@ -231,6 +222,7 @@ impl PolicyExtension for ToolPolicyExtension {
         let Some(payload) = payload.and_then(serde_json::Value::as_object) else {
             return Ok(());
         };
+
         self.authorize_shell_payload(tool_name, payload)
     }
 }

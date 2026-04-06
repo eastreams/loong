@@ -62,6 +62,7 @@ pub fn run_migrate_cli(options: MigrateCommandOptions) -> CliResult<()> {
 }
 
 async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> {
+    validate_migrate_cli_options(&options)?;
     let config = load_migrate_cli_runtime_config(&options)?;
     let kernel_ctx = mvp::context::bootstrap_kernel_context_with_config(
         "daemon-migrate-cli",
@@ -70,7 +71,7 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     )?;
     let outcome = mvp::tools::execute_tool(
         ToolCoreRequest {
-            tool_name: "claw.migrate".to_owned(),
+            tool_name: "config.import".to_owned(),
             payload: build_migrate_tool_payload(&options),
         },
         &kernel_ctx,
@@ -79,6 +80,40 @@ async fn run_migrate_cli_async(options: MigrateCommandOptions) -> CliResult<()> 
     .map_err(|error| translate_migrate_cli_error(&options, error))?;
 
     render_migrate_tool_outcome(&options, outcome)
+}
+
+fn validate_migrate_cli_options(options: &MigrateCommandOptions) -> CliResult<()> {
+    let mode = options.mode;
+    match mode {
+        MigrateMode::Apply | MigrateMode::ApplySelected => {
+            require_flag_value(options.input.as_deref(), "input", mode)?;
+            require_flag_value(options.output.as_deref(), "output", mode)?;
+        }
+        MigrateMode::Plan
+        | MigrateMode::Discover
+        | MigrateMode::PlanMany
+        | MigrateMode::RecommendPrimary
+        | MigrateMode::MergeProfiles
+        | MigrateMode::MapExternalSkills => {
+            require_flag_value(options.input.as_deref(), "input", mode)?;
+        }
+        MigrateMode::RollbackLastApply => {
+            require_flag_value(options.output.as_deref(), "output", mode)?;
+        }
+    }
+    Ok(())
+}
+
+fn require_flag_value(value: Option<&str>, flag: &str, mode: MigrateMode) -> CliResult<()> {
+    if value.map(str::trim).filter(|raw| !raw.is_empty()).is_some() {
+        return Ok(());
+    }
+    let command_name = mvp::config::active_cli_command_name();
+    Err(format!(
+        "`--{flag}` is required for `{} migrate --mode {}`",
+        command_name,
+        mode.as_id()
+    ))
 }
 
 fn block_on_migrate_cli<F>(future: F) -> CliResult<()>
@@ -226,7 +261,16 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
     let leaf = error
         .strip_prefix("tool execution failed: ")
         .unwrap_or(&error);
-    if leaf == "claw.migrate requires payload.input_path" {
+    if leaf.starts_with("policy_denied: ") {
+        return leaf.to_owned();
+    }
+    if let Some((_, reason)) = leaf.split_once(" denied request: ")
+        && leaf.starts_with("policy extension ")
+    {
+        return format!("policy_denied: {reason}");
+    }
+
+    if leaf == "config.import requires payload.input_path" {
         return format!(
             "`--input` is required for `{} migrate --mode {}`",
             mvp::config::active_cli_command_name(),
@@ -236,7 +280,7 @@ fn translate_migrate_cli_error(options: &MigrateCommandOptions, error: String) -
 
     if leaf
         == format!(
-            "claw.migrate {} mode requires payload.output_path",
+            "config.import {} mode requires payload.output_path",
             options.mode.as_id()
         )
     {

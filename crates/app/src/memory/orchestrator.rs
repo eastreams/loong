@@ -123,7 +123,7 @@ impl BuiltinMemoryOrchestrator {
         let mut entries = load_prompt_context(session_id, config)?;
         let retrieval_request = metadata
             .supports_pre_assembly_stage_family(MemoryStageFamily::Retrieve)
-            .then(|| build_builtin_retrieval_request(session_id, config))
+            .then(|| build_builtin_retrieval_request(session_id, config, &recent_window))
             .flatten();
 
         let derive = run_pre_assembly_stage(MemoryStageFamily::Derive, metadata, config, || {
@@ -371,18 +371,100 @@ async fn run_builtin_compact_stage(
 fn build_builtin_retrieval_request(
     session_id: &str,
     config: &MemoryRuntimeConfig,
+    recent_window: &[WindowTurn],
 ) -> Option<MemoryRetrievalRequest> {
     if !matches!(config.mode, MemoryMode::WindowPlusSummary) {
         return None;
     }
 
+    let query = retrieval_query_from_recent_window(recent_window);
+
+    let budget_items = if recent_window.is_empty() {
+        6
+    } else {
+        config.sliding_window.min(6)
+    };
+
     Some(MemoryRetrievalRequest {
         session_id: session_id.to_owned(),
-        query: None,
-        scopes: vec![MemoryScope::Session],
-        budget_items: config.sliding_window,
-        allowed_kinds: vec![DerivedMemoryKind::Summary],
+        query,
+        scopes: vec![
+            MemoryScope::Session,
+            MemoryScope::Workspace,
+            MemoryScope::Agent,
+            MemoryScope::User,
+        ],
+        budget_items,
+        allowed_kinds: vec![
+            DerivedMemoryKind::Profile,
+            DerivedMemoryKind::Fact,
+            DerivedMemoryKind::Episode,
+            DerivedMemoryKind::Procedure,
+            DerivedMemoryKind::Overview,
+        ],
     })
+}
+
+fn retrieval_query_from_recent_window(recent_window: &[WindowTurn]) -> Option<String> {
+    recent_window.iter().rev().find_map(|turn| {
+        if turn.role != "user" {
+            return None;
+        }
+
+        let trimmed_content = turn.content.trim();
+        if trimmed_content.is_empty() {
+            return None;
+        }
+
+        Some(trimmed_content.to_owned())
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn render_cross_session_recall_block(hits: &[super::sqlite::CanonicalMemorySearchHit]) -> String {
+    let mut sections = Vec::new();
+    sections.push("## Advisory Cross-Session Recall".to_owned());
+    sections.push(
+        "These snippets were retrieved from prior persisted sessions. Treat them as advisory hints and verify before acting."
+            .to_owned(),
+    );
+
+    for hit in hits {
+        let turn_label = hit
+            .session_turn_index
+            .map(|value| format!("turn {value}"))
+            .unwrap_or_else(|| "turn ?".to_owned());
+        let role_label = hit.record.role.as_deref();
+        let content = truncate_recall_content(hit.record.content.as_str(), 280);
+        sections.push(format!(
+            "### {} · {} · {} · {}",
+            hit.record.session_id,
+            turn_label,
+            hit.record.scope.as_str(),
+            hit.record.kind.as_str()
+        ));
+        let recall_line = match role_label {
+            Some(role_label) => format!("{role_label}: {content}"),
+            None => content,
+        };
+        sections.push(recall_line);
+    }
+
+    sections.join("\n\n")
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn truncate_recall_content(input: &str, max_chars: usize) -> String {
+    let char_count = input.chars().count();
+    if char_count <= max_chars {
+        return input.to_owned();
+    }
+    if max_chars <= 3 {
+        return input.chars().take(max_chars).collect();
+    }
+
+    let prefix = input.chars().take(max_chars - 3).collect::<String>();
+    format!("{prefix}...")
 }
 
 fn stage_error_message(
@@ -414,19 +496,38 @@ fn run_derivation_stage(
 }
 
 fn run_retrieval_stage(
-    _session_id: &str,
+    session_id: &str,
     workspace_root: Option<&Path>,
-    _config: &MemoryRuntimeConfig,
-    _recent_window: &[WindowTurn],
+    config: &MemoryRuntimeConfig,
+    recent_window: &[WindowTurn],
 ) -> Result<Vec<MemoryContextEntry>, String> {
     #[cfg(test)]
-    if let Some(error) = matching_memory_orchestrator_test_faults(_session_id)
+    if let Some(error) = matching_memory_orchestrator_test_faults(session_id)
         .and_then(|faults| faults.retrieval_error)
     {
         return Err(error);
     }
 
-    super::load_durable_recall_entries(workspace_root, _config)
+    let mut entries = super::load_durable_recall_entries(workspace_root, config)?;
+
+    #[cfg(feature = "memory-sqlite")]
+    if let Some(query) = retrieval_query_from_recent_window(recent_window) {
+        let hits = super::sqlite::search_canonical_records_for_recall(
+            query.as_str(),
+            config.sliding_window.min(6),
+            Some(session_id),
+            config,
+        )?;
+        if !hits.is_empty() {
+            entries.push(MemoryContextEntry {
+                kind: super::MemoryContextKind::RetrievedMemory,
+                role: "system".to_owned(),
+                content: render_cross_session_recall_block(hits.as_slice()),
+            });
+        }
+    }
+
+    Ok(entries)
 }
 
 pub fn hydrate_memory_context(
@@ -681,6 +782,58 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn hydrated_memory_builtin_orchestrator_retrieves_cross_session_recall_hits() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-hydrated-cross-session-recall");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("cross-session-recall.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 8,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct(
+            "prior-session",
+            "assistant",
+            "Deployment cutoff is 17:00 Beijing time and requires a release note.",
+            &config,
+        )
+        .expect("append prior session recall candidate");
+        append_turn_direct(
+            "active-session",
+            "user",
+            "What is the deployment cutoff for today's release?",
+            &config,
+        )
+        .expect("append active user turn");
+
+        let hydrated =
+            hydrate_memory_context("active-session", &config).expect("hydrate memory context");
+
+        let recalled = hydrated
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.kind == MemoryContextKind::RetrievedMemory
+                    && entry.content.contains("prior-session")
+            })
+            .expect("expected cross-session retrieved memory entry");
+        assert!(
+            recalled
+                .content
+                .contains("Deployment cutoff is 17:00 Beijing time")
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn hydrated_memory_builtin_orchestrator_preserves_profile_behavior() {
         let tmp = hydrated_memory_temp_dir("loongclaw-hydrated-profile");
         let _ = std::fs::create_dir_all(&tmp);
@@ -843,10 +996,119 @@ mod tests {
         let retrieval_request = envelope
             .retrieval_request
             .expect("window-plus-summary should advertise retrieval request");
-        assert_eq!(retrieval_request.budget_items, config.sliding_window);
+        assert_eq!(retrieval_request.budget_items, 6);
         assert_eq!(
             retrieval_request.allowed_kinds,
-            vec![DerivedMemoryKind::Summary]
+            vec![
+                DerivedMemoryKind::Profile,
+                DerivedMemoryKind::Fact,
+                DerivedMemoryKind::Episode,
+                DerivedMemoryKind::Procedure,
+                DerivedMemoryKind::Overview,
+            ]
+        );
+        assert_eq!(
+            retrieval_request.scopes,
+            vec![
+                MemoryScope::Session,
+                MemoryScope::Workspace,
+                MemoryScope::Agent,
+                MemoryScope::User,
+            ]
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn retrieval_query_from_recent_window_skips_blank_latest_user_turn() {
+        let recent_window = vec![
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "release rollback plan".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "assistant".to_owned(),
+                content: "working on it".to_owned(),
+                ts: None,
+            },
+            WindowTurn {
+                role: "user".to_owned(),
+                content: "   ".to_owned(),
+                ts: None,
+            },
+        ];
+
+        let query =
+            retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
+
+        assert_eq!(query, "release rollback plan");
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn render_cross_session_recall_block_keeps_roleless_records_neutral() {
+        let hits = vec![crate::memory::CanonicalMemorySearchHit {
+            record: crate::memory::CanonicalMemoryRecord {
+                session_id: "workspace-session".to_owned(),
+                scope: crate::memory::MemoryScope::Workspace,
+                kind: crate::memory::CanonicalMemoryKind::ImportedProfile,
+                role: None,
+                content: "Imported release checklist with smoke tests.".to_owned(),
+                metadata: serde_json::json!({
+                    "source": "workspace-import"
+                }),
+            },
+            session_turn_index: Some(2),
+        }];
+
+        let rendered = render_cross_session_recall_block(hits.as_slice());
+
+        assert!(
+            rendered.contains("Imported release checklist with smoke tests."),
+            "expected rendered recall content: {rendered}"
+        );
+        assert!(
+            !rendered.contains("assistant: Imported release checklist with smoke tests."),
+            "roleless recall should not fabricate assistant provenance: {rendered}"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn hydrate_stage_envelope_derives_retrieval_query_from_latest_user_turn() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-retrieval-query");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("retrieval-query.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 4,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct(
+            "stage-retrieval-query",
+            "user",
+            "Find the rollback checklist for database migration",
+            &config,
+        )
+        .expect("append retrieval query turn");
+
+        let envelope = hydrate_stage_envelope("stage-retrieval-query", &config)
+            .expect("hydrate staged envelope");
+        let retrieval_request = envelope
+            .retrieval_request
+            .expect("expected retrieval request");
+        assert_eq!(
+            retrieval_request.query.as_deref(),
+            Some("Find the rollback checklist for database migration")
         );
 
         let _ = std::fs::remove_file(&db_path);

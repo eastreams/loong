@@ -1,4 +1,5 @@
 use crate::mvp;
+use crate::plugin_bridge_account_summary::plugin_bridge_account_summary;
 
 pub(crate) fn push_channel_surface_plugin_bridge_contract(
     lines: &mut Vec<String>,
@@ -63,6 +64,14 @@ pub(crate) fn push_channel_surface_managed_plugin_bridge_discovery(
     let managed_install_root =
         render_line_safe_optional_text_value(discovery.managed_install_root.as_deref());
     let scan_issue = render_line_safe_optional_text_value(discovery.scan_issue.as_deref());
+    let configured_plugin_id =
+        render_line_safe_optional_text_value(discovery.configured_plugin_id.as_deref());
+    let selected_plugin_id =
+        render_line_safe_optional_text_value(discovery.selected_plugin_id.as_deref());
+    let selection_status = discovery
+        .selection_status
+        .map(|value| value.as_str())
+        .unwrap_or("-");
     let status = discovery.status.as_str();
     let ambiguity_status = discovery
         .ambiguity_status
@@ -77,16 +86,27 @@ pub(crate) fn push_channel_surface_managed_plugin_bridge_discovery(
     let incompatible_plugins = discovery.incompatible_plugins;
 
     lines.push(format!(
-        "  managed_plugin_bridge_discovery status={} managed_install_root={} scan_issue={} compatible={} compatible_plugin_ids={} ambiguity_status={} incomplete={} incompatible={}",
+        "  managed_plugin_bridge_discovery status={} managed_install_root={} scan_issue={} configured_plugin_id={} selected_plugin_id={} selection_status={} compatible={} compatible_plugin_ids={} ambiguity_status={} incomplete={} incompatible={}",
         status,
         managed_install_root,
         scan_issue,
+        configured_plugin_id,
+        selected_plugin_id,
+        selection_status,
         compatible_plugins,
         compatible_plugin_ids,
         ambiguity_status,
         incomplete_plugins,
         incompatible_plugins,
     ));
+
+    let account_summary = plugin_bridge_account_summary(surface);
+
+    if let Some(account_summary) = account_summary {
+        let rendered_account_summary = render_line_safe_text_value(account_summary.as_str());
+        let account_summary_line = format!("    account_summary={rendered_account_summary}");
+        lines.push(account_summary_line);
+    }
 
     for plugin in &discovery.plugins {
         let rendered_plugin = render_channel_surface_discovered_plugin_line(plugin);

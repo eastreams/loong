@@ -56,6 +56,8 @@ pub use protocol::{
     decode_window_turn_count, decode_window_turns, encode_stage_envelope_payload,
 };
 #[cfg(feature = "memory-sqlite")]
+pub(crate) use sqlite::CanonicalMemorySearchHit;
+#[cfg(feature = "memory-sqlite")]
 pub use sqlite::ConversationSessionSummary;
 #[cfg(feature = "memory-sqlite")]
 pub use sqlite::{
@@ -253,6 +255,16 @@ pub fn ensure_memory_db_ready_with_diagnostics(
     config: &runtime_config::MemoryRuntimeConfig,
 ) -> Result<(PathBuf, SqliteBootstrapDiagnostics), String> {
     sqlite::ensure_memory_db_ready_with_diagnostics(path, config)
+}
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) fn search_canonical_memory(
+    query: &str,
+    limit: usize,
+    exclude_session_id: Option<&str>,
+    config: &runtime_config::MemoryRuntimeConfig,
+) -> Result<Vec<CanonicalMemorySearchHit>, String> {
+    sqlite::search_canonical_records_for_recall(query, limit, exclude_session_id, config)
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -10,6 +10,7 @@ use super::types::{
 };
 
 pub const FEISHU_DEFAULT_MESSAGE_FILE_TYPE: &str = "stream";
+pub const FEISHU_MESSAGE_RESOURCE_DOWNLOAD_MAX_BYTES: usize = 32 * 1024 * 1024;
 
 pub async fn upload_message_image(
     client: &FeishuClient,
@@ -81,6 +82,7 @@ pub async fn download_message_resource(
     message_id: &str,
     file_key: &str,
     resource_type: FeishuMessageResourceType,
+    max_bytes: usize,
 ) -> CliResult<FeishuDownloadedMessageResource> {
     let message_id =
         require_non_empty("feishu message resource download", "message_id", message_id)?;
@@ -90,6 +92,7 @@ pub async fn download_message_resource(
             format!("/open-apis/im/v1/messages/{message_id}/resources/{file_key}").as_str(),
             Some(tenant_access_token),
             &[("type".to_owned(), resource_type.as_api_value().to_owned())],
+            max_bytes,
         )
         .await?;
     Ok(FeishuDownloadedMessageResource {
@@ -441,6 +444,7 @@ mod tests {
             "om_123",
             "file_456",
             FeishuMessageResourceType::File,
+            1_024,
         )
         .await
         .expect("download resource should retry and succeed");
@@ -451,6 +455,38 @@ mod tests {
         assert_eq!(resource.file_name.as_deref(), Some("spec-sheet.pdf"));
         assert_eq!(resource.content_type.as_deref(), Some("application/pdf"));
         assert_eq!(resource.bytes, b"demo-pdf".to_vec());
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn download_message_resource_rejects_payload_exceeding_max_bytes_limit() {
+        let router = Router::new().route(
+            "/open-apis/im/v1/messages/om_oversize/resources/file_oversize",
+            get(|| async move {
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header("content-type", "application/octet-stream")
+                    .header("content-length", "10")
+                    .body(Body::from(b"0123456789".to_vec()))
+                    .expect("build binary response")
+            }),
+        );
+        let (base_url, server) = spawn_mock_feishu_server(router).await;
+        let client = FeishuClient::new(base_url, "cli_xxx", "secret_xxx", 20).expect("client");
+
+        let error = download_message_resource(
+            &client,
+            "tenant-token",
+            "om_oversize",
+            "file_oversize",
+            FeishuMessageResourceType::File,
+            4,
+        )
+        .await
+        .expect_err("oversize download should fail closed");
+
+        assert!(error.contains("max_bytes limit"));
 
         server.abort();
     }

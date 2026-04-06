@@ -40,11 +40,29 @@ impl MigrationEnvironmentGuard {
     pub fn set(pairs: &[(&str, Option<&str>)]) -> Self {
         let lock = lock_daemon_test_environment();
         let mut saved = Vec::new();
+        let home_override = pairs
+            .iter()
+            .find_map(|(key, value)| (*key == "HOME").then_some(*value))
+            .flatten()
+            .map(std::path::PathBuf::from);
+        let explicit_loongclaw_home = pairs.iter().any(|(key, _)| *key == "LOONGCLAW_HOME");
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
             match value {
                 Some(value) => unsafe { std::env::set_var(key, value) },
                 None => unsafe { std::env::remove_var(key) },
+            }
+        }
+        if !explicit_loongclaw_home {
+            saved.push((
+                "LOONGCLAW_HOME".to_owned(),
+                std::env::var_os("LOONGCLAW_HOME"),
+            ));
+            match home_override {
+                Some(home) => unsafe {
+                    std::env::set_var("LOONGCLAW_HOME", home.join(".loongclaw"))
+                },
+                None => unsafe { std::env::remove_var("LOONGCLAW_HOME") },
             }
         }
         Self { _lock: lock, saved }

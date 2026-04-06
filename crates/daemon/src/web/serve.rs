@@ -70,6 +70,12 @@ pub(super) async fn run_web_serve(
             post(onboarding::onboard_preferences),
         )
         .route("/onboard/validate", post(onboarding::onboard_validate))
+        .route(
+            "/abilities/personalization",
+            get(abilities_personalization).post(abilities_personalization_save),
+        )
+        .route("/abilities/channels", get(abilities_channels))
+        .route("/abilities/skills", get(abilities_skills))
         .route("/dashboard/summary", get(dashboard_summary))
         .route("/dashboard/providers", get(dashboard_providers))
         .route("/dashboard/runtime", get(dashboard_runtime))

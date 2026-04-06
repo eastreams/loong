@@ -188,6 +188,7 @@ pub struct AcpRuntimeSnapshot {
     pub selected_metadata: AcpBackendMetadata,
     pub available: Vec<AcpBackendMetadata>,
     pub control_plane: AcpControlPlaneSnapshot,
+    pub mcp: crate::mcp::McpRuntimeSnapshot,
 }
 
 pub fn resolve_acp_backend_selection(config: &LoongClawConfig) -> AcpBackendSelection {
@@ -215,6 +216,7 @@ pub fn collect_acp_runtime_snapshot(config: &LoongClawConfig) -> CliResult<AcpRu
     let selected = resolve_acp_backend_selection(config);
     let selected_metadata = describe_acp_backend(Some(selected.id.as_str()))?;
     let available = list_acp_backend_metadata()?;
+    let mcp = crate::mcp::collect_mcp_runtime_snapshot(config)?;
     let default_agent = config.acp.resolved_default_agent()?;
     let allowed_agents = config.acp.allowed_agent_ids()?;
     let allowed_channels = config.acp.dispatch.allowed_channel_ids()?;
@@ -251,6 +253,7 @@ pub fn collect_acp_runtime_snapshot(config: &LoongClawConfig) -> CliResult<AcpRu
         selected_metadata,
         available,
         control_plane,
+        mcp,
     })
 }
 
@@ -896,6 +899,8 @@ mod tests {
             vec!["codex".to_owned(), "claude".to_owned()]
         );
         assert_eq!(snapshot.selected.id, DEFAULT_ACP_BACKEND_ID);
+        assert!(snapshot.mcp.servers.is_empty());
+        assert!(snapshot.mcp.missing_selected_servers.is_empty());
     }
 
     #[test]
@@ -999,6 +1004,11 @@ mod tests {
         assert_eq!(
             snapshot.control_plane.working_directory.as_deref(),
             Some("/workspace/dispatch")
+        );
+        assert!(snapshot.mcp.servers.is_empty());
+        assert_eq!(
+            snapshot.mcp.missing_selected_servers,
+            vec!["filesystem".to_owned(), "search".to_owned()]
         );
     }
 

@@ -77,8 +77,8 @@ enum RoundFollowup {
     Tool {
         assistant_preface: String,
         payload: ToolDrivenFollowupPayload,
-        loop_warning_reason: Option<String>,
         tool_request_summary: Option<String>,
+        loop_warning_reason: Option<String>,
     },
     Guard {
         assistant_preface: String,
@@ -490,8 +490,8 @@ fn decide_round_kernel_action(
     let followup = RoundFollowup::Tool {
         assistant_preface: evaluation.assistant_preface,
         payload: tool_payload,
-        loop_warning_reason,
         tool_request_summary: evaluation.tool_request_summary,
+        loop_warning_reason,
     };
 
     match round_budget.followup_decision() {
@@ -516,8 +516,8 @@ fn append_round_followup_messages(
         RoundFollowup::Tool {
             assistant_preface,
             payload,
-            loop_warning_reason,
             tool_request_summary,
+            loop_warning_reason,
         } => append_tool_driven_followup_messages(
             &mut session.messages,
             assistant_preface.as_str(),
@@ -1077,6 +1077,41 @@ mod tests {
     }
 
     #[test]
+    fn append_tool_driven_followup_messages_includes_request_summary_guidance() {
+        let mut messages = Vec::new();
+        let mut budget = FollowupPayloadBudget::new(8_000, 20_000);
+        let tool_request_summary = json!({
+            "tool": "shell.exec",
+            "request": {
+                "command": r#"C:\Windows\System32\CMD.EXE"#
+            }
+        })
+        .to_string();
+
+        append_tool_driven_followup_messages(
+            &mut messages,
+            "preface",
+            &ToolDrivenFollowupPayload::ToolFailure {
+                reason: "tool_preflight_denied: tool input needs repair".to_owned(),
+            },
+            "retry the command",
+            &mut budget,
+            None,
+            Some(tool_request_summary.as_str()),
+        );
+
+        let user_prompt = messages
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec:"));
+        assert!(user_prompt.contains("CMD.EXE"));
+        assert!(user_prompt.contains("cmd.exe"));
+    }
+
+    #[test]
     fn append_tool_driven_followup_messages_promotes_external_skill_invoke_into_system_context() {
         let mut messages = Vec::new();
         let mut budget = FollowupPayloadBudget::new(64, 64);
@@ -1521,12 +1556,14 @@ mod tests {
         if let RoundKernelDecision::ContinueWithFollowup(RoundFollowup::Tool {
             assistant_preface,
             payload: ToolDrivenFollowupPayload::ToolResult { text },
+            tool_request_summary,
             loop_warning_reason,
             ..
         }) = decision
         {
             assert_eq!(assistant_preface, "preface");
             assert_eq!(text, "tool output");
+            assert!(tool_request_summary.is_none());
             assert_eq!(loop_warning_reason.as_deref(), Some("warning"));
         } else {
             panic!("unexpected decision: {decision:?}");

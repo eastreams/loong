@@ -13,8 +13,14 @@ use super::runtime::ConversationRuntime;
 use super::runtime_binding::ConversationRuntimeBinding;
 use super::turn_shared::ReplyPersistenceMode;
 
+const PROVIDER_ERROR_REPLY_PREFIX: &str = "[provider_error] ";
+
 pub(super) fn format_provider_error_reply(error: &str) -> String {
-    format!("[provider_error] {error}")
+    format!("{PROVIDER_ERROR_REPLY_PREFIX}{error}")
+}
+
+pub(super) fn provider_error_reply_body(reply: &str) -> Option<&str> {
+    reply.strip_prefix(PROVIDER_ERROR_REPLY_PREFIX)
 }
 
 pub(super) async fn persist_success_turns<R: ConversationRuntime + ?Sized>(

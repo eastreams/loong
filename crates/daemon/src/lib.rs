@@ -32,6 +32,11 @@ pub use loongclaw_spec::{CliResult, DEFAULT_AGENT_ID, DEFAULT_PACK_ID, kernel_bo
 pub use self::channel_send_target_kind::{
     default_twitch_send_target_kind, parse_twitch_send_target_kind,
 };
+pub use self::cli_json::build_runtime_snapshot_cli_json_payload;
+pub use self::mcp_cli::{
+    build_mcp_server_detail_cli_json_payload, build_mcp_servers_cli_json_payload,
+    run_list_mcp_servers_cli, run_show_mcp_server_cli,
+};
 pub use loongclaw_bench::{
     run_programmatic_pressure_baseline_lint_cli, run_programmatic_pressure_benchmark_cli,
     run_wasm_cache_benchmark_cli,
@@ -82,7 +87,11 @@ mod channel_bridge_render;
 mod channel_send_cli_tests;
 mod channel_send_target_kind;
 mod cli_handoff;
+mod cli_json;
+#[cfg(test)]
+mod command_kind_tests;
 pub mod completions_cli;
+mod control_plane_server;
 pub mod doctor_cli;
 pub mod doctor_security_cli;
 mod external_skills_policy_probe;
@@ -90,6 +99,7 @@ pub mod feishu_cli;
 pub mod feishu_support;
 pub mod gateway;
 pub mod import_cli;
+mod mcp_cli;
 #[cfg(any(feature = "memory-sqlite", feature = "mvp"))]
 mod memory_context_benchmark;
 pub mod migrate_cli;
@@ -105,6 +115,7 @@ mod onboard_web_search;
 mod onboarding_model_policy;
 pub mod operator_prompt;
 pub mod personalize_cli;
+mod plugin_bridge_account_summary;
 pub mod plugins_cli;
 mod provider_credential_policy;
 mod provider_model_probe_policy;
@@ -117,6 +128,7 @@ pub mod sessions_cli;
 pub mod skills_cli;
 pub mod source_presentation;
 pub mod supervisor;
+mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
 #[path = "web/mod.rs"]
@@ -134,6 +146,8 @@ pub use loongclaw_spec::programmatic::{
     acquire_programmatic_circuit_slot, record_programmatic_circuit_outcome,
 };
 pub use observability::{debug_variant_name, init_tracing, summarize_error};
+use task_execution::execute_daemon_task_with_supervisor;
+pub use task_execution::{DaemonTaskExecution, run_demo, run_task_cli};
 pub use tlon_cli::TLON_SEND_CLI_SPEC;
 use tlon_cli::{default_tlon_send_target_kind, parse_tlon_send_target_kind};
 
@@ -168,7 +182,7 @@ fn render_import_long_about(command_name: &str) -> String {
 
 fn render_migrate_long_about(command_name: &str) -> String {
     format!(
-        "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `{command_name} onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+        "Power-user config import flow for discovering, previewing, or applying external workspace state explicitly.\n\nUse this when you want exact CLI control over import mode selection and output handling for compatibility sources and older workspace roots. If you want the guided path, use `{command_name} onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
     )
 }
 
@@ -189,7 +203,9 @@ pub fn build_cli_command(command_name: &'static str) -> clap::Command {
             command.long_about(render_import_long_about(command_name))
         })
         .mut_subcommand("migrate", |command| {
-            command.long_about(render_migrate_long_about(command_name))
+            command
+                .about("Preview or apply config import modes explicitly")
+                .long_about(render_migrate_long_about(command_name))
         })
         .mut_subcommand("ask", |command| {
             command.long_about(render_ask_long_about(command_name))
@@ -201,10 +217,12 @@ pub fn parse_cli() -> Cli {
     Cli::from_arg_matches_mut(&mut matches).unwrap_or_else(|error| error.exit())
 }
 
+pub use control_plane_server::{build_control_plane_router, run_control_plane_serve_cli};
+
 pub fn native_spec_tool_executor(
     request: ToolCoreRequest,
 ) -> Option<Result<ToolCoreOutcome, String>> {
-    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "claw.migrate" {
+    if mvp::tools::canonical_tool_name(request.tool_name.as_str()) != "config.import" {
         return None;
     }
     Some(mvp::tools::execute_tool_core(request))
@@ -553,17 +571,17 @@ pub enum Commands {
         exclude: Vec<String>,
     },
     #[command(
-        about = "Preview or apply legacy claw migration explicitly",
-        long_about = "Power-user migration flow for discovering, previewing, or applying legacy claw nativeization explicitly.\n\nUse this when you want exact CLI control over migration mode selection and output handling for older claw-family workspaces. If you want the guided path, use `loong onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
+        about = "Preview or apply config import modes explicitly",
+        long_about = "Power-user config import flow for discovering, previewing, or applying external workspace state explicitly.\n\nUse this when you want exact CLI control over import mode selection and output handling for compatibility sources and older workspace roots. If you want the guided path, use `loong onboard` instead.\n\nMode quick reference:\n- discover, plan_many, recommend_primary, merge_profiles, map_external_skills: require `--input`\n- plan: requires `--input`; `--output` is optional preview target\n- apply: requires `--input` and `--output`\n- apply_selected: requires `--input` and `--output`; use `--source-id` to pin one discovered source, and `--apply-external-skills-plan` to bridge installable local external skills into the managed runtime\n- rollback_last_apply: requires `--output`"
     )]
     Migrate {
-        /// Path to the legacy claw workspace or root to inspect
+        /// Path to the legacy agent workspace or root to inspect
         #[arg(long)]
         input: Option<String>,
         /// Target LoongClaw config path to preview, write, or roll back
         #[arg(long)]
         output: Option<String>,
-        /// Hint the legacy source kind for single-source plan/apply modes
+        /// Hint the legacy claw-family source kind for single-source plan/apply modes
         #[arg(long)]
         source: Option<String>,
         /// Migration mode to run
@@ -726,6 +744,22 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         json: bool,
     },
+    /// List configured MCP servers and their runtime-visible inventory state
+    ListMcpServers {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    /// Show one configured MCP server and its runtime-visible inventory state
+    ShowMcpServer {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     /// List available ACP runtime backends and current control-plane selection
     ListAcpBackends {
         #[arg(long)]
@@ -796,6 +830,20 @@ pub enum Commands {
         backend: Option<String>,
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+    #[command(
+        about = "Run the loopback-only internal control-plane skeleton",
+        long_about = "Run the internal control-plane skeleton.\n\nBy default this control-plane listener binds 127.0.0.1 only. You may provide `--bind <host:port>` to override the listener address, but non-loopback binds require `--config` plus `control_plane.allow_remote=true` and a configured `control_plane.shared_token`. Baseline endpoints are `/readyz`, `/healthz`, `/control/challenge`, `/control/connect`, `/control/subscribe`, `/control/snapshot`, and `/control/events`. When `--config` is provided, repository-backed `/session/list`, `/session/read`, `/approval/list`, `/pairing/list`, `/pairing/resolve`, `/acp/session/list`, and `/acp/session/read` views become available for the selected session root."
+    )]
+    ControlPlaneServe {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        bind: Option<String>,
+        #[arg(long, default_value_t = 0)]
+        port: u16,
     },
     #[command(
         about = "Run one non-interactive assistant turn",
@@ -1348,6 +1396,8 @@ impl Commands {
             Self::RuntimeCapability { .. } => "runtime_capability",
             Self::ListContextEngines { .. } => "list_context_engines",
             Self::ListMemorySystems { .. } => "list_memory_systems",
+            Self::ListMcpServers { .. } => "list_mcp_servers",
+            Self::ShowMcpServer { .. } => "show_mcp_server",
             Self::ListAcpBackends { .. } => "list_acp_backends",
             Self::ListAcpSessions { .. } => "list_acp_sessions",
             Self::AcpStatus { .. } => "acp_status",
@@ -1355,6 +1405,7 @@ impl Commands {
             Self::AcpEventSummary { .. } => "acp_event_summary",
             Self::AcpDispatch { .. } => "acp_dispatch",
             Self::AcpDoctor { .. } => "acp_doctor",
+            Self::ControlPlaneServe { .. } => "control_plane_serve",
             Self::Ask { .. } => "ask",
             Self::Chat { .. } => "chat",
             Self::SafeLaneSummary { .. } => "safe_lane_summary",
@@ -1366,7 +1417,6 @@ impl Commands {
             Self::MatrixServe { .. } => "matrix_serve",
             Self::WecomSend { .. } => "wecom_send",
             Self::WecomServe { .. } => "wecom_serve",
-            Self::WhatsappServe { .. } => "whatsapp_serve",
             Self::DiscordSend { .. } => "discord_send",
             Self::DingtalkSend { .. } => "dingtalk_send",
             Self::SlackSend { .. } => "slack_send",
@@ -1391,25 +1441,6 @@ impl Commands {
             Self::Web { .. } => "web",
             Self::Completions { .. } => "completions",
         }
-    }
-}
-
-#[cfg(test)]
-mod command_kind_tests {
-    use super::Commands;
-
-    #[test]
-    fn command_kind_for_logging_uses_stable_variant_names() {
-        assert_eq!(Commands::Welcome.command_kind_for_logging(), "welcome");
-        assert_eq!(Commands::AuditDemo.command_kind_for_logging(), "audit_demo");
-        assert_eq!(
-            Commands::RunTask {
-                objective: "test".to_owned(),
-                payload: "{}".to_owned(),
-            }
-            .command_kind_for_logging(),
-            "run_task"
-        );
     }
 }
 
@@ -1555,6 +1586,10 @@ pub fn resolve_default_entry_command() -> Commands {
     }
 }
 
+pub fn redacted_command_name(command: &Commands) -> &'static str {
+    command.command_kind_for_logging()
+}
+
 fn resolve_welcome_config_path() -> CliResult<PathBuf> {
     let config_path = resolved_default_entry_config_path();
     if config_path.is_file() {
@@ -1597,48 +1632,6 @@ pub fn run_welcome_cli() -> CliResult<()> {
     let load_result = mvp::config::load(Some(config_path_string.as_str()))?;
     let (_resolved_path, config) = load_result;
     println!("{}", render_welcome_banner(config_path.as_path(), &config));
-    Ok(())
-}
-
-pub async fn run_demo() -> CliResult<()> {
-    let kernel = kernel_bootstrap::KernelBuilder::default().build();
-    let token = kernel
-        .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 300)
-        .map_err(|error| format!("token issue failed: {error}"))?;
-
-    let task = TaskIntent {
-        task_id: "task-bootstrap-01".to_owned(),
-        objective: "summarize flaky test clusters".to_owned(),
-        required_capabilities: BTreeSet::from([Capability::InvokeTool, Capability::MemoryRead]),
-        payload: json!({"repo": PUBLIC_GITHUB_REPO}),
-    };
-
-    let task_dispatch = kernel
-        .execute_task(DEFAULT_PACK_ID, &token, task)
-        .await
-        .map_err(|error| format!("task dispatch failed: {error}"))?;
-
-    println!(
-        "task dispatched via {:?}: {}",
-        task_dispatch.adapter_route.harness_kind, task_dispatch.outcome.output
-    );
-
-    let connector_dispatch = kernel
-        .execute_connector_core(
-            DEFAULT_PACK_ID,
-            &token,
-            None,
-            ConnectorCommand {
-                connector_name: "webhook".to_owned(),
-                operation: "notify".to_owned(),
-                required_capabilities: BTreeSet::from([Capability::InvokeConnector]),
-                payload: json!({"channel": "ops-alerts", "message": "task complete"}),
-            },
-        )
-        .await
-        .map_err(|error| format!("connector dispatch failed: {error}"))?;
-
-    println!("connector dispatch: {}", connector_dispatch.outcome.payload);
     Ok(())
 }
 
@@ -1737,6 +1730,18 @@ mod first_run_entry_tests {
     }
 
     #[test]
+    fn redacted_command_name_omits_sensitive_command_payloads() {
+        let command = Commands::RunTask {
+            objective: "secret objective".to_owned(),
+            payload: "{\"api_key\":\"secret\"}".to_owned(),
+        };
+
+        let redacted_name = redacted_command_name(&command);
+
+        assert_eq!(redacted_name, "run_task");
+    }
+
+    #[test]
     fn run_welcome_cli_rejects_missing_config_file() {
         let mut env = ScopedEnv::new();
         let config_path = unique_temp_dir("loongclaw-welcome-missing").join("missing-config.toml");
@@ -1805,39 +1810,8 @@ mod first_run_entry_tests {
     }
 }
 
-pub async fn run_task_cli(objective: &str, payload_raw: &str) -> CliResult<()> {
-    let payload = parse_json_payload(payload_raw, "run-task payload")?;
-
-    let kernel = kernel_bootstrap::KernelBuilder::default().build();
-    let token = kernel
-        .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 120)
-        .map_err(|error| format!("token issue failed: {error}"))?;
-
-    let dispatch = kernel
-        .execute_task(
-            DEFAULT_PACK_ID,
-            &token,
-            TaskIntent {
-                task_id: "task-cli-01".to_owned(),
-                objective: objective.to_owned(),
-                required_capabilities: BTreeSet::from([
-                    Capability::InvokeTool,
-                    Capability::MemoryRead,
-                ]),
-                payload,
-            },
-        )
-        .await
-        .map_err(|error| format!("task dispatch failed: {error}"))?;
-
-    let pretty = serde_json::to_string_pretty(&dispatch.outcome)
-        .map_err(|error| format!("serialize task outcome failed: {error}"))?;
-    println!("{pretty}");
-    Ok(())
-}
-
 pub async fn invoke_connector_cli(operation: &str, payload_raw: &str) -> CliResult<()> {
-    let payload = parse_json_payload(payload_raw, "invoke-connector payload")?;
+    let payload = cli_json::parse_json_payload(payload_raw, "invoke-connector payload")?;
 
     let kernel = kernel_bootstrap::KernelBuilder::default().build();
     let token = kernel
@@ -1878,19 +1852,18 @@ pub async fn run_audit_demo() -> CliResult<()> {
         .issue_token(DEFAULT_PACK_ID, DEFAULT_AGENT_ID, 30)
         .map_err(|error| format!("token issue failed: {error}"))?;
 
-    let _ = kernel
-        .execute_task(
-            DEFAULT_PACK_ID,
-            &token,
-            TaskIntent {
-                task_id: "task-audit-01".to_owned(),
-                objective: "produce audit evidence".to_owned(),
-                required_capabilities: BTreeSet::from([Capability::InvokeTool]),
-                payload: json!({}),
-            },
-        )
-        .await
-        .map_err(|error| format!("task dispatch failed: {error}"))?;
+    let _ = execute_daemon_task_with_supervisor(
+        &kernel,
+        DEFAULT_PACK_ID,
+        &token,
+        TaskIntent {
+            task_id: "task-audit-01".to_owned(),
+            objective: "produce audit evidence".to_owned(),
+            required_capabilities: BTreeSet::from([Capability::InvokeTool]),
+            payload: json!({}),
+        },
+    )
+    .await?;
 
     fixed_clock.advance_by(5);
 
@@ -3454,7 +3427,7 @@ pub fn build_runtime_snapshot_artifact_json_payload(
     snapshot: &RuntimeSnapshotCliState,
     metadata: &RuntimeSnapshotArtifactMetadata,
 ) -> CliResult<Value> {
-    let base_payload = build_runtime_snapshot_cli_json_payload(snapshot)?;
+    let base_payload = cli_json::build_runtime_snapshot_cli_json_payload(snapshot)?;
     let lineage = runtime_snapshot_artifact_lineage(snapshot, metadata)?;
     let document = RuntimeSnapshotArtifactDocument {
         config: snapshot.config.clone(),
@@ -5423,19 +5396,6 @@ pub async fn run_multi_channel_serve_cli(
     .await
 }
 
-pub fn parse_json_payload(raw: &str, context: &str) -> CliResult<Value> {
-    serde_json::from_str(raw).map_err(|error| format!("invalid JSON for {context}: {error}"))
-}
-
-pub fn build_runtime_snapshot_cli_json_payload(
-    snapshot: &RuntimeSnapshotCliState,
-) -> CliResult<Value> {
-    let read_model = gateway::read_models::build_runtime_snapshot_read_model(snapshot);
-    let payload = serde_json::to_value(read_model)
-        .map_err(|error| format!("serialize runtime snapshot read model failed: {error}"))?;
-    Ok(payload)
-}
-
 pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> String {
     let mut lines = vec![
         format!("config={}", snapshot.config),
@@ -5561,6 +5521,7 @@ pub fn render_runtime_snapshot_text(snapshot: &RuntimeSnapshotCliState) -> Strin
             .as_deref()
             .unwrap_or("-")
     ));
+    mcp_cli::append_mcp_runtime_snapshot_lines(&mut lines, &snapshot.acp.mcp);
     lines.push(format!(
         "channels enabled={} service_enabled={} configured_accounts={} surfaces={}",
         render_string_list(snapshot.enabled_channel_ids.iter().map(String::as_str)),
@@ -5792,6 +5753,7 @@ fn runtime_snapshot_acp_json(snapshot: &mvp::acp::AcpRuntimeSnapshot) -> Value {
             .map(|metadata| acp_backend_metadata_json(metadata, None))
             .collect::<Vec<_>>(),
         "control_plane": acp_control_plane_json(&snapshot.control_plane),
+        "mcp": mcp_cli::mcp_runtime_snapshot_json(&snapshot.mcp),
     })
 }
 
@@ -5869,7 +5831,7 @@ fn shell_policy_default_str(
     }
 }
 
-fn render_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+pub(crate) fn render_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
     let rendered = values
         .into_iter()
         .filter(|value| !value.is_empty())
