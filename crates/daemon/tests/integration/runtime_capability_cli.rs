@@ -49,7 +49,7 @@ impl RuntimeCapabilityEnvironmentGuard {
     fn set(root: &Path) -> Self {
         let lock = super::lock_daemon_test_environment();
         let home = root.join("home");
-        let loongclaw_home = home.join(".loongclaw");
+        let loongclaw_home = home.join(mvp::config::HOME_DIR_NAME);
         fs::create_dir_all(&loongclaw_home).expect("create isolated loongclaw home");
         let home_text = home.to_string_lossy().into_owned();
         let loongclaw_home_text = loongclaw_home.to_string_lossy().into_owned();
