@@ -2911,6 +2911,49 @@ fn session_context_with_subagent_execution_preserves_prior_runtime_narrowing() {
     assert_eq!(effective_runtime_narrowing, Some(runtime_narrowing));
 }
 
+#[test]
+fn session_context_with_subagent_execution_promotes_execution_runtime_narrowing_to_session_scope() {
+    let execution_runtime_narrowing = crate::tools::runtime_config::ToolRuntimeNarrowing {
+        browser: crate::tools::runtime_config::BrowserRuntimeNarrowing {
+            max_sessions: Some(1),
+            ..crate::tools::runtime_config::BrowserRuntimeNarrowing::default()
+        },
+        ..crate::tools::runtime_config::ToolRuntimeNarrowing::default()
+    };
+    let execution = crate::conversation::ConstrainedSubagentExecution {
+        mode: crate::conversation::ConstrainedSubagentMode::Inline,
+        depth: 1,
+        max_depth: 3,
+        active_children: 0,
+        max_active_children: 2,
+        timeout_seconds: 60,
+        allow_shell_in_child: false,
+        child_tool_allowlist: vec!["web.fetch".to_owned()],
+        runtime_narrowing: execution_runtime_narrowing.clone(),
+        kernel_bound: false,
+        identity: None,
+        profile: None,
+    };
+    let session_context = SessionContext::child(
+        "child-session",
+        "root-session",
+        crate::tools::delegate_child_tool_view_for_config(&crate::config::ToolConfig::default()),
+    )
+    .with_subagent_execution(execution);
+
+    let session_runtime_narrowing = session_context.runtime_narrowing.clone();
+    let resolved_runtime_narrowing = session_context.resolved_runtime_narrowing().cloned();
+
+    assert_eq!(
+        session_runtime_narrowing,
+        Some(execution_runtime_narrowing.clone())
+    );
+    assert_eq!(
+        resolved_runtime_narrowing,
+        Some(execution_runtime_narrowing)
+    );
+}
+
 #[tokio::test]
 async fn default_runtime_delegates_bootstrap_and_ingest_to_context_engine_with_kernel() {
     let calls = Arc::new(Mutex::new(Vec::new()));

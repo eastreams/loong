@@ -91,11 +91,9 @@ impl SessionContext {
     pub fn with_runtime_narrowing(mut self, runtime_narrowing: ToolRuntimeNarrowing) -> Self {
         if !runtime_narrowing.is_empty() {
             self.runtime_narrowing = Some(runtime_narrowing.clone());
-            if let Some(subagent_execution) = self.subagent_execution.as_mut() {
-                subagent_execution.runtime_narrowing = runtime_narrowing.clone();
-            }
             let contract = self.subagent_contract.take().unwrap_or_default();
             self.subagent_contract = Some(contract.with_runtime_narrowing(runtime_narrowing));
+            self.synchronize_runtime_narrowing_views();
         }
         self
     }
@@ -106,38 +104,37 @@ impl SessionContext {
         subagent_execution: ConstrainedSubagentExecution,
     ) -> Self {
         let existing_contract = self.subagent_contract.take();
+        let existing_identity = existing_contract
+            .as_ref()
+            .and_then(ConstrainedSubagentContractView::resolved_identity)
+            .cloned();
+        let existing_profile = existing_contract
+            .as_ref()
+            .and_then(|contract| contract.profile);
+        let existing_runtime_narrowing = existing_contract
+            .as_ref()
+            .map(|contract| contract.runtime_narrowing.clone())
+            .filter(|runtime_narrowing| !runtime_narrowing.is_empty());
         let mut subagent_execution = subagent_execution.with_resolved_profile();
         if subagent_execution.identity.is_none()
-            && let Some(identity) = existing_contract
-                .as_ref()
-                .and_then(ConstrainedSubagentContractView::resolved_identity)
-                .cloned()
+            && let Some(identity) = existing_identity
         {
             subagent_execution.identity = Some(identity);
         }
         let mut merged_contract = subagent_execution.contract_view();
-        if let Some(existing_contract) = existing_contract {
-            if merged_contract.profile.is_none()
-                && let Some(profile) = existing_contract.profile
-            {
-                merged_contract = merged_contract.with_profile(profile);
-            }
-            if merged_contract.identity.is_none()
-                && let Some(identity) = existing_contract.identity
-            {
-                merged_contract = merged_contract.with_identity(identity);
-            }
-            if merged_contract.runtime_narrowing.is_empty()
-                && !existing_contract.runtime_narrowing.is_empty()
-            {
-                let runtime_narrowing = existing_contract.runtime_narrowing;
-                subagent_execution.runtime_narrowing = runtime_narrowing.clone();
-                self.runtime_narrowing = Some(runtime_narrowing.clone());
-                merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
-            }
+        if merged_contract.profile.is_none()
+            && let Some(profile) = existing_profile
+        {
+            merged_contract = merged_contract.with_profile(profile);
+        }
+        if merged_contract.runtime_narrowing.is_empty()
+            && let Some(runtime_narrowing) = existing_runtime_narrowing
+        {
+            merged_contract = merged_contract.with_runtime_narrowing(runtime_narrowing);
         }
         self.subagent_contract = Some(merged_contract);
         self.subagent_execution = Some(subagent_execution);
+        self.synchronize_runtime_narrowing_views();
         self
     }
 
@@ -148,6 +145,7 @@ impl SessionContext {
         }
         let contract = self.subagent_contract.take().unwrap_or_default();
         self.subagent_contract = Some(contract.with_profile(subagent_profile));
+        self.synchronize_runtime_narrowing_views();
         self
     }
 
@@ -164,7 +162,32 @@ impl SessionContext {
         }
         let contract = self.subagent_contract.take().unwrap_or_default();
         self.subagent_contract = Some(contract.with_identity(subagent_identity));
+        self.synchronize_runtime_narrowing_views();
         self
+    }
+
+    pub fn resolved_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
+        let session_runtime_narrowing =
+            non_empty_runtime_narrowing_ref(self.runtime_narrowing.as_ref());
+        if let Some(session_runtime_narrowing) = session_runtime_narrowing {
+            return Some(session_runtime_narrowing);
+        }
+
+        let execution_runtime_narrowing = self
+            .subagent_execution
+            .as_ref()
+            .map(|execution| &execution.runtime_narrowing);
+        let execution_runtime_narrowing =
+            non_empty_runtime_narrowing_ref(execution_runtime_narrowing);
+        if let Some(execution_runtime_narrowing) = execution_runtime_narrowing {
+            return Some(execution_runtime_narrowing);
+        }
+
+        let contract_runtime_narrowing = self
+            .subagent_contract
+            .as_ref()
+            .map(|contract| &contract.runtime_narrowing);
+        non_empty_runtime_narrowing_ref(contract_runtime_narrowing)
     }
 
     pub fn resolved_subagent_profile(&self) -> Option<ConstrainedSubagentProfile> {
@@ -195,32 +218,23 @@ impl SessionContext {
             .as_ref()
             .map(ConstrainedSubagentExecution::contract_view)
             .or(self.subagent_contract.clone())?;
-        if let Some(stored_contract) = self.subagent_contract.as_ref() {
-            if contract.profile.is_none()
-                && let Some(profile) = stored_contract.profile
-            {
-                contract = contract.with_profile(profile);
-            }
-            if contract.runtime_narrowing.is_empty()
-                && !stored_contract.runtime_narrowing.is_empty()
-            {
-                contract =
-                    contract.with_runtime_narrowing(stored_contract.runtime_narrowing.clone());
-            }
+        if let Some(stored_contract) = self.subagent_contract.as_ref()
+            && contract.profile.is_none()
+            && let Some(profile) = stored_contract.profile
+        {
+            contract = contract.with_profile(profile);
+        }
+        let resolved_runtime_narrowing = self.resolved_runtime_narrowing().cloned();
+        if contract.runtime_narrowing.is_empty()
+            && let Some(runtime_narrowing) = resolved_runtime_narrowing
+        {
+            contract = contract.with_runtime_narrowing(runtime_narrowing);
         }
         (!contract.is_empty()).then_some(contract)
     }
 
     pub fn subagent_runtime_narrowing(&self) -> Option<&ToolRuntimeNarrowing> {
-        self.subagent_execution
-            .as_ref()
-            .map(|execution| &execution.runtime_narrowing)
-            .or_else(|| {
-                self.subagent_contract
-                    .as_ref()
-                    .map(|contract| &contract.runtime_narrowing)
-            })
-            .filter(|narrowing| !narrowing.is_empty())
+        self.resolved_runtime_narrowing()
     }
 
     #[must_use]
@@ -233,6 +247,56 @@ impl SessionContext {
         }
         self
     }
+
+    fn resolve_runtime_narrowing_owned(&self) -> Option<ToolRuntimeNarrowing> {
+        let session_runtime_narrowing =
+            non_empty_runtime_narrowing_owned(self.runtime_narrowing.clone());
+        if let Some(session_runtime_narrowing) = session_runtime_narrowing {
+            return Some(session_runtime_narrowing);
+        }
+
+        let execution_runtime_narrowing = self
+            .subagent_execution
+            .as_ref()
+            .map(|execution| execution.runtime_narrowing.clone());
+        let execution_runtime_narrowing =
+            non_empty_runtime_narrowing_owned(execution_runtime_narrowing);
+        if let Some(execution_runtime_narrowing) = execution_runtime_narrowing {
+            return Some(execution_runtime_narrowing);
+        }
+
+        let contract_runtime_narrowing = self
+            .subagent_contract
+            .as_ref()
+            .map(|contract| contract.runtime_narrowing.clone());
+        non_empty_runtime_narrowing_owned(contract_runtime_narrowing)
+    }
+
+    fn synchronize_runtime_narrowing_views(&mut self) {
+        let resolved_runtime_narrowing = self.resolve_runtime_narrowing_owned();
+        let execution_runtime_narrowing = resolved_runtime_narrowing.clone().unwrap_or_default();
+        let contract_runtime_narrowing = execution_runtime_narrowing.clone();
+
+        self.runtime_narrowing = resolved_runtime_narrowing;
+        if let Some(subagent_execution) = self.subagent_execution.as_mut() {
+            subagent_execution.runtime_narrowing = execution_runtime_narrowing;
+        }
+        if let Some(subagent_contract) = self.subagent_contract.as_mut() {
+            subagent_contract.runtime_narrowing = contract_runtime_narrowing;
+        }
+    }
+}
+
+fn non_empty_runtime_narrowing_ref(
+    runtime_narrowing: Option<&ToolRuntimeNarrowing>,
+) -> Option<&ToolRuntimeNarrowing> {
+    runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty())
+}
+
+fn non_empty_runtime_narrowing_owned(
+    runtime_narrowing: Option<ToolRuntimeNarrowing>,
+) -> Option<ToolRuntimeNarrowing> {
+    runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty())
 }
 
 fn normalize_session_id(session_id: String) -> String {
@@ -319,15 +383,10 @@ fn merge_effective_runtime_narrowing(
     let policy_runtime_narrowing = session_tool_policy.and_then(|policy| {
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
-
-    match (delegate_runtime_narrowing, policy_runtime_narrowing) {
-        (Some(delegate_runtime_narrowing), Some(policy_runtime_narrowing)) => {
-            Some(delegate_runtime_narrowing.intersect(&policy_runtime_narrowing))
-        }
-        (Some(delegate_runtime_narrowing), None) => Some(delegate_runtime_narrowing),
-        (None, Some(policy_runtime_narrowing)) => Some(policy_runtime_narrowing),
-        (None, None) => None,
-    }
+    crate::tools::runtime_config::merge_runtime_narrowing_sources(
+        delegate_runtime_narrowing,
+        policy_runtime_narrowing,
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]
