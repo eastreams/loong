@@ -126,7 +126,6 @@ use super::turn_shared::{
 };
 #[cfg(test)]
 use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
-use crate::config::ToolConsentMode;
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{
     DelegateWorkspaceCleanupResult, cleanup_delegate_workspace_root,
@@ -4249,10 +4248,8 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         return Err("app_tool_disabled: delegate is disabled by config".to_owned());
     }
 
-    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-        &payload,
-        config.tools.delegate.timeout_seconds,
-    )?;
+    let delegate_request =
+        crate::tools::delegate::parse_delegate_request_with_default_timeout(&payload)?;
     let delegate_policy =
         crate::tools::delegate::resolve_delegate_policy(&delegate_request, &config.tools.delegate);
     let child_session_id = crate::tools::delegate::next_delegate_session_id();
@@ -4305,10 +4302,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                     Ok((seed.request, seed.execution))
                 },
             )?;
-            workspace_cleanup_owned_by_child_for_work
-                .store(true, std::sync::atomic::Ordering::Release);
-
-            run_started_delegate_child_turn_with_runtime(
+            let outcome = run_started_delegate_child_turn_with_runtime(
                 config,
                 runtime,
                 &child_session_id,
@@ -4320,7 +4314,11 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                 delegate_policy.timeout_seconds,
                 binding,
             )
-            .await
+            .await?;
+            workspace_cleanup_owned_by_child_for_work
+                .store(true, std::sync::atomic::Ordering::Release);
+
+            Ok(outcome)
         },
     )
     .await
@@ -4411,8 +4409,22 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
 
     let queued_execution = execution.clone();
     let queued_workspace_root = execution.workspace_root.clone();
+    emit_async_delegate_child_queued_event(
+        runtime,
+        &session_context.session_id,
+        &child_session_id,
+        delegate_policy.label.as_deref(),
+        delegate_policy.profile,
+        delegate_policy.isolation,
+        delegate_policy.timeout_seconds,
+        queued_workspace_root.as_deref(),
+        binding,
+    )
+    .await;
+    let detached_config = std::sync::Arc::new(config.clone());
     spawn_async_delegate_detached(
         runtime_handle,
+        detached_config,
         memory_config,
         spawner,
         AsyncDelegateSpawnRequest {
@@ -4427,18 +4439,6 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
             binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
         },
     );
-    emit_async_delegate_child_queued_event(
-        runtime,
-        &session_context.session_id,
-        &child_session_id,
-        delegate_policy.label.as_deref(),
-        delegate_policy.profile,
-        delegate_policy.isolation,
-        delegate_policy.timeout_seconds,
-        queued_workspace_root.as_deref(),
-        binding,
-    )
-    .await;
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
         child_session_id,
@@ -4471,15 +4471,18 @@ pub async fn spawn_background_delegate_with_runtime<R: ConversationRuntime + ?Si
     {
         payload_object.insert("label".to_owned(), json!(label));
     }
+    if let Some(specialization) = _specialization
+        && let Some(payload_object) = delegate_payload.as_object_mut()
+    {
+        payload_object.insert("specialization".to_owned(), json!(specialization));
+    }
     if let Some(timeout_seconds) = timeout_seconds
         && let Some(payload_object) = delegate_payload.as_object_mut()
     {
         payload_object.insert("timeout_seconds".to_owned(), json!(timeout_seconds));
     }
-    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-        &delegate_payload,
-        config.tools.delegate.timeout_seconds,
-    )?;
+    let delegate_request =
+        crate::tools::delegate::parse_delegate_request_with_default_timeout(&delegate_payload)?;
     enqueue_delegate_async_with_runtime(
         config,
         runtime,
@@ -4516,10 +4519,8 @@ pub(super) async fn execute_delegate_async_tool<R: ConversationRuntime + ?Sized>
         return Err("app_tool_denied: governed_runtime_binding_required".to_owned());
     }
 
-    let delegate_request = crate::tools::delegate::parse_delegate_request_with_default_timeout(
-        &payload,
-        config.tools.delegate.timeout_seconds,
-    )?;
+    let delegate_request =
+        crate::tools::delegate::parse_delegate_request_with_default_timeout(&payload)?;
     enqueue_delegate_async_with_runtime(config, runtime, session_context, delegate_request, binding)
         .await
 }
@@ -4828,42 +4829,14 @@ fn finalize_async_delegate_spawn_failure(
     execution: &ConstrainedSubagentExecution,
     error: String,
 ) -> Result<(), String> {
-    let repo = SessionRepository::new(memory_config)?;
-    let mut outcome = crate::tools::delegate::delegate_error_outcome(
-        child_session_id.to_owned(),
-        Some(parent_session_id.to_owned()),
+    crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure(
+        memory_config,
+        child_session_id,
+        parent_session_id,
         label,
         profile,
-        error.clone(),
-        0,
-    );
-    let workspace_cleanup = cleanup_delegate_workspace_root(execution);
-    let (cleanup_metadata, cleanup_error) = split_delegate_workspace_cleanup(workspace_cleanup);
-    inject_delegate_workspace_metadata(
-        &mut outcome,
         execution,
-        cleanup_metadata.as_ref(),
-        cleanup_error,
-    );
-    let request = FinalizeSessionTerminalRequest {
-        state: SessionState::Failed,
-        last_error: Some(error.clone()),
-        event_kind: "delegate_spawn_failed".to_owned(),
-        actor_session_id: Some(parent_session_id.to_owned()),
-        event_payload_json: execution.terminal_payload(
-            ConstrainedSubagentTerminalReason::SpawnFailed,
-            0,
-            None,
-            Some(error.as_str()),
-        ),
-        outcome_status: outcome.status.clone(),
-        outcome_payload_json: outcome.payload.clone(),
-    };
-    finalize_terminal_if_current_allowing_stale_state(
-        &repo,
-        child_session_id,
-        SessionState::Ready,
-        request,
+        error,
     )
 }
 
@@ -4903,6 +4876,7 @@ fn format_async_delegate_spawn_panic(panic_payload: Box<dyn Any + Send>) -> Stri
 #[cfg(feature = "memory-sqlite")]
 fn spawn_async_delegate_detached(
     runtime_handle: Handle,
+    config: std::sync::Arc<LoongClawConfig>,
     memory_config: MemoryRuntimeConfig,
     spawner: std::sync::Arc<dyn AsyncDelegateSpawner>,
     request: AsyncDelegateSpawnRequest,
@@ -4912,6 +4886,7 @@ fn spawn_async_delegate_detached(
     let label = request.label.clone();
     let profile = request.profile;
     let execution = request.execution.clone();
+    let binding = request.binding.clone();
     runtime_handle.spawn(async move {
         let spawn_failure = match AssertUnwindSafe(spawner.spawn(request))
             .catch_unwind()
@@ -4922,15 +4897,54 @@ fn spawn_async_delegate_detached(
             Err(panic_payload) => Some(format_async_delegate_spawn_panic(panic_payload)),
         };
         if let Some(error) = spawn_failure {
-            let _ = finalize_async_delegate_spawn_failure_with_recovery(
+            let finalize_result = finalize_async_delegate_spawn_failure_with_recovery(
                 &memory_config,
                 &child_session_id,
                 &parent_session_id,
-                label,
+                label.clone(),
                 profile,
                 &execution,
-                error,
+                error.clone(),
             );
+            if let Err(finalize_error) = finalize_result {
+                tracing::warn!(
+                    child_session_id = %child_session_id,
+                    parent_session_id = %parent_session_id,
+                    error = %finalize_error,
+                    "delegate async spawn failure recovery did not fully persist"
+                );
+            }
+
+            let runtime = DefaultConversationRuntime::from_config_or_env(config.as_ref());
+            match runtime {
+                Ok(runtime) => {
+                    emit_async_delegate_child_terminal_event(
+                        &runtime,
+                        &parent_session_id,
+                        &child_session_id,
+                        label.as_deref(),
+                        profile,
+                        "failed",
+                        execution.isolation,
+                        0,
+                        None,
+                        Some(error.as_str()),
+                        None,
+                        execution.workspace_root.as_deref(),
+                        None,
+                        binding.as_borrowed(),
+                    )
+                    .await;
+                }
+                Err(runtime_error) => {
+                    tracing::warn!(
+                        child_session_id = %child_session_id,
+                        parent_session_id = %parent_session_id,
+                        error = %runtime_error,
+                        "delegate async spawn failure could not emit parent terminal projection"
+                    );
+                }
+            }
         }
     });
 }

@@ -1,11 +1,12 @@
-use std::io::{BufRead, BufReader, ErrorKind};
-use std::path::Path;
+use std::io::ErrorKind;
 use std::process::{Output, Stdio};
 use std::time::Duration;
 
 use loongclaw_app as mvp;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncReadExt;
+#[cfg(unix)]
+use std::io::{BufRead, BufReader};
+#[cfg(unix)]
+use std::path::Path;
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -261,7 +262,8 @@ async fn probe_browser_companion_version(
 
     for _attempt in 0..BROWSER_COMPANION_PROBE_ATTEMPTS {
         let mut probe = if should_probe_browser_companion_via_sh(command) {
-            let mut probe = Command::new(POSIX_SH_PATH);
+            let shell = resolve_browser_companion_shell(command);
+            let mut probe = Command::new(shell);
             probe.arg(command);
             probe
         } else {
@@ -272,29 +274,9 @@ async fn probe_browser_companion_version(
         probe.stdout(Stdio::piped());
         probe.stderr(Stdio::piped());
 
-        let mut child = match probe.spawn() {
-            Ok(child) => child,
-            Err(error) => {
-                if error.kind() == ErrorKind::NotFound {
-                    return Err(BrowserCompanionProbeError::MissingBinary);
-                }
-
-                let error_message = error.to_string();
-                return Err(BrowserCompanionProbeError::SpawnFailed(error_message));
-            }
-        };
-        let probe_result = timeout(timeout_duration, child.wait()).await;
+        let probe_result = timeout(timeout_duration, probe.output()).await;
         match probe_result {
-            Ok(Ok(status)) => {
-                let stdout = read_probe_pipe(&mut child.stdout).await?;
-                let stderr = read_probe_pipe(&mut child.stderr).await?;
-                let output = Output {
-                    status,
-                    stdout,
-                    stderr,
-                };
-                return interpret_browser_companion_probe_output(output);
-            }
+            Ok(Ok(output)) => return interpret_browser_companion_probe_output(output),
             Ok(Err(error)) => {
                 if error.kind() == ErrorKind::NotFound {
                     return Err(BrowserCompanionProbeError::MissingBinary);
@@ -303,31 +285,11 @@ async fn probe_browser_companion_version(
                 let error_message = error.to_string();
                 return Err(BrowserCompanionProbeError::SpawnFailed(error_message));
             }
-            Err(_) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
-            }
+            Err(_) => {}
         }
     }
 
     Err(BrowserCompanionProbeError::TimedOut)
-}
-
-async fn read_probe_pipe<R>(pipe: &mut Option<R>) -> Result<Vec<u8>, BrowserCompanionProbeError>
-where
-    R: AsyncRead + Unpin,
-{
-    let Some(reader) = pipe.as_mut() else {
-        return Ok(Vec::new());
-    };
-
-    let mut bytes = Vec::new();
-    reader
-        .read_to_end(&mut bytes)
-        .await
-        .map_err(|error| BrowserCompanionProbeError::SpawnFailed(error.to_string()))?;
-
-    Ok(bytes)
 }
 
 fn interpret_browser_companion_probe_output(
@@ -387,6 +349,43 @@ fn should_probe_browser_companion_via_sh(command: &str) -> bool {
         let _ = command;
         false
     }
+}
+
+#[cfg(unix)]
+fn resolve_browser_companion_shell(command: &str) -> String {
+    let path = Path::new(command);
+    let Ok(file) = std::fs::File::open(path) else {
+        return POSIX_SH_PATH.to_owned();
+    };
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+    if reader.read_line(&mut first_line).is_err() {
+        return POSIX_SH_PATH.to_owned();
+    }
+
+    let Some(shebang) = first_line.strip_prefix("#!").map(str::trim) else {
+        return POSIX_SH_PATH.to_owned();
+    };
+    let mut tokens = shebang.split_ascii_whitespace();
+    let Some(first_token) = tokens.next() else {
+        return POSIX_SH_PATH.to_owned();
+    };
+    let first_name = Path::new(first_token)
+        .file_name()
+        .and_then(|name| name.to_str());
+    match first_name {
+        Some("env") => tokens
+            .find(|token| !token.starts_with('-'))
+            .unwrap_or("sh")
+            .to_owned(),
+        Some(_) => first_token.to_owned(),
+        None => POSIX_SH_PATH.to_owned(),
+    }
+}
+
+#[cfg(not(unix))]
+fn resolve_browser_companion_shell(_command: &str) -> String {
+    "sh".to_owned()
 }
 
 fn observed_output(stdout: &[u8], stderr: &[u8]) -> String {

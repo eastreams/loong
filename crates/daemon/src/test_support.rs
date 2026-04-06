@@ -91,21 +91,29 @@ impl Drop for ScopedEnv {
 pub fn write_executable_script_atomically(script_path: &Path, contents: &str) {
     use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static STAGED_SCRIPT_NONCE: AtomicUsize = AtomicUsize::new(0);
 
     let parent = script_path
         .parent()
         .expect("script path should have parent directory");
     fs::create_dir_all(parent).expect("create script parent directory");
     let staged_path = parent.join(format!(
-        ".{}.{}.tmp",
+        ".{}.{}.{}.tmp",
         script_path
             .file_name()
             .and_then(|name| name.to_str())
             .expect("script file name"),
-        std::process::id()
+        std::process::id(),
+        STAGED_SCRIPT_NONCE.fetch_add(1, Ordering::Relaxed)
     ));
 
-    let mut file = fs::File::create(&staged_path).expect("create staged executable script");
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged_path)
+        .expect("create staged executable script");
     file.write_all(contents.as_bytes())
         .expect("write staged executable script");
     file.sync_all().expect("sync staged executable script");

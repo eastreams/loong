@@ -165,6 +165,9 @@ exit 0
         })
     };
 
+    // Give the fake turn a conservative 150ms head start before aborting so the
+    // cancellation path is definitely active; the surrounding 2s timeout keeps
+    // the test comfortably away from CI timing flake territory.
     tokio::time::sleep(Duration::from_millis(150)).await;
     abort_controller.abort();
 

@@ -3,6 +3,7 @@ use serde_json::Value;
 
 use super::*;
 
+#[cfg(unix)]
 #[test]
 fn fake_acpx_script_helpers_work_with_empty_path() {
     use std::io::Write;

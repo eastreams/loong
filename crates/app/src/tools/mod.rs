@@ -336,6 +336,7 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "session_search"
         | "session_archive"
         | "session_cancel"
+        | "session_continue"
         | "session_recover" => session::execute_session_tool_with_policies(
             request,
             current_session_id,
@@ -661,14 +662,6 @@ pub fn execute_tool_core_with_config(
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
-    if !trusted_internal_tool_payload_enabled()
-        && payload_uses_reserved_internal_tool_context(&request.payload)
-    {
-        return Err(format!(
-            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
-            request.tool_name
-        ));
-    }
     let canonical_name = canonical_tool_name(request.tool_name.as_str());
     let payload = request.payload;
     let workspace_root = trusted_workspace_root_from_payload(&payload)?;
@@ -809,6 +802,9 @@ fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf
     let canonical_workspace_root = std::fs::canonicalize(&workspace_root).map_err(|error| {
         format!("invalid_internal_workspace_root: canonicalize failed: {error}")
     })?;
+    if !canonical_workspace_root.is_dir() {
+        return Err("invalid_internal_workspace_root: path must be a directory".to_owned());
+    }
     Ok(Some(canonical_workspace_root))
 }
 
@@ -819,18 +815,12 @@ pub(crate) fn merge_trusted_internal_tool_context_into_arguments(
     let trusted_context = internal_context.as_object().cloned().ok_or_else(|| {
         format!("tool.invoke payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object")
     })?;
-    let merged_context = match arguments.remove(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
-        None => Value::Object(trusted_context),
-        Some(Value::Object(mut existing_context)) => {
-            existing_context.extend(trusted_context);
-            Value::Object(existing_context)
-        }
-        Some(_) => {
-            return Err(format!(
-                "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} must be an object"
-            ));
-        }
-    };
+    if arguments.contains_key(LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY) {
+        return Err(format!(
+            "tool.invoke payload.arguments.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context"
+        ));
+    }
+    let merged_context = Value::Object(trusted_context);
     arguments.insert(
         LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
         merged_context,
@@ -1751,10 +1741,10 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::{MutexGuard, OnceLock};
 
-    fn test_tool_runtime_config(root: PathBuf) -> runtime_config::ToolRuntimeConfig {
+    fn test_tool_runtime_config(root: impl AsRef<Path>) -> runtime_config::ToolRuntimeConfig {
         runtime_config::ToolRuntimeConfig {
             shell_allow: BTreeSet::from(["echo".to_owned(), "cat".to_owned(), "ls".to_owned()]),
-            file_root: Some(root),
+            file_root: Some(root.as_ref().to_path_buf()),
             messages_enabled: true,
             external_skills: runtime_config::ExternalSkillsRuntimePolicy {
                 enabled: true,
@@ -1885,7 +1875,7 @@ mod tests {
         root: &Path,
         command: String,
     ) -> runtime_config::ToolRuntimeConfig {
-        let mut config = test_tool_runtime_config(root.to_path_buf());
+        let mut config = test_tool_runtime_config(root);
         config.browser_companion.enabled = true;
         config.browser_companion.ready = true;
         config.browser_companion.command = Some(command);
@@ -3343,7 +3333,7 @@ mod tests {
         }
         env.set("PATH", path_value);
 
-        let mut config = test_tool_runtime_config(root.clone());
+        let mut config = test_tool_runtime_config(&root);
         config.shell_allow = BTreeSet::from(["mixedcmd".to_owned()]);
 
         let error = execute_tool_core_with_config(
@@ -4146,7 +4136,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).expect("create fixture root");
 
-        let mut config = test_tool_runtime_config(root.clone());
+        let mut config = test_tool_runtime_config(root);
         config.web_fetch.timeout_seconds = 1;
         let error = execute_tool_core_with_test_context(
             ToolCoreRequest {
