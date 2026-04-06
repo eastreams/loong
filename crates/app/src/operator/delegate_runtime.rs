@@ -1,10 +1,15 @@
+#![allow(
+    dead_code,
+    reason = "delegate runtime helpers are staged ahead of final coordinator adoption on the rebased branch"
+)]
+
 use serde_json::Value;
 
 use crate::config::LoongClawConfig;
 use crate::conversation::{
     ConstrainedSubagentContractView, ConstrainedSubagentExecution, ConstrainedSubagentIdentity,
-    ConstrainedSubagentMode, ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason,
-    ConversationRuntimeBinding,
+    ConstrainedSubagentIsolation, ConstrainedSubagentMode, ConstrainedSubagentProfile,
+    ConstrainedSubagentTerminalReason, ConversationRuntimeBinding,
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
@@ -152,6 +157,7 @@ fn build_delegate_child_execution(
 
     ConstrainedSubagentExecution {
         mode,
+        isolation: ConstrainedSubagentIsolation::Shared,
         depth: next_child_depth,
         max_depth: config.tools.delegate.max_depth,
         active_children,
@@ -159,10 +165,12 @@ fn build_delegate_child_execution(
         timeout_seconds,
         allow_shell_in_child: config.tools.delegate.allow_shell_in_child,
         child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
+        workspace_root: None,
         runtime_narrowing,
         kernel_bound,
         identity,
         profile: Some(profile),
+        agent_role: None,
     }
 }
 
@@ -235,9 +243,10 @@ fn build_delegate_child_event_payload(
 ) -> Value {
     let trust_event =
         delegate_child_trust_event(parent_session_id, child_session_id, source_surface);
-    let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
+    let event_payload_json = execution.spawn_payload_with_profile_and_runtime_self_continuity(
         task,
         child_label,
+        None,
         runtime_self_continuity,
     );
     let payload_with_trust =
@@ -263,7 +272,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
         child_session_id.to_owned(),
         Some(parent_session_id.to_owned()),
         label,
-        Some(&execution.contract_view()),
+        None,
         error.clone(),
         0,
     );
