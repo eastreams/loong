@@ -13,7 +13,7 @@ use crate::KernelContext;
 #[cfg(feature = "channel-feishu")]
 use crate::channel::{
     ChannelOutboundTarget, ChannelServeStopHandle, FeishuChannelSendRequest,
-    runtime_state::ChannelOperationRuntimeTracker,
+    runtime::state::ChannelOperationRuntimeTracker,
 };
 #[cfg(feature = "channel-feishu")]
 use crate::config::{
