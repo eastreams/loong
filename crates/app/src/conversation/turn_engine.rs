@@ -2557,6 +2557,7 @@ mod tests {
     use crate::test_support::unique_temp_dir;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use serde_json::json;
@@ -2943,6 +2944,11 @@ mod tests {
 
     fn unique_browser_companion_temp_dir(prefix: &str) -> PathBuf {
         unique_temp_dir(prefix)
+    }
+
+    fn browser_companion_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     #[cfg(unix)]
@@ -3832,6 +3838,9 @@ mod tests {
 
     #[tokio::test]
     async fn browser_companion_click_turn_executes_when_approval_is_disabled() {
+        let _guard = browser_companion_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let memory_config = isolated_memory_config("browser-companion-click-exec");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -3931,6 +3940,9 @@ mod tests {
 
     #[tokio::test]
     async fn browser_companion_click_turn_uses_runtime_visible_readiness_without_env_recheck() {
+        let _guard = browser_companion_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let memory_config = isolated_memory_config("browser-companion-click-runtime-ready");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {
@@ -4031,6 +4043,9 @@ mod tests {
 
     #[tokio::test]
     async fn browser_companion_click_turn_uses_runtime_visible_policy_when_app_config_is_default() {
+        let _guard = browser_companion_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let memory_config = isolated_memory_config("browser-companion-click-runtime-policy");
         let repo = SessionRepository::new(&memory_config).expect("repository");
         repo.ensure_session(NewSessionRecord {

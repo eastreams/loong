@@ -2,9 +2,12 @@
 pub(super) enum SlashCommand {
     Help,
     Commands,
+    New,
+    Rename,
     Clear,
     Compact,
     Resume,
+    Subagents,
     Tasks,
     Approvals,
     Permissions,
@@ -55,6 +58,22 @@ const COMMANDS: &[SlashCommandSpec] = &[
         discoverable: true,
     },
     SlashCommandSpec {
+        name: "/new",
+        help: "Start a fresh root session and switch to it",
+        category: "Navigation",
+        aliases: &[],
+        argument_hint: Some("[label]"),
+        discoverable: true,
+    },
+    SlashCommandSpec {
+        name: "/rename",
+        help: "Rename the current session label",
+        category: "Navigation",
+        aliases: &[],
+        argument_hint: Some("<label>"),
+        discoverable: true,
+    },
+    SlashCommandSpec {
         name: "/clear",
         help: "Clear conversation history",
         category: "General",
@@ -76,6 +95,14 @@ const COMMANDS: &[SlashCommandSpec] = &[
         category: "Navigation",
         aliases: &[],
         argument_hint: Some("[inspect|switch] <session-id>"),
+        discoverable: true,
+    },
+    SlashCommandSpec {
+        name: "/subagents",
+        help: "Open the subagent thread picker, or switch directly to one thread",
+        category: "Navigation",
+        aliases: &["/agents"],
+        argument_hint: Some("[session-id]"),
         discoverable: true,
     },
     SlashCommandSpec {
@@ -136,7 +163,7 @@ const COMMANDS: &[SlashCommandSpec] = &[
     },
     SlashCommandSpec {
         name: "/mode",
-        help: "Show or set busy-turn submit behavior (queue or steer)",
+        help: "Show or set how busy turns handle new messages (queue or steer)",
         category: "View",
         aliases: &[],
         argument_hint: Some("[queue|steer|toggle|clear]"),
@@ -300,9 +327,12 @@ pub(super) fn parse(input: &str) -> Option<ParsedSlashCommand> {
     let command = match cmd {
         "/help" => SlashCommand::Help,
         "/commands" => SlashCommand::Commands,
+        "/new" => SlashCommand::New,
+        "/rename" => SlashCommand::Rename,
         "/clear" => SlashCommand::Clear,
         "/compact" => SlashCommand::Compact,
         "/resume" => SlashCommand::Resume,
+        "/subagents" | "/agents" => SlashCommand::Subagents,
         "/tasks" => SlashCommand::Tasks,
         "/approvals" => SlashCommand::Approvals,
         "/permissions" => SlashCommand::Permissions,
@@ -359,6 +389,20 @@ mod tests {
             })
         );
         assert_eq!(
+            parse("/new"),
+            Some(ParsedSlashCommand {
+                command: SlashCommand::New,
+                args: String::new(),
+            })
+        );
+        assert_eq!(
+            parse("/rename"),
+            Some(ParsedSlashCommand {
+                command: SlashCommand::Rename,
+                args: String::new(),
+            })
+        );
+        assert_eq!(
             parse("/clear"),
             Some(ParsedSlashCommand {
                 command: SlashCommand::Clear,
@@ -376,6 +420,13 @@ mod tests {
             parse("/resume"),
             Some(ParsedSlashCommand {
                 command: SlashCommand::Resume,
+                args: String::new(),
+            })
+        );
+        assert_eq!(
+            parse("/subagents"),
+            Some(ParsedSlashCommand {
+                command: SlashCommand::Subagents,
                 args: String::new(),
             })
         );

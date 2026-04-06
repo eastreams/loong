@@ -13,6 +13,8 @@ use ratatui::{
     },
 };
 
+use crate::session::presentation::{SessionPresentationLocale, localized_root_thread_label};
+
 use super::commands;
 use super::dialog::ClarifyDialog;
 use super::focus::{FocusLayer, FocusStack};
@@ -21,6 +23,7 @@ use super::input::{self, InputView};
 use super::layout;
 use super::message::{ToolStatus, format_tool_args_preview};
 use super::spinner::{self, SpinnerView};
+use super::state;
 use super::stats;
 use super::status_bar::{self, StatusBarView};
 use super::theme::Palette;
@@ -55,6 +58,12 @@ pub(super) struct StatsOverlayView<'a> {
     pub(super) copy_status: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SessionPickerView<'a> {
+    pub(super) picker: &'a state::SessionPickerState,
+    pub(super) current_session_id: &'a str,
+}
+
 // ---------------------------------------------------------------------------
 // Composite view trait for Shell
 // ---------------------------------------------------------------------------
@@ -71,6 +80,7 @@ pub(super) trait ShellView {
     fn clarify_dialog(&self) -> Option<&ClarifyDialog>;
     fn tool_inspector(&self) -> Option<ToolInspectorView<'_>>;
     fn stats_overlay(&self) -> Option<StatsOverlayView<'_>>;
+    fn session_picker(&self) -> Option<SessionPickerView<'_>>;
     fn slash_command_selection(&self) -> usize;
     fn slash_palette_entries(&self, draft_prefix: &str) -> Vec<SlashPaletteEntry>;
 }
@@ -92,7 +102,7 @@ pub(super) fn draw(
     }
 
     let input_height = textarea.lines().len() as u16 + 2; // +2 for borders
-    let areas = layout::compute(area, input_height);
+    let areas = resolve_shell_areas(frame, state, textarea, input_height);
 
     // 1. History (message transcript)
     history::render_history(
@@ -161,9 +171,83 @@ pub(super) fn draw(
         render_stats_overlay(stats_overlay, frame, area, palette);
     }
 
+    if let Some(session_picker) = state.session_picker()
+        && state.focus().has(FocusLayer::SessionPicker)
+    {
+        render_session_picker(session_picker, frame, area, palette);
+    }
+
     if state.focus().has(FocusLayer::Help) {
         render_help_overlay(frame, area, palette);
     }
+}
+
+fn resolve_shell_areas(
+    frame: &Frame<'_>,
+    state: &impl ShellView,
+    textarea: &tui_textarea::TextArea<'_>,
+    input_height: u16,
+) -> layout::ShellAreas {
+    let area = frame.area();
+    let maybe_intro = intro_layout_config(state, textarea, area);
+    let Some(intro) = maybe_intro else {
+        return layout::compute(area, input_height);
+    };
+
+    layout::compute_intro(area, input_height, intro)
+}
+
+fn intro_layout_config(
+    state: &impl ShellView,
+    textarea: &tui_textarea::TextArea<'_>,
+    area: Rect,
+) -> Option<layout::IntroLayoutConfig> {
+    if area.height < 18 {
+        return None;
+    }
+
+    let pane = state.pane();
+    if PaneView::scroll_offset(pane) > 0 {
+        return None;
+    }
+    if InputView::agent_running(pane) {
+        return None;
+    }
+    if state.focus().top() != FocusLayer::Composer {
+        return None;
+    }
+
+    let transcript_width = usize::from(area.width.saturating_sub(4).max(1));
+    let transcript_lines =
+        history::transcript_plain_lines(pane, transcript_width, state.show_thinking());
+    let transcript_line_count = transcript_lines.len();
+    if transcript_line_count > 8 {
+        return None;
+    }
+
+    let input_height = textarea.lines().len() as u16 + 2;
+    let clamped_input_height = input_height.clamp(3, 12);
+    let minimum_history_height = 5_u16;
+    let history_height = u16::try_from(transcript_line_count)
+        .ok()
+        .map(|count| count.saturating_add(1))
+        .unwrap_or(minimum_history_height)
+        .max(minimum_history_height);
+    let reserved_height = history_height
+        .saturating_add(clamped_input_height)
+        .saturating_add(4);
+    let remaining_height = area.height.saturating_sub(reserved_height);
+    if remaining_height < 4 {
+        return None;
+    }
+
+    let top_padding = remaining_height / 3;
+    let intro = layout::IntroLayoutConfig {
+        top_padding,
+        history_height,
+    };
+
+    Some(intro)
 }
 
 const COMPACT_CHAT_MIN_WIDTH: u16 = 32;
@@ -185,8 +269,16 @@ fn render_compact_shell(frame: &mut Frame<'_>, state: &impl ShellView, palette: 
     let transcript_lines =
         history::transcript_plain_lines(pane, transcript_width, state.show_thinking());
     let visible_body_lines = usize::from(area.height.saturating_sub(2).max(1));
+    let show_compact_welcome = pane.messages().is_empty()
+        || (pane.messages().len() == 1
+            && pane
+                .messages()
+                .first()
+                .is_some_and(|message| matches!(message.role, super::message::Role::User)));
 
-    let body_lines = if transcript_lines.is_empty() {
+    let body_lines = if show_compact_welcome {
+        vec!["Type a message to begin.".to_owned()]
+    } else if transcript_lines.is_empty() {
         vec!["Ready for chat.".to_owned()]
     } else {
         let start_index = transcript_lines.len().saturating_sub(visible_body_lines);
@@ -249,6 +341,7 @@ fn compact_focus_label(focus: FocusLayer) -> &'static str {
         FocusLayer::Composer => "COMPOSE",
         FocusLayer::Transcript => "REVIEW",
         FocusLayer::Help => "HELP",
+        FocusLayer::SessionPicker => "PICKER",
         FocusLayer::StatsOverlay => "STATS",
         FocusLayer::ToolInspector => "TOOL",
         FocusLayer::ClarifyDialog => "QUESTION",
@@ -295,7 +388,7 @@ fn render_stats_overlay(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.brand))
+        .border_style(Style::default().fg(palette.separator))
         .title(Span::styled(
             " Stats ",
             Style::default()
@@ -310,7 +403,7 @@ fn render_stats_overlay(
                 .add_modifier(Modifier::ITALIC),
         ))
         .title_position(TitlePosition::Bottom)
-        .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x1a)));
+        .style(Style::default().bg(palette.surface));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -342,6 +435,213 @@ fn render_stats_overlay(
             render_stats_sessions_body(frame, *body_area, stats_overlay, palette);
         }
     }
+}
+
+fn render_session_picker(
+    session_picker: SessionPickerView<'_>,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    palette: &Palette,
+) {
+    if area.width < 56 || area.height < 14 {
+        return;
+    }
+
+    let max_width = area.width.saturating_sub(4);
+    let preferred_width = area.width.saturating_mul(3) / 4;
+    let popup_width = preferred_width.max(56).min(max_width);
+
+    let max_height = area.height.saturating_sub(2);
+    let preferred_height = area.height.saturating_mul(3) / 4;
+    let popup_height = preferred_height.max(14).min(max_height);
+
+    let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette.separator))
+        .title(Span::styled(
+            format!(" {} ", session_picker.picker.mode.title()),
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_position(TitlePosition::Top)
+        .title(Span::styled(
+            session_picker.picker.mode.footer_hint(),
+            Style::default()
+                .fg(palette.dim)
+                .add_modifier(Modifier::ITALIC),
+        ))
+        .title_position(TitlePosition::Bottom)
+        .style(Style::default().bg(palette.surface));
+
+    let inner_area = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(6)])
+        .split(inner_area);
+    let [search_area, list_area] = sections.as_ref() else {
+        return;
+    };
+
+    let query = session_picker.picker.query.trim();
+    let query_text = if query.is_empty() {
+        " Search…".to_owned()
+    } else {
+        format!(" Search: {query}")
+    };
+    let query_style = if query.is_empty() {
+        Style::default().fg(palette.dim)
+    } else {
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD)
+    };
+    let query_line = Line::from(Span::styled(query_text, query_style));
+    frame.render_widget(Paragraph::new(vec![query_line]), *search_area);
+
+    let filtered_indices = session_picker.picker.filtered_indices();
+    let visible_rows = usize::from(list_area.height.max(1));
+    let scroll_offset = session_picker.picker.list_scroll_offset;
+    let visible_indices = filtered_indices
+        .into_iter()
+        .skip(scroll_offset)
+        .take(visible_rows)
+        .collect::<Vec<_>>();
+
+    if visible_indices.is_empty() {
+        let empty_text = Paragraph::new(vec![Line::from(Span::styled(
+            session_picker.picker.mode.empty_message(),
+            Style::default().fg(palette.dim),
+        ))]);
+        frame.render_widget(empty_text, *list_area);
+        return;
+    }
+
+    let picker_mode = session_picker.picker.mode;
+    let mut lines = Vec::new();
+    let locale = SessionPresentationLocale::detect_from_env();
+    for (visible_row, session_index) in visible_indices.into_iter().enumerate() {
+        let Some(session) = session_picker.picker.sessions.get(session_index) else {
+            continue;
+        };
+        let absolute_index = scroll_offset.saturating_add(visible_row);
+        let is_selected = absolute_index == session_picker.picker.selected_index;
+        let is_current = session.session_id == session_picker.current_session_id;
+
+        let primary = session_picker_primary_label(session, picker_mode, locale);
+        let mut detail_parts = vec![session_picker_detail_label(session)];
+        let maybe_provider_label = session
+            .agent_presentation
+            .as_ref()
+            .and_then(|presentation| presentation.provider_label(locale));
+        if let Some(provider_label) = maybe_provider_label {
+            detail_parts.push(provider_label);
+        }
+        if picker_mode == state::SessionPickerMode::Subagents
+            && session.kind == "root"
+            && session.label.is_some()
+        {
+            detail_parts.push(localized_root_thread_label(locale).to_owned());
+        }
+        if let Some(label) = session.label.as_deref() {
+            let label_text = label.to_owned();
+            if primary != label_text {
+                detail_parts.push(label_text);
+            }
+        }
+        if session.attention_approval_count > 0 {
+            detail_parts.push(format!("APR! {}", session.attention_approval_count));
+        }
+        let remaining_pending = session
+            .pending_approval_count
+            .saturating_sub(session.attention_approval_count);
+        if remaining_pending > 0 {
+            detail_parts.push(format!("APR {remaining_pending}"));
+        }
+        if is_current {
+            detail_parts.push("current".to_owned());
+        }
+        let detail = detail_parts.join(" · ");
+
+        let marker = if is_selected { "›" } else { " " };
+        let accent_color = session
+            .agent_presentation
+            .as_ref()
+            .map(|presentation| palette.subagent_accent(presentation.persona_id.as_str()))
+            .unwrap_or_else(|| {
+                if session.kind == "root" {
+                    palette.brand
+                } else {
+                    palette.text
+                }
+            });
+        let primary_style = Style::default()
+            .fg(accent_color)
+            .add_modifier(Modifier::BOLD);
+        let detail_style = if is_selected {
+            Style::default().fg(palette.info)
+        } else {
+            Style::default().fg(palette.dim)
+        };
+
+        let line = Line::from(vec![
+            Span::styled(format!("{marker} "), Style::default().fg(palette.brand)),
+            Span::styled(primary, primary_style),
+            Span::styled("  ", Style::default().fg(palette.separator)),
+            Span::styled(detail, detail_style),
+        ]);
+        lines.push(line);
+    }
+
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, *list_area);
+}
+
+fn session_picker_primary_label(
+    session: &state::VisibleSessionSuggestion,
+    picker_mode: state::SessionPickerMode,
+    locale: SessionPresentationLocale,
+) -> String {
+    if picker_mode == state::SessionPickerMode::Subagents && session.kind == "root" {
+        if let Some(label) = session.label.as_deref() {
+            let trimmed_label = label.trim();
+            if !trimmed_label.is_empty() {
+                return trimmed_label.to_owned();
+            }
+        }
+        return localized_root_thread_label(locale).to_owned();
+    }
+
+    if let Some(presentation) = session.agent_presentation.as_ref() {
+        return presentation.primary_label(locale);
+    }
+
+    session
+        .label
+        .clone()
+        .unwrap_or_else(|| session.session_id.clone())
+}
+
+fn session_picker_detail_label(session: &state::VisibleSessionSuggestion) -> String {
+    let status_label = session
+        .task_phase
+        .as_deref()
+        .unwrap_or(session.state.as_str());
+    let kind_label = match session.kind.as_str() {
+        "root" => "thread",
+        "delegate_child" => "subagent",
+        _ => session.kind.as_str(),
+    };
+
+    format!("{status_label} · {kind_label}")
 }
 
 fn render_stats_tab_row(
@@ -903,6 +1203,7 @@ fn render_stats_model_line(entry: &stats::ModelTokenTotal, palette: &Palette) ->
 }
 
 fn render_stats_session_line(row: &stats::StatsSessionRow, palette: &Palette) -> Line<'static> {
+    let locale = SessionPresentationLocale::detect_from_env();
     let session_label = if row.current {
         format!(" {} (current) ", row.session_id)
     } else {
@@ -913,13 +1214,30 @@ fn render_stats_session_line(row: &stats::StatsSessionRow, palette: &Palette) ->
         .last_activity_date
         .map(stats::short_date_label)
         .unwrap_or_else(|| "(no turns)".to_owned());
-    let label_text = row
-        .label
-        .clone()
-        .unwrap_or_else(|| "(unlabeled)".to_owned());
+    let label_text = match row.agent_presentation.as_ref() {
+        Some(presentation) => presentation.primary_label(locale),
+        None => row
+            .label
+            .clone()
+            .unwrap_or_else(|| "(unlabeled)".to_owned()),
+    };
+    let provider_text = row
+        .agent_presentation
+        .as_ref()
+        .and_then(|presentation| presentation.provider_label(locale));
+    let provider_suffix = provider_text
+        .as_deref()
+        .map(|value| format!(" · {value}"))
+        .unwrap_or_default();
     let meta_label = format!(
-        "{} · {} · {} turns · {} · {} · {}",
-        row.state, row.kind, row.turn_count, duration_label, date_label, label_text,
+        "{} · {} · {} turns · {} · {} · {}{}",
+        row.state,
+        row.kind,
+        row.turn_count,
+        duration_label,
+        date_label,
+        label_text,
+        provider_suffix,
     );
 
     Line::from(vec![
@@ -1042,10 +1360,9 @@ fn render_command_palette(
 // ---------------------------------------------------------------------------
 
 fn render_separator(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
-    let sep = Paragraph::new(Line::styled(
-        "\u{2500}".repeat(area.width as usize),
-        Style::default().fg(palette.separator),
-    ));
+    let dots = "·  ·  ·".to_string();
+    let line = format!("{dots:^width$}", width = usize::from(area.width));
+    let sep = Paragraph::new(Line::styled(line, Style::default().fg(palette.separator)));
     frame.render_widget(sep, area);
 }
 
@@ -1080,11 +1397,11 @@ fn render_clarify_dialog(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.warning))
+        .border_style(Style::default().fg(palette.separator))
         .title(Span::styled(
             " Agent Question ",
             Style::default()
-                .fg(palette.brand)
+                .fg(palette.warning)
                 .add_modifier(Modifier::BOLD),
         ))
         .title_position(TitlePosition::Top)
@@ -1095,7 +1412,7 @@ fn render_clarify_dialog(
                 .add_modifier(Modifier::ITALIC),
         ))
         .title_position(TitlePosition::Bottom)
-        .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x1a)));
+        .style(Style::default().bg(palette.surface));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -1185,7 +1502,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
         ("Ctrl+G", "Cycle queue / steer mode"),
         ("Ctrl+R", "Toggle transcript review"),
         ("Ctrl+O", "Open latest tool details"),
-        ("Ctrl+C", "Interrupt / cancel"),
+        ("Ctrl+C", "Interrupt, cancel pending, or quit"),
         ("Esc", "Close dialogs"),
     ] {
         content_lines.push(Line::from(vec![
@@ -1245,7 +1562,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.brand))
+        .border_style(Style::default().fg(palette.separator))
         .title(Span::styled(
             " Help ",
             Style::default()
@@ -1260,7 +1577,7 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
                 .add_modifier(Modifier::ITALIC),
         ))
         .title_position(TitlePosition::Bottom)
-        .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x1a)));
+        .style(Style::default().bg(palette.surface));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -1300,7 +1617,7 @@ fn render_tool_inspector(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.info))
+        .border_style(Style::default().fg(palette.separator))
         .title(Span::styled(
             " Tool Details ",
             Style::default()
@@ -1315,7 +1632,7 @@ fn render_tool_inspector(
                 .add_modifier(Modifier::ITALIC),
         ))
         .title_position(TitlePosition::Bottom)
-        .style(Style::default().bg(Color::Rgb(0x1a, 0x1a, 0x1a)));
+        .style(Style::default().bg(palette.surface));
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -1392,14 +1709,9 @@ fn render_tool_inspector(
             .add_modifier(Modifier::BOLD),
     ));
 
-    for output_line in output_text.lines() {
-        let styled_line = render_tool_output_line(output_line, palette);
-        content_lines.push(styled_line);
-    }
-
-    if output_text.is_empty() {
-        let empty_line = Line::styled(" ", Style::default().fg(palette.text));
-        content_lines.push(empty_line);
+    let rendered_output_lines = render_tool_output_lines(output_text.as_ref(), palette);
+    for rendered_output_line in rendered_output_lines {
+        content_lines.push(rendered_output_line);
     }
 
     let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false });
@@ -1429,23 +1741,285 @@ fn render_tool_inspector(
     }
 }
 
-fn render_tool_output_line(output_line: &str, palette: &Palette) -> Line<'static> {
-    let prefixed_line = format!(" {output_line}");
-    let style = if is_diff_hunk_line(output_line) {
-        Style::default()
-            .fg(palette.info)
-            .add_modifier(Modifier::BOLD)
-    } else if is_diff_addition_line(output_line) {
-        Style::default().fg(palette.success)
-    } else if is_diff_removal_line(output_line) {
-        Style::default().fg(palette.error)
-    } else if is_diff_file_header_line(output_line) {
-        Style::default().fg(palette.brand)
-    } else {
-        Style::default().fg(palette.text)
+#[derive(Debug, Clone, Copy)]
+struct DiffOutputCursor {
+    old_line: usize,
+    new_line: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DiffOutputMetrics {
+    line_number_width: usize,
+}
+
+fn render_tool_output_lines(output_text: &str, palette: &Palette) -> Vec<Line<'static>> {
+    if output_text.is_empty() {
+        let empty_line = Line::styled(" ", Style::default().fg(palette.text));
+        return vec![empty_line];
+    }
+
+    let metrics = diff_output_metrics(output_text);
+    let Some(metrics) = metrics else {
+        return output_text
+            .lines()
+            .map(|output_line| render_plain_tool_output_line(output_line, palette))
+            .collect();
     };
 
+    render_diff_tool_output_lines(output_text, palette, metrics)
+}
+
+fn render_diff_tool_output_lines(
+    output_text: &str,
+    palette: &Palette,
+    metrics: DiffOutputMetrics,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let mut cursor: Option<DiffOutputCursor> = None;
+
+    for output_line in output_text.lines() {
+        let parsed_hunk_cursor = parse_diff_hunk_cursor(output_line);
+        if let Some(parsed_hunk_cursor) = parsed_hunk_cursor {
+            cursor = Some(parsed_hunk_cursor);
+            let metadata_line = render_diff_metadata_line(output_line, palette);
+            lines.push(metadata_line);
+            continue;
+        }
+
+        let is_metadata_line = is_diff_file_header_line(output_line);
+        if is_metadata_line {
+            let metadata_line = render_diff_metadata_line(output_line, palette);
+            lines.push(metadata_line);
+            continue;
+        }
+
+        let is_no_newline_marker = output_line.starts_with("\\ No newline at end of file");
+        if is_no_newline_marker {
+            let marker_line =
+                Line::styled(format!(" {output_line}"), Style::default().fg(palette.dim));
+            lines.push(marker_line);
+            continue;
+        }
+
+        let diff_line = render_numbered_diff_output_line(
+            output_line,
+            palette,
+            &mut cursor,
+            metrics.line_number_width,
+        );
+        if let Some(diff_line) = diff_line {
+            lines.push(diff_line);
+            continue;
+        }
+
+        let fallback_line = render_plain_tool_output_line(output_line, palette);
+        lines.push(fallback_line);
+    }
+
+    lines
+}
+
+fn render_plain_tool_output_line(output_line: &str, palette: &Palette) -> Line<'static> {
+    let prefixed_line = format!(" {output_line}");
+    let style = tool_output_style(output_line, palette);
+
     Line::styled(prefixed_line, style)
+}
+
+fn tool_output_style(output_line: &str, palette: &Palette) -> Style {
+    if is_diff_hunk_line(output_line) {
+        return Style::default()
+            .fg(palette.info)
+            .add_modifier(Modifier::BOLD);
+    }
+    if is_diff_addition_line(output_line) {
+        return Style::default().fg(palette.success);
+    }
+    if is_diff_removal_line(output_line) {
+        return Style::default().fg(palette.error);
+    }
+    if is_diff_file_header_line(output_line) {
+        return Style::default().fg(palette.brand);
+    }
+
+    Style::default().fg(palette.text)
+}
+
+fn render_diff_metadata_line(output_line: &str, palette: &Palette) -> Line<'static> {
+    let prefixed_line = format!("   {output_line}");
+    let style = tool_output_style(output_line, palette);
+
+    Line::styled(prefixed_line, style)
+}
+
+fn render_numbered_diff_output_line(
+    output_line: &str,
+    palette: &Palette,
+    cursor: &mut Option<DiffOutputCursor>,
+    line_number_width: usize,
+) -> Option<Line<'static>> {
+    let line_kind = diff_content_line_kind(output_line)?;
+    let cursor = cursor.as_mut()?;
+
+    let (old_number, new_number, sign, content_style) = match line_kind {
+        DiffContentLineKind::Context => {
+            let old_number = Some(cursor.old_line);
+            let new_number = Some(cursor.new_line);
+            cursor.old_line = cursor.old_line.saturating_add(1);
+            cursor.new_line = cursor.new_line.saturating_add(1);
+            let sign = " ";
+            let content_style = Style::default().fg(palette.text);
+            (old_number, new_number, sign, content_style)
+        }
+        DiffContentLineKind::Addition => {
+            let old_number = None;
+            let new_number = Some(cursor.new_line);
+            cursor.new_line = cursor.new_line.saturating_add(1);
+            let sign = "+";
+            let content_style = Style::default().fg(palette.success);
+            (old_number, new_number, sign, content_style)
+        }
+        DiffContentLineKind::Removal => {
+            let old_number = Some(cursor.old_line);
+            let new_number = None;
+            cursor.old_line = cursor.old_line.saturating_add(1);
+            let sign = "-";
+            let content_style = Style::default().fg(palette.error);
+            (old_number, new_number, sign, content_style)
+        }
+    };
+
+    let old_label = format_diff_line_number(old_number, line_number_width);
+    let new_label = format_diff_line_number(new_number, line_number_width);
+    let number_style = Style::default().fg(palette.dim);
+    let sign_style = content_style.add_modifier(Modifier::BOLD);
+    let content = if output_line.len() > 1 {
+        output_line[1..].to_owned()
+    } else {
+        String::new()
+    };
+
+    let line = Line::from(vec![
+        Span::styled(format!(" {old_label}"), number_style),
+        Span::styled(" ", number_style),
+        Span::styled(new_label, number_style),
+        Span::styled(" │ ", Style::default().fg(palette.separator)),
+        Span::styled(sign.to_owned(), sign_style),
+        Span::styled(" ", Style::default().fg(palette.separator)),
+        Span::styled(content, content_style),
+    ]);
+
+    Some(line)
+}
+
+fn format_diff_line_number(value: Option<usize>, width: usize) -> String {
+    match value {
+        Some(value) => format!("{value:>width$}"),
+        None => " ".repeat(width),
+    }
+}
+
+fn diff_output_metrics(output_text: &str) -> Option<DiffOutputMetrics> {
+    let looks_like_diff = output_text.lines().any(is_diff_hunk_line);
+    if !looks_like_diff {
+        return None;
+    }
+
+    let mut cursor: Option<DiffOutputCursor> = None;
+    let mut max_line_number = 0_usize;
+
+    for output_line in output_text.lines() {
+        let parsed_hunk_cursor = parse_diff_hunk_cursor(output_line);
+        if let Some(parsed_hunk_cursor) = parsed_hunk_cursor {
+            max_line_number = max_line_number.max(parsed_hunk_cursor.old_line);
+            max_line_number = max_line_number.max(parsed_hunk_cursor.new_line);
+            cursor = Some(parsed_hunk_cursor);
+            continue;
+        }
+
+        let Some(cursor) = cursor.as_mut() else {
+            continue;
+        };
+
+        let line_kind = diff_content_line_kind(output_line);
+        let Some(line_kind) = line_kind else {
+            continue;
+        };
+
+        match line_kind {
+            DiffContentLineKind::Context => {
+                max_line_number = max_line_number.max(cursor.old_line);
+                max_line_number = max_line_number.max(cursor.new_line);
+                cursor.old_line = cursor.old_line.saturating_add(1);
+                cursor.new_line = cursor.new_line.saturating_add(1);
+            }
+            DiffContentLineKind::Addition => {
+                max_line_number = max_line_number.max(cursor.new_line);
+                cursor.new_line = cursor.new_line.saturating_add(1);
+            }
+            DiffContentLineKind::Removal => {
+                max_line_number = max_line_number.max(cursor.old_line);
+                cursor.old_line = cursor.old_line.saturating_add(1);
+            }
+        }
+    }
+
+    let line_number_width = decimal_width(max_line_number.max(1));
+    let metrics = DiffOutputMetrics { line_number_width };
+
+    Some(metrics)
+}
+
+fn decimal_width(value: usize) -> usize {
+    value.to_string().len()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffContentLineKind {
+    Context,
+    Addition,
+    Removal,
+}
+
+fn diff_content_line_kind(output_line: &str) -> Option<DiffContentLineKind> {
+    if is_diff_context_line(output_line) {
+        return Some(DiffContentLineKind::Context);
+    }
+    if is_diff_addition_line(output_line) {
+        return Some(DiffContentLineKind::Addition);
+    }
+    if is_diff_removal_line(output_line) {
+        return Some(DiffContentLineKind::Removal);
+    }
+
+    None
+}
+
+fn parse_diff_hunk_cursor(output_line: &str) -> Option<DiffOutputCursor> {
+    if !is_diff_hunk_line(output_line) {
+        return None;
+    }
+
+    let tokens = output_line.split_whitespace().collect::<Vec<_>>();
+    let old_token = tokens.get(1).copied()?;
+    let new_token = tokens.get(2).copied()?;
+    let old_line = parse_diff_range_start(old_token, '-')?;
+    let new_line = parse_diff_range_start(new_token, '+')?;
+    let cursor = DiffOutputCursor { old_line, new_line };
+
+    Some(cursor)
+}
+
+fn parse_diff_range_start(token: &str, prefix: char) -> Option<usize> {
+    let trimmed = token.strip_prefix(prefix)?;
+    let start = trimmed.split(',').next()?;
+    let line_number = start.parse::<usize>().ok()?;
+
+    Some(line_number)
+}
+
+fn is_diff_context_line(output_line: &str) -> bool {
+    output_line.starts_with(' ')
 }
 
 fn is_diff_hunk_line(output_line: &str) -> bool {
@@ -1693,6 +2267,9 @@ mod tests {
         fn stats_overlay(&self) -> Option<StatsOverlayView<'_>> {
             self.stats_overlay
         }
+        fn session_picker(&self) -> Option<SessionPickerView<'_>> {
+            None
+        }
         fn slash_command_selection(&self) -> usize {
             self.slash_command_selection
         }
@@ -1766,6 +2343,7 @@ mod tests {
             session_rows: vec![stats::StatsSessionRow {
                 session_id: "sess-1".to_owned(),
                 label: Some("Root".to_owned()),
+                agent_presentation: None,
                 kind: "root".to_owned(),
                 state: "ready".to_owned(),
                 turn_count: 2,
@@ -2042,7 +2620,7 @@ mod tests {
     }
 
     #[test]
-    fn separator_renders_horizontal_rule() {
+    fn separator_renders_centered_soft_divider() {
         let backend = TestBackend::new(20, 1);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let palette = Palette::dark();
@@ -2053,10 +2631,7 @@ mod tests {
             })
             .expect("draw");
 
-        let buf = terminal.backend().buffer().clone();
-        for x in 0..20 {
-            let sym = buf.cell((x, 0)).map_or("", |c| c.symbol());
-            assert_eq!(sym, "\u{2500}", "separator should be horizontal rule");
-        }
+        let text = buffer_text(&terminal);
+        assert!(text.contains("·"), "separator should render a soft divider");
     }
 }

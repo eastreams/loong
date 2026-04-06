@@ -723,6 +723,19 @@ fn build_tool_catalog() -> ToolCatalog {
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
+            name: "session_rename",
+            provider_name: "session_rename",
+            aliases: &[],
+            description: "Rename the label of a visible session",
+            execution_kind: ToolExecutionKind::App,
+            availability: runtime_session_tool_availability(),
+            exposure: ToolExposureClass::Discoverable,
+            visibility_gate: ToolVisibilityGate::SessionMutation,
+            capability_action_class: CapabilityActionClass::SessionMutation,
+            policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            provider_definition_builder: session_rename_definition,
+        },
+        ToolDescriptor {
             name: "session_status",
             provider_name: "session_status",
             aliases: &[],
@@ -2507,6 +2520,31 @@ fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
     })
 }
 
+fn session_rename_definition(descriptor: &ToolDescriptor) -> Value {
+    json!({
+        "type": "function",
+        "function": {
+            "name": descriptor.provider_name,
+            "description": descriptor.description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional visible session identifier to rename. Defaults to the current session."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "New non-empty human-readable label for the session."
+                    }
+                },
+                "required": ["label"],
+                "additionalProperties": false
+            }
+        }
+    })
+}
+
 fn session_tool_runtime_narrowing_schema() -> Value {
     json!({
         "type": "object",
@@ -3012,6 +3050,7 @@ fn tool_argument_hint(name: &str) -> &'static str {
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => "session_id:string",
+        "session_rename" => "label:string,session_id?:string",
         "sessions_list" => "limit?:integer,state?:string",
         "sessions_send" => "session_id:string,text:string",
         "web.search" => "query:string,provider?:string,max_results?:integer",
@@ -3233,6 +3272,7 @@ fn tool_parameter_types(name: &str) -> &'static [(&'static str, &'static str)] {
         ],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &[("session_id", "string")],
+        "session_rename" => &[("label", "string"), ("session_id", "string")],
         "sessions_list" => &[("limit", "integer"), ("state", "string")],
         "sessions_send" => &[("session_id", "string"), ("text", "string")],
         "web.search" => &[
@@ -3281,6 +3321,7 @@ fn tool_required_fields(name: &str) -> &'static [&'static str] {
         "session_tool_policy_set" => &[],
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
         | "session_status" | "session_wait" | "sessions_history" => &["session_id"],
+        "session_rename" => &["label"],
         "sessions_send" => &["session_id", "text"],
         "web.search" => &["query"],
         _ => &[],
@@ -3332,9 +3373,8 @@ fn tool_tags(name: &str) -> &'static [&'static str] {
             &["session", "policy", "tools", "security"]
         }
         "session_archive" | "session_cancel" | "session_events" | "session_recover"
-        | "session_status" | "session_wait" | "sessions_history" | "sessions_list" => {
-            &["session", "history", "runtime"]
-        }
+        | "session_status" | "session_wait" | "sessions_history" | "sessions_list"
+        | "session_rename" => &["session", "history", "runtime"],
         "sessions_send" => &["session", "message", "channel"],
         "web.search" => &["web", "search", "discover", "external"],
         _ => &[],

@@ -1,9 +1,9 @@
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, block::Position as TitlePosition},
+    widgets::{Block, Paragraph},
 };
 
 use super::focus::FocusLayer;
@@ -33,6 +33,43 @@ fn textarea_is_empty(textarea: &tui_textarea::TextArea<'_>) -> bool {
     textarea.lines().iter().all(|line| line.is_empty())
 }
 
+fn review_prompt_hint(selection_count: usize) -> &'static str {
+    if selection_count > 0 {
+        " Review mode · Shift+Arrows extend · y copy · Esc clear "
+    } else {
+        " Review mode · v select · Shift+Arrows extend · y copy · Esc return "
+    }
+}
+
+fn running_prompt_hint(mode: BusyInputMode, pending_submission_count: usize) -> String {
+    if pending_submission_count > 0 {
+        return match mode {
+            BusyInputMode::Queue => {
+                format!(
+                    " Queue mode · {pending_submission_count} pending · Esc clear · Ctrl+G steer "
+                )
+            }
+            BusyInputMode::Steer => {
+                " Steer armed · sends after tool boundary · Esc clear · Ctrl+G queue ".to_owned()
+            }
+        };
+    }
+
+    match mode {
+        BusyInputMode::Queue => " Enter queue · Ctrl+G steer · Esc clear pending ".to_owned(),
+        BusyInputMode::Steer => {
+            " Enter steer after tool · Ctrl+G queue · Esc clear pending ".to_owned()
+        }
+    }
+}
+
+fn idle_prompt_hint(mode: BusyInputMode) -> &'static str {
+    match mode {
+        BusyInputMode::Queue => " Enter send · busy turns queue · Ctrl+G steer · /help ",
+        BusyInputMode::Steer => " Enter send · busy turns steer · Ctrl+G queue · /help ",
+    }
+}
+
 pub(super) fn render_input(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -41,66 +78,70 @@ pub(super) fn render_input(
     focus: FocusLayer,
     palette: &Palette,
 ) {
-    let border_color = palette.brand;
-    let border_style = Style::default().fg(border_color);
-
     let default_prompt_hint = match focus {
         FocusLayer::Transcript => {
-            if pane.transcript_selection_line_count() > 0 {
-                " Review mode | Shift+Arrows extend | y copy | Esc clear "
-            } else {
-                " Review mode | v select | Shift+Arrows extend | y copy | Esc return "
-            }
+            review_prompt_hint(pane.transcript_selection_line_count()).to_owned()
         }
         FocusLayer::Composer
         | FocusLayer::Help
+        | FocusLayer::SessionPicker
         | FocusLayer::StatsOverlay
         | FocusLayer::ToolInspector
         | FocusLayer::ClarifyDialog => {
             let pending_submission_count = pane.pending_submission_count();
             let busy_input_mode = pane.busy_input_mode();
-            if pane.agent_running() && pending_submission_count > 0 {
-                match busy_input_mode {
-                    BusyInputMode::Queue => " Queue mode | Esc clears queue | Ctrl+G steer ",
-                    BusyInputMode::Steer => {
-                        " Steer mode | Esc clears pending steer | Ctrl+G queue "
-                    }
-                }
-            } else if pane.agent_running() {
-                match busy_input_mode {
-                    BusyInputMode::Queue => " Enter to queue | Ctrl+G steer | Esc clears pending ",
-                    BusyInputMode::Steer => " Enter to steer at next tool boundary | Ctrl+G queue ",
-                }
+            if pane.agent_running() {
+                running_prompt_hint(busy_input_mode, pending_submission_count)
             } else {
-                match busy_input_mode {
-                    BusyInputMode::Queue => {
-                        " Enter send | Shift+Enter newline | Ctrl+G steer | /help "
-                    }
-                    BusyInputMode::Steer => {
-                        " Enter send | Shift+Enter newline | Ctrl+G queue | /help "
-                    }
-                }
+                idle_prompt_hint(busy_input_mode).to_owned()
             }
         }
     };
-    let prompt_hint = pane.input_hint().unwrap_or(default_prompt_hint);
+    let prompt_hint = pane.input_hint().unwrap_or(default_prompt_hint.as_str());
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(Span::styled(
-            prompt_hint,
-            Style::default()
-                .fg(palette.dim)
-                .add_modifier(ratatui::style::Modifier::ITALIC),
-        ))
-        .title_position(TitlePosition::Bottom);
-
-    let inner = block.inner(area);
+    let block = Block::default().style(Style::default().bg(palette.surface_alt));
     frame.render_widget(block, area);
 
+    let content_area = area.inner(Margin {
+        horizontal: 2,
+        vertical: 0,
+    });
+    let textarea_height = content_area.height.saturating_sub(1);
+    let textarea_area = Rect::new(
+        content_area.x,
+        content_area.y,
+        content_area.width,
+        textarea_height,
+    );
+    let hint_area = Rect::new(
+        content_area.x,
+        content_area.y.saturating_add(textarea_height),
+        content_area.width,
+        content_area.height.saturating_sub(textarea_height),
+    );
+
+    let rail_area = Rect::new(area.x, area.y, 1, area.height);
+    let rail_color = if focus == FocusLayer::Composer {
+        palette.brand
+    } else {
+        palette.separator
+    };
+    let rail_lines = (0..rail_area.height)
+        .map(|_| Line::from(Span::styled("▎", Style::default().fg(rail_color))))
+        .collect::<Vec<_>>();
+    let rail = Paragraph::new(rail_lines);
+    frame.render_widget(rail, rail_area);
+
     // Render textarea widget inside the block's inner area.
-    frame.render_widget(textarea, inner);
+    frame.render_widget(textarea, textarea_area);
+
+    let hint_widget = Paragraph::new(Line::from(Span::styled(
+        prompt_hint,
+        Style::default()
+            .fg(palette.dim)
+            .add_modifier(ratatui::style::Modifier::ITALIC),
+    )));
+    frame.render_widget(hint_widget, hint_area);
 
     if focus == FocusLayer::Composer
         && textarea_is_empty(textarea)
@@ -112,7 +153,7 @@ pub(super) fn render_input(
                 .fg(palette.separator)
                 .add_modifier(Modifier::ITALIC),
         )));
-        frame.render_widget(placeholder, inner);
+        frame.render_widget(placeholder, textarea_area);
     }
 }
 
@@ -248,7 +289,7 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Enter to queue"),
+            text.contains("Enter queue"),
             "running hint should mention queue"
         );
     }
@@ -283,6 +324,7 @@ mod tests {
             text.contains("Queue mode"),
             "hint should mention queue mode"
         );
+        assert!(text.contains("2 pending"), "hint should show pending count");
     }
 
     #[test]
@@ -312,7 +354,7 @@ mod tests {
 
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("Steer mode"),
+            text.contains("Steer armed"),
             "hint should mention steer mode"
         );
     }

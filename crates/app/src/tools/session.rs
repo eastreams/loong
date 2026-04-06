@@ -34,6 +34,8 @@ use crate::tools::ToolView;
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 
 #[cfg(feature = "memory-sqlite")]
+use crate::session::presentation::{DelegateAgentPresentation, derive_delegate_agent_presentation};
+#[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     NewSessionRecord, NewSessionToolPolicyRecord, SessionEventRecord, SessionKind,
     SessionObservationRecord, SessionRepository, SessionState, SessionSummaryRecord,
@@ -306,6 +308,9 @@ pub fn execute_session_tool_with_policies(
             "session_status" => {
                 execute_session_status(payload, current_session_id, config, tool_config)
             }
+            "session_rename" => {
+                execute_session_rename(payload, current_session_id, config, tool_config)
+            }
             "session_cancel" => {
                 execute_session_cancel(payload, current_session_id, config, tool_config)
             }
@@ -395,12 +400,21 @@ fn execute_sessions_list(
 
     let mut listed_sessions = Vec::new();
     for session in sessions {
-        let delegate_lifecycle = if include_delegate_lifecycle {
-            let delegate_events = load_delegate_lifecycle_events(&repo, &session)?;
-            session_delegate_lifecycle_at(&session, delegate_events.as_slice(), now_ts)
+        let delegate_events = if session.kind == SessionKind::DelegateChild {
+            Some(load_delegate_lifecycle_events(&repo, &session)?)
         } else {
             None
         };
+        let delegate_lifecycle = if include_delegate_lifecycle {
+            delegate_events.as_ref().and_then(|events| {
+                session_delegate_lifecycle_at(&session, events.as_slice(), now_ts)
+            })
+        } else {
+            None
+        };
+        let agent_presentation = delegate_events
+            .as_ref()
+            .and_then(|events| derive_delegate_agent_presentation(&session, events.as_slice()));
         if request.overdue_only
             && !delegate_lifecycle
                 .as_ref()
@@ -410,7 +424,7 @@ fn execute_sessions_list(
         {
             continue;
         }
-        listed_sessions.push((session, delegate_lifecycle));
+        listed_sessions.push((session, delegate_lifecycle, agent_presentation));
     }
 
     let matched_count = listed_sessions.len();
@@ -425,11 +439,12 @@ fn execute_sessions_list(
             "returned_count": returned_count,
             "sessions": listed_sessions
                 .into_iter()
-                .map(|(session, delegate_lifecycle)| {
+                .map(|(session, delegate_lifecycle, agent_presentation)| {
                     session_summary_json_with_delegate_lifecycle(
                         session,
                         delegate_lifecycle,
                         include_delegate_lifecycle,
+                        agent_presentation,
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -701,6 +716,58 @@ fn execute_session_status(
             request.session_ids.len(),
             results,
         ),
+    })
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn execute_session_rename(
+    payload: Value,
+    current_session_id: &str,
+    config: &MemoryRuntimeConfig,
+    tool_config: &ToolConfig,
+) -> Result<ToolCoreOutcome, String> {
+    let target_session_id =
+        resolve_session_tool_policy_target_session_id(&payload, current_session_id)?;
+    let next_label = required_payload_string(&payload, "label", "session rename")?;
+    let repo = SessionRepository::new(config)?;
+    ensure_visible(
+        &repo,
+        current_session_id,
+        &target_session_id,
+        tool_config.sessions.visibility,
+    )?;
+    let previous_snapshot = inspect_visible_session_with_policies(
+        &target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        5,
+    )?;
+    let previous_label = previous_snapshot.session.label;
+    let updated_session = repo.update_session_label(&target_session_id, Some(next_label))?;
+    let updated_snapshot = inspect_visible_session_with_policies(
+        &target_session_id,
+        current_session_id,
+        config,
+        tool_config,
+        5,
+    )?;
+    let changed = updated_session.label != previous_label;
+    let action = json!({
+        "kind": "session_renamed",
+        "changed": changed,
+        "previous_label": previous_label,
+        "label": updated_session.label,
+    });
+
+    Ok(ToolCoreOutcome {
+        status: "ok".to_owned(),
+        payload: json!({
+            "tool": "session_rename",
+            "session_id": target_session_id,
+            "inspection": session_inspection_payload(updated_snapshot),
+            "rename_action": action,
+        }),
     })
 }
 
@@ -1433,6 +1500,8 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         snapshot.delegate_events.as_slice(),
         current_unix_ts(),
     );
+    let agent_presentation =
+        derive_delegate_agent_presentation(&snapshot.session, snapshot.delegate_events.as_slice());
     let recovery = match terminal_outcome_state {
         "missing" => Some(observe_missing_recovery(
             snapshot.recent_events.as_slice(),
@@ -1460,6 +1529,7 @@ pub(super) fn session_inspection_payload(snapshot: SessionInspectionSnapshot) ->
         "terminal_outcome_state": terminal_outcome_state,
         "terminal_outcome_missing_reason": terminal_outcome_missing_reason,
         "delegate_lifecycle": delegate_lifecycle.map(session_delegate_lifecycle_json),
+        "agent_presentation": agent_presentation,
         "recovery": recovery.map(recovery_json),
         "terminal_outcome": snapshot.terminal_outcome.map(session_terminal_outcome_json),
         "recent_events": snapshot
@@ -3040,6 +3110,7 @@ fn session_summary_json_with_delegate_lifecycle(
     session: SessionSummaryRecord,
     delegate_lifecycle: Option<SessionDelegateLifecycleRecord>,
     include_delegate_lifecycle: bool,
+    agent_presentation: Option<DelegateAgentPresentation>,
 ) -> Value {
     let mut payload = session_summary_json(session);
     if include_delegate_lifecycle && let Some(object) = payload.as_object_mut() {
@@ -3049,6 +3120,11 @@ fn session_summary_json_with_delegate_lifecycle(
                 .map(session_delegate_lifecycle_json)
                 .unwrap_or(Value::Null),
         );
+    }
+    if let Some(object) = payload.as_object_mut() {
+        let agent_presentation_value =
+            serde_json::to_value(agent_presentation).unwrap_or(Value::Null);
+        object.insert("agent_presentation".to_owned(), agent_presentation_value);
     }
     payload
 }
@@ -3089,8 +3165,9 @@ mod tests {
     use crate::memory::append_turn_direct;
     use crate::memory::runtime_config::MemoryRuntimeConfig;
     use crate::session::repository::{
-        FinalizeSessionTerminalRequest, NewSessionEvent, NewSessionRecord, SessionEventRecord,
-        SessionKind, SessionRepository, SessionState, SessionSummaryRecord,
+        CreateSessionWithEventRequest, FinalizeSessionTerminalRequest, NewSessionEvent,
+        NewSessionRecord, SessionEventRecord, SessionKind, SessionRepository, SessionState,
+        SessionSummaryRecord,
     };
 
     use super::{execute_session_tool_with_config, execute_session_tool_with_policies};
@@ -3343,6 +3420,66 @@ mod tests {
         assert_eq!(ids, vec!["child-running"]);
         assert_eq!(outcome.payload["matched_count"], 1);
         assert_eq!(outcome.payload["returned_count"], 1);
+    }
+
+    #[test]
+    fn sessions_list_includes_agent_presentation_for_delegate_children() {
+        let config = isolated_memory_config("sessions-list-agent-presentation");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+        repo.create_session_with_event(CreateSessionWithEventRequest {
+            session: NewSessionRecord {
+                session_id: "delegate-child".to_owned(),
+                kind: SessionKind::DelegateChild,
+                parent_session_id: Some("root-session".to_owned()),
+                label: Some("reference-study".to_owned()),
+                state: SessionState::Ready,
+            },
+            event_kind: "delegate_queued".to_owned(),
+            actor_session_id: Some("root-session".to_owned()),
+            event_payload_json: json!({
+                "task": "research reference implementations",
+                "label": "reference-study",
+                "provider": {
+                    "profile_id": "openai-reasoning",
+                    "provider_kind": "openai",
+                    "model": "gpt-5",
+                    "reasoning_effort": "high"
+                }
+            }),
+        })
+        .expect("create delegate child with event");
+
+        let outcome = execute_session_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "sessions_list".to_owned(),
+                payload: json!({
+                    "kind": "delegate_child"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("sessions_list outcome");
+
+        let session = outcome.payload["sessions"]
+            .as_array()
+            .and_then(|sessions| sessions.first())
+            .expect("first session");
+        let presentation = &session["agent_presentation"];
+
+        assert_eq!(presentation["role_id"], "explorer");
+        assert_eq!(presentation["model"], "gpt-5");
+        assert_eq!(presentation["reasoning_effort"], "high");
+        assert!(presentation["names"]["zh_hans"].is_string());
+        assert!(presentation["roles"]["en"].is_string());
     }
 
     #[test]
@@ -3731,6 +3868,37 @@ mod tests {
             .expect("recent_events array");
         assert_eq!(recent_events.len(), 1);
         assert_eq!(recent_events[0]["event_kind"], "delegate_failed");
+    }
+
+    #[test]
+    fn session_rename_updates_visible_session_label() {
+        let config = isolated_memory_config("session-rename");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Before".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root");
+
+        let outcome = execute_session_mutation_tool_with_config(
+            ToolCoreRequest {
+                tool_name: "session_rename".to_owned(),
+                payload: json!({
+                    "label": "After"
+                }),
+            },
+            "root-session",
+            &config,
+        )
+        .expect("session_rename outcome");
+
+        assert_eq!(outcome.payload["tool"], "session_rename");
+        assert_eq!(outcome.payload["inspection"]["session"]["label"], "After");
+        assert_eq!(outcome.payload["rename_action"]["previous_label"], "Before");
+        assert_eq!(outcome.payload["rename_action"]["label"], "After");
     }
 
     #[test]

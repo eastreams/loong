@@ -22,9 +22,27 @@ pub(super) trait StatusBarView {
     fn output_tokens(&self) -> u32;
     fn context_length(&self) -> u32;
     fn session_id(&self) -> &str;
+    fn session_display_label(&self) -> Option<&str> {
+        None
+    }
     fn busy_input_mode(&self) -> BusyInputMode;
     fn pending_submission_count(&self) -> usize {
         0
+    }
+    fn running_task_count(&self) -> Option<usize> {
+        None
+    }
+    fn overdue_task_count(&self) -> Option<usize> {
+        None
+    }
+    fn pending_approval_count(&self) -> Option<usize> {
+        None
+    }
+    fn attention_approval_count(&self) -> Option<usize> {
+        None
+    }
+    fn visible_session_count(&self) -> Option<usize> {
+        None
     }
     fn scroll_offset(&self) -> u16 {
         0
@@ -47,7 +65,10 @@ pub(super) fn render_status_bar(
     palette: &Palette,
 ) {
     let model_display = truncate_str(pane.model(), 24, "no model");
-    let session_display = truncate_str(pane.session_id(), 16, "no session");
+    let raw_session_display = pane
+        .session_display_label()
+        .unwrap_or_else(|| pane.session_id());
+    let session_display = truncate_str(raw_session_display, 16, "no session");
 
     let total = pane.input_tokens().saturating_add(pane.output_tokens());
     let ctx = pane.context_length();
@@ -79,7 +100,7 @@ pub(super) fn render_status_bar(
         .filter(|(_, when)| when.elapsed() < Duration::from_secs(3))
         .map(|(msg, _)| {
             Span::styled(
-                format!(" | {msg}"),
+                format!(" · {msg}"),
                 Style::default()
                     .fg(palette.dim)
                     .add_modifier(Modifier::ITALIC),
@@ -91,11 +112,11 @@ pub(super) fn render_status_bar(
             format!(" {model_display}"),
             Style::default().fg(palette.dim),
         ),
-        Span::styled(" | ".to_string(), Style::default().fg(palette.separator)),
+        Span::styled(" · ".to_string(), Style::default().fg(palette.separator)),
     ];
     spans.extend(token_spans);
     spans.push(Span::styled(
-        " | ".to_string(),
+        " · ".to_string(),
         Style::default().fg(palette.separator),
     ));
     spans.push(Span::styled(
@@ -103,17 +124,17 @@ pub(super) fn render_status_bar(
         Style::default().fg(palette.dim),
     ));
     spans.push(Span::styled(
-        " | ".to_string(),
+        " · ".to_string(),
         Style::default().fg(palette.separator),
     ));
     spans.push(scroll_state_span(pane.scroll_offset(), palette));
     spans.push(Span::styled(
-        " | ".to_string(),
+        " · ".to_string(),
         Style::default().fg(palette.separator),
     ));
     spans.push(focus_state_span(focus, palette));
     spans.push(Span::styled(
-        " | ".to_string(),
+        " · ".to_string(),
         Style::default().fg(palette.separator),
     ));
     spans.push(Span::styled(
@@ -123,7 +144,7 @@ pub(super) fn render_status_bar(
     let pending_submission_count = pane.pending_submission_count();
     if pending_submission_count > 0 {
         spans.push(Span::styled(
-            " | ".to_string(),
+            " · ".to_string(),
             Style::default().fg(palette.separator),
         ));
         spans.push(Span::styled(
@@ -133,10 +154,13 @@ pub(super) fn render_status_bar(
                 .add_modifier(Modifier::BOLD),
         ));
     }
+
+    append_activity_spans(&mut spans, pane, palette);
+
     let transcript_selection_line_count = pane.transcript_selection_line_count();
     if focus == FocusLayer::Transcript && transcript_selection_line_count > 0 {
         spans.push(Span::styled(
-            " | ".to_string(),
+            " · ".to_string(),
             Style::default().fg(palette.separator),
         ));
         spans.push(Span::styled(
@@ -153,6 +177,59 @@ pub(super) fn render_status_bar(
     let line = Line::from(spans);
 
     frame.render_widget(Paragraph::new(line), area);
+}
+
+fn append_activity_spans(
+    spans: &mut Vec<Span<'static>>,
+    pane: &impl StatusBarView,
+    palette: &Palette,
+) {
+    let attention_approval_count = pane.attention_approval_count().unwrap_or(0);
+    if attention_approval_count > 0 {
+        let label = format!("APR! {attention_approval_count}");
+        push_activity_span(spans, label, palette.warning, palette);
+    }
+
+    let pending_approval_count = pane.pending_approval_count().unwrap_or(0);
+    let remaining_approval_count = pending_approval_count.saturating_sub(attention_approval_count);
+    if remaining_approval_count > 0 {
+        let label = format!("APR {remaining_approval_count}");
+        push_activity_span(spans, label, palette.info, palette);
+    }
+
+    let overdue_task_count = pane.overdue_task_count().unwrap_or(0);
+    if overdue_task_count > 0 {
+        let label = format!("LATE {overdue_task_count}");
+        push_activity_span(spans, label, palette.error, palette);
+    }
+
+    let running_task_count = pane.running_task_count().unwrap_or(0);
+    if running_task_count > 0 {
+        let label = format!("TASK {running_task_count}");
+        push_activity_span(spans, label, palette.tool_running, palette);
+    }
+
+    let visible_session_count = pane.visible_session_count().unwrap_or(0);
+    if visible_session_count > 1 {
+        let label = format!("SESS {visible_session_count}");
+        push_activity_span(spans, label, palette.brand, palette);
+    }
+}
+
+fn push_activity_span(
+    spans: &mut Vec<Span<'static>>,
+    label: String,
+    color: ratatui::style::Color,
+    palette: &Palette,
+) {
+    spans.push(Span::styled(
+        " · ".to_string(),
+        Style::default().fg(palette.separator),
+    ));
+    spans.push(Span::styled(
+        label,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ));
 }
 
 fn scroll_state_span(scroll_offset: u16, palette: &Palette) -> Span<'static> {
@@ -177,6 +254,7 @@ fn focus_state_span(focus: FocusLayer, palette: &Palette) -> Span<'static> {
         FocusLayer::Composer => ("COMPOSE", palette.info),
         FocusLayer::Transcript => ("REVIEW", palette.warning),
         FocusLayer::Help => ("HELP", palette.brand),
+        FocusLayer::SessionPicker => ("PICKER", palette.brand),
         FocusLayer::StatsOverlay => ("STATS", palette.brand),
         FocusLayer::ToolInspector => ("TOOL", palette.tool_running),
         FocusLayer::ClarifyDialog => ("QUESTION", palette.warning),
@@ -234,6 +312,11 @@ mod tests {
         session_id: String,
         busy_input_mode: BusyInputMode,
         pending_submission_count: usize,
+        running_task_count: Option<usize>,
+        overdue_task_count: Option<usize>,
+        pending_approval_count: Option<usize>,
+        attention_approval_count: Option<usize>,
+        visible_session_count: Option<usize>,
         scroll_offset: u16,
         status_message: Option<(String, Instant)>,
     }
@@ -259,6 +342,21 @@ mod tests {
         }
         fn pending_submission_count(&self) -> usize {
             self.pending_submission_count
+        }
+        fn running_task_count(&self) -> Option<usize> {
+            self.running_task_count
+        }
+        fn overdue_task_count(&self) -> Option<usize> {
+            self.overdue_task_count
+        }
+        fn pending_approval_count(&self) -> Option<usize> {
+            self.pending_approval_count
+        }
+        fn attention_approval_count(&self) -> Option<usize> {
+            self.attention_approval_count
+        }
+        fn visible_session_count(&self) -> Option<usize> {
+            self.visible_session_count
         }
         fn scroll_offset(&self) -> u16 {
             self.scroll_offset
@@ -297,6 +395,11 @@ mod tests {
             session_id: "sess-abc123".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 0,
             status_message: None,
         };
@@ -314,6 +417,44 @@ mod tests {
         assert!(text.contains("12%")); // 1234/10000 ~= 12%
         assert!(text.contains("sess-abc123"));
         assert!(text.contains("QUEUE"));
+    }
+
+    #[test]
+    fn status_bar_shows_activity_spans_when_context_has_tasks_and_approvals() {
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let bar = TestBar {
+            model: "gpt-5".into(),
+            input_tokens: 400,
+            output_tokens: 100,
+            context_length: 10000,
+            session_id: "sess-ops".into(),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 1,
+            running_task_count: Some(3),
+            overdue_task_count: Some(1),
+            pending_approval_count: Some(4),
+            attention_approval_count: Some(2),
+            visible_session_count: Some(5),
+            scroll_offset: 0,
+            status_message: None,
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(text.contains("PEND 1"));
+        assert!(text.contains("APR! 2"));
+        assert!(text.contains("APR 2"));
+        assert!(text.contains("LATE 1"));
+        assert!(text.contains("TASK 3"));
+        assert!(text.contains("SESS 5"));
     }
 
     #[test]
@@ -370,6 +511,11 @@ mod tests {
             session_id: "s1".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 0,
             status_message: None,
         };
@@ -398,6 +544,11 @@ mod tests {
             session_id: "sess-live".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 0,
             status_message: None,
         };
@@ -429,6 +580,11 @@ mod tests {
             session_id: "sess-scroll".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 4,
             status_message: None,
         };
@@ -460,6 +616,11 @@ mod tests {
             session_id: "sess-input".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 0,
             status_message: None,
         };
@@ -491,6 +652,11 @@ mod tests {
             session_id: "sess-output".into(),
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
             scroll_offset: 2,
             status_message: None,
         };
@@ -542,6 +708,21 @@ mod tests {
             fn pending_submission_count(&self) -> usize {
                 self.inner.pending_submission_count()
             }
+            fn running_task_count(&self) -> Option<usize> {
+                self.inner.running_task_count()
+            }
+            fn overdue_task_count(&self) -> Option<usize> {
+                self.inner.overdue_task_count()
+            }
+            fn pending_approval_count(&self) -> Option<usize> {
+                self.inner.pending_approval_count()
+            }
+            fn attention_approval_count(&self) -> Option<usize> {
+                self.inner.attention_approval_count()
+            }
+            fn visible_session_count(&self) -> Option<usize> {
+                self.inner.visible_session_count()
+            }
             fn scroll_offset(&self) -> u16 {
                 self.inner.scroll_offset()
             }
@@ -562,6 +743,11 @@ mod tests {
                 session_id: "sess-select".into(),
                 busy_input_mode: BusyInputMode::Queue,
                 pending_submission_count: 0,
+                running_task_count: None,
+                overdue_task_count: None,
+                pending_approval_count: None,
+                attention_approval_count: None,
+                visible_session_count: None,
                 scroll_offset: 2,
                 status_message: None,
             },

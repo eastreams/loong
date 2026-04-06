@@ -80,6 +80,7 @@ pub use session_history::{
 };
 pub use subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    SubagentProviderSnapshot,
 };
 pub use turn_budget::SafeLaneFailureRouteReason;
 pub(crate) use turn_checkpoint::{TurnCheckpointDiagnostics, TurnCheckpointRecoveryAssessment};

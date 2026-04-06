@@ -1,6 +1,8 @@
 #[cfg(feature = "memory-sqlite")]
 pub mod recovery;
 
+pub mod presentation;
+
 #[cfg(feature = "memory-sqlite")]
 pub mod repository;
 

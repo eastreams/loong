@@ -1,6 +1,8 @@
 use std::collections::VecDeque;
 use std::time::Instant;
 
+use crate::session::presentation::{DelegateAgentPresentation, root_thread_search_terms};
+
 use super::dialog::ClarifyDialog;
 use super::focus::FocusStack;
 use super::message::{Message, MessagePart, ToolStatus};
@@ -41,10 +43,19 @@ pub(super) struct ComposerSuggestionContext {
 pub(super) struct VisibleSessionSuggestion {
     pub(super) session_id: String,
     pub(super) label: Option<String>,
+    pub(super) agent_presentation: Option<DelegateAgentPresentation>,
     pub(super) state: String,
     pub(super) kind: String,
     pub(super) task_phase: Option<String>,
     pub(super) overdue: bool,
+    pub(super) pending_approval_count: usize,
+    pub(super) attention_approval_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct SubagentSurfaceSnapshot {
+    pub(super) active_delegate_session_ids: Vec<String>,
+    pub(super) visible_delegate_sessions: Vec<VisibleSessionSuggestion>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +120,201 @@ impl StatsOverlayState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SessionPickerMode {
+    Resume,
+    Subagents,
+}
+
+impl SessionPickerMode {
+    pub(super) fn title(self) -> &'static str {
+        match self {
+            Self::Resume => "Resume",
+            Self::Subagents => "Subagents",
+        }
+    }
+
+    pub(super) fn footer_hint(self) -> &'static str {
+        match self {
+            Self::Resume => " Type to search · Enter switch · Esc close ",
+            Self::Subagents => " Type to search · Enter switch thread · Esc close ",
+        }
+    }
+
+    pub(super) fn empty_message(self) -> &'static str {
+        match self {
+            Self::Resume => " No visible sessions match the current search.",
+            Self::Subagents => " No subagent threads match the current search.",
+        }
+    }
+
+    pub(super) fn open_status_message(self) -> &'static str {
+        match self {
+            Self::Resume => "Resume picker opened",
+            Self::Subagents => "Subagent picker opened",
+        }
+    }
+
+    pub(super) fn switching_status_message(self) -> &'static str {
+        match self {
+            Self::Resume => "Switching sessions...",
+            Self::Subagents => "Switching subagent thread...",
+        }
+    }
+
+    pub(super) fn submit_command(self, session_id: &str) -> String {
+        match self {
+            Self::Resume => format!("/resume {session_id}"),
+            Self::Subagents => format!("/subagents {session_id}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SessionPickerState {
+    pub(super) mode: SessionPickerMode,
+    pub(super) sessions: Vec<VisibleSessionSuggestion>,
+    pub(super) query: String,
+    pub(super) selected_index: usize,
+    pub(super) list_scroll_offset: usize,
+}
+
+impl SessionPickerState {
+    pub(super) fn new(mode: SessionPickerMode, sessions: Vec<VisibleSessionSuggestion>) -> Self {
+        Self {
+            mode,
+            sessions,
+            query: String::new(),
+            selected_index: 0,
+            list_scroll_offset: 0,
+        }
+    }
+
+    pub(super) fn filtered_indices(&self) -> Vec<usize> {
+        let query = self.query.trim().to_ascii_lowercase();
+
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter(|(_index, session)| {
+                if query.is_empty() {
+                    return true;
+                }
+
+                let session_id_matches = session.session_id.to_ascii_lowercase().contains(&query);
+                let label_matches = session
+                    .label
+                    .as_deref()
+                    .map(|label| label.to_ascii_lowercase().contains(&query))
+                    .unwrap_or(false);
+                let root_alias_matches = self.mode == SessionPickerMode::Subagents
+                    && session.kind == "root"
+                    && root_thread_search_terms()
+                        .iter()
+                        .any(|term| term.contains(query.as_str()));
+                let agent_matches = session
+                    .agent_presentation
+                    .as_ref()
+                    .map(|presentation| {
+                        let zh_hans_matches = presentation
+                            .names
+                            .zh_hans
+                            .to_ascii_lowercase()
+                            .contains(&query);
+                        let zh_hant_matches = presentation
+                            .names
+                            .zh_hant
+                            .to_ascii_lowercase()
+                            .contains(&query);
+                        let en_matches =
+                            presentation.names.en.to_ascii_lowercase().contains(&query);
+                        let ja_matches =
+                            presentation.names.ja.to_ascii_lowercase().contains(&query);
+                        let role_matches =
+                            presentation.role_id.to_ascii_lowercase().contains(&query);
+                        let role_zh_hans_matches = presentation
+                            .roles
+                            .zh_hans
+                            .to_ascii_lowercase()
+                            .contains(&query);
+                        let role_zh_hant_matches = presentation
+                            .roles
+                            .zh_hant
+                            .to_ascii_lowercase()
+                            .contains(&query);
+                        let role_en_matches =
+                            presentation.roles.en.to_ascii_lowercase().contains(&query);
+                        let role_ja_matches =
+                            presentation.roles.ja.to_ascii_lowercase().contains(&query);
+                        let model_matches = presentation
+                            .model
+                            .as_deref()
+                            .map(|model| model.to_ascii_lowercase().contains(&query))
+                            .unwrap_or(false);
+                        let reasoning_matches = presentation
+                            .reasoning_effort
+                            .as_deref()
+                            .map(|reasoning| reasoning.to_ascii_lowercase().contains(&query))
+                            .unwrap_or(false);
+
+                        zh_hans_matches
+                            || zh_hant_matches
+                            || en_matches
+                            || ja_matches
+                            || role_matches
+                            || role_zh_hans_matches
+                            || role_zh_hant_matches
+                            || role_en_matches
+                            || role_ja_matches
+                            || model_matches
+                            || reasoning_matches
+                    })
+                    .unwrap_or(false);
+                let state_matches = session.state.to_ascii_lowercase().contains(&query);
+                let kind_matches = session.kind.to_ascii_lowercase().contains(&query);
+                let task_phase_matches = session
+                    .task_phase
+                    .as_deref()
+                    .map(|phase| phase.to_ascii_lowercase().contains(&query))
+                    .unwrap_or(false);
+
+                session_id_matches
+                    || label_matches
+                    || root_alias_matches
+                    || agent_matches
+                    || state_matches
+                    || task_phase_matches
+                    || kind_matches
+            })
+            .map(|(index, _session)| index)
+            .collect()
+    }
+
+    pub(super) fn clamp_selection(&mut self, visible_rows: usize) {
+        let filtered_count = self.filtered_indices().len();
+        if filtered_count == 0 {
+            self.selected_index = 0;
+            self.list_scroll_offset = 0;
+            return;
+        }
+
+        let max_index = filtered_count.saturating_sub(1);
+        if self.selected_index > max_index {
+            self.selected_index = max_index;
+        }
+
+        if self.selected_index < self.list_scroll_offset {
+            self.list_scroll_offset = self.selected_index;
+        }
+
+        let visible_rows = visible_rows.max(1);
+        let visible_end = self.list_scroll_offset.saturating_add(visible_rows);
+        if self.selected_index >= visible_end {
+            self.list_scroll_offset = self.selected_index.saturating_add(1) - visible_rows;
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BusyInputMode {
     Queue,
     Steer,
@@ -141,6 +347,7 @@ pub(super) struct Pane {
     pub(super) messages: Vec<Message>,
     pub(super) scroll_offset: u16,
     pub(super) session_id: String,
+    pub(super) session_display_label: Option<String>,
     pub(super) model: String,
     pub(super) input_tokens: u32,
     pub(super) output_tokens: u32,
@@ -170,6 +377,7 @@ impl Pane {
             messages: Vec::new(),
             scroll_offset: 0,
             session_id: session_id.to_string(),
+            session_display_label: None,
             model: String::new(),
             input_tokens: 0,
             output_tokens: 0,
@@ -777,7 +985,9 @@ impl Pane {
                         args_preview,
                         status,
                     },
-                    MessagePart::Text(_) | MessagePart::ThinkBlock(_) => continue,
+                    MessagePart::Text(_)
+                    | MessagePart::ThinkBlock(_)
+                    | MessagePart::SurfaceEvent { .. } => continue,
                 };
 
                 tool_calls.push(tool_call);
@@ -872,8 +1082,12 @@ pub(super) struct Shell {
     pub(super) pane: Pane,
     pub(super) runtime_config: Option<crate::config::LoongClawConfig>,
     pub(super) runtime_config_path: Option<std::path::PathBuf>,
+    pub(super) session_picker: Option<SessionPickerState>,
     pub(super) stats_overlay: Option<StatsOverlayState>,
+    pub(super) last_context_poll_at: Instant,
+    pub(super) subagent_surface_snapshot: SubagentSurfaceSnapshot,
     pub(super) running: bool,
+    pub(super) interrupt_requested: bool,
     pub(super) show_thinking: bool,
     pub(super) focus: FocusStack,
     pub(super) dirty: bool,
@@ -886,8 +1100,12 @@ impl Shell {
             pane: Pane::new(session_id),
             runtime_config: None,
             runtime_config_path: None,
+            session_picker: None,
             stats_overlay: None,
+            last_context_poll_at: Instant::now(),
+            subagent_surface_snapshot: SubagentSurfaceSnapshot::default(),
             running: true,
+            interrupt_requested: false,
             show_thinking: true,
             focus: FocusStack::new(),
             dirty: true,
@@ -1052,6 +1270,56 @@ mod tests {
     }
 
     #[test]
+    fn session_picker_search_matches_model_reasoning_and_localized_roles() {
+        let picker = SessionPickerState {
+            mode: SessionPickerMode::Subagents,
+            sessions: vec![VisibleSessionSuggestion {
+                session_id: "delegate:explore".to_owned(),
+                label: Some("Reference pass".to_owned()),
+                agent_presentation: Some(DelegateAgentPresentation {
+                    persona_id: "xu-xiake".to_owned(),
+                    role_id: "explorer".to_owned(),
+                    names: crate::session::presentation::LocalizedSubagentText {
+                        zh_hans: "徐霞客".to_owned(),
+                        zh_hant: "徐霞客".to_owned(),
+                        en: "Xu Xiake".to_owned(),
+                        ja: "徐霞客".to_owned(),
+                    },
+                    roles: crate::session::presentation::LocalizedSubagentText {
+                        zh_hans: "行者".to_owned(),
+                        zh_hant: "行者".to_owned(),
+                        en: "Explorer".to_owned(),
+                        ja: "探索者".to_owned(),
+                    },
+                    model: Some("gpt-5".to_owned()),
+                    reasoning_effort: Some("high".to_owned()),
+                }),
+                state: "running".to_owned(),
+                kind: "delegate_child".to_owned(),
+                task_phase: Some("running".to_owned()),
+                overdue: false,
+                pending_approval_count: 0,
+                attention_approval_count: 0,
+            }],
+            query: "high".to_owned(),
+            selected_index: 0,
+            list_scroll_offset: 0,
+        };
+
+        assert_eq!(picker.filtered_indices(), vec![0]);
+
+        let mut model_picker = picker;
+        model_picker.query = "gpt-5".to_owned();
+        assert_eq!(model_picker.filtered_indices(), vec![0]);
+
+        let role_picker = SessionPickerState {
+            query: "行者".to_owned(),
+            ..model_picker
+        };
+        assert_eq!(role_picker.filtered_indices(), vec![0]);
+    }
+
+    #[test]
     fn append_and_flush_streaming() {
         let mut pane = Pane::new("sess-1");
         pane.append_token("hello ", false);
@@ -1061,7 +1329,9 @@ mod tests {
         assert_eq!(pane.messages[0].parts.len(), 1);
         match &pane.messages[0].parts[0] {
             MessagePart::Text(text) => assert_eq!(text, "hello world"),
-            other @ MessagePart::ThinkBlock(_) | other @ MessagePart::ToolCall { .. } => {
+            other @ MessagePart::ThinkBlock(_)
+            | other @ MessagePart::ToolCall { .. }
+            | other @ MessagePart::SurfaceEvent { .. } => {
                 panic!("expected Text, got {:?}", other)
             }
         }
@@ -1130,7 +1400,9 @@ mod tests {
                     panic!("expected completed tool call output");
                 }
             },
-            other @ MessagePart::Text(_) | other @ MessagePart::ThinkBlock(_) => {
+            other @ MessagePart::Text(_)
+            | other @ MessagePart::ThinkBlock(_)
+            | other @ MessagePart::SurfaceEvent { .. } => {
                 panic!("expected ToolCall part, got {:?}", other)
             }
         }
@@ -1169,7 +1441,9 @@ mod tests {
                 assert_eq!(args_preview, "path: docs/notes.md");
                 assert!(matches!(status, ToolStatus::Running { .. }));
             }
-            other @ MessagePart::Text(_) | other @ MessagePart::ThinkBlock(_) => {
+            other @ MessagePart::Text(_)
+            | other @ MessagePart::ThinkBlock(_)
+            | other @ MessagePart::SurfaceEvent { .. } => {
                 panic!("expected ToolCall part, got {:?}", other)
             }
         }
@@ -1236,6 +1510,7 @@ mod tests {
     fn shell_defaults() {
         let shell = Shell::new("s1");
         assert!(shell.running);
+        assert!(!shell.interrupt_requested);
         assert!(shell.show_thinking);
         assert!(shell.dirty);
         assert_eq!(shell.focus.top(), super::super::focus::FocusLayer::Composer);

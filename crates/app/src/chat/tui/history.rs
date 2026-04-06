@@ -397,7 +397,7 @@ struct RenderedMessage {
 
 fn render_message(
     msg: &Message,
-    width: usize,
+    _width: usize,
     show_thinking: bool,
     palette: &Palette,
     tool_call_index: &mut usize,
@@ -407,45 +407,47 @@ fn render_message(
 
     match msg.role {
         Role::User => {
-            // " You " badge -- white text on user_msg background
-            lines.push(Line::styled(
-                " You ".to_string(),
-                Style::default()
-                    .fg(ratatui::style::Color::White)
-                    .bg(palette.user_msg)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            line_targets.push(TranscriptLineTargetKind::Plain);
+            let mut rendered_user_line = false;
             for part in &msg.parts {
                 if let MessagePart::Text(text) = part {
                     for line_str in text.lines() {
-                        lines.push(Line::styled(
-                            format!("  {line_str}"),
-                            Style::default().fg(palette.text),
-                        ));
+                        let marker = if rendered_user_line { "  " } else { "› " };
+                        let marker_color = if rendered_user_line {
+                            palette.separator
+                        } else {
+                            palette.user_msg
+                        };
+                        rendered_user_line = true;
+                        lines.push(Line::from(vec![
+                            Span::styled(marker.to_string(), Style::default().fg(marker_color)),
+                            Span::styled(line_str.to_owned(), Style::default().fg(palette.text)),
+                        ]));
                         line_targets.push(TranscriptLineTargetKind::Plain);
                     }
                 }
             }
+
+            if !rendered_user_line {
+                lines.push(Line::from(vec![Span::styled(
+                    "› ".to_string(),
+                    Style::default().fg(palette.user_msg),
+                )]));
+                line_targets.push(TranscriptLineTargetKind::Plain);
+            }
         }
         Role::Assistant => {
-            // Top divider: "── LoongClaw ──…"
-            let label = " LoongClaw ";
-            let remaining = width.saturating_sub(label.len() + 4);
             lines.push(Line::from(vec![
                 Span::styled(
-                    "\u{2500}\u{2500}".to_string(),
-                    Style::default().fg(palette.brand),
-                ),
-                Span::styled(
-                    label.to_string(),
+                    "• ".to_string(),
                     Style::default()
                         .fg(palette.brand)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    "\u{2500}".repeat(remaining),
-                    Style::default().fg(palette.brand),
+                    "LoongClaw".to_string(),
+                    Style::default()
+                        .fg(palette.brand)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             line_targets.push(TranscriptLineTargetKind::Plain);
@@ -503,15 +505,9 @@ fn render_message(
                         line_targets.push(TranscriptLineTargetKind::ToolCall(*tool_call_index));
                         *tool_call_index += 1;
                     }
+                    MessagePart::SurfaceEvent { .. } => {}
                 }
             }
-
-            // Bottom divider
-            lines.push(Line::styled(
-                "\u{2500}".repeat(width),
-                Style::default().fg(palette.brand),
-            ));
-            line_targets.push(TranscriptLineTargetKind::Plain);
         }
         Role::System => {
             for part in &msg.parts {
@@ -530,14 +526,37 @@ fn render_message(
         }
         Role::Surface => {
             for part in &msg.parts {
-                if let MessagePart::Text(text) = part {
-                    for line_str in text.lines() {
-                        lines.push(Line::styled(
-                            line_str.to_owned(),
-                            Style::default().fg(palette.text),
-                        ));
-                        line_targets.push(TranscriptLineTargetKind::Plain);
+                match part {
+                    MessagePart::Text(text) => {
+                        for line_str in text.lines() {
+                            lines.push(Line::styled(
+                                line_str.to_owned(),
+                                Style::default().fg(palette.text),
+                            ));
+                            line_targets.push(TranscriptLineTargetKind::Plain);
+                        }
                     }
+                    MessagePart::SurfaceEvent { title, lines: body } => {
+                        lines.push(Line::from(vec![
+                            Span::styled("• ".to_string(), Style::default().fg(palette.brand)),
+                            Span::styled(
+                                title.clone(),
+                                Style::default()
+                                    .fg(palette.text)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                        line_targets.push(TranscriptLineTargetKind::Plain);
+
+                        for body_line in body {
+                            lines.push(Line::styled(
+                                body_line.to_owned(),
+                                Style::default().fg(palette.dim),
+                            ));
+                            line_targets.push(TranscriptLineTargetKind::Plain);
+                        }
+                    }
+                    MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => {}
                 }
             }
         }
@@ -565,7 +584,7 @@ fn render_tool_call_line<'a>(
         ToolStatus::Running { started } => {
             let elapsed = started.elapsed().as_secs_f32();
             Line::from(vec![
-                Span::styled("  | ".to_string(), Style::default().fg(palette.dim)),
+                Span::styled("  · ".to_string(), Style::default().fg(palette.dim)),
                 Span::styled("* ".to_string(), Style::default().fg(palette.tool_running)),
                 Span::styled(
                     format!("{tool_name:<12}"),
@@ -597,7 +616,7 @@ fn render_tool_call_line<'a>(
             let preview = truncate_output(output, 40);
             let truncated = preview.ends_with('\u{2026}');
             let mut spans = vec![
-                Span::styled("  | ".to_string(), Style::default().fg(palette.dim)),
+                Span::styled("  · ".to_string(), Style::default().fg(palette.dim)),
                 Span::styled(format!("{icon} "), Style::default().fg(color)),
                 Span::styled(
                     format!("{tool_name:<12}"),
@@ -642,24 +661,31 @@ fn truncate_output(text: &str, max_chars: usize) -> String {
 
 fn render_welcome(width: usize, palette: &Palette) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    let title = "LoongClaw";
+    let centered_title = format!("{title:^width$}", width = width);
     lines.push(Line::default());
-
-    let bar_len = 47usize.min(width.saturating_sub(2));
-    let bar: String = "\u{2500}".repeat(bar_len);
-    let title = "LoongClaw  -  AI Agent";
-    let padded_title = format!("| {:^w$} |", title, w = bar_len.saturating_sub(4));
-
-    for bl in [format!("+{bar}+"), padded_title, format!("+{bar}+")] {
-        let centered = format!("{bl:^width$}", width = width);
-        lines.push(Line::styled(
-            centered,
-            Style::default()
-                .fg(palette.brand)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    lines.push(Line::default());
+    lines.push(Line::styled(
+        centered_title,
+        Style::default()
+            .fg(palette.brand)
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.push(Line::styled(
+        format!(
+            "{:^width$}",
+            "Durable chat, tools, and subagents",
+            width = width
+        ),
+        Style::default().fg(palette.dim),
+    ));
+    lines.push(Line::styled(
+        format!(
+            "{:^width$}",
+            "Ask, steer, delegate, and review in one surface",
+            width = width
+        ),
+        Style::default().fg(palette.separator),
+    ));
     lines.push(Line::styled(
         "  Type a message to begin, or /help for commands.".to_string(),
         Style::default()
@@ -983,7 +1009,7 @@ mod tests {
     }
 
     #[test]
-    fn user_message_renders_badge() {
+    fn user_message_renders_without_you_badge() {
         let pane = TestPane {
             messages: vec![Message::user("hello world")],
             ..TestPane::empty()
@@ -1000,7 +1026,14 @@ mod tests {
             .expect("draw failed");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("You"), "should show You badge");
+        assert!(
+            !text.contains("You"),
+            "user chrome should not show a You badge"
+        );
+        assert!(
+            text.contains("›"),
+            "user message should retain a subtle marker"
+        );
         assert!(text.contains("hello world"), "should show message text");
     }
 
@@ -1043,7 +1076,14 @@ mod tests {
             .expect("draw failed");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("You"), "should show You badge");
+        assert!(
+            !text.contains("You"),
+            "user cursor view should not show a You badge"
+        );
+        assert!(
+            text.contains("›"),
+            "user cursor view should retain a subtle marker"
+        );
         assert!(text.contains("\u{258e}"), "cursor marker should be visible");
         assert!(
             text.contains("cursor line"),
@@ -1052,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_message_renders_divider() {
+    fn assistant_message_renders_agent_heading() {
         let mut msg = Message::assistant();
         msg.parts.push(MessagePart::Text("reply text".into()));
 
@@ -1072,7 +1112,7 @@ mod tests {
             .expect("draw failed");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("LoongClaw"), "should show divider with name");
+        assert!(text.contains("LoongClaw"), "should show assistant heading");
         assert!(text.contains("reply text"), "should show reply text");
     }
 

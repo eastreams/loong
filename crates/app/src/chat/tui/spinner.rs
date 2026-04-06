@@ -43,17 +43,10 @@ pub(super) fn render_spinner(
         let spinner = FRAMES.get(idx).copied().unwrap_or("");
         let didx = pane.dots_frame() % DOTS.len();
         let dots = DOTS.get(didx).copied().unwrap_or("");
-
-        let state_info = if pane.loop_state().is_empty() {
-            String::new()
-        } else {
-            format!(" | {}", pane.loop_state())
-        };
-        let action_info = if pane.loop_action().is_empty() {
-            String::new()
-        } else {
-            format!(" | {}", pane.loop_action())
-        };
+        let working_label = "Working";
+        let round_label = running_round_label(pane.loop_iteration());
+        let state_label = optional_running_segment(pane.loop_state());
+        let action_label = optional_running_segment(pane.loop_action());
 
         Line::from(vec![
             Span::styled(
@@ -62,13 +55,11 @@ pub(super) fn render_spinner(
                     .fg(palette.brand)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                format!("Iteration {}", pane.loop_iteration()),
-                Style::default().fg(palette.text),
-            ),
-            Span::styled(state_info, Style::default().fg(palette.dim)),
-            Span::styled(action_info, Style::default().fg(palette.info)),
-            Span::styled(format!(" {dots}"), Style::default().fg(palette.warning)),
+            Span::styled(working_label.to_owned(), Style::default().fg(palette.text)),
+            Span::styled(round_label, Style::default().fg(palette.dim)),
+            Span::styled(state_label, Style::default().fg(palette.info)),
+            Span::styled(action_label, Style::default().fg(palette.dim)),
+            Span::styled(format!(" {dots}"), Style::default().fg(palette.brand)),
         ])
     } else if let Some((msg, when)) = pane.status_message() {
         if when.elapsed().as_secs() < STATUS_FADE_SECS {
@@ -86,6 +77,23 @@ pub(super) fn render_spinner(
     };
 
     frame.render_widget(Paragraph::new(content), area);
+}
+
+fn running_round_label(loop_iteration: u32) -> String {
+    if loop_iteration <= 1 {
+        return String::new();
+    }
+
+    format!(" · round {loop_iteration}")
+}
+
+fn optional_running_segment(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    format!(" · {trimmed}")
 }
 
 fn ready_line(palette: &Palette) -> Line<'static> {
@@ -208,7 +216,8 @@ mod tests {
             .expect("draw");
 
         let text = buffer_text(&terminal);
-        assert!(text.contains("Iteration 2"), "should show iteration number");
+        assert!(text.contains("Working"), "should show running label");
+        assert!(text.contains("round 2"), "should show round number");
         assert!(
             text.contains("requesting provider"),
             "should show loop state"

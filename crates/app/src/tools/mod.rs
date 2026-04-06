@@ -301,6 +301,7 @@ fn execute_app_tool_with_browser_companion_readiness(
         | "session_tool_policy_set"
         | "session_tool_policy_clear"
         | "session_status"
+        | "session_rename"
         | "session_events"
         | "session_archive"
         | "session_cancel"

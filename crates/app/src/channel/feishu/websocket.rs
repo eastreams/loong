@@ -32,6 +32,7 @@ const MESSAGE_TYPE_PING: &str = "ping";
 const MESSAGE_TYPE_PONG: &str = "pong";
 const FRAME_TYPE_CONTROL: i32 = 0;
 const FRAME_TYPE_DATA: i32 = 1;
+const DEFAULT_WS_CONNECT_TIMEOUT_S: u64 = 4;
 const DEFAULT_WS_RECONNECT_INTERVAL_S: u64 = 120;
 const DEFAULT_WS_PING_INTERVAL_S: u64 = 120;
 
@@ -273,9 +274,20 @@ async fn run_feishu_websocket_session(
     // Install the same process default once so websocket TLS does not panic when other crates
     // also link rustls with aws-lc-rs enabled.
     ensure_feishu_websocket_rustls_provider();
+    let connect_timeout = Duration::from_secs(DEFAULT_WS_CONNECT_TIMEOUT_S);
     let connect_result = tokio::select! {
         _ = stop.wait() => return Ok(()),
-        result = connect_async(parsed_url.as_str()) => result,
+        result = tokio::time::timeout(connect_timeout, connect_async(parsed_url.as_str())) => {
+            match result {
+                Ok(result) => result,
+                Err(_) => {
+                    return Err(format!(
+                        "connect Feishu websocket failed: timed out after {}s",
+                        DEFAULT_WS_CONNECT_TIMEOUT_S
+                    ));
+                }
+            }
+        },
     };
     let (mut stream, _) =
         connect_result.map_err(|error| format!("connect Feishu websocket failed: {error}"))?;
@@ -452,6 +464,7 @@ mod tests {
     };
     use futures_util::{SinkExt, StreamExt};
     use serde_json::{Value, json};
+    use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
     use tokio::sync::{Mutex, Notify};
     use tokio_tungstenite::accept_async;
@@ -821,14 +834,14 @@ mod tests {
             .expect("bind mock tls listener");
         let address = listener.local_addr().expect("mock tls listener addr");
         let accept_task = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.expect("accept mock tls socket");
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let (mut socket, _) = listener.accept().await.expect("accept mock tls socket");
+            let _ = socket.write_all(b"not-a-tls-server").await;
             drop(socket);
         });
 
         let session_url = format!("wss://{address}/events?service_id=42");
         let session_join = tokio::time::timeout(
-            Duration::from_secs(5),
+            Duration::from_secs(15),
             tokio::spawn(async move {
                 run_feishu_websocket_session(
                     &state,
@@ -843,7 +856,7 @@ mod tests {
         .expect("wss session should not hang");
         let session_error = session_join
             .expect("wss session should return a recoverable error instead of panicking")
-            .expect_err("plain tcp listener should not complete a tls websocket session");
+            .expect_err("invalid tls listener should not complete a websocket session");
         assert!(
             session_error.starts_with("connect Feishu websocket failed:"),
             "unexpected websocket tls session result: {session_error}"

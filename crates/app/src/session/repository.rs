@@ -552,6 +552,30 @@ impl SessionRepository {
             .ok_or_else(|| format!("session `{session_id}` missing after update"))
     }
 
+    pub fn update_session_label(
+        &self,
+        session_id: &str,
+        label: Option<String>,
+    ) -> Result<SessionRecord, String> {
+        let session_id = normalize_required_text(session_id, "session_id")?;
+        let label = normalize_optional_text(label);
+        let updated_at = unix_ts_now();
+        let conn = self.open_connection()?;
+        let affected = conn
+            .execute(
+                "UPDATE sessions
+                 SET label = ?2, updated_at = ?3
+                 WHERE session_id = ?1",
+                params![session_id, label, updated_at],
+            )
+            .map_err(|error| format!("update session label failed: {error}"))?;
+        if affected == 0 {
+            return Err(format!("session `{session_id}` not found"));
+        }
+        self.load_session(&session_id)?
+            .ok_or_else(|| format!("session `{session_id}` missing after label update"))
+    }
+
     pub fn update_session_state_if_current(
         &self,
         session_id: &str,
@@ -2417,6 +2441,33 @@ mod tests {
         assert_eq!(loaded.session_id, "root-session");
         assert_eq!(loaded.label.as_deref(), Some("Root"));
         assert_eq!(loaded.parent_session_id, None);
+    }
+
+    #[test]
+    fn update_session_label_trims_and_persists_new_value() {
+        let config = isolated_memory_config("update-label");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Before".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create session");
+
+        let updated = repo
+            .update_session_label("root-session", Some("  After  ".to_owned()))
+            .expect("update label");
+
+        assert_eq!(updated.label.as_deref(), Some("After"));
+
+        let reloaded = repo
+            .load_session("root-session")
+            .expect("load session")
+            .expect("session exists");
+
+        assert_eq!(reloaded.label.as_deref(), Some("After"));
     }
 
     #[test]

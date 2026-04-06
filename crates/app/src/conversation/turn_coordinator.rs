@@ -73,6 +73,7 @@ use super::session_history::{
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
     ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
+    SubagentProviderSnapshot,
 };
 use super::turn_budget::{
     EscalatingAttemptBudget, SafeLaneBackpressureBudget, SafeLaneContinuationBudgetDecision,
@@ -4226,6 +4227,7 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
+    let provider_snapshot = current_delegate_provider_snapshot(config);
     with_prepared_subagent_spawn_cleanup_if_kernel_bound(
         runtime,
         &session_context.session_id,
@@ -4255,12 +4257,12 @@ async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                             },
                             event_kind: "delegate_started".to_owned(),
                             actor_session_id: Some(session_context.session_id.clone()),
-                            event_payload_json: execution
-                                .spawn_payload_with_runtime_self_continuity(
-                                    &delegate_request.task,
-                                    child_label.as_deref(),
-                                    runtime_self_continuity.as_ref(),
-                                ),
+                            event_payload_json: execution.spawn_payload_with_runtime_metadata(
+                                &delegate_request.task,
+                                child_label.as_deref(),
+                                runtime_self_continuity.as_ref(),
+                                Some(&provider_snapshot),
+                            ),
                         },
                         execution,
                     ))
@@ -4313,6 +4315,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
     let next_child_depth = next_delegate_child_depth_for_delegate(config, &repo, session_context)?;
     let runtime_self_continuity =
         effective_runtime_self_continuity_for_session(config, session_context);
+    let provider_snapshot = current_delegate_provider_snapshot(config);
     let (_, execution) = repo.create_delegate_child_session_with_event_if_within_limit(
         &session_context.session_id,
         config.tools.delegate.max_active_children,
@@ -4325,10 +4328,11 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
                 next_child_depth,
                 active_children,
             );
-            let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
+            let event_payload_json = execution.spawn_payload_with_runtime_metadata(
                 &task,
                 child_label.as_deref(),
                 runtime_self_continuity.as_ref(),
+                Some(&provider_snapshot),
             );
             let session = NewSessionRecord {
                 session_id: child_session_id.clone(),
@@ -4365,6 +4369,26 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         label,
         timeout_seconds,
     ))
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn current_delegate_provider_snapshot(config: &LoongClawConfig) -> SubagentProviderSnapshot {
+    let profile_id = config.active_provider_id().unwrap_or("default").to_owned();
+    let provider = &config.provider;
+    let provider_kind = provider.kind.as_str().to_owned();
+    let model = provider
+        .resolved_model()
+        .unwrap_or_else(|| "auto".to_owned());
+    let reasoning_effort = provider
+        .reasoning_effort
+        .map(|value| value.as_str().to_owned());
+
+    SubagentProviderSnapshot {
+        profile_id,
+        provider_kind,
+        model,
+        reasoning_effort,
+    }
 }
 
 #[cfg(feature = "memory-sqlite")]

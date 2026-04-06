@@ -48,6 +48,10 @@ pub(super) enum ToolStatus {
 pub(super) enum MessagePart {
     Text(String),
     ThinkBlock(String),
+    SurfaceEvent {
+        title: String,
+        lines: Vec<String>,
+    },
     ToolCall {
         tool_id: String,
         tool_name: String,
@@ -81,6 +85,16 @@ impl Message {
         Self {
             role: Role::Surface,
             parts: vec![MessagePart::Text(text.into())],
+        }
+    }
+
+    pub(super) fn surface_event(title: impl Into<String>, lines: Vec<String>) -> Self {
+        Self {
+            role: Role::Surface,
+            parts: vec![MessagePart::SurfaceEvent {
+                title: title.into(),
+                lines,
+            }],
         }
     }
 

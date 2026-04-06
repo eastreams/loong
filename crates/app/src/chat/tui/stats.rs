@@ -8,6 +8,7 @@ use crate::conversation::analytics::{TURN_USAGE_EVENT_NAME, parse_conversation_e
 use crate::memory::ConversationTurn;
 #[cfg(feature = "memory-sqlite")]
 use crate::memory::runtime_config::MemoryRuntimeConfig;
+use crate::session::presentation::{DelegateAgentPresentation, derive_delegate_agent_presentation};
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
     ApprovalRequestStatus, SessionKind, SessionRepository, SessionState, SessionSummaryRecord,
@@ -144,6 +145,7 @@ pub(super) struct SessionDurationStat {
 pub(super) struct StatsSessionRow {
     pub(super) session_id: String,
     pub(super) label: Option<String>,
+    pub(super) agent_presentation: Option<DelegateAgentPresentation>,
     pub(super) kind: String,
     pub(super) state: String,
     pub(super) turn_count: usize,
@@ -499,7 +501,15 @@ pub(super) fn load_stats_snapshot(
             pending_approvals = pending_approvals.saturating_add(session_pending_count);
 
             update_longest_session(&mut longest_session, session);
-            let session_row = build_stats_session_row(session, current_session_id);
+            let delegate_events = if session.kind == SessionKind::DelegateChild {
+                repo.list_delegate_lifecycle_events(session.session_id.as_str())?
+            } else {
+                Vec::new()
+            };
+            let agent_presentation =
+                derive_delegate_agent_presentation(session, delegate_events.as_slice());
+            let session_row =
+                build_stats_session_row(session, current_session_id, agent_presentation);
             session_rows.push(session_row);
 
             let turn_count = session.turn_count;
@@ -594,6 +604,7 @@ pub(super) fn load_stats_snapshot(
 fn build_stats_session_row(
     session: &SessionSummaryRecord,
     current_session_id: &str,
+    agent_presentation: Option<DelegateAgentPresentation>,
 ) -> StatsSessionRow {
     let end_ts = session.last_turn_at.unwrap_or(session.updated_at);
     let raw_duration_seconds = end_ts.saturating_sub(session.created_at);
@@ -606,6 +617,7 @@ fn build_stats_session_row(
     StatsSessionRow {
         session_id: session.session_id.clone(),
         label: session.label.clone(),
+        agent_presentation,
         kind,
         state,
         turn_count: session.turn_count,
@@ -1077,6 +1089,7 @@ mod tests {
             session_rows: vec![StatsSessionRow {
                 session_id: "sess-1".to_owned(),
                 label: Some("Root".to_owned()),
+                agent_presentation: None,
                 kind: "root".to_owned(),
                 state: "ready".to_owned(),
                 turn_count: 1,

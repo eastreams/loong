@@ -133,10 +133,11 @@ impl BrowserCompanionRunner for CommandBrowserCompanionRunner {
         })
         .map_err(|error| format!("browser_companion_spawn_failed: {error}"))?;
 
-        let stdin = child.stdin.take();
-        write_browser_companion_request(stdin, &encoded, || {
+        let mut stdin = child.stdin.take();
+        write_browser_companion_request(&mut stdin, &encoded, || {
             cleanup_browser_companion_after_stdin_write_failure(&mut child);
         })?;
+        drop(stdin);
 
         let output = wait_for_browser_companion_output(child, timeout_seconds)?;
         if !output.status.success() {
@@ -251,7 +252,7 @@ fn should_retry_spawn_error(error: &std::io::Error) -> bool {
 }
 
 fn write_browser_companion_request<W, C>(
-    stdin: Option<W>,
+    stdin: &mut Option<W>,
     encoded: &[u8],
     mut cleanup: C,
 ) -> Result<(), String>
@@ -259,7 +260,7 @@ where
     W: Write,
     C: FnMut(),
 {
-    if let Some(mut stdin) = stdin {
+    if let Some(stdin) = stdin.as_mut() {
         stdin.write_all(encoded).map_err(|error| {
             cleanup();
             format!("browser_companion_stdin_write_failed: {error}")
@@ -832,12 +833,12 @@ mod tests {
     #[test]
     fn write_browser_companion_request_cleans_up_failed_stdin_writes() {
         let cleaned_up = AtomicBool::new(false);
+        let mut stdin = Some(BrokenWriter);
 
-        let error =
-            super::write_browser_companion_request(Some(BrokenWriter), br#"{"ok":true}"#, || {
-                cleaned_up.store(true, Ordering::Relaxed);
-            })
-            .expect_err("stdin write failure should be surfaced");
+        let error = super::write_browser_companion_request(&mut stdin, br#"{"ok":true}"#, || {
+            cleaned_up.store(true, Ordering::Relaxed);
+        })
+        .expect_err("stdin write failure should be surfaced");
 
         assert!(
             error.contains("browser_companion_stdin_write_failed"),

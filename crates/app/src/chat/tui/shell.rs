@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -28,7 +29,12 @@ use crate::CliResult;
 use crate::acp::AcpConversationTurnOptions;
 use crate::conversation::{
     ConversationRuntimeBinding, ConversationTurnObserverHandle, DefaultConversationRuntime,
-    ProviderErrorMode, resolve_context_engine, resolve_context_engine_selection,
+    ProviderErrorMode, parse_conversation_event, resolve_context_engine,
+    resolve_context_engine_selection,
+};
+use crate::session::presentation::{
+    DelegateAgentPresentation, SessionPresentationLocale, localized_root_thread_label,
+    root_thread_search_terms,
 };
 
 use super::boot::{TuiBootFlow, TuiBootScreen, TuiBootTransition};
@@ -110,11 +116,29 @@ impl StatusBarView for state::Pane {
     fn session_id(&self) -> &str {
         &self.session_id
     }
+    fn session_display_label(&self) -> Option<&str> {
+        self.session_display_label.as_deref()
+    }
     fn busy_input_mode(&self) -> state::BusyInputMode {
         self.busy_input_mode()
     }
     fn pending_submission_count(&self) -> usize {
         self.pending_submission_count()
+    }
+    fn running_task_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.running_tasks
+    }
+    fn overdue_task_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.overdue_tasks
+    }
+    fn pending_approval_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.pending_approvals
+    }
+    fn attention_approval_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.attention_approvals
+    }
+    fn visible_session_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.visible_sessions
     }
     fn scroll_offset(&self) -> u16 {
         self.scroll_offset
@@ -149,24 +173,24 @@ impl InputView for state::Pane {
 }
 
 const STARTER_COMPOSER_PLACEHOLDERS: &[&str] = &[
-    "Explain the layered kernel design in this workspace",
-    "Use /skills to inspect installed external skills",
+    "Explain this workspace's layered kernel design",
+    "Inspect installed skills with /skills",
     "Review the current worktree and call out the riskiest diff",
     "Check effective tool policy with /permissions",
-    "Trace delegate work with /tasks running",
+    "Trace active child threads with /subagents",
     "Review approval hotspots with /approvals attention",
-    "Resume a previous thread with /resume <session-id>",
-    "Compact the current session with /compact when context gets heavy",
+    "Summarize the crate graph and the sharp edges in this repo",
+    "Use /compact before the session context gets too heavy",
 ];
 
 const ACTIVE_COMPOSER_PLACEHOLDERS: &[&str] = &[
-    "Summarize what changed in this session before we continue",
-    "Turn the latest idea into a concrete patch plan",
-    "Inspect the current branch and tell me where the risky edge is",
-    "Open the next blocked delegate with /tasks overdue",
+    "Summarize what changed in this thread before we continue",
+    "Turn the latest idea into a minimal patch plan",
+    "Inspect the next blocked child thread with /subagents",
     "Resolve the next queued approval from /approvals",
     "Check whether this session is over-permitted with /permissions",
-    "Switch back to another thread with /resume <session-id>",
+    "Switch across active threads with /subagents",
+    "Tighten the current patch and call out regression risk",
     "Compare the transcript story against the actual diff",
 ];
 
@@ -185,17 +209,17 @@ const HOT_CONTEXT_COMPOSER_PLACEHOLDERS: &[&str] = &[
 
 const SESSION_RESUME_COMPOSER_PLACEHOLDERS: &[&str] = &[
     "There are other visible threads; inspect them with /resume",
-    "Switch back to another thread with /resume <session-id>",
+    "Switch across active subagent threads with /subagents",
 ];
 
 const RUNNING_TASK_COMPOSER_PLACEHOLDERS: &[&str] = &[
-    "Delegate work is active; inspect it with /tasks running",
-    "Trace the current child sessions through /tasks running",
+    "Delegate work is active; open /subagents to watch the child threads",
+    "Jump into a running child thread with /subagents",
 ];
 
 const OVERDUE_TASK_COMPOSER_PLACEHOLDERS: &[&str] = &[
-    "A delegate looks overdue; inspect it with /tasks overdue",
-    "Check blocked delegate work through /tasks overdue",
+    "A child thread looks overdue; inspect it with /subagents",
+    "Open /subagents and jump into the blocked thread",
 ];
 
 const PENDING_APPROVAL_COMPOSER_PLACEHOLDERS: &[&str] = &[
@@ -301,6 +325,13 @@ impl ShellView for state::Shell {
             date_range: stats_overlay.date_range,
             list_scroll_offset: stats_overlay.list_scroll_offset,
             copy_status: stats_overlay.copy_status.as_deref(),
+        })
+    }
+    fn session_picker(&self) -> Option<render::SessionPickerView<'_>> {
+        let session_picker = self.session_picker.as_ref()?;
+        Some(render::SessionPickerView {
+            picker: session_picker,
+            current_session_id: self.pane.session_id.as_str(),
         })
     }
     fn slash_command_selection(&self) -> usize {
@@ -462,6 +493,28 @@ fn parse_resume_action(args: &str) -> ResumeAction {
     }
 
     ResumeAction::Switch(trimmed.to_owned())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SubagentAction {
+    List,
+    Switch(String),
+}
+
+fn parse_subagent_action(args: &str) -> SubagentAction {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return SubagentAction::List;
+    }
+
+    if let Some(session_id) = trimmed.strip_prefix("switch ") {
+        let session_id = session_id.trim();
+        if !session_id.is_empty() {
+            return SubagentAction::Switch(session_id.to_owned());
+        }
+    }
+
+    SubagentAction::Switch(trimmed.to_owned())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -661,6 +714,21 @@ enum BusyInputModeAction {
     Clear,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RenameAction {
+    Status,
+    Set(String),
+}
+
+fn parse_rename_action(args: &str) -> Result<RenameAction, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(RenameAction::Status);
+    }
+
+    Ok(RenameAction::Set(trimmed.to_owned()))
+}
+
 fn parse_busy_input_mode_action(args: &str) -> Result<BusyInputModeAction, String> {
     let trimmed = args.trim();
     if trimmed.is_empty() {
@@ -686,11 +754,22 @@ fn is_async_slash_request(request: &ParsedSlashCommand) -> bool {
 }
 
 fn is_runtime_slash_request(request: &ParsedSlashCommand) -> bool {
-    matches!(request.command, SlashCommand::Resume)
-        && matches!(
-            parse_resume_action(request.args.as_str()),
-            ResumeAction::Switch(_)
-        )
+    matches!(request.command, SlashCommand::New)
+        || matches!(request.command, SlashCommand::Rename)
+            && matches!(
+                parse_rename_action(request.args.as_str()),
+                Ok(RenameAction::Set(_))
+            )
+        || matches!(request.command, SlashCommand::Resume)
+            && matches!(
+                parse_resume_action(request.args.as_str()),
+                ResumeAction::Switch(_)
+            )
+        || matches!(request.command, SlashCommand::Subagents)
+            && matches!(
+                parse_subagent_action(request.args.as_str()),
+                SubagentAction::Switch(_)
+            )
         || matches!(request.command, SlashCommand::Model)
             && matches!(
                 parse_model_action(request.args.as_str()),
@@ -942,6 +1021,7 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
         } => {
             shell.pane.finalize_response(input_tokens, output_tokens);
             refresh_composer_suggestion_context(shell);
+            maybe_emit_subagent_lifecycle_surface(shell);
         }
         UiEvent::ClarifyRequest { question, choices } => {
             shell.pane.clarify_dialog = Some(ClarifyDialog::new(question, choices));
@@ -953,11 +1033,13 @@ fn apply_ui_event(shell: &mut state::Shell, event: UiEvent) {
                 .pane
                 .set_status(format!("{title} added to transcript"));
             refresh_composer_suggestion_context(shell);
+            maybe_emit_subagent_lifecycle_surface(shell);
         }
         UiEvent::TurnError(msg) => {
             shell.pane.agent_running = false;
             shell.pane.add_system_message(&format!("Error: {msg}"));
             refresh_composer_suggestion_context(shell);
+            maybe_emit_subagent_lifecycle_surface(shell);
         }
     }
 }
@@ -1060,6 +1142,24 @@ fn terminal_shell_areas(textarea: &tui_textarea::TextArea<'_>) -> layout::ShellA
     layout::compute(area, input_height)
 }
 
+fn session_picker_visible_rows() -> usize {
+    let terminal_size = crossterm::terminal::size();
+    let (width, height) = terminal_size.unwrap_or((80, 24));
+    if width < 56 || height < 14 {
+        return 1;
+    }
+
+    let popup_height = {
+        let max_height = height.saturating_sub(2);
+        let preferred_height = height.saturating_mul(3) / 4;
+        preferred_height.max(14).min(max_height)
+    };
+    let inner_height = popup_height.saturating_sub(2);
+    let list_height = inner_height.saturating_sub(2);
+
+    usize::from(list_height.max(1))
+}
+
 fn apply_history_navigation(
     shell: &mut state::Shell,
     textarea: &tui_textarea::TextArea<'_>,
@@ -1146,6 +1246,139 @@ fn matches_candidate_query(candidate: &str, query: &str) -> bool {
     candidate.to_ascii_lowercase().contains(query)
 }
 
+fn session_presentation_locale() -> SessionPresentationLocale {
+    SessionPresentationLocale::detect_from_env()
+}
+
+fn visible_session_primary_label(
+    session: &state::VisibleSessionSuggestion,
+    locale: SessionPresentationLocale,
+) -> String {
+    if let Some(presentation) = session.agent_presentation.as_ref() {
+        return presentation.primary_label(locale);
+    }
+
+    if let Some(label) = session.label.as_deref() {
+        return label.to_owned();
+    }
+
+    session.session_id.clone()
+}
+
+fn subagent_session_primary_label(
+    session: &state::VisibleSessionSuggestion,
+    locale: SessionPresentationLocale,
+) -> String {
+    if session.kind == "root" {
+        if let Some(label) = session.label.as_deref() {
+            let trimmed_label = label.trim();
+            if !trimmed_label.is_empty() {
+                return trimmed_label.to_owned();
+            }
+        }
+        return localized_root_thread_label(locale).to_owned();
+    }
+
+    visible_session_primary_label(session, locale)
+}
+
+fn visible_session_meta_label(session: &state::VisibleSessionSuggestion) -> &'static str {
+    match session.kind.as_str() {
+        "root" => "Primary",
+        "delegate_child" => "Subagent",
+        _ => "Session",
+    }
+}
+
+fn visible_session_kind_detail_label(session: &state::VisibleSessionSuggestion) -> &'static str {
+    match session.kind.as_str() {
+        "root" => "thread",
+        "delegate_child" => "subagent",
+        _ => "session",
+    }
+}
+
+fn visible_session_status_detail(session: &state::VisibleSessionSuggestion) -> String {
+    let status_label = session
+        .task_phase
+        .as_deref()
+        .unwrap_or(session.state.as_str());
+    let kind_label = visible_session_kind_detail_label(session);
+    format!("{status_label} · {kind_label}")
+}
+
+fn visible_session_provider_label(
+    session: &state::VisibleSessionSuggestion,
+    locale: SessionPresentationLocale,
+) -> Option<String> {
+    session
+        .agent_presentation
+        .as_ref()
+        .and_then(|presentation| presentation.provider_label(locale))
+}
+
+fn visible_session_matches_query(session: &state::VisibleSessionSuggestion, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+
+    let session_id_matches = matches_candidate_query(session.session_id.as_str(), query);
+    if session_id_matches {
+        return true;
+    }
+
+    let label_matches = session
+        .label
+        .as_deref()
+        .is_some_and(|label| matches_candidate_query(label, query));
+    if label_matches {
+        return true;
+    }
+
+    let phase_matches = session
+        .task_phase
+        .as_deref()
+        .is_some_and(|phase| matches_candidate_query(phase, query));
+    if phase_matches {
+        return true;
+    }
+
+    if session.kind == "root" {
+        let alias_matches = root_thread_search_terms()
+            .iter()
+            .any(|term| matches_candidate_query(term, query));
+        if alias_matches {
+            return true;
+        }
+    }
+
+    let Some(presentation) = session.agent_presentation.as_ref() else {
+        return false;
+    };
+
+    let zh_hans_matches = matches_candidate_query(presentation.names.zh_hans.as_str(), query);
+    let zh_hant_matches = matches_candidate_query(presentation.names.zh_hant.as_str(), query);
+    let en_matches = matches_candidate_query(presentation.names.en.as_str(), query);
+    let ja_matches = matches_candidate_query(presentation.names.ja.as_str(), query);
+    let role_matches = matches_candidate_query(presentation.role_id.as_str(), query);
+    let model_matches = presentation
+        .model
+        .as_deref()
+        .is_some_and(|model| matches_candidate_query(model, query));
+    let reasoning_matches = presentation
+        .reasoning_effort
+        .as_deref()
+        .is_some_and(|reasoning| matches_candidate_query(reasoning, query));
+
+    zh_hans_matches
+        || zh_hant_matches
+        || en_matches
+        || ja_matches
+        || role_matches
+        || model_matches
+        || reasoning_matches
+}
+
 fn resume_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashPaletteEntry> {
     let context = &shell.pane.composer_suggestion_context;
     let action = parse_resume_action(args);
@@ -1155,17 +1388,12 @@ fn resume_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::Slash
     };
     let query = raw_query.trim().to_ascii_lowercase();
     let inspect_mode = matches!(action, ResumeAction::Inspect(_));
+    let locale = session_presentation_locale();
 
     context
         .visible_session_suggestions
         .iter()
-        .filter(|session| {
-            matches_candidate_query(session.session_id.as_str(), query.as_str())
-                || session
-                    .label
-                    .as_deref()
-                    .is_some_and(|label| matches_candidate_query(label, query.as_str()))
-        })
+        .filter(|session| visible_session_matches_query(session, query.as_str()))
         .take(6)
         .map(|session| {
             let replacement = if inspect_mode {
@@ -1173,18 +1401,78 @@ fn resume_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::Slash
             } else {
                 format!("/resume {}", session.session_id)
             };
-            let mut detail = format!("{} · {}", session.state, session.kind);
+            let mut detail = visible_session_status_detail(session);
+            if let Some(presentation) = session.agent_presentation.as_ref() {
+                detail.push_str(&format!(" · {}", presentation.primary_label(locale)));
+                if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                    detail.push_str(&format!(" · {provider_label}"));
+                }
+            }
             if let Some(label) = session.label.as_deref() {
                 detail.push_str(&format!(" · {label}"));
             }
             render::SlashPaletteEntry {
-                label: replacement.clone(),
+                label: visible_session_primary_label(session, locale),
                 replacement,
                 meta: if inspect_mode {
                     "Resume Inspect".to_owned()
                 } else {
                     "Resume Switch".to_owned()
                 },
+                detail,
+                immediate: false,
+                submit_on_select: true,
+            }
+        })
+        .collect()
+}
+
+fn subagents_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashPaletteEntry> {
+    let query = args.trim().to_ascii_lowercase();
+    let locale = session_presentation_locale();
+
+    shell
+        .pane
+        .composer_suggestion_context
+        .visible_session_suggestions
+        .iter()
+        .filter(|session| session.kind == "root" || session.kind == "delegate_child")
+        .filter(|session| {
+            visible_session_matches_query(session, query.as_str())
+                || matches_candidate_query(
+                    subagent_session_primary_label(session, locale).as_str(),
+                    query.as_str(),
+                )
+        })
+        .take(6)
+        .map(|session| {
+            let mut detail_parts = vec![visible_session_status_detail(session)];
+            if session.overdue {
+                detail_parts.push("overdue".to_owned());
+            }
+            if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                detail_parts.push(provider_label);
+            }
+            if let Some(label) = session.label.as_deref() {
+                detail_parts.push(label.to_owned());
+            }
+            if session.attention_approval_count > 0 {
+                detail_parts.push(format!("APR! {}", session.attention_approval_count));
+            }
+            let remaining_pending = session
+                .pending_approval_count
+                .saturating_sub(session.attention_approval_count);
+            if remaining_pending > 0 {
+                detail_parts.push(format!("APR {remaining_pending}"));
+            }
+
+            let detail = detail_parts.join(" · ");
+            let replacement = format!("/subagents {}", session.session_id);
+
+            render::SlashPaletteEntry {
+                replacement,
+                label: subagent_session_primary_label(session, locale),
+                meta: visible_session_meta_label(session).to_owned(),
                 detail,
                 immediate: false,
                 submit_on_select: true,
@@ -1377,6 +1665,7 @@ fn approvals_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::Sl
 
 fn tasks_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashPaletteEntry> {
     let query = args.trim().to_ascii_lowercase();
+    let locale = session_presentation_locale();
     let filter_entries = [
         ("running", "Show active delegate task sessions"),
         ("overdue", "Show overdue delegate task sessions"),
@@ -1402,32 +1691,26 @@ fn tasks_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashP
         .iter()
         .filter(|session| session.kind == "delegate_child")
         .filter(|session| {
-            matches_candidate_query(session.session_id.as_str(), query.as_str())
-                || session
-                    .label
-                    .as_deref()
-                    .is_some_and(|label| matches_candidate_query(label, query.as_str()))
-                || session
-                    .task_phase
-                    .as_deref()
-                    .is_some_and(|phase| matches_candidate_query(phase, query.as_str()))
+            visible_session_matches_query(session, query.as_str())
                 || (query == "overdue" && session.overdue)
         })
         .map(|session| {
-            let mut detail = format!(
-                "{}{}",
-                session
-                    .task_phase
-                    .as_deref()
-                    .unwrap_or(session.state.as_str()),
-                if session.overdue { " · overdue" } else { "" }
-            );
+            let mut detail = visible_session_status_detail(session);
+            if session.overdue {
+                detail.push_str(" · overdue");
+            }
+            if let Some(presentation) = session.agent_presentation.as_ref() {
+                detail.push_str(&format!(" · {}", presentation.primary_label(locale)));
+                if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                    detail.push_str(&format!(" · {provider_label}"));
+                }
+            }
             if let Some(label) = session.label.as_deref() {
                 detail.push_str(&format!(" · {label}"));
             }
             render::SlashPaletteEntry {
                 replacement: format!("/tasks {}", session.session_id),
-                label: format!("/tasks {}", session.session_id),
+                label: visible_session_primary_label(session, locale),
                 meta: "Task Session".to_owned(),
                 detail,
                 immediate: false,
@@ -1440,28 +1723,29 @@ fn tasks_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashP
 
 fn permissions_palette_entries(shell: &state::Shell, args: &str) -> Vec<render::SlashPaletteEntry> {
     let query = args.trim().to_ascii_lowercase();
+    let locale = session_presentation_locale();
 
     shell
         .pane
         .composer_suggestion_context
         .visible_session_suggestions
         .iter()
-        .filter(|session| {
-            matches_candidate_query(session.session_id.as_str(), query.as_str())
-                || session
-                    .label
-                    .as_deref()
-                    .is_some_and(|label| matches_candidate_query(label, query.as_str()))
-        })
+        .filter(|session| visible_session_matches_query(session, query.as_str()))
         .take(6)
         .map(|session| {
-            let mut detail = format!("{} · {}", session.state, session.kind);
+            let mut detail = visible_session_status_detail(session);
+            if let Some(presentation) = session.agent_presentation.as_ref() {
+                detail.push_str(&format!(" · {}", presentation.primary_label(locale)));
+                if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                    detail.push_str(&format!(" · {provider_label}"));
+                }
+            }
             if let Some(label) = session.label.as_deref() {
                 detail.push_str(&format!(" · {label}"));
             }
             render::SlashPaletteEntry {
                 replacement: format!("/permissions {}", session.session_id),
-                label: format!("/permissions {}", session.session_id),
+                label: visible_session_primary_label(session, locale),
                 meta: "Permissions".to_owned(),
                 detail,
                 immediate: false,
@@ -1697,6 +1981,12 @@ fn slash_palette_entries(
                 return entries;
             }
         }
+        if matches!(parsed.command, SlashCommand::Subagents) {
+            let entries = subagents_palette_entries(shell, parsed.args.as_str());
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
         if matches!(parsed.command, SlashCommand::Approvals) {
             let entries = approvals_palette_entries(shell, parsed.args.as_str());
             if !entries.is_empty() {
@@ -1850,6 +2140,7 @@ fn focus_layer_label(layer: FocusLayer) -> &'static str {
         FocusLayer::Composer => "compose",
         FocusLayer::Transcript => "review",
         FocusLayer::Help => "help",
+        FocusLayer::SessionPicker => "session-picker",
         FocusLayer::StatsOverlay => "stats",
         FocusLayer::ToolInspector => "tool",
         FocusLayer::ClarifyDialog => "question",
@@ -1862,6 +2153,13 @@ fn append_surface_message(shell: &mut state::Shell, title: &str, lines: &[String
     message_lines.push(String::new());
     message_lines.extend(lines.iter().cloned());
     shell.pane.add_surface_lines(message_lines.as_slice());
+    shell.pane.scroll_offset = 0;
+}
+
+fn append_surface_event_message(shell: &mut state::Shell, title: &str, lines: &[String]) {
+    let message =
+        crate::chat::tui::message::Message::surface_event(title.to_owned(), lines.to_vec());
+    shell.pane.messages.push(message);
     shell.pane.scroll_offset = 0;
 }
 
@@ -1922,6 +2220,51 @@ fn show_model_surface(shell: &mut state::Shell, args: &str) {
     }
 }
 
+fn show_rename_surface(shell: &mut state::Shell, args: &str) {
+    match parse_rename_action(args) {
+        Ok(RenameAction::Status) => {
+            let outcome = match execute_shell_app_tool(shell, "session_status", json!({})) {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let message = format!("Unable to inspect the current session label: {error}");
+                    shell.pane.add_system_message(&message);
+                    return;
+                }
+            };
+            let session = outcome
+                .payload
+                .get("session")
+                .cloned()
+                .unwrap_or(Value::Null);
+            let session_id = session
+                .get("session_id")
+                .and_then(Value::as_str)
+                .unwrap_or("(unknown)");
+            let label = session
+                .get("label")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or("(unset)");
+            let lines = vec![
+                format!("- session: {session_id}"),
+                format!("- label: {label}"),
+                "- rename with `/rename <label>`".to_owned(),
+            ];
+            append_surface_message(shell, "session label", lines.as_slice());
+            shell
+                .pane
+                .set_status("Session label added to transcript".to_owned());
+        }
+        Ok(RenameAction::Set(label)) => {
+            let message = format!(
+                "Use `/rename {label}` from the composer submit path to rename the current session."
+            );
+            shell.pane.add_system_message(&message);
+        }
+        Err(error) => shell.pane.add_system_message(&error),
+    }
+}
+
 fn busy_input_mode_lines(shell: &state::Shell) -> Vec<String> {
     let busy_input_mode = shell.pane.busy_input_mode();
     let mode_label = busy_input_mode.label().to_ascii_lowercase();
@@ -1942,7 +2285,7 @@ fn busy_input_mode_lines(shell: &state::Shell) -> Vec<String> {
         .map(|message| trim_message_preview(message.text.as_str()));
 
     let mut lines = vec![
-        format!("- mode: {mode_label}"),
+        format!("- response mode: {mode_label}"),
         format!("- pending submissions: {pending_submission_count}"),
         format!("- queued messages: {queue_depth}"),
         format!("- steer armed: {}", if steer_armed { "yes" } else { "no" }),
@@ -2053,6 +2396,107 @@ fn close_stats_overlay(shell: &mut state::Shell) {
     }
 }
 
+fn open_resume_picker(shell: &mut state::Shell) {
+    let visibility_scope_session_id = session_visibility_scope_session_id(shell)
+        .unwrap_or_else(|_| shell.pane.session_id.clone());
+    let outcome = match execute_shell_app_tool_for_session(
+        shell,
+        visibility_scope_session_id.as_str(),
+        "sessions_list",
+        json!({
+            "limit": session_surface_limit(shell),
+            "include_delegate_lifecycle": true,
+        }),
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let message = format!("Unable to load resume candidates: {error}");
+            shell.pane.add_system_message(&message);
+            return;
+        }
+    };
+
+    let approval_outcome = execute_shell_app_tool_for_session(
+        shell,
+        visibility_scope_session_id.as_str(),
+        "approval_requests_list",
+        json!({ "limit": 8 }),
+    )
+    .ok();
+    let mut sessions = parse_visible_session_suggestions(&outcome);
+    let approvals = approval_outcome
+        .as_ref()
+        .map(parse_approval_request_suggestions)
+        .unwrap_or_default();
+    annotate_session_approval_counts(sessions.as_mut_slice(), approvals.as_slice());
+
+    open_session_picker(shell, state::SessionPickerMode::Resume, sessions);
+}
+
+fn open_subagent_picker(shell: &mut state::Shell) {
+    let visibility_scope_session_id = session_visibility_scope_session_id(shell)
+        .unwrap_or_else(|_| shell.pane.session_id.clone());
+    let outcome = match execute_shell_app_tool_for_session(
+        shell,
+        visibility_scope_session_id.as_str(),
+        "sessions_list",
+        json!({
+            "limit": session_surface_limit(shell),
+            "include_delegate_lifecycle": true,
+        }),
+    ) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let message = format!("Unable to load subagent candidates: {error}");
+            shell.pane.add_system_message(&message);
+            return;
+        }
+    };
+
+    let approval_outcome = execute_shell_app_tool_for_session(
+        shell,
+        visibility_scope_session_id.as_str(),
+        "approval_requests_list",
+        json!({ "limit": 8 }),
+    )
+    .ok();
+    let mut sessions = parse_visible_session_suggestions(&outcome);
+    let approvals = approval_outcome
+        .as_ref()
+        .map(parse_approval_request_suggestions)
+        .unwrap_or_default();
+    annotate_session_approval_counts(sessions.as_mut_slice(), approvals.as_slice());
+    sessions.retain(|session| session.kind == "root" || session.kind == "delegate_child");
+    sessions.sort_by_key(|session| {
+        (
+            usize::from(session.kind != "root"),
+            session.session_id.clone(),
+        )
+    });
+
+    open_session_picker(shell, state::SessionPickerMode::Subagents, sessions);
+}
+
+fn open_session_picker(
+    shell: &mut state::Shell,
+    mode: state::SessionPickerMode,
+    sessions: Vec<state::VisibleSessionSuggestion>,
+) {
+    let picker = state::SessionPickerState::new(mode, sessions);
+    shell.session_picker = Some(picker);
+    if !shell.focus.has(FocusLayer::SessionPicker) {
+        shell.focus.push(FocusLayer::SessionPicker);
+    }
+    shell.pane.set_status(mode.open_status_message().to_owned());
+}
+
+fn close_session_picker(shell: &mut state::Shell) {
+    shell.session_picker = None;
+    if shell.focus.top() == FocusLayer::SessionPicker {
+        shell.focus.pop();
+    }
+}
+
 fn stats_overlay_entry_count(stats_overlay: &state::StatsOverlayState) -> usize {
     let range_view = stats_overlay.snapshot.range_view(stats_overlay.date_range);
     match stats_overlay.active_tab {
@@ -2081,7 +2525,7 @@ fn show_session_surface(shell: &mut state::Shell) {
     let lines = vec![
         format!("- session: {}", shell.pane.session_id),
         format!("- focus: {focus_label}"),
-        format!("- busy input mode: {mode_label}"),
+        format!("- response mode: {mode_label}"),
         format!("- pending submissions: {pending_submission_count}"),
         format!("- messages: {}", shell.pane.messages.len()),
         format!("- transcript lines: {total_lines}"),
@@ -2178,6 +2622,15 @@ fn execute_shell_app_tool(
     tool_name: &str,
     payload: Value,
 ) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
+    execute_shell_app_tool_for_session(shell, shell.pane.session_id.as_str(), tool_name, payload)
+}
+
+fn execute_shell_app_tool_for_session(
+    shell: &state::Shell,
+    session_id: &str,
+    tool_name: &str,
+    payload: Value,
+) -> Result<loongclaw_contracts::ToolCoreOutcome, String> {
     let config = shell.runtime_config.as_ref().ok_or_else(|| {
         "App tool surface is unavailable before the chat runtime is initialized.".to_owned()
     })?;
@@ -2189,10 +2642,30 @@ fn execute_shell_app_tool(
             tool_name: tool_name.to_owned(),
             payload,
         },
-        shell.pane.session_id.as_str(),
+        session_id,
         &memory_config,
         &config.tools,
     )
+}
+
+fn session_repository_for_shell(
+    shell: &state::Shell,
+) -> Result<crate::session::repository::SessionRepository, String> {
+    let config = shell.runtime_config.as_ref().ok_or_else(|| {
+        "Session repository is unavailable before the chat runtime is initialized.".to_owned()
+    })?;
+    let memory_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    crate::session::repository::SessionRepository::new(&memory_config)
+}
+
+fn session_visibility_scope_session_id(shell: &state::Shell) -> Result<String, String> {
+    let repo = session_repository_for_shell(shell)?;
+    let current_session_id = shell.pane.session_id.as_str();
+    let scope_session_id = repo
+        .lineage_root_session_id(current_session_id)?
+        .unwrap_or_else(|| current_session_id.to_owned());
+    Ok(scope_session_id)
 }
 
 fn execute_shell_core_tool(
@@ -2243,6 +2716,36 @@ fn provider_reasoning_effort_options(
         })
 }
 
+fn validated_reasoning_effort_for_provider(
+    provider: &crate::config::ProviderConfig,
+    provider_label: &str,
+    reasoning: ModelReasoningChoice,
+) -> Result<Option<crate::config::ReasoningEffort>, String> {
+    match reasoning {
+        ModelReasoningChoice::Auto => Ok(None),
+        ModelReasoningChoice::Explicit(effort) => {
+            let allowed_efforts = provider_reasoning_effort_options(provider);
+            if allowed_efforts.is_empty() {
+                return Err(format!(
+                    "provider `{provider_label}` does not support reasoning effort overrides"
+                ));
+            }
+            if !allowed_efforts.contains(&effort) {
+                let supported = allowed_efforts
+                    .iter()
+                    .map(|effort| effort.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "provider `{provider_label}` does not support reasoning effort `{}`; choose `auto`, or one of: {supported}",
+                    effort.as_str()
+                ));
+            }
+            Ok(Some(effort))
+        }
+    }
+}
+
 fn persist_model_selection_to_config(
     config_path: &Path,
     selector: &str,
@@ -2254,9 +2757,17 @@ fn persist_model_selection_to_config(
     let selected_profile_id = loaded.switch_active_provider(selector)?;
 
     if let Some(choice) = reasoning {
-        let updated_reasoning_effort = match choice {
-            ModelReasoningChoice::Auto => None,
-            ModelReasoningChoice::Explicit(effort) => Some(effort),
+        let updated_reasoning_effort = {
+            let selected_provider = loaded
+                .providers
+                .get(&selected_profile_id)
+                .map(|profile| &profile.provider)
+                .unwrap_or(&loaded.provider);
+            validated_reasoning_effort_for_provider(
+                selected_provider,
+                selected_profile_id.as_str(),
+                choice,
+            )?
         };
 
         loaded.provider.reasoning_effort = updated_reasoning_effort;
@@ -2307,6 +2818,9 @@ fn parse_visible_session_suggestions(
                             .get("label")
                             .and_then(Value::as_str)
                             .map(ToOwned::to_owned),
+                        agent_presentation: parse_agent_presentation(
+                            session.get("agent_presentation"),
+                        ),
                         state: session
                             .get("state")
                             .and_then(Value::as_str)
@@ -2328,11 +2842,42 @@ fn parse_visible_session_suggestions(
                             .and_then(|value| value.get("state"))
                             .and_then(Value::as_str)
                             == Some("overdue"),
+                        pending_approval_count: 0,
+                        attention_approval_count: 0,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn parse_agent_presentation(value: Option<&Value>) -> Option<DelegateAgentPresentation> {
+    let value = value?.clone();
+    serde_json::from_value(value).ok()
+}
+
+fn annotate_session_approval_counts(
+    sessions: &mut [state::VisibleSessionSuggestion],
+    approvals: &[state::ApprovalRequestSuggestion],
+) {
+    for session in sessions.iter_mut() {
+        session.pending_approval_count = 0;
+        session.attention_approval_count = 0;
+    }
+
+    for approval in approvals {
+        let maybe_session = sessions
+            .iter_mut()
+            .find(|session| session.session_id == approval.session_id);
+        let Some(session) = maybe_session else {
+            continue;
+        };
+
+        session.pending_approval_count = session.pending_approval_count.saturating_add(1);
+        if approval.needs_attention {
+            session.attention_approval_count = session.attention_approval_count.saturating_add(1);
+        }
+    }
 }
 
 fn parse_approval_request_suggestions(
@@ -2432,6 +2977,8 @@ fn parse_model_selection_suggestions(
 }
 
 fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
+    let visibility_scope_session_id = session_visibility_scope_session_id(shell)
+        .unwrap_or_else(|_| shell.pane.session_id.clone());
     let model_selection_suggestions = shell
         .runtime_config
         .as_ref()
@@ -2443,8 +2990,9 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
             .map(|status| !status.trim().is_empty())
     });
 
-    let visible_session_outcome = execute_shell_app_tool(
+    let visible_session_outcome = execute_shell_app_tool_for_session(
         shell,
+        visibility_scope_session_id.as_str(),
         "sessions_list",
         json!({
             "limit": session_surface_limit(shell),
@@ -2455,13 +3003,14 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
     let visible_sessions = visible_session_outcome
         .as_ref()
         .and_then(matched_count_from_outcome);
-    let visible_session_suggestions = visible_session_outcome
+    let mut visible_session_suggestions = visible_session_outcome
         .as_ref()
         .map(parse_visible_session_suggestions)
         .unwrap_or_default();
 
-    let running_tasks = execute_shell_app_tool(
+    let running_tasks = execute_shell_app_tool_for_session(
         shell,
+        visibility_scope_session_id.as_str(),
         "sessions_list",
         json!({
             "limit": 1,
@@ -2473,8 +3022,9 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
     .ok()
     .and_then(|outcome| matched_count_from_outcome(&outcome));
 
-    let overdue_tasks = execute_shell_app_tool(
+    let overdue_tasks = execute_shell_app_tool_for_session(
         shell,
+        visibility_scope_session_id.as_str(),
         "sessions_list",
         json!({
             "limit": 1,
@@ -2486,8 +3036,13 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
     .ok()
     .and_then(|outcome| matched_count_from_outcome(&outcome));
 
-    let approval_outcome =
-        execute_shell_app_tool(shell, "approval_requests_list", json!({ "limit": 8 })).ok();
+    let approval_outcome = execute_shell_app_tool_for_session(
+        shell,
+        visibility_scope_session_id.as_str(),
+        "approval_requests_list",
+        json!({ "limit": 8 }),
+    )
+    .ok();
     let (pending_approvals, attention_approvals) = match approval_outcome.as_ref() {
         Some(outcome) => (
             matched_count_from_outcome(outcome),
@@ -2504,6 +3059,10 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
         .as_ref()
         .map(parse_approval_request_suggestions)
         .unwrap_or_default();
+    annotate_session_approval_counts(
+        visible_session_suggestions.as_mut_slice(),
+        approval_request_suggestions.as_slice(),
+    );
 
     let has_explicit_permission_policy =
         execute_shell_app_tool(shell, "session_tool_policy_status", json!({}))
@@ -2528,6 +3087,230 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
         approval_request_suggestions,
         has_explicit_permission_policy,
     };
+    shell.pane.session_display_label = current_session_display_label(shell);
+}
+
+fn current_session_display_label(shell: &state::Shell) -> Option<String> {
+    let locale = session_presentation_locale();
+    let current_session_id = shell.pane.session_id.as_str();
+    let visible_sessions = &shell
+        .pane
+        .composer_suggestion_context
+        .visible_session_suggestions;
+    let current_session = visible_sessions
+        .iter()
+        .find(|session| session.session_id == current_session_id)?;
+
+    Some(subagent_session_primary_label(current_session, locale))
+}
+
+fn capture_subagent_surface_snapshot(shell: &state::Shell) -> state::SubagentSurfaceSnapshot {
+    let visible_delegate_sessions = shell
+        .pane
+        .composer_suggestion_context
+        .visible_session_suggestions
+        .iter()
+        .filter(|session| session.kind == "delegate_child")
+        .cloned()
+        .collect::<Vec<_>>();
+    let active_delegate_session_ids = visible_delegate_sessions
+        .iter()
+        .filter(|session| matches!(session.state.as_str(), "ready" | "running"))
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+
+    state::SubagentSurfaceSnapshot {
+        active_delegate_session_ids,
+        visible_delegate_sessions,
+    }
+}
+
+fn reset_subagent_surface_tracking(shell: &mut state::Shell) {
+    shell.subagent_surface_snapshot = capture_subagent_surface_snapshot(shell);
+    shell.last_context_poll_at = Instant::now();
+}
+
+fn should_poll_background_context(shell: &state::Shell) -> bool {
+    if shell.runtime_config.is_none() {
+        return false;
+    }
+
+    if shell.session_picker.is_some() {
+        return true;
+    }
+
+    let has_visible_delegate_sessions = shell
+        .pane
+        .composer_suggestion_context
+        .visible_session_suggestions
+        .iter()
+        .any(|session| session.kind == "delegate_child");
+    if has_visible_delegate_sessions {
+        return true;
+    }
+
+    !shell
+        .subagent_surface_snapshot
+        .active_delegate_session_ids
+        .is_empty()
+}
+
+fn maybe_poll_background_context(shell: &mut state::Shell) {
+    if !should_poll_background_context(shell) {
+        return;
+    }
+
+    let elapsed_millis = shell.last_context_poll_at.elapsed().as_millis();
+    if elapsed_millis < 900 {
+        return;
+    }
+
+    refresh_composer_suggestion_context(shell);
+    maybe_emit_subagent_lifecycle_surface(shell);
+    shell.last_context_poll_at = Instant::now();
+    shell.dirty = true;
+}
+
+fn maybe_emit_subagent_lifecycle_surface(shell: &mut state::Shell) {
+    let previous_snapshot = shell.subagent_surface_snapshot.clone();
+    let current_snapshot = capture_subagent_surface_snapshot(shell);
+
+    let previous_active_ids = previous_snapshot.active_delegate_session_ids.as_slice();
+    let current_active_ids = current_snapshot.active_delegate_session_ids.as_slice();
+    if previous_active_ids == current_active_ids {
+        shell.subagent_surface_snapshot = current_snapshot;
+        return;
+    }
+
+    let previous_had_active = !previous_active_ids.is_empty();
+    let current_has_active = !current_active_ids.is_empty();
+
+    if !previous_had_active && current_has_active {
+        let waiting_lines =
+            build_waiting_subagent_lines(current_snapshot.visible_delegate_sessions.as_slice());
+        if !waiting_lines.is_empty() {
+            let waiting_title = if current_active_ids.len() == 1 {
+                "Waiting for 1 subagent".to_owned()
+            } else {
+                format!("Waiting for {} subagents", current_active_ids.len())
+            };
+            append_surface_event_message(shell, waiting_title.as_str(), waiting_lines.as_slice());
+        }
+    } else if previous_had_active && !current_has_active {
+        let finished_lines = build_finished_subagent_lines(
+            shell,
+            previous_snapshot.active_delegate_session_ids.as_slice(),
+        );
+        if !finished_lines.is_empty() {
+            let finished_title = if previous_active_ids.len() == 1 {
+                "Finished waiting on 1 subagent".to_owned()
+            } else {
+                format!(
+                    "Finished waiting on {} subagents",
+                    previous_active_ids.len()
+                )
+            };
+            append_surface_event_message(shell, finished_title.as_str(), finished_lines.as_slice());
+        }
+    }
+
+    shell.subagent_surface_snapshot = current_snapshot;
+}
+
+fn build_waiting_subagent_lines(sessions: &[state::VisibleSessionSuggestion]) -> Vec<String> {
+    let locale = session_presentation_locale();
+    sessions
+        .iter()
+        .filter(|session| matches!(session.state.as_str(), "ready" | "running"))
+        .map(|session| {
+            let mut parts = vec![subagent_session_primary_label(session, locale)];
+            if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                parts.push(provider_label);
+            }
+            format!("  └ {}", parts.join(" · "))
+        })
+        .collect()
+}
+
+fn build_finished_subagent_lines(shell: &state::Shell, session_ids: &[String]) -> Vec<String> {
+    let locale = session_presentation_locale();
+    let visible_sessions = &shell
+        .pane
+        .composer_suggestion_context
+        .visible_session_suggestions;
+
+    session_ids
+        .iter()
+        .filter_map(|session_id| {
+            let maybe_session = visible_sessions
+                .iter()
+                .find(|session| session.session_id == *session_id);
+            let session = maybe_session?;
+            let label = subagent_session_primary_label(session, locale);
+            let status = terminal_subagent_status_label(session.state.as_str());
+            let summary = load_delegate_terminal_summary(shell, session_id.as_str());
+            let mut parts = vec![label];
+            if let Some(provider_label) = visible_session_provider_label(session, locale) {
+                parts.push(provider_label);
+            }
+            parts.push(status.to_owned());
+            if let Some(summary) = summary {
+                parts.push(summary);
+            }
+            let line = format!("  └ {}", parts.join(" · "));
+            Some(line)
+        })
+        .collect()
+}
+
+fn terminal_subagent_status_label(state: &str) -> &'static str {
+    match state {
+        "completed" => "Completed",
+        "failed" => "Failed",
+        "timed_out" => "Timed out",
+        "running" => "Running",
+        "ready" => "Queued",
+        _ => "Updated",
+    }
+}
+
+fn load_delegate_terminal_summary(shell: &state::Shell, session_id: &str) -> Option<String> {
+    let config = shell.runtime_config.as_ref()?;
+    let memory_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = session_repository_for_shell(shell).ok()?;
+    let session_summary = repo
+        .load_session_summary_with_legacy_fallback(session_id)
+        .ok()
+        .flatten()?;
+    let turn_count = session_summary.turn_count;
+    if turn_count == 0 {
+        return session_summary
+            .last_error
+            .as_deref()
+            .map(trim_message_preview);
+    }
+
+    let window_limit = turn_count.min(12);
+    let turns = crate::memory::window_direct(session_id, window_limit, &memory_config).ok()?;
+    for turn in turns.iter().rev() {
+        if turn.role != "assistant" {
+            continue;
+        }
+        if parse_conversation_event(turn.content.as_str()).is_some() {
+            continue;
+        }
+        let trimmed = turn.content.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        return Some(trim_message_preview(trimmed));
+    }
+
+    session_summary
+        .last_error
+        .as_deref()
+        .map(trim_message_preview)
 }
 
 fn session_surface_limit(shell: &state::Shell) -> usize {
@@ -2600,6 +3383,7 @@ fn json_preview(value: Option<&Value>, max_chars: usize) -> String {
 }
 
 fn push_session_summary_lines(lines: &mut Vec<String>, session: &Value, current_session_id: &str) {
+    let locale = session_presentation_locale();
     let session_id = session
         .get("session_id")
         .and_then(Value::as_str)
@@ -2641,6 +3425,10 @@ fn push_session_summary_lines(lines: &mut Vec<String>, session: &Value, current_
 
     lines.push(summary);
 
+    if let Some(agent_line) = session_agent_summary_line(session, locale) {
+        lines.push(format!("  agent: {agent_line}"));
+    }
+
     if let Some(label) = session
         .get("label")
         .and_then(Value::as_str)
@@ -2664,6 +3452,7 @@ fn push_session_summary_lines(lines: &mut Vec<String>, session: &Value, current_
 
 fn session_inspection_lines(payload: &Value) -> Vec<String> {
     let mut lines = Vec::new();
+    let locale = session_presentation_locale();
     let session = payload.get("session").cloned().unwrap_or(Value::Null);
     let session_id = session
         .get("session_id")
@@ -2696,6 +3485,13 @@ fn session_inspection_lines(payload: &Value) -> Vec<String> {
         .filter(|value| !value.trim().is_empty())
     {
         lines.push(format!("- label: {label}"));
+    }
+
+    if let Some(agent_line) = payload
+        .get("agent_presentation")
+        .and_then(|value| agent_presentation_summary_line(value, locale))
+    {
+        lines.push(format!("- agent: {agent_line}"));
     }
 
     if let Some(updated_at) = session.get("updated_at").and_then(Value::as_i64) {
@@ -2770,6 +3566,26 @@ fn session_inspection_lines(payload: &Value) -> Vec<String> {
     lines
 }
 
+fn session_agent_summary_line(
+    session: &Value,
+    locale: SessionPresentationLocale,
+) -> Option<String> {
+    let presentation = session.get("agent_presentation")?;
+    agent_presentation_summary_line(presentation, locale)
+}
+
+fn agent_presentation_summary_line(
+    value: &Value,
+    locale: SessionPresentationLocale,
+) -> Option<String> {
+    let presentation = parse_agent_presentation(Some(value))?;
+    let mut parts = vec![presentation.primary_label(locale)];
+    if let Some(provider_label) = presentation.provider_label(locale) {
+        parts.push(provider_label);
+    }
+    Some(parts.join(" · "))
+}
+
 fn session_history_messages(payload: &Value) -> Vec<Message> {
     payload
         .get("turns")
@@ -2806,6 +3622,7 @@ fn activate_resumed_session(
 ) {
     shell.runtime_config = Some(runtime.config.clone());
     shell.runtime_config_path = Some(runtime.resolved_path.clone());
+    shell.session_picker = None;
     shell.pane.session_id = runtime.session_id.clone();
     shell.pane.model = runtime.model_label.clone();
     shell.pane.context_length = state::context_length_for_model(&runtime.model_label);
@@ -2827,6 +3644,7 @@ fn activate_resumed_session(
     shell.pane.add_system_message(system_message);
     shell.pane.scroll_offset = 0;
     refresh_composer_suggestion_context(shell);
+    reset_subagent_surface_tracking(shell);
 }
 
 fn approval_request_lines(request: &Value) -> Vec<String> {
@@ -2921,61 +3739,14 @@ fn approval_request_lines(request: &Value) -> Vec<String> {
 fn show_resume_surface(shell: &mut state::Shell, args: &str) {
     match parse_resume_action(args) {
         ResumeAction::List => {
-            let outcome = match execute_shell_app_tool(
-                shell,
-                "sessions_list",
-                json!({
-                    "limit": session_surface_limit(shell),
-                    "include_delegate_lifecycle": true,
-                }),
-            ) {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    shell
-                        .pane
-                        .add_system_message(&format!("Unable to list resume candidates: {error}"));
-                    return;
-                }
-            };
-
-            let matched_count = outcome
-                .payload
-                .get("matched_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let returned_count = outcome
-                .payload
-                .get("returned_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let mut lines = vec![
-                format!("- current session: {}", shell.pane.session_id),
-                format!("- visible sessions: {returned_count}/{matched_count}"),
-            ];
-            let sessions = outcome
-                .payload
-                .get("sessions")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            if sessions.is_empty() {
-                lines.push("- no visible sessions".to_owned());
-            } else {
-                for session in &sessions {
-                    push_session_summary_lines(&mut lines, session, shell.pane.session_id.as_str());
-                }
-                lines.push("- inspect with `/resume inspect <session-id>`".to_owned());
-                lines.push("- switch with `/resume <session-id>`".to_owned());
-            }
-
-            append_surface_message(shell, "resume candidates", lines.as_slice());
-            shell
-                .pane
-                .set_status("Resume candidates added to transcript".to_owned());
+            open_resume_picker(shell);
         }
         ResumeAction::Inspect(target_session_id) => {
-            let outcome = match execute_shell_app_tool(
+            let visibility_scope_session_id = session_visibility_scope_session_id(shell)
+                .unwrap_or_else(|_| shell.pane.session_id.clone());
+            let outcome = match execute_shell_app_tool_for_session(
                 shell,
+                visibility_scope_session_id.as_str(),
                 "session_status",
                 json!({ "session_id": target_session_id }),
             ) {
@@ -2997,6 +3768,19 @@ fn show_resume_surface(shell: &mut state::Shell, args: &str) {
         ResumeAction::Switch(target_session_id) => {
             shell.pane.add_system_message(&format!(
                 "Use `/resume {target_session_id}` from the composer submit path to switch sessions."
+            ));
+        }
+    }
+}
+
+fn show_subagents_surface(shell: &mut state::Shell, args: &str) {
+    match parse_subagent_action(args) {
+        SubagentAction::List => {
+            open_subagent_picker(shell);
+        }
+        SubagentAction::Switch(target_session_id) => {
+            shell.pane.add_system_message(&format!(
+                "Use `/subagents {target_session_id}` from the composer submit path to switch threads."
             ));
         }
     }
@@ -3243,6 +4027,35 @@ fn switch_resumed_session(
     shell: &mut state::Shell,
     target_session_id: &str,
 ) -> Result<(), String> {
+    let visibility_scope_session_id = session_visibility_scope_session_id(shell)?;
+    switch_session_with_scope(
+        owned_runtime,
+        shell,
+        target_session_id,
+        Some(visibility_scope_session_id.as_str()),
+    )
+}
+
+fn switch_subagent_session(
+    owned_runtime: &mut Option<std::sync::Arc<super::runtime::TuiRuntime>>,
+    shell: &mut state::Shell,
+    target_session_id: &str,
+) -> Result<(), String> {
+    let visibility_scope_session_id = session_visibility_scope_session_id(shell)?;
+    switch_session_with_scope(
+        owned_runtime,
+        shell,
+        target_session_id,
+        Some(visibility_scope_session_id.as_str()),
+    )
+}
+
+fn switch_session_with_scope(
+    owned_runtime: &mut Option<std::sync::Arc<super::runtime::TuiRuntime>>,
+    shell: &mut state::Shell,
+    target_session_id: &str,
+    visibility_scope_session_id: Option<&str>,
+) -> Result<(), String> {
     let current_runtime = resolve_active_runtime(owned_runtime.as_ref())
         .ok_or_else(|| "active TUI runtime is unavailable".to_owned())?;
     let target_session_id = target_session_id.trim();
@@ -3256,13 +4069,16 @@ fn switch_resumed_session(
         return Ok(());
     }
 
-    let status_outcome = execute_shell_app_tool(
+    let scoped_session_id = visibility_scope_session_id.unwrap_or(shell.pane.session_id.as_str());
+    let status_outcome = execute_shell_app_tool_for_session(
         shell,
+        scoped_session_id,
         "session_status",
         json!({ "session_id": target_session_id }),
     )?;
-    let history_outcome = execute_shell_app_tool(
+    let history_outcome = execute_shell_app_tool_for_session(
         shell,
+        scoped_session_id,
         "sessions_history",
         json!({
             "session_id": target_session_id,
@@ -3292,6 +4108,85 @@ fn switch_resumed_session(
     shell
         .pane
         .set_status(format!("Switched to session `{target_session_id}`"));
+    *owned_runtime = Some(next_runtime);
+    Ok(())
+}
+
+fn trimmed_optional_session_label(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_owned())
+}
+
+fn next_root_session_id() -> String {
+    static ROOT_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let elapsed_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let timestamp_millis = elapsed_since_epoch.as_millis();
+    let sequence = ROOT_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+
+    format!("root-{timestamp_millis:x}-{sequence:x}")
+}
+
+fn create_new_root_session_record(
+    repo: &crate::session::repository::SessionRepository,
+    label: Option<&str>,
+) -> Result<String, String> {
+    let label = label.map(str::to_owned);
+
+    for _attempt in 0..4 {
+        let session_id = next_root_session_id();
+        let record = crate::session::repository::NewSessionRecord {
+            session_id: session_id.clone(),
+            kind: crate::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: label.clone(),
+            state: crate::session::repository::SessionState::Ready,
+        };
+        let create_result = repo.create_session(record);
+
+        match create_result {
+            Ok(_) => return Ok(session_id),
+            Err(error) if error.contains("UNIQUE constraint failed") => continue,
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err("failed to allocate a unique root session id".to_owned())
+}
+
+fn start_new_session(
+    owned_runtime: &mut Option<std::sync::Arc<super::runtime::TuiRuntime>>,
+    shell: &mut state::Shell,
+    label: &str,
+) -> Result<(), String> {
+    let current_runtime = resolve_active_runtime(owned_runtime.as_ref())
+        .ok_or_else(|| "active TUI runtime is unavailable".to_owned())?;
+    let config = shell
+        .runtime_config
+        .as_ref()
+        .ok_or_else(|| "session creation requires an initialized runtime config".to_owned())?;
+    let memory_config =
+        crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let repo = crate::session::repository::SessionRepository::new(&memory_config)?;
+    let label = trimmed_optional_session_label(label);
+    let session_id = create_new_root_session_record(&repo, label.as_deref())?;
+    let next_runtime = std::sync::Arc::new(current_runtime.switched_session(session_id.as_str()));
+    let label_suffix = label
+        .as_deref()
+        .map(|value| format!(" · {value}"))
+        .unwrap_or_default();
+    let system_message = format!("Started new session `{session_id}`{label_suffix}.");
+    let transcript = Vec::new();
+
+    activate_resumed_session(shell, next_runtime.as_ref(), transcript, &system_message);
+    shell
+        .pane
+        .set_status(format!("Started new session `{session_id}`"));
     *owned_runtime = Some(next_runtime);
     Ok(())
 }
@@ -3660,14 +4555,23 @@ fn latest_copyable_output(shell: &state::Shell) -> Option<String> {
                         lines.extend(text.lines().map(ToOwned::to_owned));
                     }
                     super::message::MessagePart::ThinkBlock(_)
-                    | super::message::MessagePart::ToolCall { .. } => {}
+                    | super::message::MessagePart::ToolCall { .. }
+                    | super::message::MessagePart::SurfaceEvent { .. } => {}
                 }
             }
         }
         super::message::Role::System | super::message::Role::Surface => {
             for part in &message.parts {
-                if let super::message::MessagePart::Text(text) = part {
-                    lines.extend(text.lines().map(ToOwned::to_owned));
+                match part {
+                    super::message::MessagePart::Text(text) => {
+                        lines.extend(text.lines().map(ToOwned::to_owned));
+                    }
+                    super::message::MessagePart::SurfaceEvent { title, lines: body } => {
+                        lines.push(title.clone());
+                        lines.extend(body.iter().cloned());
+                    }
+                    super::message::MessagePart::ThinkBlock(_)
+                    | super::message::MessagePart::ToolCall { .. } => {}
                 }
             }
         }
@@ -4164,6 +5068,133 @@ fn apply_terminal_event(
             }
             return;
         }
+        FocusLayer::SessionPicker => {
+            enum SessionPickerAction {
+                Close,
+                Submit(String),
+                UpdateQuery(String),
+                MoveUp,
+                MoveDown,
+                None,
+            }
+
+            let action = {
+                let session_picker = match shell.session_picker.as_mut() {
+                    Some(session_picker) => session_picker,
+                    None => return,
+                };
+                match key.code {
+                    KeyCode::Esc | KeyCode::Char('q') => SessionPickerAction::Close,
+                    KeyCode::Enter => {
+                        let filtered_indices = session_picker.filtered_indices();
+                        let selected_index = session_picker.selected_index;
+                        let selected_session_id = filtered_indices
+                            .get(selected_index)
+                            .and_then(|session_index| session_picker.sessions.get(*session_index))
+                            .map(|session| session.session_id.clone());
+                        match selected_session_id {
+                            Some(session_id) => SessionPickerAction::Submit(session_id),
+                            None => SessionPickerAction::None,
+                        }
+                    }
+                    KeyCode::Up => SessionPickerAction::MoveUp,
+                    KeyCode::Down => SessionPickerAction::MoveDown,
+                    KeyCode::Backspace => {
+                        let mut query = session_picker.query.clone();
+                        query.pop();
+                        SessionPickerAction::UpdateQuery(query)
+                    }
+                    KeyCode::Char(ch) if !key.modifiers.intersects(KeyModifiers::CONTROL) => {
+                        let mut query = session_picker.query.clone();
+                        query.push(ch);
+                        SessionPickerAction::UpdateQuery(query)
+                    }
+                    KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Home
+                    | KeyCode::End
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Tab
+                    | KeyCode::BackTab
+                    | KeyCode::Delete
+                    | KeyCode::Insert
+                    | KeyCode::F(_)
+                    | KeyCode::Char(_)
+                    | KeyCode::Null
+                    | KeyCode::CapsLock
+                    | KeyCode::ScrollLock
+                    | KeyCode::NumLock
+                    | KeyCode::PrintScreen
+                    | KeyCode::Pause
+                    | KeyCode::Menu
+                    | KeyCode::KeypadBegin
+                    | KeyCode::Media(_)
+                    | KeyCode::Modifier(_) => SessionPickerAction::None,
+                }
+            };
+
+            match action {
+                SessionPickerAction::Close => {
+                    close_session_picker(shell);
+                }
+                SessionPickerAction::Submit(session_id) => {
+                    if shell.pane.agent_running {
+                        shell.pane.add_system_message(
+                            "Cannot switch threads while a response is already in progress.",
+                        );
+                    } else {
+                        let submit_command = shell
+                            .session_picker
+                            .as_ref()
+                            .map(|picker| picker.mode.submit_command(session_id.as_str()))
+                            .unwrap_or_else(|| format!("/resume {session_id}"));
+                        let status = shell
+                            .session_picker
+                            .as_ref()
+                            .map(|picker| picker.mode.switching_status_message().to_owned())
+                            .unwrap_or_else(|| "Switching sessions...".to_owned());
+                        close_session_picker(shell);
+                        *submit_text = Some(submit_command);
+                        shell.pane.set_status(status);
+                    }
+                }
+                SessionPickerAction::UpdateQuery(query) => {
+                    if let Some(session_picker) = shell.session_picker.as_mut() {
+                        session_picker.query = query;
+                        session_picker.selected_index = 0;
+                        session_picker.list_scroll_offset = 0;
+                        session_picker.clamp_selection(session_picker_visible_rows());
+                    }
+                }
+                SessionPickerAction::MoveUp => {
+                    if let Some(session_picker) = shell.session_picker.as_mut() {
+                        let filtered_count = session_picker.filtered_indices().len();
+                        if filtered_count > 0 {
+                            if session_picker.selected_index == 0 {
+                                session_picker.selected_index = filtered_count.saturating_sub(1);
+                            } else {
+                                session_picker.selected_index =
+                                    session_picker.selected_index.saturating_sub(1);
+                            }
+                            session_picker.clamp_selection(session_picker_visible_rows());
+                        }
+                    }
+                }
+                SessionPickerAction::MoveDown => {
+                    if let Some(session_picker) = shell.session_picker.as_mut() {
+                        let filtered_count = session_picker.filtered_indices().len();
+                        if filtered_count > 0 {
+                            let next_index = session_picker.selected_index.saturating_add(1);
+                            session_picker.selected_index = next_index % filtered_count;
+                            session_picker.clamp_selection(session_picker_visible_rows());
+                        }
+                    }
+                }
+                SessionPickerAction::None => {}
+            }
+            return;
+        }
         FocusLayer::StatsOverlay => {
             if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
                 close_stats_overlay(shell);
@@ -4422,7 +5453,18 @@ fn apply_terminal_event(
     #[allow(clippy::wildcard_enum_match_arm)]
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            shell.running = false;
+            if shell.pane.agent_running {
+                shell.interrupt_requested = true;
+                shell.pane.set_status("Interrupting response...".to_owned());
+            } else if shell.pane.has_pending_submissions() {
+                let pending_submission_count = shell.pane.pending_submission_count();
+                shell.pane.clear_pending_submissions();
+                shell.pane.set_status(format!(
+                    "Cleared {pending_submission_count} pending submission(s)"
+                ));
+            } else {
+                shell.running = false;
+            }
             return;
         }
         KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4490,8 +5532,14 @@ fn apply_terminal_event(
             textarea.delete_str(usize::MAX);
             if is_async_slash_request(&request) || is_runtime_slash_request(&request) {
                 if shell.pane.agent_running {
-                    let message = if matches!(request.command, SlashCommand::Resume) {
+                    let message = if matches!(request.command, SlashCommand::New) {
+                        "Cannot start a new session while a response is already in progress."
+                    } else if matches!(request.command, SlashCommand::Rename) {
+                        "Cannot rename the current session while a response is already in progress."
+                    } else if matches!(request.command, SlashCommand::Resume) {
                         "Cannot switch sessions while a response is already in progress."
+                    } else if matches!(request.command, SlashCommand::Subagents) {
+                        "Cannot switch subagent threads while a response is already in progress."
                     } else if matches!(request.command, SlashCommand::Model) {
                         "Cannot switch models while a response is already in progress."
                     } else {
@@ -4500,8 +5548,14 @@ fn apply_terminal_event(
                     shell.pane.add_system_message(message);
                 } else {
                     *submit_text = Some(trimmed.to_owned());
-                    let status = if matches!(request.command, SlashCommand::Resume) {
+                    let status = if matches!(request.command, SlashCommand::New) {
+                        "Starting new session..."
+                    } else if matches!(request.command, SlashCommand::Rename) {
+                        "Renaming session..."
+                    } else if matches!(request.command, SlashCommand::Resume) {
                         "Switching sessions..."
+                    } else if matches!(request.command, SlashCommand::Subagents) {
+                        "Switching subagent thread..."
                     } else if matches!(request.command, SlashCommand::Model) {
                         "Switching model..."
                     } else if matches!(request.command, SlashCommand::Approvals) {
@@ -4593,6 +5647,10 @@ fn apply_mouse_event(
             | MouseEventKind::ScrollLeft
             | MouseEventKind::ScrollRight => {}
         }
+        return;
+    }
+
+    if shell.focus.top() == FocusLayer::SessionPicker {
         return;
     }
 
@@ -4726,8 +5784,19 @@ fn handle_slash_command(shell: &mut state::Shell, request: ParsedSlashCommand) {
                 "Context compaction runs asynchronously. Submit `/compact` from the composer.",
             );
         }
+        SlashCommand::New => {
+            shell.pane.add_system_message(
+                "Use `/new` from the composer submit path to start a fresh session.",
+            );
+        }
+        SlashCommand::Rename => {
+            show_rename_surface(shell, request.args.as_str());
+        }
         SlashCommand::Resume => {
             show_resume_surface(shell, request.args.as_str());
+        }
+        SlashCommand::Subagents => {
+            show_subagents_surface(shell, request.args.as_str());
         }
         SlashCommand::Tasks => {
             show_tasks_surface(shell, request.args.as_str());
@@ -4883,6 +5952,7 @@ fn activate_chat_surface(
         .pane
         .add_system_message("Welcome to LoongClaw TUI. Type a message and press Enter.");
     refresh_composer_suggestion_context(shell);
+    reset_subagent_surface_tracking(shell);
 }
 
 fn handle_boot_key_event(
@@ -5076,7 +6146,63 @@ fn process_submitted_chat_text(
 
     if let Some(request) = commands::parse(text) {
         if is_runtime_slash_request(&request) {
-            if matches!(request.command, SlashCommand::Resume) {
+            if matches!(request.command, SlashCommand::New) {
+                match start_new_session(owned_runtime, shell, request.args.as_str()) {
+                    Ok(()) => {
+                        *turn_active = false;
+                        *turn_future = Box::pin(std::future::pending());
+                    }
+                    Err(error) => {
+                        shell
+                            .pane
+                            .add_system_message(&format!("Unable to start a new session: {error}"));
+                    }
+                }
+            } else if matches!(request.command, SlashCommand::Rename) {
+                match parse_rename_action(request.args.as_str()) {
+                    Ok(RenameAction::Set(label)) => {
+                        let payload = json!({ "label": label });
+                        let outcome = execute_shell_app_tool(shell, "session_rename", payload);
+                        match outcome {
+                            Ok(outcome) => {
+                                if let Some(inspection) = outcome.payload.get("inspection") {
+                                    let session =
+                                        inspection.get("session").cloned().unwrap_or(Value::Null);
+                                    let session_id = session
+                                        .get("session_id")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or("(unknown)");
+                                    let label = session
+                                        .get("label")
+                                        .and_then(Value::as_str)
+                                        .filter(|value| !value.trim().is_empty())
+                                        .unwrap_or("(unset)");
+                                    let lines = vec![
+                                        format!("- session: {session_id}"),
+                                        format!("- label: {label}"),
+                                    ];
+                                    append_surface_message(
+                                        shell,
+                                        "session label",
+                                        lines.as_slice(),
+                                    );
+                                }
+                                refresh_composer_suggestion_context(shell);
+                                shell.pane.set_status("Renamed current session".to_owned());
+                                *turn_active = false;
+                                *turn_future = Box::pin(std::future::pending());
+                            }
+                            Err(error) => {
+                                let message =
+                                    format!("Unable to rename the current session: {error}");
+                                shell.pane.add_system_message(&message);
+                            }
+                        }
+                    }
+                    Ok(RenameAction::Status) => {}
+                    Err(error) => shell.pane.add_system_message(&error),
+                }
+            } else if matches!(request.command, SlashCommand::Resume) {
                 if let ResumeAction::Switch(target_session_id) =
                     parse_resume_action(request.args.as_str())
                 {
@@ -5088,6 +6214,23 @@ fn process_submitted_chat_text(
                         Err(error) => {
                             shell.pane.add_system_message(&format!(
                                 "Unable to resume session `{target_session_id}`: {error}"
+                            ));
+                        }
+                    }
+                }
+            } else if matches!(request.command, SlashCommand::Subagents) {
+                if let SubagentAction::Switch(target_session_id) =
+                    parse_subagent_action(request.args.as_str())
+                {
+                    match switch_subagent_session(owned_runtime, shell, target_session_id.as_str())
+                    {
+                        Ok(()) => {
+                            *turn_active = false;
+                            *turn_future = Box::pin(std::future::pending());
+                        }
+                        Err(error) => {
+                            shell.pane.add_system_message(&format!(
+                                "Unable to switch subagent thread `{target_session_id}`: {error}"
                             ));
                         }
                     }
@@ -5173,6 +6316,36 @@ fn submit_pending_message(shell: &mut state::Shell, submit_text: &mut Option<Str
     shell.pane.scroll_offset = 0;
     shell.pane.set_status(status);
     *submit_text = Some(pending_text);
+}
+
+fn apply_interrupt_request(
+    shell: &mut state::Shell,
+    turn_future: &mut Pin<Box<dyn std::future::Future<Output = ()> + '_>>,
+    turn_active: &mut bool,
+) {
+    if !shell.interrupt_requested {
+        return;
+    }
+    shell.interrupt_requested = false;
+
+    if !*turn_active {
+        return;
+    }
+
+    *turn_active = false;
+    *turn_future = Box::pin(std::future::pending());
+    shell.pane.agent_running = false;
+    shell
+        .pane
+        .add_system_message("Interrupted the in-flight turn.");
+
+    let pending_submission_count = shell.pane.pending_submission_count();
+    let status = if pending_submission_count > 0 {
+        format!("Response interrupted; {pending_submission_count} pending submission(s) kept")
+    } else {
+        "Response interrupted".to_owned()
+    };
+    shell.pane.set_status(status);
 }
 
 fn interrupt_for_steer_boundary(
@@ -5324,6 +6497,7 @@ async fn run_inner(
                         );
                     }
                     shell.dirty = true;
+                    apply_interrupt_request(&mut shell, &mut turn_future, &mut turn_active);
 
                     if submit_text_drain.is_some() {
                         submit_text = submit_text_drain;
@@ -5427,6 +6601,7 @@ async fn run_inner(
                         );
                     }
                     shell.dirty = true;
+                    apply_interrupt_request(&mut shell, &mut turn_future, &mut turn_active);
                 }
             }
 
@@ -5442,6 +6617,7 @@ async fn run_inner(
                 if shell.pane.needs_periodic_redraw() {
                     shell.dirty = true;
                 }
+                maybe_poll_background_context(&mut shell);
             }
         }
 
@@ -5482,6 +6658,8 @@ mod tests {
     use super::*;
     use crate::chat::tui::message::{MessagePart, Role};
     use crate::chat::tui::runtime;
+    #[cfg(feature = "memory-sqlite")]
+    use crate::memory::append_turn_direct;
 
     use crossterm::event::{KeyEventKind, KeyEventState};
     use std::fs;
@@ -5591,6 +6769,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.clone()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.clone()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or_default()
@@ -5633,6 +6812,7 @@ mod tests {
             session_rows: vec![stats::StatsSessionRow {
                 session_id: "sess-root".to_owned(),
                 label: Some("Root".to_owned()),
+                agent_presentation: None,
                 kind: "root".to_owned(),
                 state: "ready".to_owned(),
                 turn_count: 2,
@@ -6108,6 +7288,62 @@ mod tests {
     }
 
     #[test]
+    fn enter_with_new_submits_runtime_switch_request() {
+        let mut shell = state::Shell::new("sess-new");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let enter_event = Event::Key(plain_key(KeyCode::Enter));
+
+        textarea.insert_str("/new fresh start");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            enter_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        let status = shell
+            .pane
+            .status_message
+            .as_ref()
+            .map(|(message, _)| message.as_str());
+
+        assert_eq!(submit_text.as_deref(), Some("/new fresh start"));
+        assert_eq!(status, Some("Starting new session..."));
+    }
+
+    #[test]
+    fn enter_with_rename_submits_runtime_update_request() {
+        let mut shell = state::Shell::new("sess-rename");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+        let enter_event = Event::Key(plain_key(KeyCode::Enter));
+
+        textarea.insert_str("/rename Session Prime");
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            enter_event,
+            &tx,
+            &mut submit_text,
+        );
+
+        let status = shell
+            .pane
+            .status_message
+            .as_ref()
+            .map(|(message, _)| message.as_str());
+
+        assert_eq!(submit_text.as_deref(), Some("/rename Session Prime"));
+        assert_eq!(status, Some("Renaming session..."));
+    }
+
+    #[test]
     fn enter_with_resume_submits_runtime_switch_request() {
         let mut shell = state::Shell::new("sess-resume");
         let mut textarea = tui_textarea::TextArea::default();
@@ -6136,6 +7372,155 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn new_command_creates_root_session_switches_runtime_and_persists_label() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config = shell_runtime_config_for_test(temp_dir.path());
+        let root_session_id = scoped_test_id(temp_dir.path(), "ops-root");
+        let runtime = runtime::TuiRuntime {
+            resolved_path: temp_dir.path().join("loongclaw.toml"),
+            config: config.clone(),
+            session_id: root_session_id.clone(),
+            session_address: crate::conversation::ConversationSessionAddress::from_session_id(
+                root_session_id.clone(),
+            ),
+            turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+            kernel_ctx: crate::context::bootstrap_kernel_context_with_config(
+                "tui-new-session-test",
+                crate::context::DEFAULT_TOKEN_TTL_S,
+                &config,
+            )
+            .expect("bootstrap kernel context"),
+            model_label: config
+                .provider
+                .resolved_model()
+                .unwrap_or_else(|| "auto".to_owned()),
+        };
+        let mut shell = state::Shell::new(root_session_id.as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        shell.pane.add_user_message("old history");
+        let mut owned_runtime = Some(std::sync::Arc::new(runtime));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut turn_future: Pin<Box<dyn std::future::Future<Output = ()>>> =
+            Box::pin(std::future::pending());
+        let mut turn_active = false;
+
+        process_submitted_chat_text(
+            &mut owned_runtime,
+            &mut shell,
+            "/new Session Alpha",
+            &tx,
+            &mut turn_future,
+            &mut turn_active,
+        )
+        .expect("process new command");
+
+        let new_session_id = shell.pane.session_id.clone();
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let repo = crate::session::repository::SessionRepository::new(&memory_config)
+            .expect("session repo");
+        let stored_session = repo
+            .load_session(new_session_id.as_str())
+            .expect("load session")
+            .expect("created session");
+
+        assert_ne!(new_session_id, root_session_id);
+        assert_eq!(
+            stored_session.kind,
+            crate::session::repository::SessionKind::Root
+        );
+        assert_eq!(stored_session.parent_session_id, None);
+        assert_eq!(stored_session.label.as_deref(), Some("Session Alpha"));
+        assert_eq!(
+            owned_runtime
+                .as_ref()
+                .map(|runtime| runtime.session_id.as_str()),
+            Some(new_session_id.as_str())
+        );
+        assert!(
+            latest_message_text(&shell).contains("Started new session"),
+            "new command should reset transcript and append a system note"
+        );
+        assert_eq!(shell.pane.messages.len(), 1);
+        assert!(!turn_active);
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn rename_command_updates_current_session_label() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config = shell_runtime_config_for_test(temp_dir.path());
+        let root_session_id = scoped_test_id(temp_dir.path(), "ops-root");
+        let runtime = runtime::TuiRuntime {
+            resolved_path: temp_dir.path().join("loongclaw.toml"),
+            config: config.clone(),
+            session_id: root_session_id.clone(),
+            session_address: crate::conversation::ConversationSessionAddress::from_session_id(
+                root_session_id.clone(),
+            ),
+            turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+            kernel_ctx: crate::context::bootstrap_kernel_context_with_config(
+                "tui-rename-session-test",
+                crate::context::DEFAULT_TOKEN_TTL_S,
+                &config,
+            )
+            .expect("bootstrap kernel context"),
+            model_label: config
+                .provider
+                .resolved_model()
+                .unwrap_or_else(|| "auto".to_owned()),
+        };
+        let mut shell = state::Shell::new(root_session_id.as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let repo = crate::session::repository::SessionRepository::new(&memory_config)
+            .expect("session repo");
+        repo.ensure_session(crate::session::repository::NewSessionRecord {
+            session_id: root_session_id.clone(),
+            kind: crate::session::repository::SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Before".to_owned()),
+            state: crate::session::repository::SessionState::Ready,
+        })
+        .expect("seed root session");
+        let mut owned_runtime = Some(std::sync::Arc::new(runtime));
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut turn_future: Pin<Box<dyn std::future::Future<Output = ()>>> =
+            Box::pin(std::future::pending());
+        let mut turn_active = false;
+
+        process_submitted_chat_text(
+            &mut owned_runtime,
+            &mut shell,
+            "/rename Session Prime",
+            &tx,
+            &mut turn_future,
+            &mut turn_active,
+        )
+        .expect("process rename command");
+
+        let stored_session = repo
+            .load_session(root_session_id.as_str())
+            .expect("load session")
+            .expect("session exists");
+
+        assert_eq!(stored_session.label.as_deref(), Some("Session Prime"));
+        assert!(
+            latest_message_text(&shell).contains("Session Prime"),
+            "rename command should append the updated label"
+        );
+        assert!(!turn_active);
+    }
+
+    #[test]
     fn selecting_resume_palette_candidate_fills_composer() {
         let mut shell = state::Shell::new("sess-resume");
         let mut textarea = tui_textarea::TextArea::default();
@@ -6146,10 +7531,13 @@ mod tests {
             .visible_session_suggestions = vec![state::VisibleSessionSuggestion {
             session_id: "child-session".to_owned(),
             label: Some("Child work".to_owned()),
+            agent_presentation: None,
             state: "completed".to_owned(),
             kind: "delegate_child".to_owned(),
             task_phase: Some("completed".to_owned()),
             overdue: false,
+            pending_approval_count: 0,
+            attention_approval_count: 0,
         }];
 
         let applied = apply_selected_slash_command(&mut shell, &mut textarea);
@@ -6185,6 +7573,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -6401,6 +7790,182 @@ mod tests {
 
     #[test]
     #[cfg(feature = "memory-sqlite")]
+    fn switch_model_selection_accepts_model_selector_and_auto_clears_reasoning_effort() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config_path = temp_dir.path().join("loongclaw.toml");
+        let mut config = crate::config::LoongClawConfig::default();
+        let mut openai_main =
+            crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
+        openai_main.model = "gpt-5".to_owned();
+        config.set_active_provider_profile(
+            "openai-main",
+            crate::config::ProviderProfileConfig {
+                default_for_kind: true,
+                provider: openai_main.clone(),
+            },
+        );
+        let mut openai_reasoning =
+            crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
+        openai_reasoning.model = "o4-mini".to_owned();
+        openai_reasoning.reasoning_effort = Some(crate::config::ReasoningEffort::High);
+        config.providers.insert(
+            "openai-reasoning".to_owned(),
+            crate::config::ProviderProfileConfig {
+                default_for_kind: false,
+                provider: openai_reasoning,
+            },
+        );
+        config.provider = openai_main;
+        config.active_provider = Some("openai-main".to_owned());
+        std::fs::write(
+            &config_path,
+            crate::config::render(&config).expect("render config"),
+        )
+        .expect("write config");
+
+        let runtime = runtime::TuiRuntime {
+            resolved_path: config_path.clone(),
+            config: config.clone(),
+            session_id: scoped_test_id(temp_dir.path(), "ops-root"),
+            session_address: crate::conversation::ConversationSessionAddress::from_session_id(
+                scoped_test_id(temp_dir.path(), "ops-root"),
+            ),
+            turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+            kernel_ctx: crate::context::bootstrap_kernel_context_with_config(
+                "tui-model-switch-auto-test",
+                crate::context::DEFAULT_TOKEN_TTL_S,
+                &config,
+            )
+            .expect("bootstrap kernel context"),
+            model_label: config
+                .provider
+                .resolved_model()
+                .unwrap_or_else(|| "auto".to_owned()),
+        };
+
+        let mut shell = state::Shell::new(scoped_test_id(temp_dir.path(), "ops-root").as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        let mut owned_runtime = Some(std::sync::Arc::new(runtime));
+        switch_model_selection(
+            &mut owned_runtime,
+            &mut shell,
+            "o4-mini",
+            Some(ModelReasoningChoice::Auto),
+        )
+        .expect("switch model");
+
+        let reloaded =
+            crate::config::load(Some(config_path.to_str().expect("utf8 path"))).expect("reload");
+        let reloaded = reloaded.1;
+
+        assert_eq!(reloaded.active_provider_id(), Some("openai-reasoning"));
+        assert_eq!(reloaded.provider.reasoning_effort, None);
+        assert_eq!(
+            reloaded
+                .providers
+                .get("openai-reasoning")
+                .and_then(|profile| profile.provider.reasoning_effort),
+            None
+        );
+        assert!(
+            latest_message_text(&shell).contains("resolved profile: openai-reasoning"),
+            "switch should surface the resolved profile when the selector is the model alias"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn switch_model_selection_rejects_reasoning_effort_for_unsupported_provider() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config_path = temp_dir.path().join("loongclaw.toml");
+        let mut config = crate::config::LoongClawConfig::default();
+        let mut openai_main =
+            crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Openai);
+        openai_main.model = "gpt-5".to_owned();
+        config.set_active_provider_profile(
+            "openai-main",
+            crate::config::ProviderProfileConfig {
+                default_for_kind: true,
+                provider: openai_main.clone(),
+            },
+        );
+        let mut anthropic =
+            crate::config::ProviderConfig::fresh_for_kind(crate::config::ProviderKind::Anthropic);
+        anthropic.model = "claude-sonnet-4-20250514".to_owned();
+        config.providers.insert(
+            "anthropic-main".to_owned(),
+            crate::config::ProviderProfileConfig {
+                default_for_kind: true,
+                provider: anthropic,
+            },
+        );
+        config.provider = openai_main;
+        config.active_provider = Some("openai-main".to_owned());
+        std::fs::write(
+            &config_path,
+            crate::config::render(&config).expect("render config"),
+        )
+        .expect("write config");
+
+        let runtime = runtime::TuiRuntime {
+            resolved_path: config_path.clone(),
+            config: config.clone(),
+            session_id: scoped_test_id(temp_dir.path(), "ops-root"),
+            session_address: crate::conversation::ConversationSessionAddress::from_session_id(
+                scoped_test_id(temp_dir.path(), "ops-root"),
+            ),
+            turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+            kernel_ctx: crate::context::bootstrap_kernel_context_with_config(
+                "tui-model-switch-unsupported-test",
+                crate::context::DEFAULT_TOKEN_TTL_S,
+                &config,
+            )
+            .expect("bootstrap kernel context"),
+            model_label: config
+                .provider
+                .resolved_model()
+                .unwrap_or_else(|| "auto".to_owned()),
+        };
+
+        let mut shell = state::Shell::new(scoped_test_id(temp_dir.path(), "ops-root").as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        let mut owned_runtime = Some(std::sync::Arc::new(runtime));
+        let error = switch_model_selection(
+            &mut owned_runtime,
+            &mut shell,
+            "anthropic",
+            Some(ModelReasoningChoice::Explicit(
+                crate::config::ReasoningEffort::Low,
+            )),
+        )
+        .expect_err("unsupported providers should reject explicit reasoning efforts");
+
+        let reloaded =
+            crate::config::load(Some(config_path.to_str().expect("utf8 path"))).expect("reload");
+        let reloaded = reloaded.1;
+
+        assert!(
+            error.contains("does not support reasoning effort overrides"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(reloaded.active_provider_id(), Some("openai-main"));
+        assert_eq!(
+            owned_runtime
+                .as_ref()
+                .and_then(|runtime| runtime.config.active_provider_id().map(str::to_owned))
+                .as_deref(),
+            Some("openai-main")
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
     fn stats_command_opens_overlay() {
         let _guard = shell_memory_test_lock()
             .lock()
@@ -6510,6 +8075,7 @@ mod tests {
             let session_row = stats::StatsSessionRow {
                 session_id: format!("sess-{index}"),
                 label: Some(format!("Session {index}")),
+                agent_presentation: None,
                 kind: "delegate_child".to_owned(),
                 state: "completed".to_owned(),
                 turn_count: index + 1,
@@ -6581,6 +8147,85 @@ mod tests {
         );
 
         assert_eq!(shell.pane.busy_input_mode(), state::BusyInputMode::Steer);
+    }
+
+    #[test]
+    fn ctrl_c_while_running_requests_interrupt_without_exiting() {
+        let mut shell = state::Shell::new("sess-interrupt");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        shell.pane.agent_running = true;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert!(shell.running);
+        assert!(shell.interrupt_requested);
+        assert_eq!(
+            shell
+                .pane
+                .status_message
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("Interrupting response...")
+        );
+    }
+
+    #[test]
+    fn ctrl_c_when_idle_clears_pending_submissions_before_exiting() {
+        let mut shell = state::Shell::new("sess-cancel-pending");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        shell.pane.enqueue_busy_submission("queued".to_owned());
+        shell.pane.enqueue_busy_submission("next".to_owned());
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert!(shell.running);
+        assert!(!shell.interrupt_requested);
+        assert!(!shell.pane.has_pending_submissions());
+        assert_eq!(
+            shell
+                .pane
+                .status_message
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("Cleared 2 pending submission(s)")
+        );
+    }
+
+    #[test]
+    fn ctrl_c_when_idle_and_no_pending_exits_shell() {
+        let mut shell = state::Shell::new("sess-exit");
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(modified_key(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert!(!shell.running);
+        assert!(!shell.interrupt_requested);
     }
 
     #[test]
@@ -6702,6 +8347,34 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_c_interrupt_request_stops_active_turn_and_keeps_pending_submissions() {
+        let mut shell = state::Shell::new("sess-interrupt-active");
+        shell.pane.agent_running = true;
+        shell.pane.enqueue_busy_submission("follow-up".to_owned());
+        shell.interrupt_requested = true;
+
+        let mut turn_future: Pin<Box<dyn std::future::Future<Output = ()>>> =
+            Box::pin(std::future::pending());
+        let mut turn_active = true;
+
+        apply_interrupt_request(&mut shell, &mut turn_future, &mut turn_active);
+
+        assert!(!turn_active);
+        assert!(!shell.pane.agent_running);
+        assert!(!shell.interrupt_requested);
+        assert!(shell.pane.has_pending_submissions());
+        assert_eq!(
+            shell
+                .pane
+                .status_message
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("Response interrupted; 1 pending submission(s) kept")
+        );
+        assert!(latest_message_text(&shell).contains("Interrupted the in-flight turn."));
+    }
+
+    #[test]
     fn tasks_palette_suggests_delegate_sessions() {
         let mut shell = state::Shell::new("sess-tasks");
         shell
@@ -6710,10 +8383,13 @@ mod tests {
             .visible_session_suggestions = vec![state::VisibleSessionSuggestion {
             session_id: "delegate:task-7".to_owned(),
             label: Some("Background review".to_owned()),
+            agent_presentation: None,
             state: "running".to_owned(),
             kind: "delegate_child".to_owned(),
             task_phase: Some("running".to_owned()),
             overdue: false,
+            pending_approval_count: 0,
+            attention_approval_count: 0,
         }];
 
         let entries = slash_palette_entries(&shell, "/tasks run");
@@ -6735,10 +8411,13 @@ mod tests {
             .visible_session_suggestions = vec![state::VisibleSessionSuggestion {
             session_id: "child-session".to_owned(),
             label: Some("Child work".to_owned()),
+            agent_presentation: None,
             state: "completed".to_owned(),
             kind: "delegate_child".to_owned(),
             task_phase: Some("completed".to_owned()),
             overdue: false,
+            pending_approval_count: 0,
+            attention_approval_count: 0,
         }];
 
         let entries = slash_palette_entries(&shell, "/permissions child");
@@ -6748,6 +8427,38 @@ mod tests {
                 .iter()
                 .any(|entry| entry.replacement == "/permissions child-session"),
             "permissions palette should surface visible sessions: {entries:?}"
+        );
+    }
+
+    #[test]
+    fn subagents_palette_matches_root_aliases_and_humanizes_meta() {
+        let mut shell = state::Shell::new("sess-subagents");
+        shell
+            .pane
+            .composer_suggestion_context
+            .visible_session_suggestions = vec![state::VisibleSessionSuggestion {
+            session_id: "root-session".to_owned(),
+            label: Some("Main thread".to_owned()),
+            agent_presentation: None,
+            state: "running".to_owned(),
+            kind: "root".to_owned(),
+            task_phase: None,
+            overdue: false,
+            pending_approval_count: 0,
+            attention_approval_count: 0,
+        }];
+
+        let entries = slash_palette_entries(&shell, "/subagents root");
+        let root_entry = entries
+            .iter()
+            .find(|entry| entry.replacement == "/subagents root-session")
+            .expect("root entry");
+
+        assert_eq!(root_entry.meta, "Primary");
+        assert_eq!(root_entry.label, "Main thread");
+        assert!(
+            root_entry.detail.contains("thread"),
+            "root entry should use human thread wording: {root_entry:?}"
         );
     }
 
@@ -6859,6 +8570,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -6891,6 +8603,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -6947,7 +8660,7 @@ mod tests {
         let placeholder = composer_placeholder(&pane).expect("placeholder");
 
         assert!(
-            placeholder.contains("/tasks overdue"),
+            placeholder.contains("/subagents"),
             "overdue delegate work should outrank generic dirty-worktree advice: {placeholder}"
         );
     }
@@ -6989,12 +8702,369 @@ mod tests {
             },
         );
 
-        let rendered_surface = latest_message_text(&shell);
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
 
-        assert!(rendered_surface.contains("resume candidates"));
-        assert!(rendered_surface.contains(root_session_id.as_str()));
-        assert!(rendered_surface.contains(delegate_session_id.as_str()));
-        assert!(rendered_surface.contains("task queued"));
+        assert_eq!(shell.focus.top(), FocusLayer::SessionPicker);
+        assert!(
+            session_picker
+                .sessions
+                .iter()
+                .any(|session| session.session_id == root_session_id)
+        );
+        assert!(
+            session_picker
+                .sessions
+                .iter()
+                .any(|session| session.session_id == delegate_session_id)
+        );
+    }
+
+    #[test]
+    fn session_picker_enter_submits_selected_session_switch() {
+        let mut shell = state::Shell::new("root-session");
+        shell.session_picker = Some(state::SessionPickerState::new(
+            state::SessionPickerMode::Resume,
+            vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "root-session".to_owned(),
+                    label: Some("Root".to_owned()),
+                    agent_presentation: None,
+                    state: "ready".to_owned(),
+                    kind: "root".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "child-session".to_owned(),
+                    label: Some("Child".to_owned()),
+                    agent_presentation: None,
+                    state: "completed".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("completed".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+            ],
+        ));
+        if let Some(session_picker) = shell.session_picker.as_mut() {
+            session_picker.selected_index = 1;
+        }
+        shell.focus.push(FocusLayer::SessionPicker);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(submit_text.as_deref(), Some("/resume child-session"));
+        assert!(shell.session_picker.is_none());
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
+    }
+
+    #[test]
+    fn session_picker_search_filters_visible_sessions() {
+        let mut shell = state::Shell::new("root-session");
+        shell.session_picker = Some(state::SessionPickerState::new(
+            state::SessionPickerMode::Resume,
+            vec![
+                state::VisibleSessionSuggestion {
+                    session_id: "alpha-session".to_owned(),
+                    label: Some("Alpha".to_owned()),
+                    agent_presentation: None,
+                    state: "ready".to_owned(),
+                    kind: "root".to_owned(),
+                    task_phase: None,
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+                state::VisibleSessionSuggestion {
+                    session_id: "beta-session".to_owned(),
+                    label: Some("Beta".to_owned()),
+                    agent_presentation: None,
+                    state: "completed".to_owned(),
+                    kind: "delegate_child".to_owned(),
+                    task_phase: Some("completed".to_owned()),
+                    overdue: false,
+                    pending_approval_count: 0,
+                    attention_approval_count: 0,
+                },
+            ],
+        ));
+        shell.focus.push(FocusLayer::SessionPicker);
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Char('b'))),
+            &tx,
+            &mut submit_text,
+        );
+
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
+        let filtered_indices = session_picker.filtered_indices();
+        let filtered_session_id = filtered_indices
+            .first()
+            .and_then(|index| session_picker.sessions.get(*index))
+            .map(|session| session.session_id.as_str());
+
+        assert_eq!(session_picker.query, "b");
+        assert_eq!(filtered_session_id, Some("beta-session"));
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn subagents_command_opens_session_picker_with_main_and_delegate_threads() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config = shell_runtime_config_for_test(temp_dir.path());
+        let repo = session_repo_for_config(&config);
+        let root_session_id = scoped_test_id(temp_dir.path(), "subagent-root");
+        let delegate_session_id = scoped_test_id(temp_dir.path(), "subagent-child");
+        ensure_root_session(&repo, root_session_id.as_str());
+        repo.create_session_with_event(crate::session::repository::CreateSessionWithEventRequest {
+            session: crate::session::repository::NewSessionRecord {
+                session_id: delegate_session_id.clone(),
+                kind: crate::session::repository::SessionKind::DelegateChild,
+                parent_session_id: Some(root_session_id.clone()),
+                label: Some("Research branch".to_owned()),
+                state: crate::session::repository::SessionState::Running,
+            },
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some(root_session_id.clone()),
+            event_payload_json: json!({
+                "task": "research external references",
+                "provider": {
+                    "profile_id": "openai-reasoning",
+                    "provider_kind": "openai",
+                    "model": "gpt-5",
+                    "reasoning_effort": "high"
+                }
+            }),
+        })
+        .expect("create delegate child");
+
+        let mut shell = state::Shell::new(root_session_id.as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Subagents,
+                args: String::new(),
+            },
+        );
+
+        let session_picker = shell.session_picker.as_ref().expect("session picker");
+
+        assert_eq!(shell.focus.top(), FocusLayer::SessionPicker);
+        assert_eq!(session_picker.mode, state::SessionPickerMode::Subagents);
+        assert_eq!(
+            session_picker
+                .sessions
+                .first()
+                .map(|session| session.session_id.as_str()),
+            Some(root_session_id.as_str())
+        );
+        assert!(
+            session_picker
+                .sessions
+                .iter()
+                .any(|session| session.session_id == delegate_session_id)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn switch_subagent_session_allows_switching_between_sibling_delegate_threads() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config = shell_runtime_config_for_test(temp_dir.path());
+        let repo = session_repo_for_config(&config);
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let root_session_id = scoped_test_id(temp_dir.path(), "subagent-root");
+        let left_session_id = scoped_test_id(temp_dir.path(), "subagent-left");
+        let right_session_id = scoped_test_id(temp_dir.path(), "subagent-right");
+
+        ensure_root_session(&repo, root_session_id.as_str());
+        for session_id in [left_session_id.as_str(), right_session_id.as_str()] {
+            repo.create_session_with_event(
+                crate::session::repository::CreateSessionWithEventRequest {
+                    session: crate::session::repository::NewSessionRecord {
+                        session_id: session_id.to_owned(),
+                        kind: crate::session::repository::SessionKind::DelegateChild,
+                        parent_session_id: Some(root_session_id.clone()),
+                        label: Some(format!("Task {session_id}")),
+                        state: crate::session::repository::SessionState::Completed,
+                    },
+                    event_kind: "delegate_completed".to_owned(),
+                    actor_session_id: Some(root_session_id.clone()),
+                    event_payload_json: json!({ "task": session_id }),
+                },
+            )
+            .expect("create delegate child");
+        }
+
+        append_turn_direct(
+            left_session_id.as_str(),
+            "user",
+            "left user",
+            &memory_config,
+        )
+        .expect("append left user");
+        append_turn_direct(
+            left_session_id.as_str(),
+            "assistant",
+            "left assistant",
+            &memory_config,
+        )
+        .expect("append left assistant");
+        append_turn_direct(
+            right_session_id.as_str(),
+            "user",
+            "right user",
+            &memory_config,
+        )
+        .expect("append right user");
+        append_turn_direct(
+            right_session_id.as_str(),
+            "assistant",
+            "right assistant",
+            &memory_config,
+        )
+        .expect("append right assistant");
+
+        let runtime = runtime::TuiRuntime {
+            resolved_path: temp_dir.path().join("loongclaw.toml"),
+            config: config.clone(),
+            session_id: left_session_id.clone(),
+            session_address: crate::conversation::ConversationSessionAddress::from_session_id(
+                left_session_id.clone(),
+            ),
+            turn_coordinator: crate::conversation::ConversationTurnCoordinator::new(),
+            kernel_ctx: crate::context::bootstrap_kernel_context_with_config(
+                "tui-subagent-switch-test",
+                crate::context::DEFAULT_TOKEN_TTL_S,
+                &config,
+            )
+            .expect("bootstrap kernel context"),
+            model_label: config
+                .provider
+                .resolved_model()
+                .unwrap_or_else(|| "auto".to_owned()),
+        };
+        let mut shell = state::Shell::new(left_session_id.as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        let mut owned_runtime = Some(std::sync::Arc::new(runtime));
+
+        switch_subagent_session(&mut owned_runtime, &mut shell, right_session_id.as_str())
+            .expect("switch sibling subagent");
+
+        assert_eq!(shell.pane.session_id, right_session_id);
+        assert!(
+            transcript_plain_lines(&shell)
+                .join("\n")
+                .contains("right assistant"),
+            "expected switched transcript to show right sibling history"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "memory-sqlite")]
+    fn subagent_lifecycle_surface_reports_waiting_and_finished_states() {
+        let _guard = shell_memory_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let config = shell_runtime_config_for_test(temp_dir.path());
+        let repo = session_repo_for_config(&config);
+        let memory_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        let root_session_id = scoped_test_id(temp_dir.path(), "surface-root");
+        let child_session_id = scoped_test_id(temp_dir.path(), "surface-child");
+
+        ensure_root_session(&repo, root_session_id.as_str());
+        let mut shell = state::Shell::new(root_session_id.as_str());
+        attach_shell_runtime_config(&mut shell, &config, temp_dir.path());
+        refresh_composer_suggestion_context(&mut shell);
+        reset_subagent_surface_tracking(&mut shell);
+
+        repo.create_session_with_event(crate::session::repository::CreateSessionWithEventRequest {
+            session: crate::session::repository::NewSessionRecord {
+                session_id: child_session_id.clone(),
+                kind: crate::session::repository::SessionKind::DelegateChild,
+                parent_session_id: Some(root_session_id.clone()),
+                label: Some("Research branch".to_owned()),
+                state: crate::session::repository::SessionState::Running,
+            },
+            event_kind: "delegate_started".to_owned(),
+            actor_session_id: Some(root_session_id.clone()),
+            event_payload_json: json!({
+                "task": "research external references",
+                "provider": {
+                    "profile_id": "openai-reasoning",
+                    "provider_kind": "openai",
+                    "model": "gpt-5",
+                    "reasoning_effort": "high"
+                }
+            }),
+        })
+        .expect("create running child");
+
+        refresh_composer_suggestion_context(&mut shell);
+        maybe_emit_subagent_lifecycle_surface(&mut shell);
+
+        let waiting_surface = latest_message_text(&shell);
+        let waiting_transcript = transcript_plain_lines(&shell).join("\n");
+        assert!(waiting_surface.contains("Waiting for 1 subagent"));
+        assert!(waiting_transcript.contains("gpt-5 · high"));
+
+        append_turn_direct(
+            child_session_id.as_str(),
+            "assistant",
+            "Finished the research without edits.",
+            &memory_config,
+        )
+        .expect("append assistant summary");
+        repo.finalize_session_terminal(
+            child_session_id.as_str(),
+            crate::session::repository::FinalizeSessionTerminalRequest {
+                state: crate::session::repository::SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some(root_session_id),
+                event_payload_json: json!({ "result": "ok" }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({ "child_session_id": child_session_id }),
+            },
+        )
+        .expect("finalize child");
+
+        refresh_composer_suggestion_context(&mut shell);
+        maybe_emit_subagent_lifecycle_surface(&mut shell);
+
+        let finished_surface = latest_message_text(&shell);
+        let transcript = transcript_plain_lines(&shell).join("\n");
+        assert!(finished_surface.contains("Finished waiting"));
+        assert!(transcript.contains("Completed"));
+        assert!(transcript.contains("Finished the research without edits"));
     }
 
     #[test]
@@ -7253,6 +9323,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -7286,6 +9357,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -7320,6 +9392,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -7372,6 +9445,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");
@@ -7473,6 +9547,7 @@ mod tests {
             .and_then(|message| message.parts.first())
             .and_then(|part| match part {
                 MessagePart::Text(text) => Some(text.as_str()),
+                MessagePart::SurfaceEvent { title, .. } => Some(title.as_str()),
                 MessagePart::ThinkBlock(_) | MessagePart::ToolCall { .. } => None,
             })
             .unwrap_or("");

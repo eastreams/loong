@@ -36,6 +36,15 @@ pub struct ConstrainedSubagentExecution {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubagentProviderSnapshot {
+    pub profile_id: String,
+    pub provider_kind: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConstrainedSubagentSpawnEventPayload {
     pub task: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,6 +52,8 @@ pub struct ConstrainedSubagentSpawnEventPayload {
     pub execution: ConstrainedSubagentExecution,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_self_continuity: Option<RuntimeSelfContinuity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<SubagentProviderSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,11 +78,22 @@ impl ConstrainedSubagentExecution {
         label: Option<&str>,
         runtime_self_continuity: Option<&RuntimeSelfContinuity>,
     ) -> Value {
+        self.spawn_payload_with_runtime_metadata(task, label, runtime_self_continuity, None)
+    }
+
+    pub(crate) fn spawn_payload_with_runtime_metadata(
+        &self,
+        task: &str,
+        label: Option<&str>,
+        runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+        provider: Option<&SubagentProviderSnapshot>,
+    ) -> Value {
         json!(ConstrainedSubagentSpawnEventPayload {
             task: task.to_owned(),
             label: label.map(ToOwned::to_owned),
             execution: self.clone(),
             runtime_self_continuity: runtime_self_continuity.cloned(),
+            provider: provider.cloned(),
         })
     }
 
@@ -94,6 +116,13 @@ impl ConstrainedSubagentExecution {
     pub fn from_event_payload(payload: &Value) -> Option<Self> {
         let execution = payload.get("execution")?.clone();
         serde_json::from_value(execution).ok()
+    }
+}
+
+impl SubagentProviderSnapshot {
+    pub fn from_event_payload(payload: &Value) -> Option<Self> {
+        let provider = payload.get("provider")?.clone();
+        serde_json::from_value(provider).ok()
     }
 }
 
@@ -178,6 +207,40 @@ mod tests {
         assert_eq!(
             payload["runtime_self_continuity"]["runtime_self"]["tool_usage_policy"][0],
             "Search memory before guessing workspace facts."
+        );
+    }
+
+    #[test]
+    fn constrained_subagent_execution_preserves_provider_snapshot_in_spawn_payload() {
+        let execution = ConstrainedSubagentExecution {
+            mode: ConstrainedSubagentMode::Async,
+            depth: 1,
+            max_depth: 2,
+            active_children: 0,
+            max_active_children: 2,
+            timeout_seconds: 45,
+            allow_shell_in_child: false,
+            child_tool_allowlist: vec!["web.fetch".to_owned()],
+            runtime_narrowing: ToolRuntimeNarrowing::default(),
+            kernel_bound: true,
+        };
+        let provider = SubagentProviderSnapshot {
+            profile_id: "openai-reasoning".to_owned(),
+            provider_kind: "openai".to_owned(),
+            model: "gpt-5".to_owned(),
+            reasoning_effort: Some("high".to_owned()),
+        };
+
+        let payload = execution.spawn_payload_with_runtime_metadata(
+            "investigate ui drift",
+            Some("ui-drift"),
+            None,
+            Some(&provider),
+        );
+
+        assert_eq!(
+            SubagentProviderSnapshot::from_event_payload(&payload),
+            Some(provider)
         );
     }
 }

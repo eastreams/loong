@@ -11,6 +11,12 @@ pub(super) struct ShellAreas {
     pub(super) status_bar: Rect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IntroLayoutConfig {
+    pub(super) top_padding: u16,
+    pub(super) history_height: u16,
+}
+
 /// Compute the main layout areas for the TUI shell.
 ///
 /// `input_height` is the raw height (including borders); this function clamps
@@ -30,6 +36,36 @@ pub(super) fn compute(area: Rect, input_height: u16) -> ShellAreas {
 
     // Safe access via iterator to avoid direct indexing.
     let mut chunks = chunks.iter().copied();
+
+    ShellAreas {
+        history: chunks.next().unwrap_or_default(),
+        separator1: chunks.next().unwrap_or_default(),
+        spinner: chunks.next().unwrap_or_default(),
+        separator2: chunks.next().unwrap_or_default(),
+        input: chunks.next().unwrap_or_default(),
+        status_bar: chunks.next().unwrap_or_default(),
+    }
+}
+
+pub(super) fn compute_intro(area: Rect, input_height: u16, intro: IntroLayoutConfig) -> ShellAreas {
+    let clamped_input_height = input_height.clamp(3, 12);
+    let clamped_top_padding = intro.top_padding.min(area.height);
+    let clamped_history_height = intro.history_height.min(area.height);
+
+    let chunks = Layout::vertical([
+        Constraint::Length(clamped_top_padding),
+        Constraint::Length(clamped_history_height),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(clamped_input_height),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .split(area);
+
+    let mut chunks = chunks.iter().copied();
+    let _top_padding = chunks.next();
 
     ShellAreas {
         history: chunks.next().unwrap_or_default(),

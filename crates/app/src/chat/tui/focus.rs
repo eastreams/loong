@@ -3,6 +3,7 @@ pub(crate) enum FocusLayer {
     Composer,
     Transcript,
     Help,
+    SessionPicker,
     StatsOverlay,
     ToolInspector,
     ClarifyDialog,
