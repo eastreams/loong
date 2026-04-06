@@ -221,6 +221,10 @@ pub struct DelegateToolConfig {
     pub allow_shell_in_child: bool,
     #[serde(default = "default_delegate_max_frozen_bytes")]
     pub max_frozen_bytes: usize,
+    #[serde(default = "default_delegate_announce_debounce_ms")]
+    pub announce_debounce_ms: u64,
+    #[serde(default = "default_delegate_announce_max_batch")]
+    pub announce_max_batch: usize,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -612,6 +616,8 @@ impl Default for DelegateToolConfig {
             child_tool_allowlist: default_delegate_child_tool_allowlist(),
             allow_shell_in_child: false,
             max_frozen_bytes: default_delegate_max_frozen_bytes(),
+            announce_debounce_ms: default_delegate_announce_debounce_ms(),
+            announce_max_batch: default_delegate_announce_max_batch(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -829,6 +835,14 @@ impl ToolConfig {
             "tools.delegate.max_frozen_bytes",
             self.delegate.max_frozen_bytes,
             MIN_DELEGATE_MAX_FROZEN_BYTES,
+            usize::MAX,
+        ) {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_numeric_range(
+            "tools.delegate.announce_max_batch",
+            self.delegate.announce_max_batch,
+            1,
             usize::MAX,
         ) {
             issues.push(*issue);
@@ -1265,6 +1279,14 @@ const fn default_delegate_max_frozen_bytes() -> usize {
     DEFAULT_DELEGATE_MAX_FROZEN_BYTES
 }
 
+const fn default_delegate_announce_debounce_ms() -> u64 {
+    500
+}
+
+const fn default_delegate_announce_max_batch() -> usize {
+    20
+}
+
 const fn default_browser_max_sessions() -> usize {
     DEFAULT_BROWSER_MAX_SESSIONS
 }
@@ -1358,6 +1380,8 @@ mod tests {
             config.delegate.max_frozen_bytes,
             DEFAULT_DELEGATE_MAX_FROZEN_BYTES
         );
+        assert_eq!(config.delegate.announce_debounce_ms, 500);
+        assert_eq!(config.delegate.announce_max_batch, 20);
         assert_eq!(
             config.delegate.child_tool_allowlist,
             vec![
@@ -1627,6 +1651,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_zero_delegate_announce_max_batch() {
+        let mut config = ToolConfig::default();
+        config.delegate.announce_max_batch = 0;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.delegate.announce_max_batch"),
+            "expected delegate announce_max_batch validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn validate_rejects_zero_tool_execution_per_tool_timeout() {
         let mut config = ToolConfig::default();
         config
@@ -1741,6 +1780,8 @@ max_active_children = 4
 timeout_seconds = 90
 allow_shell_in_child = true
 max_frozen_bytes = 131072
+announce_debounce_ms = 250
+announce_max_batch = 7
 child_tool_allowlist = ["file.read", "shell.exec"]
 
 [tools.delegate.child_runtime.web]
@@ -1782,6 +1823,8 @@ max_text_chars = 1024
         assert_eq!(parsed.tools.delegate.timeout_seconds, 90);
         assert!(parsed.tools.delegate.allow_shell_in_child);
         assert_eq!(parsed.tools.delegate.max_frozen_bytes, 131072);
+        assert_eq!(parsed.tools.delegate.announce_debounce_ms, 250);
+        assert_eq!(parsed.tools.delegate.announce_max_batch, 7);
         assert_eq!(
             parsed.tools.delegate.child_tool_allowlist,
             vec!["file.read".to_owned(), "shell.exec".to_owned()]

@@ -43,6 +43,8 @@ use super::analytics::{
     TurnCheckpointRecoveryAction, build_turn_checkpoint_repair_plan, summarize_safe_lane_history,
 };
 #[cfg(feature = "memory-sqlite")]
+use super::announce::{DelegateAnnounceSettings, enqueue_delegate_result_announce};
+#[cfg(feature = "memory-sqlite")]
 use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 use super::ingress::ConversationIngressContext;
@@ -4443,6 +4445,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
             binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
         },
         config.tools.delegate.max_frozen_bytes,
+        DelegateAnnounceSettings::from_config(config),
     );
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
@@ -4631,6 +4634,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     frozen_result: Some(frozen_result),
                 },
             )?;
+            enqueue_delegate_result_announce_for_parent(
+                config,
+                parent_session_id,
+                child_session_id,
+            );
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4691,6 +4699,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     frozen_result: Some(frozen_result),
                 },
             )?;
+            enqueue_delegate_result_announce_for_parent(
+                config,
+                parent_session_id,
+                child_session_id,
+            );
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4752,6 +4765,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     frozen_result: Some(frozen_result),
                 },
             )?;
+            enqueue_delegate_result_announce_for_parent(
+                config,
+                parent_session_id,
+                child_session_id,
+            );
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4812,6 +4830,11 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     frozen_result: Some(frozen_result),
                 },
             )?;
+            enqueue_delegate_result_announce_for_parent(
+                config,
+                parent_session_id,
+                child_session_id,
+            );
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4902,6 +4925,7 @@ fn spawn_async_delegate_detached(
     spawner: std::sync::Arc<dyn AsyncDelegateSpawner>,
     request: AsyncDelegateSpawnRequest,
     max_frozen_bytes: usize,
+    announce_settings: DelegateAnnounceSettings,
 ) {
     let child_session_id = request.child_session_id.clone();
     let parent_session_id = request.parent_session_id.clone();
@@ -4919,6 +4943,7 @@ fn spawn_async_delegate_detached(
             Err(panic_payload) => Some(format_async_delegate_spawn_panic(panic_payload)),
         };
         if let Some(error) = spawn_failure {
+            let spawn_error = error.clone();
             let finalize_result = finalize_async_delegate_spawn_failure_with_recovery(
                 &memory_config,
                 &child_session_id,
@@ -4929,14 +4954,21 @@ fn spawn_async_delegate_detached(
                 max_frozen_bytes,
                 error.clone(),
             );
-            if let Err(finalize_error) = finalize_result {
+            if let Err(finalize_error) = &finalize_result {
                 tracing::warn!(
                     child_session_id = %child_session_id,
                     parent_session_id = %parent_session_id,
+                    spawn_error = %spawn_error,
                     error = %finalize_error,
-                    "delegate async spawn failure recovery did not fully persist"
+                    "delegate async spawn failure finalize fell back with error"
                 );
             }
+            enqueue_delegate_result_announce_with_memory_config(
+                memory_config.clone(),
+                parent_session_id.clone(),
+                child_session_id.clone(),
+                announce_settings.clone(),
+            );
 
             let runtime = DefaultConversationRuntime::from_config_or_env(config.as_ref());
             match runtime {
@@ -4972,6 +5004,38 @@ fn spawn_async_delegate_detached(
     });
 }
 
+#[cfg(feature = "memory-sqlite")]
+fn enqueue_delegate_result_announce_for_parent(
+    config: &LoongClawConfig,
+    parent_session_id: &str,
+    child_session_id: &str,
+) {
+    let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let announce_settings = DelegateAnnounceSettings::from_config(config);
+    enqueue_delegate_result_announce_with_memory_config(
+        memory_config,
+        parent_session_id.to_owned(),
+        child_session_id.to_owned(),
+        announce_settings,
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn enqueue_delegate_result_announce_with_memory_config(
+    memory_config: MemoryRuntimeConfig,
+    parent_session_id: String,
+    child_session_id: String,
+    announce_settings: DelegateAnnounceSettings,
+) {
+    enqueue_delegate_result_announce(
+        memory_config,
+        parent_session_id,
+        child_session_id,
+        announce_settings,
+    );
+}
+
+#[cfg(feature = "memory-sqlite")]
 fn next_delegate_child_depth_for_delegate(
     config: &LoongClawConfig,
     repo: &SessionRepository,

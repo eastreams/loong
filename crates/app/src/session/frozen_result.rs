@@ -61,9 +61,13 @@ fn freeze_tool_outcome(outcome: &ToolCoreOutcome, max_frozen_bytes: usize) -> Fr
 
 fn freeze_success_payload(payload: &Value, max_frozen_bytes: usize) -> FrozenCapture {
     let final_output = payload.get("final_output");
-    let final_output_text = final_output.and_then(Value::as_str);
-    if let Some(final_output_text) = final_output_text {
-        return freeze_text(final_output_text, max_frozen_bytes);
+    if let Some(final_output_value) = final_output {
+        let final_output_text = final_output_value.as_str();
+        if let Some(final_output_text) = final_output_text {
+            return freeze_text(final_output_text, max_frozen_bytes);
+        }
+
+        return freeze_structured_payload(final_output_value, max_frozen_bytes);
     }
 
     freeze_structured_payload(payload, max_frozen_bytes)
