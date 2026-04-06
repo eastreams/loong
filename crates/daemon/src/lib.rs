@@ -2483,6 +2483,7 @@ pub struct RuntimeSnapshotArtifactDocument {
     pub channels: Value,
     pub tool_runtime: Value,
     pub tools: Value,
+    #[serde(default)]
     pub runtime_plugins: Value,
     pub external_skills: Value,
     pub restore_spec: RuntimeSnapshotRestoreSpec,
@@ -2824,7 +2825,6 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
 
     let scanner = PluginScanner::new();
     let mut combined = kernel::PluginScanReport::default();
-    let mut descriptors = Vec::new();
     for root in &resolved_roots {
         let report = match scanner.scan_path(root) {
             Ok(report) => report,
@@ -2851,11 +2851,8 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
                 };
             }
         };
-        combined.scanned_files += report.scanned_files;
-        combined.matched_plugins += report.matched_plugins;
-        descriptors.extend(report.descriptors);
+        merge_plugin_scan_report(&mut combined, report);
     }
-    combined.descriptors = descriptors;
 
     let bridge_matrix = match config.runtime_plugins.resolved_bridge_support_matrix() {
         Ok(matrix) => matrix,
@@ -2993,6 +2990,23 @@ pub(crate) fn collect_runtime_snapshot_runtime_plugins_state(
     }
 }
 
+fn merge_plugin_scan_report(
+    combined: &mut kernel::PluginScanReport,
+    report: kernel::PluginScanReport,
+) {
+    let kernel::PluginScanReport {
+        scanned_files,
+        matched_plugins,
+        descriptors,
+        diagnostic_findings,
+    } = report;
+
+    combined.scanned_files += scanned_files;
+    combined.matched_plugins += matched_plugins;
+    combined.descriptors.extend(descriptors);
+    combined.diagnostic_findings.extend(diagnostic_findings);
+}
+
 fn runtime_plugin_setup_readiness_context(
     config: &mvp::config::LoongClawConfig,
 ) -> PluginSetupReadinessContext {
@@ -3026,8 +3040,17 @@ fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<
                     Some(prefix) => format!("{prefix}.{key}"),
                     None => key.clone(),
                 };
-                if !child.is_null() {
-                    collect_config_paths(child, Some(next_prefix.as_str()), out);
+
+                match child {
+                    Value::Null => {}
+                    Value::Object(_)
+                    | Value::Array(_)
+                    | Value::Bool(_)
+                    | Value::Number(_)
+                    | Value::String(_) => {
+                        out.insert(next_prefix.clone());
+                        collect_config_paths(child, Some(next_prefix.as_str()), out);
+                    }
                 }
             }
         }
@@ -3680,6 +3703,103 @@ mod runtime_snapshot_restore_spec_tests {
         );
         assert_eq!(profile.provider.oauth_access_token_env, None);
         assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn merge_plugin_scan_report_preserves_diagnostic_findings() {
+        let mut combined = kernel::PluginScanReport::default();
+        let report = kernel::PluginScanReport {
+            scanned_files: 2,
+            matched_plugins: 1,
+            descriptors: Vec::new(),
+            diagnostic_findings: vec![kernel::PluginDiagnosticFinding {
+                code: kernel::PluginDiagnosticCode::EmbeddedSourceLegacyContract,
+                severity: kernel::PluginDiagnosticSeverity::Warning,
+                phase: kernel::PluginDiagnosticPhase::Scan,
+                blocking: false,
+                plugin_id: Some("demo-search-plugin".to_owned()),
+                source_path: Some("/tmp/demo-search-plugin/loongclaw.plugin.json".to_owned()),
+                source_kind: Some(kernel::PluginSourceKind::PackageManifest),
+                field_path: None,
+                message: "legacy source marker".to_owned(),
+                remediation: Some("add a manifest contract".to_owned()),
+            }],
+        };
+
+        merge_plugin_scan_report(&mut combined, report);
+
+        assert_eq!(combined.scanned_files, 2);
+        assert_eq!(combined.matched_plugins, 1);
+        assert_eq!(combined.diagnostic_findings.len(), 1);
+    }
+
+    #[test]
+    fn runtime_plugin_setup_readiness_context_skips_null_config_values() {
+        let config = mvp::config::LoongClawConfig::default();
+        let readiness_context = runtime_plugin_setup_readiness_context(&config);
+
+        assert!(
+            readiness_context
+                .verified_config_keys
+                .contains("external_skills")
+        );
+        assert!(
+            !readiness_context
+                .verified_config_keys
+                .contains("external_skills.install_root")
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_artifact_document_defaults_missing_runtime_plugins_top_level_field() {
+        let payload = json!({
+            "config": "/tmp/loongclaw.toml",
+            "schema": {
+                "version": RUNTIME_SNAPSHOT_ARTIFACT_JSON_SCHEMA_VERSION,
+                "surface": "runtime_snapshot",
+                "purpose": "experiment_reproducibility"
+            },
+            "lineage": {
+                "snapshot_id": "snapshot-1",
+                "created_at": "2026-04-06T00:00:00Z",
+                "label": null,
+                "experiment_id": null,
+                "parent_snapshot_id": null
+            },
+            "provider": {},
+            "context_engine": {},
+            "memory_system": {},
+            "acp": {},
+            "channels": {},
+            "tool_runtime": {},
+            "tools": {},
+            "external_skills": {},
+            "restore_spec": {
+                "provider": {
+                    "active_provider": null,
+                    "last_provider": null,
+                    "profiles": {}
+                },
+                "conversation": {},
+                "memory": {},
+                "acp": {},
+                "tools": {},
+                "external_skills": {},
+                "managed_skills": {
+                    "skills": []
+                },
+                "warnings": []
+            }
+        });
+
+        let document = serde_json::from_value::<RuntimeSnapshotArtifactDocument>(payload)
+            .expect("artifact document should decode");
+
+        assert_eq!(document.runtime_plugins, Value::Null);
+        assert_eq!(
+            document.restore_spec.runtime_plugins,
+            mvp::config::RuntimePluginsConfig::default()
+        );
     }
 
     #[test]

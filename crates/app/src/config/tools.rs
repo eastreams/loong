@@ -1990,6 +1990,10 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
 
     #[test]
     fn runtime_plugins_resolved_roots_expand_user_home() {
+        let home = tempfile::tempdir().expect("create temp home");
+        let mut env = ScopedEnv::new();
+        env.set("HOME", home.path());
+
         let config = RuntimePluginsConfig {
             enabled: true,
             roots: vec!["~/runtime-plugins".to_owned()],
@@ -1998,16 +2002,9 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
         };
 
         let roots = config.resolved_roots();
-        assert_eq!(roots.len(), 1);
-        assert!(
-            roots[0].ends_with("runtime-plugins"),
-            "expected expanded plugin root to preserve tail path"
-        );
-        assert!(roots[0].is_absolute());
-        assert!(
-            !roots[0].to_string_lossy().starts_with("~/"),
-            "expected `~` prefix to be expanded"
-        );
+        let expected_root = home.path().join("runtime-plugins");
+
+        assert_eq!(roots, vec![expected_root]);
     }
 
     #[test]
@@ -2044,6 +2041,7 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 "web-search".to_owned(),
             ],
         };
+        let default_matrix = BridgeSupportMatrix::default();
 
         let matrix = config
             .resolved_bridge_support_matrix()
@@ -2069,6 +2067,18 @@ blocked_domains = ["internal.example", " INTERNAL.EXAMPLE "]
                 .contains("python-stdio-adapter")
         );
         assert!(matrix.supported_adapter_families.contains("web-search"));
+        assert_eq!(
+            matrix.supported_compatibility_modes,
+            default_matrix.supported_compatibility_modes
+        );
+        assert_eq!(
+            matrix.supported_compatibility_shims,
+            default_matrix.supported_compatibility_shims
+        );
+        assert_eq!(
+            matrix.supported_compatibility_shim_profiles,
+            default_matrix.supported_compatibility_shim_profiles
+        );
     }
 
     #[test]

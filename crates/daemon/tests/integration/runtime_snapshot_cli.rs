@@ -584,10 +584,12 @@ fn runtime_snapshot_text_highlights_experiment_relevant_sections() {
         "runtime_plugins inventory_status=ok enabled=true readiness_evaluation=default_bridge_support_matrix"
     ));
     assert!(rendered.contains("demo-search-plugin"));
+    assert!(rendered.contains("source_path="));
+    assert!(rendered.contains("package_root="));
     assert!(rendered.contains("setup_mode=metadata_only"));
     assert!(rendered.contains("setup_surface=web_search"));
     assert!(rendered.contains("missing_env_vars=RUNTIME_PLUGIN_DEMO_KEY"));
-    assert!(rendered.contains("reason=plugin setup is incomplete:"));
+    assert!(rendered.contains("reason=\"plugin setup is incomplete:"));
     assert!(rendered.contains("external_skills inventory_status=ok override_active=false"));
     assert!(rendered.contains("demo-skill"));
 

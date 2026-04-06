@@ -364,6 +364,41 @@ fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_restore_fie
 }
 
 #[test]
+fn runtime_restore_dry_run_accepts_artifacts_without_runtime_plugins_top_level_field() {
+    let root = unique_temp_dir("loongclaw-runtime-restore-legacy-runtime-plugins-top-level");
+    let _env = RuntimeRestoreEnvGuard::set(&[
+        ("LOONGCLAW_BROWSER_COMPANION_READY", Some("true")),
+        ("OPENAI_API_KEY", None),
+        ("RUNTIME_RESTORE_DEEPSEEK_KEY", Some("deepseek-demo-token")),
+    ]);
+    let (config_path, config) = write_runtime_restore_config(&root);
+    install_demo_skill(&root, &config, &config_path);
+    let (_artifact_path, _snapshot, mut payload) = write_snapshot_artifact(&root, &config_path);
+
+    let payload_object = payload
+        .as_object_mut()
+        .expect("artifact payload should be an object");
+    payload_object.remove("runtime_plugins");
+    let artifact_path = write_snapshot_artifact_payload(
+        &root,
+        "artifacts/runtime-snapshot-legacy-runtime-plugins-top-level.json",
+        &payload,
+    );
+
+    let execution = loongclaw_daemon::runtime_restore_cli::execute_runtime_restore_command(
+        loongclaw_daemon::runtime_restore_cli::RuntimeRestoreCommandOptions {
+            config: Some(config_path.display().to_string()),
+            snapshot: artifact_path.display().to_string(),
+            json: false,
+            apply: false,
+        },
+    )
+    .expect("legacy runtime snapshot artifact should still plan successfully");
+
+    assert!(execution.plan.can_apply);
+}
+
+#[test]
 fn runtime_snapshot_artifact_json_redacts_inline_provider_secrets_from_restore_spec() {
     let root = unique_temp_dir("loongclaw-runtime-restore-redaction");
     let _env = RuntimeRestoreEnvGuard::set(&[
