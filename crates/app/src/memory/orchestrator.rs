@@ -25,6 +25,7 @@ pub struct MemoryDiagnostics {
     pub degraded: bool,
     pub derivation_error: Option<String>,
     pub retrieval_error: Option<String>,
+    pub rank_error: Option<String>,
     pub recent_window_count: usize,
     pub entry_count: usize,
 }
@@ -44,6 +45,7 @@ pub struct MemoryOrchestratorTestFaults {
     pub session_id: Option<String>,
     pub derivation_error: Option<String>,
     pub retrieval_error: Option<String>,
+    pub rank_error: Option<String>,
 }
 
 #[cfg(test)]
@@ -227,6 +229,7 @@ impl MemoryDiagnostics {
     ) -> Self {
         let derivation_error = stage_error_message(stage_diagnostics, MemoryStageFamily::Derive);
         let retrieval_error = stage_error_message(stage_diagnostics, MemoryStageFamily::Retrieve);
+        let rank_error = stage_error_message(stage_diagnostics, MemoryStageFamily::Rank);
         let degraded = stage_diagnostics.iter().any(|diagnostic| {
             matches!(
                 diagnostic.outcome,
@@ -243,6 +246,7 @@ impl MemoryDiagnostics {
             degraded,
             derivation_error,
             retrieval_error,
+            rank_error,
             recent_window_count: recent_window.len(),
             entry_count: entries.len(),
         }
@@ -302,6 +306,29 @@ fn run_rank_stage(
             records: entries,
             diagnostics: skipped_stage_diagnostics(MemoryStageFamily::Rank, None),
         });
+    }
+
+    #[cfg(test)]
+    if let Some(error) = matching_memory_orchestrator_test_faults(context.session_id)
+        .and_then(|faults| faults.rank_error)
+    {
+        return if config.effective_fail_open() {
+            let diagnostics = StageDiagnostics {
+                family: MemoryStageFamily::Rank,
+                outcome: StageOutcome::Fallback,
+                budget_ms: None,
+                elapsed_ms: None,
+                fallback_activated: true,
+                message: Some(error),
+            };
+            let outcome = StageRunResult {
+                records: entries,
+                diagnostics,
+            };
+            Ok(outcome)
+        } else {
+            Err(format!("memory rank stage failed: {error}"))
+        };
     }
 
     let fallback_entries = if config.effective_fail_open() {
@@ -576,16 +603,21 @@ mod tests {
         append_turn_direct, builtin_pre_assembly_stage_families, register_memory_system,
     };
 
-    struct RegistryRetrieveOnlyMemorySystem;
+    const REGISTRY_RETRIEVE_ONLY_SYSTEM_ID: &str = "registry-retrieve-only";
+    const REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID: &str = "registry-retrieve-only-compact";
+
+    struct RegistryRetrieveOnlyMemorySystem {
+        id: &'static str,
+    }
 
     impl MemorySystem for RegistryRetrieveOnlyMemorySystem {
         fn id(&self) -> &'static str {
-            "registry-retrieve-only"
+            self.id
         }
 
         fn metadata(&self) -> MemorySystemMetadata {
             MemorySystemMetadata::new(
-                "registry-retrieve-only",
+                self.id,
                 [MemorySystemCapability::PromptHydration],
                 "Registry system without an execution adapter yet",
             )
@@ -1098,8 +1130,10 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[test]
     fn registry_selected_system_skips_builtin_pre_assembly_execution() {
-        register_memory_system("registry-retrieve-only", || {
-            Box::new(RegistryRetrieveOnlyMemorySystem)
+        register_memory_system(REGISTRY_RETRIEVE_ONLY_SYSTEM_ID, || {
+            Box::new(RegistryRetrieveOnlyMemorySystem {
+                id: REGISTRY_RETRIEVE_ONLY_SYSTEM_ID,
+            })
         })
         .expect("register registry-selected memory system");
 
@@ -1115,7 +1149,7 @@ mod tests {
             sliding_window: 2,
             ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
         };
-        config.resolved_system_id = Some("registry-retrieve-only".to_owned());
+        config.resolved_system_id = Some(REGISTRY_RETRIEVE_ONLY_SYSTEM_ID.to_owned());
 
         append_turn_direct("registry-selected", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1129,7 +1163,7 @@ mod tests {
 
         assert_eq!(
             envelope.hydrated.diagnostics.system_id,
-            "registry-retrieve-only"
+            REGISTRY_RETRIEVE_ONLY_SYSTEM_ID
         );
         assert_eq!(envelope.hydrated.recent_window.len(), 2);
         assert_eq!(
@@ -1396,8 +1430,10 @@ mod tests {
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
     async fn compact_stage_remains_runtime_owned_for_registry_selected_system_without_executor() {
-        register_memory_system("registry-retrieve-only", || {
-            Box::new(RegistryRetrieveOnlyMemorySystem)
+        register_memory_system(REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID, || {
+            Box::new(RegistryRetrieveOnlyMemorySystem {
+                id: REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID,
+            })
         })
         .expect("register registry-selected memory system");
 
@@ -1413,7 +1449,7 @@ mod tests {
             sliding_window: 2,
             ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
         };
-        config.resolved_system_id = Some("registry-retrieve-only".to_owned());
+        config.resolved_system_id = Some(REGISTRY_RETRIEVE_ONLY_COMPACT_SYSTEM_ID.to_owned());
 
         append_turn_direct("compact-stage-registry-selected", "user", "turn 1", &config)
             .expect("append turn 1 should succeed");
@@ -1574,6 +1610,57 @@ mod tests {
         assert_eq!(
             hydrated.diagnostics.retrieval_error.as_deref(),
             Some("simulated retrieval failure")
+        );
+        assert!(hydrated.diagnostics.degraded);
+        assert!(hydrated.diagnostics.fail_open);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn fail_open_memory_rank_failure_keeps_recent_window_behavior() {
+        let session_id = "fail-open-rank";
+        let _faults = ScopedMemoryOrchestratorTestFaults::set(MemoryOrchestratorTestFaults {
+            session_id: Some(session_id.to_owned()),
+            rank_error: Some("simulated rank failure".to_owned()),
+            ..MemoryOrchestratorTestFaults::default()
+        });
+        let tmp = hydrated_memory_temp_dir("loongclaw-fail-open-rank");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("rank.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+
+        append_turn_direct(session_id, "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct(session_id, "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct(session_id, "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let hydrated = hydrate_memory_context(session_id, &config)
+            .expect("fail-open rank should preserve hydration");
+
+        let turn_entries = hydrated
+            .entries
+            .iter()
+            .filter(|entry| entry.kind == MemoryContextKind::Turn)
+            .collect::<Vec<_>>();
+        assert_eq!(turn_entries.len(), 2);
+        assert_eq!(turn_entries[0].content, "turn 2");
+        assert_eq!(turn_entries[1].content, "turn 3");
+        assert_eq!(
+            hydrated.diagnostics.rank_error.as_deref(),
+            Some("simulated rank failure")
         );
         assert!(hydrated.diagnostics.degraded);
         assert!(hydrated.diagnostics.fail_open);

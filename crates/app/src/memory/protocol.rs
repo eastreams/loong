@@ -65,6 +65,8 @@ struct MemoryDiagnosticsPayload {
     #[serde(default)]
     retrieval_error: Option<String>,
     #[serde(default)]
+    rank_error: Option<String>,
+    #[serde(default)]
     recent_window_count: usize,
     #[serde(default)]
     entry_count: usize,
@@ -289,6 +291,7 @@ impl From<&MemoryDiagnostics> for MemoryDiagnosticsPayload {
             degraded: value.degraded,
             derivation_error: value.derivation_error.clone(),
             retrieval_error: value.retrieval_error.clone(),
+            rank_error: value.rank_error.clone(),
             recent_window_count: value.recent_window_count,
             entry_count: value.entry_count,
         }
@@ -396,6 +399,7 @@ fn decode_memory_diagnostics_payload(
         degraded: payload.degraded,
         derivation_error: payload.derivation_error,
         retrieval_error: payload.retrieval_error,
+        rank_error: payload.rank_error,
         recent_window_count: payload.recent_window_count,
         entry_count: payload.entry_count,
     })
@@ -511,6 +515,7 @@ mod tests {
         assert!(!envelope.hydrated.diagnostics.degraded);
         assert_eq!(envelope.hydrated.diagnostics.derivation_error, None);
         assert_eq!(envelope.hydrated.diagnostics.retrieval_error, None);
+        assert_eq!(envelope.hydrated.diagnostics.rank_error, None);
         assert_eq!(envelope.hydrated.diagnostics.recent_window_count, 0);
         assert_eq!(envelope.hydrated.diagnostics.entry_count, 0);
 

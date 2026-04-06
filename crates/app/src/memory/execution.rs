@@ -28,7 +28,8 @@ pub trait MemoryPreAssemblyExecutor: Send + Sync {
         context: &MemoryPreAssemblyContext<'_>,
     ) -> Result<Vec<MemoryContextEntry>, String> {
         let _ = context;
-        Ok(Vec::new())
+        let error = "derive not implemented for this executor".to_owned();
+        Err(error)
     }
 
     fn retrieve(
@@ -36,7 +37,8 @@ pub trait MemoryPreAssemblyExecutor: Send + Sync {
         context: &MemoryPreAssemblyContext<'_>,
     ) -> Result<Vec<MemoryContextEntry>, String> {
         let _ = context;
-        Ok(Vec::new())
+        let error = "retrieve not implemented for this executor".to_owned();
+        Err(error)
     }
 
     fn rank(
@@ -44,8 +46,10 @@ pub trait MemoryPreAssemblyExecutor: Send + Sync {
         entries: Vec<MemoryContextEntry>,
         context: &MemoryPreAssemblyContext<'_>,
     ) -> Result<Vec<MemoryContextEntry>, String> {
+        let _ = entries;
         let _ = context;
-        Ok(entries)
+        let error = "rank not implemented for this executor".to_owned();
+        Err(error)
     }
 }
 
@@ -60,11 +64,30 @@ impl MemoryPreAssemblyExecutor for BuiltinMemoryPreAssemblyExecutor {
         builtin_retrieval_request(context)
     }
 
+    fn derive(
+        &self,
+        context: &MemoryPreAssemblyContext<'_>,
+    ) -> Result<Vec<MemoryContextEntry>, String> {
+        let _ = context;
+        let entries = Vec::new();
+        Ok(entries)
+    }
+
     fn retrieve(
         &self,
         context: &MemoryPreAssemblyContext<'_>,
     ) -> Result<Vec<MemoryContextEntry>, String> {
         run_builtin_retrieval_entries(context)
+    }
+
+    fn rank(
+        &self,
+        entries: Vec<MemoryContextEntry>,
+        context: &MemoryPreAssemblyContext<'_>,
+    ) -> Result<Vec<MemoryContextEntry>, String> {
+        let _ = context;
+        let ranked_entries = entries;
+        Ok(ranked_entries)
     }
 }
 
