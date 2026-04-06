@@ -1,7 +1,6 @@
 mod acpx;
 #[cfg(test)]
 mod acpx_doctor_tests;
-mod acpx_mcp;
 mod analytics;
 mod backend;
 mod binding;

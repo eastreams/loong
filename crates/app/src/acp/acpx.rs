@@ -84,6 +84,8 @@ struct AcpxMcpServerEntry {
     command: String,
     args: Vec<String>,
     env: Vec<AcpxMcpServerEnvEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,6 +515,16 @@ impl AcpRuntimeBackend for AcpxCliProbeBackend {
         if let Some(cwd) = cwd.clone() {
             diagnostics.insert("cwd".to_owned(), cwd);
         }
+        if config.acp.allow_mcp_server_injection
+            && let Err(error) = crate::mcp::McpRegistry::from_config(config)
+        {
+            diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
+            diagnostics.insert("error".to_owned(), error);
+            return Ok(Some(AcpDoctorReport {
+                healthy: false,
+                diagnostics,
+            }));
+        }
         if let Err(error) = resolve_profile(config) {
             diagnostics.insert("status".to_owned(), "invalid_config".to_owned());
             diagnostics.insert("error".to_owned(), error);
@@ -886,6 +898,7 @@ fn resolve_selected_mcp_server_entries(
                 name: name.clone(),
                 command: server.command.clone(),
                 args: server.args.clone(),
+                cwd: None,
                 env: server
                     .env
                     .iter()
@@ -1743,6 +1756,7 @@ mod tests {
 
     use super::*;
     use crate::config::{AcpBackendProfilesConfig, AcpConfig, AcpxBackendConfig, LoongClawConfig};
+    use crate::test_support::ScopedEnv;
 
     const ACPX_RUNTIME_TEST_TIMEOUT_SECONDS: f64 = 45.0;
 
@@ -1849,7 +1863,7 @@ mod tests {
     ) -> PathBuf {
         let script_path = temp_dir.join(script_name);
         let script_source = format!(
-            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\n{}\n",
+            "#!/bin/sh\nset -eu\n# Keep test helper scripts stable even when unrelated tests narrow PATH.\nPATH=\"$(command -p getconf PATH 2>/dev/null || printf '%s' '/usr/bin:/bin')\"\nexport PATH\nLOG_PATH=\"{}\"\nprintf '%s\\n' \"$*\" >> \"$LOG_PATH\"\nargs_contain() {{\n  case \"$1\" in\n    *\"$2\"*) return 0 ;;\n    *) return 1 ;;\n  esac\n}}\ndrain_stdin() {{\n  if [ ! -t 0 ]; then\n    cat >/dev/null\n  fi\n}}\n{}\n",
             log_path.display(),
             body
         );
@@ -1858,6 +1872,8 @@ mod tests {
         script_path
     }
 
+    #[cfg(unix)]
+    mod mcp_proxy_tests;
     #[cfg(unix)]
     mod path_tests;
 
@@ -1888,60 +1904,6 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp"))
             .count();
         assert_eq!(staging_entries, 0, "staging files should be cleaned up");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn fake_acpx_script_helpers_work_with_empty_path() {
-        use std::io::Write;
-        use std::process::{Command, Stdio};
-
-        let temp_dir = unique_temp_dir("loongclaw-acpx-script-builtins");
-        let log_path = temp_dir.join("calls.log");
-        let script_path = write_fake_acpx_script(
-            &temp_dir,
-            "fake-acpx",
-            &log_path,
-            r#"
-if args_contain "$*" 'prompt --session'; then
-  drain_stdin
-  echo '{"type":"text","content":"builtins ok"}'
-  echo '{"type":"done"}'
-  exit 0
-fi
-
-exit 0
-"#,
-        );
-
-        let mut command = Command::new(&script_path);
-        command
-            .args(["prompt", "--session", "sess-builtins", "--file", "-"])
-            .current_dir(&temp_dir)
-            .env("PATH", "")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = retry_executable_file_busy_blocking(|| command.spawn())
-            .expect("spawn fake acpx script");
-        let mut stdin = child.stdin.take().expect("fake acpx stdin");
-        stdin
-            .write_all(b"payload without trailing newline")
-            .expect("write fake acpx stdin");
-        drop(stdin);
-
-        let output = child.wait_with_output().expect("wait for fake acpx script");
-        assert!(output.status.success(), "fake acpx script should succeed");
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            stdout.contains("{\"type\":\"text\",\"content\":\"builtins ok\"}"),
-            "expected built-in helper response in stdout: {stdout}"
-        );
-        assert!(
-            stdout.contains("{\"type\":\"done\"}"),
-            "expected done event in stdout: {stdout}"
-        );
     }
 
     #[tokio::test]
@@ -2227,7 +2189,7 @@ exit 0
     #[tokio::test]
     #[cfg(unix)]
     async fn doctor_accepts_path_discovered_fake_version_command() {
-        let _guard = acpx_test_lock();
+        let _guard = lock_acpx_runtime_tests().await;
         let temp_dir = unique_temp_dir("loongclaw-acpx-probe-path");
         let bin_dir = temp_dir.join("bin");
         let script_path = bin_dir.join("fake-acpx");
@@ -2271,57 +2233,6 @@ exit 0
             Some(&"fake-acpx".to_owned())
         );
         assert_eq!(report.diagnostics.get("status"), Some(&"ready".to_owned()));
-    }
-
-    #[test]
-    fn build_mcp_proxy_agent_command_preserves_server_cwd() {
-        let server = AcpxMcpServerEntry {
-            name: "docs".to_owned(),
-            command: "uvx".to_owned(),
-            args: vec!["context7-mcp".to_owned()],
-            env: vec![AcpxMcpServerEnvEntry {
-                name: "API_TOKEN".to_owned(),
-                value: "secret".to_owned(),
-            }],
-            cwd: Some("/workspace/docs".to_owned()),
-        };
-
-        let command = build_mcp_proxy_agent_command("npx @zed-industries/codex-acp", &[server])
-            .expect("proxy command");
-        let payload_marker = "--payload-file ";
-        let payload_index = command.find(payload_marker).expect("payload marker");
-        let payload_argument = &command[payload_index + payload_marker.len()..];
-        let payload_path = decode_test_command_argument(payload_argument);
-        let payload_bytes = std::fs::read(&payload_path).expect("read payload file");
-        let payload: Value = serde_json::from_slice(&payload_bytes).expect("parse payload");
-
-        assert_eq!(
-            payload["mcpServers"][0]["cwd"],
-            Value::String("/workspace/docs".to_owned())
-        );
-    }
-
-    fn decode_test_command_argument(argument: &str) -> String {
-        let trimmed_argument = argument.trim();
-        let is_quoted = trimmed_argument.starts_with('"') && trimmed_argument.ends_with('"');
-        if !is_quoted {
-            return trimmed_argument.to_owned();
-        }
-
-        let quoted_argument = &trimmed_argument[1..trimmed_argument.len() - 1];
-        let mut decoded = String::new();
-        let mut chars = quoted_argument.chars();
-        while let Some(character) = chars.next() {
-            if character == '\\' {
-                match chars.next() {
-                    Some(escaped_character) => decoded.push(escaped_character),
-                    None => decoded.push('\\'),
-                }
-                continue;
-            }
-            decoded.push(character);
-        }
-        decoded
     }
 
     #[tokio::test]

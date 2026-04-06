@@ -72,6 +72,9 @@ mod web_fetch;
 pub(crate) mod web_http;
 mod web_search;
 
+#[cfg(test)]
+mod workspace_root_tests;
+
 pub use catalog::{
     CapabilityActionClass, ToolApprovalMode, ToolAvailability, ToolCatalog, ToolDescriptor,
     ToolExecutionKind, ToolGovernanceProfile, ToolGovernanceScope, ToolRiskClass,
@@ -4168,81 +4171,6 @@ mod tests {
             error.contains("not in allowed_domains"),
             "expected narrowed domain denial, got: {error}"
         );
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn file_read_uses_workspace_root_from_trusted_internal_payload() {
-        let outer_root = std::env::temp_dir().join(format!(
-            "loongclaw-file-read-workspace-root-outer-{}",
-            std::process::id()
-        ));
-        let child_root = std::env::temp_dir().join(format!(
-            "loongclaw-file-read-workspace-root-child-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&outer_root).expect("create outer root");
-        std::fs::create_dir_all(&child_root).expect("create child root");
-        std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
-        std::fs::write(child_root.join("note.txt"), "child").expect("write child note");
-
-        let config = test_tool_runtime_config(outer_root.clone());
-        let outcome = execute_tool_core_with_test_context(
-            ToolCoreRequest {
-                tool_name: "file.read".to_owned(),
-                payload: json!({
-                    "path": "note.txt",
-                    "_loongclaw": {
-                        "workspace_root": child_root.display().to_string()
-                    }
-                }),
-            },
-            &config,
-        )
-        .expect("trusted workspace root override should succeed");
-
-        assert_eq!(outcome.status, "ok");
-        assert_eq!(outcome.payload["content"], "child");
-        let expected_path =
-            std::fs::canonicalize(child_root.join("note.txt")).expect("canonicalize child note");
-        assert_eq!(outcome.payload["path"], expected_path.display().to_string());
-
-        std::fs::remove_dir_all(&outer_root).ok();
-        std::fs::remove_dir_all(&child_root).ok();
-    }
-
-    #[cfg(feature = "tool-file")]
-    #[test]
-    fn file_read_rejects_relative_workspace_root_from_trusted_internal_payload() {
-        let outer_root = std::env::temp_dir().join(format!(
-            "loongclaw-file-read-relative-workspace-root-outer-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&outer_root).expect("create outer root");
-        std::fs::write(outer_root.join("note.txt"), "outer").expect("write outer note");
-
-        let config = test_tool_runtime_config(outer_root.clone());
-        let error = execute_tool_core_with_test_context(
-            ToolCoreRequest {
-                tool_name: "file.read".to_owned(),
-                payload: json!({
-                    "path": "note.txt",
-                    "_loongclaw": {
-                        "workspace_root": "relative/path"
-                    }
-                }),
-            },
-            &config,
-        )
-        .expect_err("relative workspace root override should be rejected");
-
-        assert!(
-            error.contains("path must be absolute"),
-            "expected absolute-path rejection, got: {error}"
-        );
-
-        std::fs::remove_dir_all(&outer_root).ok();
     }
 
     #[cfg(feature = "tool-webfetch")]
@@ -4651,59 +4579,6 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
-    }
-
-    #[cfg(feature = "tool-file")]
-    #[test]
-    fn tool_invoke_preserves_combined_trusted_internal_context_for_inner_execution() {
-        let child_root = std::env::temp_dir().join(format!(
-            "loongclaw-tool-invoke-workspace-root-child-{}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&child_root).expect("create child fixture root");
-        std::fs::write(child_root.join("note.txt"), "child").expect("write child note");
-
-        let (tool_name, mut payload) = bridge_provider_tool_call_with_scope(
-            "file.read",
-            json!({
-                "path": "note.txt"
-            }),
-            None,
-            None,
-        );
-        let payload_object = payload.as_object_mut().expect("tool.invoke payload object");
-        payload_object.insert(
-            LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY.to_owned(),
-            json!({
-                LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY: child_root.display().to_string(),
-                LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY: {
-                    "web_fetch": {
-                        "allowed_domains": ["docs.example.com"],
-                        "allow_private_hosts": false
-                    }
-                }
-            }),
-        );
-
-        let (_, effective_request) =
-            resolve_tool_invoke_request(&ToolCoreRequest { tool_name, payload })
-                .expect("tool.invoke should preserve trusted internal context");
-
-        let internal_context = effective_request.payload[LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY]
-            .as_object()
-            .expect("inner arguments should keep trusted internal context");
-        assert_eq!(
-            internal_context[LOONGCLAW_INTERNAL_WORKSPACE_ROOT_KEY],
-            child_root.display().to_string()
-        );
-        assert_eq!(
-            internal_context[LOONGCLAW_INTERNAL_RUNTIME_NARROWING_KEY]["web_fetch"]["allowed_domains"]
-                [0],
-            "docs.example.com"
-        );
-        assert_eq!(effective_request.payload["path"], "note.txt");
-
-        std::fs::remove_dir_all(&child_root).ok();
     }
 
     #[test]
