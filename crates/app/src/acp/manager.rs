@@ -195,7 +195,6 @@ impl AcpSessionManager {
             has_trace_id,
             input_len = request.input.chars().count(),
             sink_enabled = sink.is_some(),
-            has_trace_id = trace_id.is_some(),
             "starting ACP turn"
         );
         let backend = resolve_acp_backend(Some(metadata.backend_id.as_str()))?;
@@ -269,7 +268,6 @@ impl AcpSessionManager {
                     end_to_end_duration_ms,
                     execution_duration_ms,
                     queue_wait_ms,
-                    has_trace_id = trace_id.is_some(),
                     "ACP turn completed"
                 );
                 Ok(result)
