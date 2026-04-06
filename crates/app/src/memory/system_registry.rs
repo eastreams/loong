@@ -12,6 +12,7 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
+    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
 };
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
@@ -87,6 +88,10 @@ fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
         map.insert(
             DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             Arc::new(|| Box::new(BuiltinMemorySystem)),
+        );
+        map.insert(
+            WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(WorkspaceRecallMemorySystem)),
         );
         RwLock::new(map)
     })
@@ -248,7 +253,7 @@ pub fn collect_memory_system_runtime_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemorySystemCapability};
+    use crate::memory::{MEMORY_SYSTEM_API_VERSION, MemoryRecallMode, MemorySystemCapability};
     use crate::test_support::ScopedEnv;
 
     fn clear_memory_runtime_env_overrides(env: &mut ScopedEnv) {
@@ -394,6 +399,25 @@ mod tests {
                 .capabilities
                 .contains(&MemorySystemCapability::CanonicalStore),
             "builtin metadata should include canonical-store capability"
+        );
+        assert_eq!(
+            builtin.supported_recall_modes,
+            vec![MemoryRecallMode::PromptAssembly]
+        );
+
+        let workspace_recall = metadata
+            .iter()
+            .find(|entry| entry.id == WORKSPACE_RECALL_MEMORY_SYSTEM_ID)
+            .expect("workspace_recall metadata entry");
+        assert!(
+            workspace_recall
+                .capabilities
+                .contains(&MemorySystemCapability::RetrievalProvenance),
+            "workspace_recall metadata should include retrieval provenance capability"
+        );
+        assert_eq!(
+            workspace_recall.supported_recall_modes,
+            vec![MemoryRecallMode::PromptAssembly]
         );
     }
 

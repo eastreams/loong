@@ -5,23 +5,27 @@ use std::path::Path;
 use crate::runtime_self_continuity;
 
 use super::{
-    MemoryContextEntry, MemoryContextKind, WorkspaceMemoryDocumentKind,
-    WorkspaceMemoryDocumentLocation, collect_workspace_memory_document_locations,
-    runtime_config::MemoryRuntimeConfig,
+    MemoryContextEntry, MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind,
+    MemoryRecallMode, MemoryScope, WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
+    collect_workspace_memory_document_locations, runtime_config::MemoryRuntimeConfig,
 };
 
 const RECENT_DAILY_LOG_LIMIT: usize = 2;
 const DURABLE_RECALL_READ_SLACK_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DurableRecallDocument {
-    label: String,
-    content: String,
+pub(crate) struct DurableRecallDocument {
+    pub label: String,
+    pub path: String,
+    pub scope: MemoryScope,
+    pub content: String,
 }
 
 pub(crate) fn load_durable_recall_entries(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
+    memory_system_id: &str,
+    recall_mode: MemoryRecallMode,
 ) -> Result<Vec<MemoryContextEntry>, String> {
     let Some(workspace_root) = workspace_root else {
         return Ok(Vec::new());
@@ -35,16 +39,80 @@ pub(crate) fn load_durable_recall_entries(
     }
 
     let content = render_durable_recall_block(documents.as_slice());
+    let provenance = documents
+        .iter()
+        .map(|document| {
+            build_workspace_document_provenance(document, memory_system_id, recall_mode)
+        })
+        .collect::<Vec<_>>();
     let entry = MemoryContextEntry {
         kind: MemoryContextKind::RetrievedMemory,
         role: "system".to_owned(),
         content,
+        provenance,
     };
 
     Ok(vec![entry])
 }
 
-fn collect_durable_recall_documents(
+pub(crate) fn load_workspace_document_recall_entries(
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+    memory_system_id: &str,
+    recall_mode: MemoryRecallMode,
+    scopes: &[MemoryScope],
+    max_documents: usize,
+) -> Result<Vec<MemoryContextEntry>, String> {
+    let Some(workspace_root) = workspace_root else {
+        return Ok(Vec::new());
+    };
+
+    let per_file_char_budget = config.summary_max_chars.max(256);
+    let documents = collect_durable_recall_documents(workspace_root, per_file_char_budget)?;
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let filtered_documents = filter_recall_documents_by_scope(documents, scopes);
+    let capped_documents = filtered_documents
+        .into_iter()
+        .take(max_documents)
+        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+
+    for document in capped_documents {
+        let heading = format!("## Advisory Durable Recall — {}", document.label);
+        let intro = runtime_self_continuity::runtime_durable_recall_intro().to_owned();
+        let content = [heading, intro, document.content.clone()].join("\n\n");
+        let provenance =
+            build_workspace_document_provenance(&document, memory_system_id, recall_mode);
+        let entry = MemoryContextEntry {
+            kind: MemoryContextKind::RetrievedMemory,
+            role: "system".to_owned(),
+            content,
+            provenance: vec![provenance],
+        };
+        entries.push(entry);
+    }
+
+    Ok(entries)
+}
+
+fn filter_recall_documents_by_scope(
+    documents: Vec<DurableRecallDocument>,
+    scopes: &[MemoryScope],
+) -> Vec<DurableRecallDocument> {
+    if scopes.is_empty() {
+        return documents;
+    }
+
+    documents
+        .into_iter()
+        .filter(|document| scopes.contains(&document.scope))
+        .collect()
+}
+
+pub(crate) fn collect_durable_recall_documents(
     workspace_root: &Path,
     per_file_char_budget: usize,
 ) -> Result<Vec<DurableRecallDocument>, String> {
@@ -89,9 +157,18 @@ fn load_document_from_location(
 
     let document = DurableRecallDocument {
         label: location.label.clone(),
+        path: location.path.display().to_string(),
+        scope: document_scope(location.kind),
         content,
     };
     Ok(Some(document))
+}
+
+fn document_scope(kind: WorkspaceMemoryDocumentKind) -> MemoryScope {
+    match kind {
+        WorkspaceMemoryDocumentKind::Curated => MemoryScope::Workspace,
+        WorkspaceMemoryDocumentKind::DailyLog => MemoryScope::Session,
+    }
 }
 
 fn load_trimmed_document_content(
@@ -162,7 +239,7 @@ fn truncate_chars(input: &str, max_chars: usize) -> String {
     }
 }
 
-fn render_durable_recall_block(documents: &[DurableRecallDocument]) -> String {
+pub(crate) fn render_durable_recall_block(documents: &[DurableRecallDocument]) -> String {
     let mut sections = Vec::new();
     sections.push("## Advisory Durable Recall".to_owned());
     sections.push(runtime_self_continuity::runtime_durable_recall_intro().to_owned());
@@ -174,6 +251,21 @@ fn render_durable_recall_block(documents: &[DurableRecallDocument]) -> String {
     }
 
     sections.join("\n\n")
+}
+
+fn build_workspace_document_provenance(
+    document: &DurableRecallDocument,
+    memory_system_id: &str,
+    recall_mode: MemoryRecallMode,
+) -> MemoryContextProvenance {
+    MemoryContextProvenance::new(
+        memory_system_id,
+        MemoryProvenanceSourceKind::WorkspaceDocument,
+        Some(document.label.clone()),
+        Some(document.path.clone()),
+        Some(document.scope),
+        recall_mode,
+    )
 }
 
 #[cfg(test)]
@@ -199,8 +291,11 @@ mod tests {
 
         assert_eq!(documents.len(), 3);
         assert_eq!(documents[0].label, "MEMORY.md");
+        assert_eq!(documents[0].scope, MemoryScope::Workspace);
         assert_eq!(documents[1].label, "memory/2026-03-22.md");
+        assert_eq!(documents[1].scope, MemoryScope::Session);
         assert_eq!(documents[2].label, "memory/2026-03-21.md");
+        assert_eq!(documents[2].scope, MemoryScope::Session);
     }
 
     #[test]
@@ -259,5 +354,75 @@ mod tests {
 
         assert_eq!(truncated_char_count, 8);
         assert!(!truncated.is_empty());
+    }
+
+    #[test]
+    fn load_durable_recall_entries_attach_source_path_and_scope_provenance() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let memory_dir = workspace_root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(workspace_root.join("MEMORY.md"), "curated").expect("write curated file");
+        std::fs::write(memory_dir.join("2026-03-22.md"), "daily").expect("write daily file");
+
+        let config = MemoryRuntimeConfig::default();
+        let expected_curated_path = workspace_root
+            .join("MEMORY.md")
+            .canonicalize()
+            .expect("canonical curated path")
+            .display()
+            .to_string();
+        let entries = load_durable_recall_entries(
+            Some(workspace_root),
+            &config,
+            "builtin",
+            MemoryRecallMode::PromptAssembly,
+        )
+        .expect("load durable recall entries");
+
+        let entry = entries.first().expect("retrieved entry");
+        assert_eq!(entry.provenance.len(), 2);
+
+        let curated_provenance = &entry.provenance[0];
+        assert_eq!(curated_provenance.memory_system_id, "builtin");
+        assert_eq!(
+            curated_provenance.source_path.as_deref(),
+            Some(expected_curated_path.as_str())
+        );
+        assert_eq!(curated_provenance.scope, Some(MemoryScope::Workspace));
+
+        let daily_provenance = &entry.provenance[1];
+        assert_eq!(daily_provenance.scope, Some(MemoryScope::Session));
+        assert_eq!(
+            daily_provenance.recall_mode,
+            MemoryRecallMode::PromptAssembly
+        );
+    }
+
+    #[test]
+    fn workspace_document_recall_entries_honor_requested_scopes() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let memory_dir = workspace_root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(workspace_root.join("MEMORY.md"), "curated").expect("write curated file");
+        std::fs::write(memory_dir.join("2026-03-22.md"), "daily").expect("write daily file");
+
+        let config = MemoryRuntimeConfig::default();
+        let entries = load_workspace_document_recall_entries(
+            Some(workspace_root),
+            &config,
+            "workspace_recall",
+            MemoryRecallMode::PromptAssembly,
+            &[MemoryScope::Workspace],
+            4,
+        )
+        .expect("load workspace document recall entries");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].provenance.len(), 1);
+        assert_eq!(entries[0].provenance[0].scope, Some(MemoryScope::Workspace));
     }
 }

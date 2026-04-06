@@ -1490,16 +1490,19 @@ mod tests {
             kind: MemoryContextKind::RetrievedMemory,
             role: "system".to_owned(),
             content: "durable recall".to_owned(),
+            provenance: Vec::new(),
         };
         let summary_entry = MemoryContextEntry {
             kind: MemoryContextKind::Summary,
             role: "system".to_owned(),
             content: "summary block".to_owned(),
+            provenance: Vec::new(),
         };
         let turn_entry = MemoryContextEntry {
             kind: MemoryContextKind::Turn,
             role: "user".to_owned(),
             content: "hello".to_owned(),
+            provenance: Vec::new(),
         };
         let entries = vec![retrieved_entry, summary_entry, turn_entry];
         let retrieved_payload_chars = "system".len() + "durable recall".len();

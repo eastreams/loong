@@ -1377,6 +1377,94 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn message_builder_workspace_recall_system_suppresses_summary_and_prioritizes_recall_entries() {
+        let temp_dir = tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let memory_dir = workspace_root.join("memory");
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+
+        std::fs::write(
+            workspace_root.join("MEMORY.md"),
+            "# Durable Notes\n\nRemember the deploy freeze window.\n",
+        )
+        .expect("write curated memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "## Durable Recall\n\nCustomer migration starts tomorrow.\n",
+        )
+        .expect("write daily durable memory");
+
+        let db_path = workspace_root.join("provider-workspace-recall.sqlite3");
+        let mut config = LoongClawConfig::default();
+        config.tools.file_root = Some(workspace_root.display().to_string());
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+        config.memory.profile = crate::config::MemoryProfile::WindowPlusSummary;
+        config.memory.sliding_window = 2;
+        config.memory.sqlite_path = db_path.display().to_string();
+
+        let runtime_config =
+            crate::memory::runtime_config::MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "user",
+            "turn 1",
+            &runtime_config,
+        )
+        .expect("append turn 1");
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "assistant",
+            "turn 2",
+            &runtime_config,
+        )
+        .expect("append turn 2");
+        crate::memory::append_turn_direct(
+            "provider-workspace-recall-session",
+            "user",
+            "turn 3",
+            &runtime_config,
+        )
+        .expect("append turn 3");
+
+        let messages =
+            build_messages_for_session(&config, "provider-workspace-recall-session", true)
+                .expect("build messages");
+
+        let has_summary_message = messages.iter().any(|message| {
+            message["role"] == "system"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.contains("## Memory Summary"))
+        });
+        assert!(
+            !has_summary_message,
+            "workspace recall system should suppress builtin summary projection"
+        );
+
+        let durable_recall_message_index = messages
+            .iter()
+            .position(|message| {
+                message["role"] == "system"
+                    && message["content"].as_str().is_some_and(|content| {
+                        content.contains("Remember the deploy freeze window.")
+                    })
+            })
+            .expect("durable recall system message");
+        let first_turn_message_index = messages
+            .iter()
+            .position(|message| {
+                message["role"] == "assistant" && message["content"].as_str() == Some("turn 2")
+            })
+            .expect("assistant turn 2 message");
+
+        assert!(
+            durable_recall_message_index < first_turn_message_index,
+            "workspace recall entries should be projected before recent conversation turns"
+        );
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn message_builder_keeps_durable_recall_advisory_when_memory_files_look_like_identity() {
         let temp_dir = tempdir().expect("tempdir");
         let workspace_root = temp_dir.path();
@@ -1509,6 +1597,7 @@ mod tests {
                 "- demote repeated summary headings",
             )
             .to_owned(),
+            provenance: Vec::new(),
         };
 
         append_advisory_memory_message(&mut messages, &mut artifacts, &entry);
