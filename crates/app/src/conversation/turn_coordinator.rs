@@ -28,7 +28,9 @@ use crate::acp::{
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
-use crate::operator::session_graph::OperatorSessionGraph;
+use crate::operator::delegate_runtime::{
+    build_delegate_child_lifecycle_seed, next_delegate_child_depth,
+};
 use crate::runtime_self_continuity;
 
 use super::super::config::LoongClawConfig;
@@ -75,12 +77,10 @@ use super::session_history::{
 };
 #[cfg(feature = "memory-sqlite")]
 use super::subagent::{
-    ConstrainedSubagentExecution, ConstrainedSubagentIdentity, ConstrainedSubagentMode,
-    ConstrainedSubagentProfile, ConstrainedSubagentTerminalReason,
+    ConstrainedSubagentExecution, ConstrainedSubagentMode, ConstrainedSubagentTerminalReason,
 };
 use super::tool_discovery_state::{TOOL_DISCOVERY_REFRESHED_EVENT_NAME, ToolDiscoveryState};
 use super::trust_projection::{
-    build_delegate_queued_child_session_request, build_delegate_started_child_session_request,
     emit_provider_failover_trust_event_if_needed, emit_runtime_binding_trust_event_if_needed,
 };
 use super::turn_budget::{
@@ -3989,24 +3989,21 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
                 &session_context.session_id,
                 config.tools.delegate.max_active_children,
                 |active_children| {
-                    let execution = constrained_subagent_execution_for_delegate(
+                    let seed = build_delegate_child_lifecycle_seed(
                         config,
                         binding,
-                        subagent_identity.clone(),
                         ConstrainedSubagentMode::Inline,
                         delegate_request.timeout_seconds,
                         next_child_depth,
                         active_children,
-                    );
-                    let request = build_delegate_started_child_session_request(
                         &session_context.session_id,
                         &child_session_id,
                         child_label.clone(),
                         &delegate_request.task,
                         runtime_self_continuity.as_ref(),
-                        &execution,
+                        subagent_identity.clone(),
                     );
-                    Ok((request, execution))
+                    Ok((seed.request, seed.execution))
                 },
             )?;
 
@@ -4060,24 +4057,21 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
         &session_context.session_id,
         config.tools.delegate.max_active_children,
         |active_children| {
-            let execution = constrained_subagent_execution_for_delegate(
+            let seed = build_delegate_child_lifecycle_seed(
                 config,
                 binding,
-                subagent_identity.clone(),
                 ConstrainedSubagentMode::Async,
                 delegate_request.timeout_seconds,
                 next_child_depth,
                 active_children,
-            );
-            let request = build_delegate_queued_child_session_request(
                 &session_context.session_id,
                 &child_session_id,
                 child_label.clone(),
                 &delegate_request.task,
                 runtime_self_continuity.as_ref(),
-                &execution,
+                subagent_identity.clone(),
             );
-            Ok((request, execution))
+            Ok((seed.request, seed.execution))
         },
     )?;
 
@@ -4512,45 +4506,16 @@ fn spawn_async_delegate_detached(
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn constrained_subagent_execution_for_delegate(
-    config: &LoongClawConfig,
-    binding: ConversationRuntimeBinding<'_>,
-    subagent_identity: Option<ConstrainedSubagentIdentity>,
-    mode: ConstrainedSubagentMode,
-    timeout_seconds: u64,
-    next_child_depth: usize,
-    active_children: usize,
-) -> ConstrainedSubagentExecution {
-    let subagent_profile = ConstrainedSubagentProfile::for_child_depth(
-        next_child_depth,
-        config.tools.delegate.max_depth,
-    );
-
-    ConstrainedSubagentExecution {
-        mode,
-        depth: next_child_depth,
-        max_depth: config.tools.delegate.max_depth,
-        active_children,
-        max_active_children: config.tools.delegate.max_active_children,
-        timeout_seconds,
-        allow_shell_in_child: config.tools.delegate.allow_shell_in_child,
-        child_tool_allowlist: config.tools.delegate.child_tool_allowlist.clone(),
-        runtime_narrowing: config.tools.delegate.child_runtime.runtime_narrowing(),
-        kernel_bound: binding.is_kernel_bound(),
-        identity: subagent_identity,
-        profile: Some(subagent_profile),
-    }
-}
-
-#[cfg(feature = "memory-sqlite")]
 fn next_delegate_child_depth_for_delegate(
     config: &LoongClawConfig,
     repo: &SessionRepository,
     session_context: &SessionContext,
 ) -> Result<usize, String> {
-    let session_graph = OperatorSessionGraph::new(repo);
-    session_graph
-        .next_delegate_child_depth(&session_context.session_id, config.tools.delegate.max_depth)
+    next_delegate_child_depth(
+        repo,
+        &session_context.session_id,
+        config.tools.delegate.max_depth,
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]

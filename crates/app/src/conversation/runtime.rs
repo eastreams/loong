@@ -7,6 +7,10 @@ use serde_json::Value;
 
 use crate::CliResult;
 use crate::KernelContext;
+#[cfg(feature = "memory-sqlite")]
+use crate::operator::delegate_runtime::{
+    derive_subagent_profile_from_lineage, load_delegate_execution, resolve_delegate_child_contract,
+};
 use crate::runtime_self_continuity::{self, RuntimeSelfContinuity};
 use crate::tools::runtime_config::ToolRuntimeNarrowing;
 use crate::tools::{ToolView, delegate_child_tool_view_for_runtime_config_and_contract};
@@ -286,49 +290,6 @@ fn normalize_session_id(session_id: String) -> String {
 }
 
 #[cfg(feature = "memory-sqlite")]
-fn load_delegate_execution(
-    repo: &SessionRepository,
-    session_id: &str,
-) -> Result<Option<ConstrainedSubagentExecution>, String> {
-    let events = repo.list_delegate_lifecycle_events(session_id)?;
-    Ok(events.into_iter().rev().find_map(|event| {
-        matches!(
-            event.event_kind.as_str(),
-            "delegate_queued" | "delegate_started"
-        )
-        .then(|| {
-            super::subagent::ConstrainedSubagentExecution::from_event_payload(&event.payload_json)
-        })
-        .flatten()
-    }))
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn derive_subagent_profile_from_lineage(
-    repo: &SessionRepository,
-    session_id: &str,
-    max_depth: usize,
-) -> Result<Option<ConstrainedSubagentProfile>, String> {
-    let depth = match repo.session_lineage_depth(session_id) {
-        Ok(depth) => depth,
-        Err(error)
-            if error.starts_with("session_lineage_broken:")
-                || error.starts_with("session_lineage_cycle_detected:") =>
-        {
-            return Ok(None);
-        }
-        Err(error) => {
-            return Err(format!(
-                "compute session lineage depth for subagent profile failed: {error}"
-            ));
-        }
-    };
-    Ok(Some(ConstrainedSubagentProfile::for_child_depth(
-        depth, max_depth,
-    )))
-}
-
-#[cfg(feature = "memory-sqlite")]
 fn load_session_tool_policy(
     repo: &SessionRepository,
     session_id: &str,
@@ -485,33 +446,10 @@ fn build_base_tool_view_from_snapshot(
         ));
     };
 
-    if snapshot.parent_session_id.is_some() {
-        let derived_contract = match snapshot.subagent_execution.as_ref() {
-            Some(subagent_execution) => Some(subagent_execution.contract_view()),
-            None => derive_subagent_profile_from_lineage(
-                repo,
-                session_id,
-                config.tools.delegate.max_depth,
-            )?
-            .map(ConstrainedSubagentContractView::from_profile),
-        };
-        return Ok(delegate_child_tool_view_for_runtime_config_and_contract(
-            &config.tools,
-            &tool_runtime_config,
-            derived_contract.as_ref(),
-        ));
-    }
-
-    if snapshot.is_delegate_child {
-        let derived_contract = match snapshot.subagent_execution.as_ref() {
-            Some(subagent_execution) => Some(subagent_execution.contract_view()),
-            None => derive_subagent_profile_from_lineage(
-                repo,
-                session_id,
-                config.tools.delegate.max_depth,
-            )?
-            .map(ConstrainedSubagentContractView::from_profile),
-        };
+    let is_delegate_child = snapshot.parent_session_id.is_some() || snapshot.is_delegate_child;
+    if is_delegate_child {
+        let derived_contract =
+            resolve_delegate_child_contract(repo, session_id, config.tools.delegate.max_depth)?;
         return Ok(delegate_child_tool_view_for_runtime_config_and_contract(
             &config.tools,
             &tool_runtime_config,

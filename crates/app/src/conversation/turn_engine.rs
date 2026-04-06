@@ -20,6 +20,8 @@ use crate::memory::runtime_config::MemoryRuntimeConfig;
 #[cfg(feature = "memory-sqlite")]
 use crate::operator::approval_runtime::{GovernedToolApprovalRequest, OperatorApprovalRuntime};
 #[cfg(feature = "memory-sqlite")]
+use crate::operator::delegate_runtime::resolve_delegate_child_contract;
+#[cfg(feature = "memory-sqlite")]
 use crate::operator::session_graph::OperatorSessionGraph;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
@@ -652,34 +654,11 @@ impl DefaultAppToolDispatcher {
             if session.parent_session_id.is_some() {
                 let subagent_contract = match session_context.resolved_subagent_contract() {
                     Some(subagent_contract) => Some(subagent_contract),
-                    None => {
-                        let session_graph = OperatorSessionGraph::new(&repo);
-                        match session_graph.lineage_depth(&session_context.session_id) {
-                            Ok(depth) => {
-                                let subagent_profile =
-                                    crate::conversation::ConstrainedSubagentProfile::for_child_depth(
-                                        depth,
-                                        self.tool_config.delegate.max_depth,
-                                    );
-                                Some(
-                                    crate::conversation::ConstrainedSubagentContractView::from_profile(
-                                        subagent_profile,
-                                    ),
-                                )
-                            }
-                            Err(error)
-                                if error.starts_with("session_lineage_broken:")
-                                    || error.starts_with("session_lineage_cycle_detected:") =>
-                            {
-                                None
-                            }
-                            Err(error) => {
-                                return Err(format!(
-                                    "compute session lineage depth for dispatcher tool view failed: {error}"
-                                ));
-                            }
-                        }
-                    }
+                    None => resolve_delegate_child_contract(
+                        &repo,
+                        &session_context.session_id,
+                        self.tool_config.delegate.max_depth,
+                    )?,
                 };
                 return Ok(with_runtime_ready_browser_companion_tools(
                     delegate_child_tool_view_for_contract(
@@ -698,32 +677,11 @@ impl DefaultAppToolDispatcher {
             .load_session_summary_with_legacy_fallback(&session_context.session_id)?
             .is_some_and(|session| session.kind == SessionKind::DelegateChild)
         {
-            let session_graph = OperatorSessionGraph::new(&repo);
-            let subagent_contract = match session_graph.lineage_depth(&session_context.session_id) {
-                Ok(depth) => {
-                    let subagent_profile =
-                        crate::conversation::ConstrainedSubagentProfile::for_child_depth(
-                            depth,
-                            self.tool_config.delegate.max_depth,
-                        );
-                    Some(
-                        crate::conversation::ConstrainedSubagentContractView::from_profile(
-                            subagent_profile,
-                        ),
-                    )
-                }
-                Err(error)
-                    if error.starts_with("session_lineage_broken:")
-                        || error.starts_with("session_lineage_cycle_detected:") =>
-                {
-                    None
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "compute session lineage depth for dispatcher tool view failed: {error}"
-                    ));
-                }
-            };
+            let subagent_contract = resolve_delegate_child_contract(
+                &repo,
+                &session_context.session_id,
+                self.tool_config.delegate.max_depth,
+            )?;
             return Ok(with_runtime_ready_browser_companion_tools(
                 delegate_child_tool_view_for_contract(
                     &self.tool_config,
