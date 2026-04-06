@@ -24,8 +24,8 @@ use crate::runtime::{
     RuntimeExtensionOutcome, RuntimeExtensionRequest,
 };
 use crate::tool::{
-    CoreToolAdapter, ToolConcurrencyClass, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter,
-    ToolExtensionOutcome, ToolExtensionRequest,
+    CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
+    ToolExtensionRequest,
 };
 
 pub struct MockEmbeddedPiHarness {
@@ -270,10 +270,6 @@ impl RuntimeExtensionAdapter for MockRuntimeExtension {
 impl CoreToolAdapter for MockCoreTool {
     fn name(&self) -> &str {
         "core-tools"
-    }
-
-    fn concurrency_class(&self) -> ToolConcurrencyClass {
-        ToolConcurrencyClass::Unknown
     }
 
     async fn execute_core_tool(

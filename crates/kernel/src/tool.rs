@@ -26,15 +26,15 @@ impl ToolConcurrencyClass {
             Self::Unknown => "unknown",
         }
     }
+
+    pub const fn requires_serial_execution(self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
 }
 
 #[async_trait]
 pub trait CoreToolAdapter: Send + Sync {
     fn name(&self) -> &str;
-
-    fn concurrency_class(&self) -> ToolConcurrencyClass {
-        ToolConcurrencyClass::Unknown
-    }
 
     async fn execute_core_tool(
         &self,

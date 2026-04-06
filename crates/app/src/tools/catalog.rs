@@ -246,6 +246,7 @@ pub struct ToolDescriptor {
     pub visibility_gate: ToolVisibilityGate,
     capability_action_class: CapabilityActionClass,
     policy: ToolPolicyDescriptor,
+    concurrency_class: ToolConcurrencyClass,
     provider_definition_builder: fn(&ToolDescriptor) -> Value,
 }
 
@@ -295,10 +296,7 @@ impl ToolDescriptor {
     }
 
     pub fn concurrency_class(&self) -> ToolConcurrencyClass {
-        match self.scheduling_class() {
-            ToolSchedulingClass::ParallelSafe => ToolConcurrencyClass::ReadOnly,
-            ToolSchedulingClass::SerialOnly => ToolConcurrencyClass::Unknown,
-        }
+        self.concurrency_class
     }
 
     pub fn governance_profile(&self) -> ToolGovernanceProfile {
@@ -447,6 +445,69 @@ impl ToolCatalog {
     }
 }
 
+fn declared_concurrency_class(tool_name: &str) -> ToolConcurrencyClass {
+    match tool_name {
+        "tool.search"
+        | "external_skills.resolve"
+        | "external_skills.search"
+        | "external_skills.recommend"
+        | "external_skills.source_search"
+        | "external_skills.inspect"
+        | "external_skills.list"
+        | "approval_request_status"
+        | "approval_requests_list"
+        | "session_events"
+        | "session_tool_policy_status"
+        | "session_search"
+        | "session_status"
+        | "session_wait"
+        | "sessions_history"
+        | "sessions_list"
+        | "file.read"
+        | "memory_search"
+        | "memory_get"
+        | "browser.companion.snapshot"
+        | "browser.companion.wait"
+        | "browser.extract"
+        | "web.fetch"
+        | "web.search" => ToolConcurrencyClass::ReadOnly,
+        "config.import"
+        | "external_skills.fetch"
+        | "external_skills.install"
+        | "external_skills.invoke"
+        | "external_skills.policy"
+        | "external_skills.remove"
+        | "provider.switch"
+        | "approval_request_resolve"
+        | "delegate"
+        | "delegate_async"
+        | "session_archive"
+        | "session_cancel"
+        | "session_tool_policy_set"
+        | "session_tool_policy_clear"
+        | "session_recover"
+        | "sessions_send"
+        | "file.write"
+        | "file.edit"
+        | "shell.exec"
+        | "bash.exec"
+        | "browser.click"
+        | "browser.companion.click"
+        | "browser.companion.navigate"
+        | "browser.companion.session.start"
+        | "browser.companion.session.stop"
+        | "browser.companion.type"
+        | "browser.open" => ToolConcurrencyClass::Mutating,
+        _ => ToolConcurrencyClass::Unknown,
+    }
+}
+
+fn annotate_tool_concurrency_classes(descriptors: &mut [ToolDescriptor]) {
+    for descriptor in descriptors {
+        descriptor.concurrency_class = declared_concurrency_class(descriptor.name);
+    }
+}
+
 fn build_tool_catalog() -> ToolCatalog {
     let mut descriptors = vec![
         ToolDescriptor {
@@ -460,6 +521,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::Discover,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: tool_search_definition,
         },
         ToolDescriptor {
@@ -473,6 +535,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: tool_invoke_definition,
         },
         ToolDescriptor {
@@ -486,6 +549,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: config_import_definition,
         },
         ToolDescriptor {
@@ -499,6 +563,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityFetch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_fetch_definition,
         },
         ToolDescriptor {
@@ -512,6 +577,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_resolve_definition,
         },
         ToolDescriptor {
@@ -525,6 +591,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_search_definition,
         },
         ToolDescriptor {
@@ -538,6 +605,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_recommend_definition,
         },
         ToolDescriptor {
@@ -551,6 +619,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_source_search_definition,
         },
         ToolDescriptor {
@@ -564,6 +633,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_inspect_definition,
         },
         ToolDescriptor {
@@ -577,6 +647,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityInstall,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_install_definition,
         },
         ToolDescriptor {
@@ -590,6 +661,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::CapabilityLoad,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_invoke_definition,
         },
         ToolDescriptor {
@@ -603,6 +675,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::Discover,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_list_definition,
         },
         ToolDescriptor {
@@ -616,6 +689,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_policy_definition,
         },
         ToolDescriptor {
@@ -629,6 +703,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::ExternalSkills,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: external_skills_remove_definition,
         },
         ToolDescriptor {
@@ -642,6 +717,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::RuntimeSwitch,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: provider_switch_definition,
         },
         ToolDescriptor {
@@ -655,6 +731,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_request_resolve_definition,
         },
         ToolDescriptor {
@@ -668,6 +745,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_request_status_definition,
         },
         ToolDescriptor {
@@ -681,6 +759,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: approval_requests_list_definition,
         },
         ToolDescriptor {
@@ -694,6 +773,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: delegate_definition,
         },
         ToolDescriptor {
@@ -707,6 +787,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Delegate,
             capability_action_class: CapabilityActionClass::TopologyExpand,
             policy: TOPOLOGY_MUTATION_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: delegate_async_definition,
         },
         ToolDescriptor {
@@ -720,6 +801,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_archive_definition,
         },
         ToolDescriptor {
@@ -733,6 +815,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_cancel_definition,
         },
         ToolDescriptor {
@@ -746,6 +829,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_events_definition,
         },
         ToolDescriptor {
@@ -759,6 +843,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_status_definition,
         },
         ToolDescriptor {
@@ -772,6 +857,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_set_definition,
         },
         ToolDescriptor {
@@ -785,6 +871,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::PolicyMutation,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_tool_policy_clear_definition,
         },
         ToolDescriptor {
@@ -798,6 +885,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_search_definition,
         },
         ToolDescriptor {
@@ -811,6 +899,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::SessionMutation,
             capability_action_class: CapabilityActionClass::SessionMutation,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_recover_definition,
         },
         ToolDescriptor {
@@ -824,6 +913,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_status_definition,
         },
         ToolDescriptor {
@@ -837,6 +927,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: session_wait_definition,
         },
         ToolDescriptor {
@@ -850,6 +941,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_history_definition,
         },
         ToolDescriptor {
@@ -863,6 +955,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Sessions,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_list_definition,
         },
         ToolDescriptor {
@@ -876,6 +969,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Messages,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: ELEVATED_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: sessions_send_definition,
         },
     ];
@@ -1157,6 +1251,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_read_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1170,6 +1265,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::MemorySearchCorpus,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: memory_search_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1183,6 +1279,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::MemoryFileRoot,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: memory_get_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1196,6 +1293,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_write_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1209,6 +1307,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: file_edit_definition,
         });
     }
@@ -1226,6 +1325,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Always,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: shell_exec_definition,
         });
     }
@@ -1243,6 +1343,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BashRuntime,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: bash_exec_definition,
         });
     }
@@ -1260,6 +1361,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1273,6 +1375,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_click_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1286,6 +1389,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_navigate_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1299,6 +1403,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_session_start_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1312,6 +1417,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_session_stop_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1325,6 +1431,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_snapshot_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1338,6 +1445,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: HIGH_RISK_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_type_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1351,6 +1459,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::BrowserCompanion,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_companion_wait_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1364,6 +1473,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_extract_definition,
         });
         descriptors.push(ToolDescriptor {
@@ -1378,6 +1488,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::Browser,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: DEFAULT_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: browser_open_definition,
         });
     }
@@ -1395,6 +1506,7 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::WebFetch,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: web_fetch_definition,
         });
     }
@@ -1413,10 +1525,12 @@ fn build_tool_catalog() -> ToolCatalog {
             visibility_gate: ToolVisibilityGate::WebSearch,
             capability_action_class: CapabilityActionClass::ExecuteExisting,
             policy: PARALLEL_SAFE_TOOL_POLICY_DESCRIPTOR,
+            concurrency_class: ToolConcurrencyClass::Unknown,
             provider_definition_builder: web_search_definition,
         });
     }
 
+    annotate_tool_concurrency_classes(&mut descriptors);
     descriptors.sort_by(|left, right| left.name.cmp(right.name));
     ToolCatalog { descriptors }
 }
@@ -3493,6 +3607,7 @@ fn push_feishu_tool_descriptor(
         visibility_gate: ToolVisibilityGate::Feishu,
         capability_action_class: CapabilityActionClass::ExecuteExisting,
         policy,
+        concurrency_class: ToolConcurrencyClass::Unknown,
         provider_definition_builder: feishu_definition,
     });
 }
@@ -4739,10 +4854,24 @@ mod tests {
         assert_eq!(invoke.scheduling_class, ToolSchedulingClass::SerialOnly);
         assert_eq!(invoke.concurrency_class, ToolConcurrencyClass::Unknown);
 
-        let status =
-            find_tool_catalog_entry("session_status").expect("session_status catalog entry");
-        assert_eq!(status.scheduling_class, ToolSchedulingClass::SerialOnly);
-        assert_eq!(status.concurrency_class, ToolConcurrencyClass::Unknown);
+        let delegate_async =
+            find_tool_catalog_entry("delegate_async").expect("delegate_async catalog entry");
+        assert_eq!(
+            delegate_async.scheduling_class,
+            ToolSchedulingClass::SerialOnly
+        );
+        assert_eq!(
+            delegate_async.concurrency_class,
+            ToolConcurrencyClass::Mutating
+        );
+
+        let file_write = find_tool_catalog_entry("file.write").expect("file.write catalog entry");
+        assert_eq!(file_write.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(file_write.concurrency_class, ToolConcurrencyClass::Mutating);
+
+        let bash_exec = find_tool_catalog_entry("bash.exec").expect("bash.exec catalog entry");
+        assert_eq!(bash_exec.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(bash_exec.concurrency_class, ToolConcurrencyClass::Mutating);
     }
 
     #[test]
@@ -4933,6 +5062,9 @@ mod tests {
         let search = find_tool_catalog_entry("tool.search").expect("tool.search catalog entry");
         let search_value =
             serde_json::to_value(search).expect("serialize tool.search catalog entry");
+        let invoke = find_tool_catalog_entry("tool.invoke").expect("tool.invoke catalog entry");
+        let invoke_value =
+            serde_json::to_value(invoke).expect("serialize tool.invoke catalog entry");
 
         assert_eq!(
             delegate_async.capability_action_class,
@@ -4942,8 +5074,9 @@ mod tests {
             delegate_async_value["capability_action_class"],
             "topology_expand"
         );
-        assert_eq!(delegate_async_value["concurrency_class"], "unknown");
+        assert_eq!(delegate_async_value["concurrency_class"], "mutating");
         assert_eq!(search_value["concurrency_class"], "read_only");
+        assert_eq!(invoke_value["concurrency_class"], "unknown");
     }
 
     #[test]
