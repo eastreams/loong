@@ -127,6 +127,9 @@ pub(super) fn print_cli_chat_startup(
 
 #[allow(clippy::print_stdout)] // CLI output
 pub(super) async fn print_turn_checkpoint_startup_health(runtime: &CliTurnRuntime) {
+    #[cfg(not(feature = "memory-sqlite"))]
+    let _ = runtime;
+
     #[cfg(feature = "memory-sqlite")]
     let render_width = detect_cli_chat_render_width();
 
@@ -174,6 +177,9 @@ pub(super) async fn print_cli_chat_status(
 }
 
 async fn print_turn_checkpoint_status_health(runtime: &CliTurnRuntime) {
+    #[cfg(not(feature = "memory-sqlite"))]
+    let _ = runtime;
+
     #[cfg(feature = "memory-sqlite")]
     let render_width = detect_cli_chat_render_width();
 
@@ -832,7 +838,7 @@ fn extract_manual_compaction_summary_headline(
 ) -> Option<String> {
     let first_turn = snapshot.turns.first()?;
     let content = first_turn.content.trim();
-    if !content.starts_with("Compacted ") {
+    if !crate::conversation::is_compacted_summary_content(content) {
         return None;
     }
 
@@ -1138,7 +1144,7 @@ fn build_turn_checkpoint_health_message_spec(
     always_emit: bool,
 ) -> Option<TuiMessageSpec> {
     let summary = diagnostics.summary();
-    if !always_emit && !summary.checkpoint_durable {
+    if !always_emit && !summary.checkpoint_durable && !summary.requires_recovery {
         return None;
     }
 

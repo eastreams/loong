@@ -1,6 +1,7 @@
 use crate::memory::WindowTurn;
 use crate::runtime_self_continuity;
 
+pub(crate) const COMPACTED_SUMMARY_PREFIX: &str = "Compacted ";
 const SUMMARY_MAX_RENDERED_TURNS: usize = 4;
 const SUMMARY_PREFERRED_USER_TURNS: usize = 3;
 const SUMMARY_PREFERRED_ASSISTANT_TURNS: usize = 1;
@@ -39,7 +40,7 @@ pub fn compact_window(turns: &[WindowTurn], policy: CompactPolicy) -> Option<Vec
     let summary = WindowTurn {
         role: "user".to_owned(),
         content: format!(
-            "Compacted {} earlier turns\n{}",
+            "{COMPACTED_SUMMARY_PREFIX}{} earlier turns\n{}",
             older.len(),
             render_summary(older)
         ),
@@ -78,8 +79,7 @@ fn render_summary(turns: &[WindowTurn]) -> String {
         .into_iter()
         .filter_map(|idx| all_lines.get(idx).cloned())
         .collect::<Vec<_>>();
-    let omitted_lines = all_lines.len().saturating_sub(selected_lines.len());
-    render_structured_summary(&selected_lines, omitted_lines)
+    render_structured_summary(&selected_lines, all_lines.len())
 }
 
 fn extend_summary_indices(
@@ -181,42 +181,43 @@ struct RenderedSummaryLine {
     is_user: bool,
 }
 
-fn render_structured_summary(lines: &[RenderedSummaryLine], omitted_lines: usize) -> String {
+fn render_structured_summary(lines: &[RenderedSummaryLine], total_line_count: usize) -> String {
     let scope_note = runtime_self_continuity::compaction_summary_scope_note();
-    let omitted_line = if omitted_lines > 0 {
-        Some(format!(
-            "{OMITTED_CONTEXT_PREFIX} {omitted_lines} earlier turns omitted."
-        ))
-    } else {
-        None
-    };
-    let reserved_chars = omitted_line
-        .as_ref()
-        .map(|line| line.chars().count() + 1)
-        .unwrap_or(0);
+    let max_omitted_count_width = total_line_count.to_string().chars().count();
+    let omitted_line = format!(
+        "{OMITTED_CONTEXT_PREFIX} {} earlier turns omitted.",
+        "9".repeat(max_omitted_count_width.max(1))
+    );
+    let reserved_chars = omitted_line.chars().count().saturating_add(1);
     let content_budget_limit = SUMMARY_TOTAL_CHARS_MAX.saturating_sub(reserved_chars);
     let mut budget = SummaryCharBudget::new(content_budget_limit);
     let mut sections = Vec::new();
+    let mut rendered_selected_lines = 0usize;
 
     push_summary_line(&mut sections, &mut budget, scope_note);
 
     let user_lines = collect_summary_group(lines, true);
-    append_summary_section(
+    let user_rendered_lines = append_summary_section(
         &mut sections,
         &mut budget,
         USER_CONTEXT_HEADING,
         &user_lines,
     );
+    rendered_selected_lines += user_rendered_lines;
 
     let assistant_lines = collect_summary_group(lines, false);
-    append_summary_section(
+    let assistant_rendered_lines = append_summary_section(
         &mut sections,
         &mut budget,
         ASSISTANT_PROGRESS_HEADING,
         &assistant_lines,
     );
+    rendered_selected_lines += assistant_rendered_lines;
 
-    if let Some(omitted_line) = omitted_line {
+    let omitted_lines = total_line_count.saturating_sub(rendered_selected_lines);
+    if omitted_lines > 0 {
+        let omitted_line =
+            format!("{OMITTED_CONTEXT_PREFIX} {omitted_lines} earlier turns omitted.");
         sections.push(omitted_line);
     }
 
@@ -236,21 +237,24 @@ fn append_summary_section(
     budget: &mut SummaryCharBudget,
     heading: &str,
     lines: &[String],
-) {
+) -> usize {
     if lines.is_empty() {
-        return;
+        return 0;
     }
 
     if !push_summary_line(sections, budget, heading) {
-        return;
+        return 0;
     }
 
+    let mut rendered_lines = 0usize;
     for line in lines {
         let bullet_line = format!("- {line}");
         if !push_summary_line(sections, budget, &bullet_line) {
-            return;
+            return rendered_lines;
         }
+        rendered_lines += 1;
     }
+    rendered_lines
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -300,7 +304,7 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
         return Vec::new();
     }
 
-    if turn.content.trim_start().starts_with("Compacted ") {
+    if is_compacted_summary_content(&turn.content) {
         let lines = extract_prior_summary_lines(&turn.content);
         if !lines.is_empty() {
             return lines;
@@ -318,7 +322,11 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
 }
 
 fn is_compacted_summary_turn(turn: &WindowTurn) -> bool {
-    turn.content.trim_start().starts_with("Compacted ")
+    is_compacted_summary_content(&turn.content)
+}
+
+pub(crate) fn is_compacted_summary_content(content: &str) -> bool {
+    content.trim_start().starts_with(COMPACTED_SUMMARY_PREFIX)
 }
 
 fn is_internal_assistant_event_turn(turn: &WindowTurn) -> bool {

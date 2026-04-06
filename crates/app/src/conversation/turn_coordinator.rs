@@ -1159,6 +1159,10 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
+        if let Some(kernel_ctx) = binding.kernel_context() {
+            runtime.bootstrap(config, session_id, kernel_ctx).await?;
+        }
+
         let session_context = runtime.session_context(config, session_id, binding)?;
         let tool_view = session_context.tool_view.clone();
         let before_messages = runtime
