@@ -1802,7 +1802,7 @@ mod tests {
     ) -> (runtime_config::BashExecRuntimePolicy, PathBuf) {
         let log_path = root.join("bash-args.log");
         let runtime_path = write_fake_bash_runtime(root, "fake-bash", &log_path);
-        let rules_dir = root.join(".loongclaw").join("rules");
+        let rules_dir = root.join(crate::config::HOME_DIR_NAME).join("rules");
         let rules = bash_rules::load_rules_from_dir(&rules_dir).expect("load rules");
 
         (
