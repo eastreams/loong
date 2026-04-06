@@ -351,7 +351,10 @@ impl MemorySystem for BuiltinMemorySystem {
             "Built-in SQLite-backed canonical memory with deterministic prompt hydration.",
         )
         .with_supported_pre_assembly_stage_families(builtin_pre_assembly_stage_families())
-        .with_supported_recall_modes([MemoryRecallMode::PromptAssembly])
+        .with_supported_recall_modes([
+            MemoryRecallMode::PromptAssembly,
+            MemoryRecallMode::OperatorInspection,
+        ])
     }
 
     fn build_retrieval_request(
@@ -419,7 +422,10 @@ impl MemorySystem for WorkspaceRecallMemorySystem {
             MemoryStageFamily::Retrieve,
             MemoryStageFamily::Rank,
         ])
-        .with_supported_recall_modes([MemoryRecallMode::PromptAssembly])
+        .with_supported_recall_modes([
+            MemoryRecallMode::PromptAssembly,
+            MemoryRecallMode::OperatorInspection,
+        ])
     }
 
     fn build_retrieval_request(
@@ -575,7 +581,10 @@ mod tests {
         );
         assert_eq!(
             metadata.supported_recall_modes,
-            vec![MemoryRecallMode::PromptAssembly]
+            vec![
+                MemoryRecallMode::PromptAssembly,
+                MemoryRecallMode::OperatorInspection
+            ]
         );
     }
 
@@ -653,7 +662,10 @@ mod tests {
         );
         assert_eq!(
             metadata.supported_recall_modes,
-            vec![MemoryRecallMode::PromptAssembly]
+            vec![
+                MemoryRecallMode::PromptAssembly,
+                MemoryRecallMode::OperatorInspection
+            ]
         );
     }
 

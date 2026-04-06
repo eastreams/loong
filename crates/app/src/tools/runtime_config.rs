@@ -670,6 +670,7 @@ impl ToolExecutionConfig {
 pub struct ToolRuntimeConfig {
     pub file_root: Option<PathBuf>,
     pub memory_sqlite_path: Option<PathBuf>,
+    pub selected_memory_system_id: String,
     pub shell_allow: BTreeSet<String>,
     pub shell_deny: BTreeSet<String>,
     pub shell_default_mode: ShellPolicyDefault,
@@ -696,6 +697,7 @@ impl Default for ToolRuntimeConfig {
         Self {
             file_root: None,
             memory_sqlite_path: None,
+            selected_memory_system_id: crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             shell_allow: crate::config::DEFAULT_SHELL_ALLOW
                 .iter()
                 .map(|s| (*s).to_owned())
@@ -736,6 +738,8 @@ impl ToolRuntimeConfig {
     }
 
     pub fn from_loongclaw_config(config: &LoongClawConfig, config_path: Option<&Path>) -> Self {
+        let memory_system_selection = crate::memory::resolve_memory_system_selection(config);
+        let selected_memory_system_id = memory_system_selection.id;
         let web_fetch_allowed_domains = config.tools.web.normalized_allowed_domains();
         let web_fetch_enforce_allowed_domains = !web_fetch_allowed_domains.is_empty();
         let browser_companion_allowed_domains =
@@ -762,6 +766,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root: Some(config.tools.resolved_file_root()),
             memory_sqlite_path: Some(config.memory.resolved_sqlite_path()),
+            selected_memory_system_id,
             shell_allow,
             shell_deny,
             shell_default_mode: ShellPolicyDefault::parse(&config.tools.shell_default_mode),
@@ -906,6 +911,8 @@ impl ToolRuntimeConfig {
             let default_config = crate::config::LoongClawConfig::default();
             Some(default_config.memory.resolved_sqlite_path())
         });
+        let selected_memory_system_id = crate::memory::registered_memory_system_id_from_env()
+            .unwrap_or_else(|| crate::memory::DEFAULT_MEMORY_SYSTEM_ID.to_owned());
         let config_path = std::env::var("LOONGCLAW_CONFIG_PATH")
             .ok()
             .map(PathBuf::from);
@@ -1056,6 +1063,7 @@ impl ToolRuntimeConfig {
         Self {
             file_root,
             memory_sqlite_path,
+            selected_memory_system_id,
             shell_allow,
             shell_deny,
             shell_default_mode: ShellPolicyDefault::Deny,
@@ -2209,6 +2217,16 @@ mod tests {
     }
 
     #[test]
+    fn selected_memory_system_id_uses_injected_config() {
+        let mut config = crate::config::LoongClawConfig::default();
+        config.memory.system = crate::config::MemorySystemKind::WorkspaceRecall;
+
+        let runtime = ToolRuntimeConfig::from_loongclaw_config(&config, None);
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
+    }
+
+    #[test]
     fn memory_sqlite_path_from_env_uses_legacy_override() {
         let mut env = ScopedEnv::new();
         clear_tool_runtime_env(&mut env);
@@ -2220,6 +2238,17 @@ mod tests {
             runtime.memory_sqlite_path,
             Some(PathBuf::from("/tmp/tool-runtime-memory.sqlite3"))
         );
+    }
+
+    #[test]
+    fn selected_memory_system_id_from_env_uses_registered_override() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "workspace_recall");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(runtime.selected_memory_system_id, "workspace_recall");
     }
 
     #[test]

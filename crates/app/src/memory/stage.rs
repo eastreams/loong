@@ -139,6 +139,7 @@ impl MemoryRecallMode {
 #[serde(rename_all = "snake_case")]
 pub enum MemoryProvenanceSourceKind {
     WorkspaceDocument,
+    CanonicalMemoryRecord,
     ProfileNote,
     SummaryCheckpoint,
     RecentWindowTurn,
@@ -149,6 +150,7 @@ impl MemoryProvenanceSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::WorkspaceDocument => "workspace_document",
+            Self::CanonicalMemoryRecord => "canonical_memory_record",
             Self::ProfileNote => "profile_note",
             Self::SummaryCheckpoint => "summary_checkpoint",
             Self::RecentWindowTurn => "recent_window_turn",
