@@ -1,13 +1,14 @@
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use loongclaw_contracts::ToolCoreOutcome;
 use serde_json::{Value, json};
 
-use crate::conversation::{ConstrainedSubagentIdentity, DelegateBuiltinProfile};
-
 use crate::config::DelegateToolConfig;
-use crate::conversation::ConstrainedSubagentIsolation;
+use crate::conversation::{
+    ConstrainedSubagentIdentity, ConstrainedSubagentIsolation, DelegateBuiltinProfile,
+};
 use crate::tools::runtime_config::{
     BrowserRuntimeNarrowing, ToolRuntimeNarrowing, WebFetchRuntimeNarrowing,
 };
@@ -43,7 +44,7 @@ pub(crate) struct ResolvedDelegatePolicy {
 
 #[cfg(test)]
 pub(crate) fn parse_delegate_request(payload: &Value) -> Result<DelegateRequest, String> {
-    parse_delegate_request_with_default_timeout(payload, 0)
+    parse_delegate_request_with_default_timeout(payload, DEFAULT_TIMEOUT_SECONDS)
 }
 
 pub(crate) fn parse_delegate_request_with_default_timeout(
@@ -70,13 +71,12 @@ pub(crate) fn parse_delegate_request_with_default_timeout(
         task,
         label,
         specialization,
-        timeout_seconds,
         profile,
         isolation,
+        timeout_seconds,
     })
 }
 
-#[cfg(test)]
 pub(crate) fn normalize_delegate_request(
     task: &str,
     label: Option<&str>,
@@ -84,35 +84,41 @@ pub(crate) fn normalize_delegate_request(
     timeout_seconds: Option<u64>,
     default_timeout_seconds: u64,
 ) -> Result<DelegateRequest, String> {
-    let mut payload = json!({
-        "task": task,
-    });
-    if let Some(label) = label
-        && let Some(payload_object) = payload.as_object_mut()
-    {
-        payload_object.insert("label".to_owned(), json!(label));
+    let task = normalize_required_delegate_text(task, "task")?;
+    let label = normalize_optional_delegate_text(label);
+    let specialization = normalize_optional_delegate_text(specialization);
+    let timeout_seconds = Some(timeout_seconds.unwrap_or(default_timeout_seconds));
+
+    Ok(DelegateRequest {
+        task,
+        label,
+        specialization,
+        profile: None,
+        isolation: ConstrainedSubagentIsolation::Shared,
+        timeout_seconds,
+    })
+}
+
+fn normalize_required_delegate_text(value: &str, field: &str) -> Result<String, String> {
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return Err(format!("delegate tool requires payload.{field}"));
     }
-    if let Some(specialization) = specialization
-        && let Some(payload_object) = payload.as_object_mut()
-    {
-        payload_object.insert("specialization".to_owned(), json!(specialization));
+    Ok(trimmed_value.to_owned())
+}
+
+fn normalize_optional_delegate_text(value: Option<&str>) -> Option<String> {
+    let raw_value = value?;
+    let trimmed_value = raw_value.trim();
+    if trimmed_value.is_empty() {
+        return None;
     }
-    if let Some(timeout_seconds) = timeout_seconds
-        && let Some(payload_object) = payload.as_object_mut()
-    {
-        payload_object.insert("timeout_seconds".to_owned(), json!(timeout_seconds));
-    }
-    if timeout_seconds.is_none()
-        && default_timeout_seconds > 0
-        && let Some(payload_object) = payload.as_object_mut()
-    {
-        payload_object.insert("timeout_seconds".to_owned(), json!(default_timeout_seconds));
-    }
-    parse_delegate_request_with_default_timeout(&payload, default_timeout_seconds)
+    Some(trimmed_value.to_owned())
 }
 
 fn parse_delegate_timeout_seconds(payload: &Value) -> Result<Option<u64>, String> {
-    let Some(value) = payload.get("timeout_seconds") else {
+    let value = payload.get("timeout_seconds");
+    let Some(value) = value else {
         return Ok(None);
     };
     let timeout_seconds = value.as_u64().ok_or_else(|| {
@@ -132,7 +138,10 @@ pub(crate) fn subagent_identity_for_delegate_request(
         nickname: request.label.clone(),
         specialization: request.specialization.clone(),
     };
-    (!identity.is_empty()).then_some(identity)
+    if identity.is_empty() {
+        return None;
+    }
+    Some(identity)
 }
 
 pub(crate) fn next_delegate_session_id() -> String {
@@ -156,9 +165,8 @@ pub(crate) fn resolve_delegate_policy(
         .unwrap_or_default();
     let timeout_seconds = request.timeout_seconds.unwrap_or_else(|| {
         profile.map_or(config.timeout_seconds, |profile| {
-            profile
-                .default_timeout_seconds()
-                .min(config.timeout_seconds)
+            let default_timeout_seconds = profile.default_timeout_seconds();
+            default_timeout_seconds.min(config.timeout_seconds)
         })
     });
     let timeout_seconds = timeout_seconds.min(config.timeout_seconds);
@@ -171,8 +179,14 @@ pub(crate) fn resolve_delegate_policy(
         .map(delegate_profile_child_tool_allowlist)
         .unwrap_or_else(|| config.child_tool_allowlist.clone());
     let allow_shell_in_child = profile.map_or(config.allow_shell_in_child, |profile| {
-        config.allow_shell_in_child && profile.allows_shell_in_child()
+        let config_allows_shell = config.allow_shell_in_child;
+        let profile_allows_shell = profile.allows_shell_in_child();
+        config_allows_shell && profile_allows_shell
     });
+
+    let base_runtime_narrowing = config.child_runtime.runtime_narrowing();
+    let runtime_narrowing =
+        merge_runtime_narrowing(base_runtime_narrowing, profile_runtime_narrowing);
 
     ResolvedDelegatePolicy {
         label,
@@ -181,16 +195,13 @@ pub(crate) fn resolve_delegate_policy(
         timeout_seconds,
         allow_shell_in_child,
         child_tool_allowlist,
-        runtime_narrowing: merge_runtime_narrowing(
-            config.child_runtime.runtime_narrowing(),
-            profile_runtime_narrowing,
-        ),
+        runtime_narrowing,
     }
 }
 
 pub(crate) fn delegate_success_outcome(
     child_session_id: String,
-    _parent_session_id: Option<String>,
+    parent_session_id: Option<String>,
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     final_output: String,
@@ -199,16 +210,13 @@ pub(crate) fn delegate_success_outcome(
 ) -> ToolCoreOutcome {
     let mut payload = json!({
         "child_session_id": child_session_id,
+        "parent_session_id": parent_session_id,
         "label": label,
         "final_output": final_output,
         "turn_count": turn_count,
         "duration_ms": duration_ms,
     });
-    if let Some(profile) = profile
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("profile".to_owned(), json!(profile.as_str()));
-    }
+    inject_delegate_profile(&mut payload, profile);
     ToolCoreOutcome {
         status: "ok".to_owned(),
         payload,
@@ -217,23 +225,20 @@ pub(crate) fn delegate_success_outcome(
 
 pub(crate) fn delegate_async_queued_outcome(
     child_session_id: String,
-    _parent_session_id: Option<String>,
+    parent_session_id: Option<String>,
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     timeout_seconds: u64,
 ) -> ToolCoreOutcome {
     let mut payload = json!({
         "child_session_id": child_session_id,
+        "parent_session_id": parent_session_id,
         "label": label,
         "mode": "async",
         "state": "queued",
         "timeout_seconds": timeout_seconds,
     });
-    if let Some(profile) = profile
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("profile".to_owned(), json!(profile.as_str()));
-    }
+    inject_delegate_profile(&mut payload, profile);
     ToolCoreOutcome {
         status: "ok".to_owned(),
         payload,
@@ -242,22 +247,19 @@ pub(crate) fn delegate_async_queued_outcome(
 
 pub(crate) fn delegate_timeout_outcome(
     child_session_id: String,
-    _parent_session_id: Option<String>,
+    parent_session_id: Option<String>,
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     duration_ms: u64,
 ) -> ToolCoreOutcome {
     let mut payload = json!({
         "child_session_id": child_session_id,
+        "parent_session_id": parent_session_id,
         "label": label,
         "duration_ms": duration_ms,
         "error": "delegate_timeout",
     });
-    if let Some(profile) = profile
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("profile".to_owned(), json!(profile.as_str()));
-    }
+    inject_delegate_profile(&mut payload, profile);
     ToolCoreOutcome {
         status: "timeout".to_owned(),
         payload,
@@ -266,7 +268,7 @@ pub(crate) fn delegate_timeout_outcome(
 
 pub(crate) fn delegate_error_outcome(
     child_session_id: String,
-    _parent_session_id: Option<String>,
+    parent_session_id: Option<String>,
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     error: String,
@@ -274,38 +276,47 @@ pub(crate) fn delegate_error_outcome(
 ) -> ToolCoreOutcome {
     let mut payload = json!({
         "child_session_id": child_session_id,
+        "parent_session_id": parent_session_id,
         "label": label,
         "duration_ms": duration_ms,
         "error": error,
     });
-    if let Some(profile) = profile
-        && let Some(object) = payload.as_object_mut()
-    {
-        object.insert("profile".to_owned(), json!(profile.as_str()));
-    }
+    inject_delegate_profile(&mut payload, profile);
     ToolCoreOutcome {
         status: "error".to_owned(),
         payload,
     }
 }
 
+fn inject_delegate_profile(payload: &mut Value, profile: Option<DelegateBuiltinProfile>) {
+    let Some(profile) = profile else {
+        return;
+    };
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert("profile".to_owned(), json!(profile.as_str()));
+}
+
 fn parse_delegate_profile(raw: &str) -> Result<DelegateBuiltinProfile, String> {
-    match raw.trim() {
+    let trimmed_value = raw.trim();
+    match trimmed_value {
         "research" => Ok(DelegateBuiltinProfile::Research),
         "plan" => Ok(DelegateBuiltinProfile::Plan),
         "verify" => Ok(DelegateBuiltinProfile::Verify),
-        other => Err(format!(
-            "invalid_delegate_profile: `{other}` is not supported; expected one of: {DELEGATE_PROFILE_VALID_VALUES}"
+        _ => Err(format!(
+            "invalid_delegate_profile: `{trimmed_value}` is not supported; expected one of: {DELEGATE_PROFILE_VALID_VALUES}"
         )),
     }
 }
 
 fn parse_delegate_isolation(raw: &str) -> Result<ConstrainedSubagentIsolation, String> {
-    match raw.trim() {
+    let trimmed_value = raw.trim();
+    match trimmed_value {
         "shared" => Ok(ConstrainedSubagentIsolation::Shared),
         "worktree" => Ok(ConstrainedSubagentIsolation::Worktree),
-        other => Err(format!(
-            "invalid_delegate_isolation: `{other}` is not supported; expected one of: {DELEGATE_ISOLATION_VALID_VALUES}"
+        _ => Err(format!(
+            "invalid_delegate_isolation: `{trimmed_value}` is not supported; expected one of: {DELEGATE_ISOLATION_VALID_VALUES}"
         )),
     }
 }
@@ -356,56 +367,63 @@ fn merge_runtime_narrowing(
     base: ToolRuntimeNarrowing,
     overlay: ToolRuntimeNarrowing,
 ) -> ToolRuntimeNarrowing {
-    ToolRuntimeNarrowing {
-        browser: BrowserRuntimeNarrowing {
-            max_sessions: merge_option_min(base.browser.max_sessions, overlay.browser.max_sessions),
-            max_links: merge_option_min(base.browser.max_links, overlay.browser.max_links),
-            max_text_chars: merge_option_min(
-                base.browser.max_text_chars,
-                overlay.browser.max_text_chars,
-            ),
-        },
-        web_fetch: WebFetchRuntimeNarrowing {
-            allow_private_hosts: match (
-                base.web_fetch.allow_private_hosts,
-                overlay.web_fetch.allow_private_hosts,
-            ) {
-                (Some(false), _) | (_, Some(false)) => Some(false),
-                (Some(true), Some(true)) => Some(true),
-                (Some(value), None) | (None, Some(value)) => Some(value),
-                (None, None) => None,
-            },
-            enforce_allowed_domains: base.web_fetch.enforces_allowed_domains()
-                || overlay.web_fetch.enforces_allowed_domains(),
-            allowed_domains: merge_allowed_domains(
-                &base.web_fetch.allowed_domains,
-                &overlay.web_fetch.allowed_domains,
-            ),
-            blocked_domains: base
-                .web_fetch
-                .blocked_domains
-                .union(&overlay.web_fetch.blocked_domains)
-                .cloned()
-                .collect(),
-            timeout_seconds: merge_option_min(
-                base.web_fetch.timeout_seconds,
-                overlay.web_fetch.timeout_seconds,
-            ),
-            max_bytes: merge_option_min(base.web_fetch.max_bytes, overlay.web_fetch.max_bytes),
-            max_redirects: merge_option_min(
-                base.web_fetch.max_redirects,
-                overlay.web_fetch.max_redirects,
-            ),
-        },
-    }
+    let browser = BrowserRuntimeNarrowing {
+        max_sessions: merge_option_min(base.browser.max_sessions, overlay.browser.max_sessions),
+        max_links: merge_option_min(base.browser.max_links, overlay.browser.max_links),
+        max_text_chars: merge_option_min(
+            base.browser.max_text_chars,
+            overlay.browser.max_text_chars,
+        ),
+    };
+    let allow_private_hosts = match (
+        base.web_fetch.allow_private_hosts,
+        overlay.web_fetch.allow_private_hosts,
+    ) {
+        (Some(false), _) => Some(false),
+        (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),
+        (Some(value), None) => Some(value),
+        (None, Some(value)) => Some(value),
+        (None, None) => None,
+    };
+    let enforce_allowed_domains =
+        base.web_fetch.enforce_allowed_domains || overlay.web_fetch.enforce_allowed_domains;
+    let allowed_domains = merge_allowed_domains(
+        &base.web_fetch.allowed_domains,
+        &overlay.web_fetch.allowed_domains,
+    );
+    let blocked_domains = base
+        .web_fetch
+        .blocked_domains
+        .union(&overlay.web_fetch.blocked_domains)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let timeout_seconds = merge_option_min(
+        base.web_fetch.timeout_seconds,
+        overlay.web_fetch.timeout_seconds,
+    );
+    let max_bytes = merge_option_min(base.web_fetch.max_bytes, overlay.web_fetch.max_bytes);
+    let max_redirects = merge_option_min(
+        base.web_fetch.max_redirects,
+        overlay.web_fetch.max_redirects,
+    );
+    let web_fetch = WebFetchRuntimeNarrowing {
+        allow_private_hosts,
+        enforce_allowed_domains,
+        allowed_domains,
+        blocked_domains,
+        timeout_seconds,
+        max_bytes,
+        max_redirects,
+    };
+    ToolRuntimeNarrowing { browser, web_fetch }
 }
 
-fn merge_allowed_domains(
-    base: &std::collections::BTreeSet<String>,
-    overlay: &std::collections::BTreeSet<String>,
-) -> std::collections::BTreeSet<String> {
-    match (base.is_empty(), overlay.is_empty()) {
-        (true, true) => std::collections::BTreeSet::new(),
+fn merge_allowed_domains(base: &BTreeSet<String>, overlay: &BTreeSet<String>) -> BTreeSet<String> {
+    let base_empty = base.is_empty();
+    let overlay_empty = overlay.is_empty();
+    match (base_empty, overlay_empty) {
+        (true, true) => BTreeSet::new(),
         (false, true) => base.clone(),
         (true, false) => overlay.clone(),
         (false, false) => base.intersection(overlay).cloned().collect(),
@@ -415,7 +433,8 @@ fn merge_allowed_domains(
 fn merge_option_min<T: Ord + Copy>(base: Option<T>, overlay: Option<T>) -> Option<T> {
     match (base, overlay) {
         (Some(base), Some(overlay)) => Some(base.min(overlay)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
+        (Some(value), None) => Some(value),
+        (None, Some(value)) => Some(value),
         (None, None) => None,
     }
 }
@@ -439,6 +458,7 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label, None);
+        assert_eq!(request.specialization, None);
         assert_eq!(request.timeout_seconds, None);
         assert_eq!(request.profile, None);
         assert_eq!(request.isolation, ConstrainedSubagentIsolation::Shared);
@@ -456,25 +476,8 @@ mod tests {
         .expect("delegate request");
         assert_eq!(request.task, "research");
         assert_eq!(request.label.as_deref(), Some("release-check"));
-        assert_eq!(request.timeout_seconds, Some(DEFAULT_TIMEOUT_SECONDS));
-    }
-
-    #[test]
-    fn parse_delegate_request_includes_optional_specialization() {
-        let request = parse_delegate_request(&json!({
-            "task": "research",
-            "label": "child",
-            "specialization": "reviewer"
-        }))
-        .expect("delegate request");
         assert_eq!(request.specialization.as_deref(), Some("reviewer"));
-        assert_eq!(
-            subagent_identity_for_delegate_request(&request),
-            Some(ConstrainedSubagentIdentity {
-                nickname: Some("child".to_owned()),
-                specialization: Some("reviewer".to_owned())
-            })
-        );
+        assert_eq!(request.timeout_seconds, Some(DEFAULT_TIMEOUT_SECONDS));
     }
 
     #[test]
@@ -487,11 +490,13 @@ mod tests {
     fn parse_delegate_request_accepts_builtin_profile() {
         let request = parse_delegate_request(&json!({
             "task": "investigate the bug",
+            "specialization": "reviewer",
             "profile": "research"
         }))
         .expect("delegate request");
 
         assert_eq!(request.profile, Some(DelegateBuiltinProfile::Research));
+        assert_eq!(request.specialization.as_deref(), Some("reviewer"));
     }
 
     #[test]
@@ -575,5 +580,22 @@ mod tests {
         let policy = resolve_delegate_policy(&request, &config);
 
         assert_eq!(policy.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn subagent_identity_for_delegate_request_uses_label_and_specialization() {
+        let request = DelegateRequest {
+            task: "review the patch".to_owned(),
+            label: Some("Child".to_owned()),
+            specialization: Some("reviewer".to_owned()),
+            profile: None,
+            isolation: ConstrainedSubagentIsolation::Shared,
+            timeout_seconds: None,
+        };
+
+        let identity = subagent_identity_for_delegate_request(&request).expect("identity");
+
+        assert_eq!(identity.nickname.as_deref(), Some("Child"));
+        assert_eq!(identity.specialization.as_deref(), Some("reviewer"));
     }
 }

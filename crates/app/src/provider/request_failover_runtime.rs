@@ -107,6 +107,7 @@ where
                         profile_index = profile_index + 1,
                         profile_count = ordered_profiles.len(),
                         exhausted,
+                        error = %crate::observability::summarize_error(message.as_str()),
                         "provider request attempt failed"
                     );
                     last_error = Some(message);

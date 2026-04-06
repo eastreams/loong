@@ -1284,11 +1284,11 @@ impl ToolRuntimeConfig {
 
         if let Some(subagent_profile) = subagent_contract.profile {
             rendered_any = true;
-            let role = match subagent_profile.role {
+            let role = match subagent_profile.role() {
                 ConstrainedSubagentRole::Orchestrator => "orchestrator",
                 ConstrainedSubagentRole::Leaf => "leaf",
             };
-            let control_scope = match subagent_profile.control_scope {
+            let control_scope = match subagent_profile.control_scope() {
                 ConstrainedSubagentControlScope::Children => "children",
                 ConstrainedSubagentControlScope::None => "none",
             };

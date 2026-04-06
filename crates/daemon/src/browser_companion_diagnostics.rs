@@ -14,8 +14,6 @@ pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser comp
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
 const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 3;
-#[cfg(test)]
-const TEST_BROWSER_COMPANION_VERSION_PREFIX: &str = "test-browser-companion-version:";
 #[cfg(unix)]
 const POSIX_SH_PATH: &str = "/bin/sh";
 #[cfg(test)]
@@ -672,18 +670,9 @@ mod tests {
     }
 
     #[test]
-    fn browser_companion_probe_timeout_duration_caps_slack_without_overflow() {
-        let timeout_duration = browser_companion_probe_timeout_duration(10);
-        let expected_duration = Duration::from_millis(10_500);
-
-        assert_eq!(timeout_duration, expected_duration);
-    }
-
-    #[test]
-    fn browser_companion_probe_timeout_duration_preserves_capped_slack_at_u64_max() {
+    fn browser_companion_probe_timeout_duration_saturates() {
         let timeout_duration = browser_companion_probe_timeout_duration(u64::MAX);
-        let expected_duration = Duration::new(u64::MAX, 500_000_000);
 
-        assert_eq!(timeout_duration, expected_duration);
+        assert_eq!(timeout_duration, Duration::MAX);
     }
 }

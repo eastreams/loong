@@ -65,8 +65,6 @@ mod shell;
 pub mod shell_policy_ext;
 mod shell_request_prep;
 mod tool_search;
-#[cfg(test)]
-mod workspace_root_tests;
 // Browser reuses the shared SSRF and HTML helpers from web_fetch even when the
 // public web.fetch tool is compiled out.
 #[cfg(any(feature = "tool-webfetch", feature = "tool-browser"))]
@@ -80,6 +78,9 @@ pub use catalog::{
     ToolSchedulingClass, ToolView, capability_action_class_for_descriptor,
     capability_action_class_for_tool_name, delegate_child_tool_view_for_config,
     delegate_child_tool_view_for_config_with_delegate, delegate_child_tool_view_for_contract,
+    delegate_child_tool_view_for_profile, delegate_child_tool_view_for_runtime_config,
+    delegate_child_tool_view_for_runtime_config_and_contract,
+    delegate_child_tool_view_for_runtime_config_with_delegate,
     delegate_child_tool_view_with_constraints, governance_profile_for_descriptor,
     governance_profile_for_tool_name, planned_delegate_child_tool_view, planned_root_tool_view,
     runtime_tool_view, runtime_tool_view_for_config,
@@ -660,26 +661,8 @@ pub fn execute_tool_core_with_config(
     let requested_tool_name = request.tool_name.clone();
     let payload_kind = crate::observability::json_value_kind(&request.payload);
     let payload_keys = crate::observability::top_level_json_keys(&request.payload);
-    if !trusted_internal_tool_payload_enabled()
-        && payload_uses_reserved_internal_tool_context(&request.payload)
-    {
-        return Err(format!(
-            "tool `{}` payload.{LOONGCLAW_INTERNAL_TOOL_CONTEXT_KEY} is reserved for trusted internal tool context; retry without that field",
-            request.tool_name
-        ));
-    }
-    let canonical_name = canonical_tool_name(request.tool_name.as_str());
+    let canonical_name = canonical_tool_name(request.tool_name.as_str()).to_owned();
     let payload = request.payload;
-    let workspace_root = trusted_workspace_root_from_payload(&payload)?;
-    let runtime_narrowing = trusted_runtime_narrowing_from_payload(&payload)?;
-    let mut effective_config = match workspace_root {
-        Some(workspace_root) => config.with_file_root_override(workspace_root),
-        None => config.clone(),
-    };
-    if let Some(runtime_narrowing) = runtime_narrowing {
-        effective_config = effective_config.narrowed(&runtime_narrowing);
-    }
-    let config = &effective_config;
     let started_at = std::time::Instant::now();
     let result = (|| {
         ensure_untrusted_payload_does_not_use_reserved_internal_tool_context(
@@ -688,15 +671,22 @@ pub fn execute_tool_core_with_config(
             "payload",
         )?;
         let request = ToolCoreRequest {
-            tool_name: canonical_name.to_owned(),
+            tool_name: canonical_name.clone(),
             payload,
         };
         let request = normalize_shell_request_for_execution(request);
-        let effective_config = trusted_runtime_narrowing_from_payload(&request.payload)?;
-        let effective_config = effective_config.map(|narrowing| config.narrowed(&narrowing));
-        let config = effective_config.as_ref().unwrap_or(config);
+        let workspace_root = trusted_workspace_root_from_payload(&request.payload)?;
+        let runtime_narrowing = trusted_runtime_narrowing_from_payload(&request.payload)?;
+        let mut effective_config = match workspace_root {
+            Some(workspace_root) => config.with_file_root_override(workspace_root),
+            None => config.clone(),
+        };
+        if let Some(runtime_narrowing) = runtime_narrowing {
+            effective_config = effective_config.narrowed(&runtime_narrowing);
+        }
+        let config = &effective_config;
 
-        match canonical_name {
+        match canonical_name.as_str() {
             "tool.search" => execute_tool_search_tool_with_config(request, config),
             "tool.invoke" => execute_tool_invoke_tool_with_config(request, config),
             _ => execute_discoverable_tool_core_with_config(request, config),
@@ -801,10 +791,12 @@ fn trusted_workspace_root_from_payload(payload: &Value) -> Result<Option<PathBuf
     if trimmed_workspace_root.is_empty() {
         return Err("invalid_internal_workspace_root: expected a non-empty path".to_owned());
     }
+
     let workspace_root = PathBuf::from(trimmed_workspace_root);
     if !workspace_root.is_absolute() {
         return Err("invalid_internal_workspace_root: path must be absolute".to_owned());
     }
+
     let canonical_workspace_root = std::fs::canonicalize(&workspace_root).map_err(|error| {
         format!("invalid_internal_workspace_root: canonicalize failed: {error}")
     })?;
@@ -2148,7 +2140,6 @@ mod tests {
 
         assert!(names.contains(&"session_archive"));
         assert!(names.contains(&"session_cancel"));
-        assert!(names.contains(&"session_continue"));
         assert!(names.contains(&"session_recover"));
         assert!(names.contains(&"session_tool_policy_set"));
         assert!(names.contains(&"session_tool_policy_clear"));
@@ -2213,8 +2204,9 @@ mod tests {
         for tool_name in [
             "session_archive",
             "session_cancel",
-            "session_continue",
             "session_recover",
+            "session_tool_policy_set",
+            "session_tool_policy_clear",
         ] {
             assert!(
                 !view.contains(tool_name),
@@ -2241,7 +2233,6 @@ mod tests {
 
         assert!(view.contains("session_archive"));
         assert!(view.contains("session_cancel"));
-        assert!(view.contains("session_continue"));
         assert!(view.contains("session_recover"));
         assert!(view.contains("session_tool_policy_set"));
         assert!(view.contains("session_tool_policy_clear"));

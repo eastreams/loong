@@ -66,6 +66,19 @@ impl DelegateBuiltinProfile {
     pub const fn allows_shell_in_child(self) -> bool {
         matches!(self, Self::Verify)
     }
+
+    pub fn from_lifecycle_profile(value: &str) -> Option<Self> {
+        let trimmed_value = value.trim();
+        if trimmed_value.is_empty() {
+            return None;
+        }
+        match trimmed_value {
+            "research" => Some(Self::Research),
+            "plan" => Some(Self::Plan),
+            "verify" => Some(Self::Verify),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,7 +127,9 @@ pub struct ConstrainedSubagentIdentity {
 
 impl ConstrainedSubagentIdentity {
     pub fn is_empty(&self) -> bool {
-        self.nickname.is_none() && self.specialization.is_none()
+        let nickname_missing = self.nickname.is_none();
+        let specialization_missing = self.specialization.is_none();
+        nickname_missing && specialization_missing
     }
 }
 
@@ -139,8 +154,9 @@ pub struct ConstrainedSubagentHandle {
 
 impl ConstrainedSubagentHandle {
     pub fn new(session_id: impl Into<String>) -> Self {
+        let session_id = session_id.into();
         Self {
-            session_id: session_id.into(),
+            session_id,
             ..Self::default()
         }
     }
@@ -166,16 +182,19 @@ impl ConstrainedSubagentHandle {
     }
 
     pub fn with_identity(mut self, identity: Option<ConstrainedSubagentIdentity>) -> Self {
-        if let Some(identity) = identity.filter(|identity| !identity.is_empty()) {
+        let filtered_identity = identity.filter(|value| !value.is_empty());
+        if let Some(identity) = filtered_identity {
             self.identity = Some(identity);
         }
         self
     }
 
     pub fn with_contract(mut self, contract: Option<ConstrainedSubagentContractView>) -> Self {
-        if let Some(contract) = contract.filter(|contract| !contract.is_empty()) {
+        let filtered_contract = contract.filter(|value| !value.is_empty());
+        if let Some(contract) = filtered_contract {
             if self.identity.is_none() {
-                self.identity = contract.resolved_identity().cloned();
+                let resolved_identity = contract.resolved_identity().cloned();
+                self.identity = resolved_identity;
             }
             self.contract = Some(contract);
         }
@@ -191,22 +210,23 @@ impl ConstrainedSubagentHandle {
     }
 
     pub fn resolved_identity(&self) -> Option<&ConstrainedSubagentIdentity> {
-        self.identity.as_ref().or_else(|| {
-            self.contract
-                .as_ref()
-                .and_then(ConstrainedSubagentContractView::resolved_identity)
-        })
+        let explicit_identity = self.identity.as_ref();
+        if explicit_identity.is_some() {
+            return explicit_identity;
+        }
+        let contract = self.contract.as_ref()?;
+        contract.resolved_identity()
     }
 
     pub fn resolved_profile(&self) -> Option<ConstrainedSubagentProfile> {
-        self.contract
-            .as_ref()
-            .and_then(ConstrainedSubagentContractView::resolved_profile)
+        let contract = self.contract.as_ref()?;
+        contract.resolved_profile()
     }
 }
 
 pub fn subagent_surface_fields(subagent: Option<&ConstrainedSubagentHandle>) -> Map<String, Value> {
     let mut fields = Map::new();
+
     let subagent_identity = subagent
         .and_then(ConstrainedSubagentHandle::resolved_identity)
         .cloned();
@@ -229,6 +249,41 @@ pub fn subagent_surface_fields(subagent: Option<&ConstrainedSubagentHandle>) -> 
     fields.insert("subagent".to_owned(), subagent_value);
 
     fields
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConstrainedSubagentProfile {
+    Orchestrator,
+    Leaf,
+}
+
+impl ConstrainedSubagentProfile {
+    pub fn for_child_depth(depth: usize, max_depth: usize) -> Self {
+        let below_max_depth = depth < max_depth;
+        if below_max_depth {
+            return Self::Orchestrator;
+        }
+        Self::Leaf
+    }
+
+    pub fn allows_child_delegation(self) -> bool {
+        matches!(self, Self::Orchestrator)
+    }
+
+    pub const fn role(self) -> ConstrainedSubagentRole {
+        match self {
+            Self::Orchestrator => ConstrainedSubagentRole::Orchestrator,
+            Self::Leaf => ConstrainedSubagentRole::Leaf,
+        }
+    }
+
+    pub const fn control_scope(self) -> ConstrainedSubagentControlScope {
+        match self {
+            Self::Orchestrator => ConstrainedSubagentControlScope::Children,
+            Self::Leaf => ConstrainedSubagentControlScope::None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,10 +320,8 @@ pub struct ConstrainedSubagentCoordinationAction {
 
 impl ConstrainedSubagentCoordinationAction {
     pub fn from_kind(kind: ConstrainedSubagentCoordinationActionKind) -> Self {
-        Self {
-            kind,
-            tool_name: kind.tool_name().to_owned(),
-        }
+        let tool_name = kind.tool_name().to_owned();
+        Self { kind, tool_name }
     }
 }
 
@@ -291,57 +344,35 @@ pub fn coordination_actions_for_subagent_handle(
     ];
 
     if terminal {
-        actions.push(ConstrainedSubagentCoordinationAction::from_kind(
+        let archive_action = ConstrainedSubagentCoordinationAction::from_kind(
             ConstrainedSubagentCoordinationActionKind::Archive,
-        ));
+        );
+        actions.push(archive_action);
         return actions;
     }
 
-    actions.push(ConstrainedSubagentCoordinationAction::from_kind(
+    let wait_action = ConstrainedSubagentCoordinationAction::from_kind(
         ConstrainedSubagentCoordinationActionKind::Wait,
-    ));
+    );
+    actions.push(wait_action);
 
     let async_mode = matches!(mode, Some(ConstrainedSubagentMode::Async));
     let can_cancel = async_mode && matches!(phase, Some("queued" | "running"));
     if can_cancel {
-        actions.push(ConstrainedSubagentCoordinationAction::from_kind(
+        let cancel_action = ConstrainedSubagentCoordinationAction::from_kind(
             ConstrainedSubagentCoordinationActionKind::Cancel,
-        ));
+        );
+        actions.push(cancel_action);
     }
 
     if overdue {
-        actions.push(ConstrainedSubagentCoordinationAction::from_kind(
+        let recover_action = ConstrainedSubagentCoordinationAction::from_kind(
             ConstrainedSubagentCoordinationActionKind::Recover,
-        ));
+        );
+        actions.push(recover_action);
     }
 
     actions
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConstrainedSubagentProfile {
-    pub role: ConstrainedSubagentRole,
-    pub control_scope: ConstrainedSubagentControlScope,
-}
-
-impl ConstrainedSubagentProfile {
-    pub fn for_child_depth(depth: usize, max_depth: usize) -> Self {
-        if depth < max_depth {
-            Self {
-                role: ConstrainedSubagentRole::Orchestrator,
-                control_scope: ConstrainedSubagentControlScope::Children,
-            }
-        } else {
-            Self {
-                role: ConstrainedSubagentRole::Leaf,
-                control_scope: ConstrainedSubagentControlScope::None,
-            }
-        }
-    }
-
-    pub fn allows_child_delegation(self) -> bool {
-        self.control_scope == ConstrainedSubagentControlScope::Children
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -353,6 +384,8 @@ pub struct ConstrainedSubagentContractView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ConstrainedSubagentProfile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<ConstrainedSubagentIsolation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth_budget: Option<ConstrainedSubagentBudgetSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_child_budget: Option<ConstrainedSubagentBudgetSnapshot>,
@@ -362,6 +395,8 @@ pub struct ConstrainedSubagentContractView {
     pub allow_shell_in_child: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub child_tool_allowlist: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_root: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "ToolRuntimeNarrowing::is_empty")]
     pub runtime_narrowing: ToolRuntimeNarrowing,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -370,27 +405,42 @@ pub struct ConstrainedSubagentContractView {
 
 impl ConstrainedSubagentContractView {
     pub fn from_execution(execution: &ConstrainedSubagentExecution) -> Self {
+        let mode = Some(execution.mode);
+        let identity = execution.identity.clone();
+        let profile = Some(execution.resolved_profile());
+        let isolation = Some(execution.isolation);
+        let depth_budget = Some(ConstrainedSubagentBudgetSnapshot {
+            current: execution.depth,
+            max: execution.max_depth,
+        });
+        let active_child_budget = Some(ConstrainedSubagentBudgetSnapshot {
+            current: execution.active_children,
+            max: execution.max_active_children,
+        });
+        let timeout_seconds = Some(execution.timeout_seconds);
+        let allow_shell_in_child = Some(execution.allow_shell_in_child);
+        let child_tool_allowlist = execution.child_tool_allowlist.clone();
+        let workspace_root = execution.workspace_root.clone();
+        let runtime_narrowing = execution.runtime_narrowing.clone();
+        let runtime_binding = if execution.kernel_bound {
+            Some(ConstrainedSubagentRuntimeBinding::KernelBound)
+        } else {
+            Some(ConstrainedSubagentRuntimeBinding::Direct)
+        };
+
         Self {
-            mode: Some(execution.mode),
-            identity: execution.identity.clone(),
-            profile: Some(execution.resolved_profile()),
-            depth_budget: Some(ConstrainedSubagentBudgetSnapshot {
-                current: execution.depth,
-                max: execution.max_depth,
-            }),
-            active_child_budget: Some(ConstrainedSubagentBudgetSnapshot {
-                current: execution.active_children,
-                max: execution.max_active_children,
-            }),
-            timeout_seconds: Some(execution.timeout_seconds),
-            allow_shell_in_child: Some(execution.allow_shell_in_child),
-            child_tool_allowlist: execution.child_tool_allowlist.clone(),
-            runtime_narrowing: execution.runtime_narrowing.clone(),
-            runtime_binding: Some(if execution.kernel_bound {
-                ConstrainedSubagentRuntimeBinding::KernelBound
-            } else {
-                ConstrainedSubagentRuntimeBinding::Direct
-            }),
+            mode,
+            identity,
+            profile,
+            isolation,
+            depth_budget,
+            active_child_budget,
+            timeout_seconds,
+            allow_shell_in_child,
+            child_tool_allowlist,
+            workspace_root,
+            runtime_narrowing,
+            runtime_binding,
         }
     }
 
@@ -399,6 +449,16 @@ impl ConstrainedSubagentContractView {
             profile: Some(profile),
             ..Self::default()
         }
+    }
+
+    pub fn from_depth_budget(depth: usize, max_depth: usize) -> Self {
+        let mut contract = Self::default();
+        let depth_budget = ConstrainedSubagentBudgetSnapshot {
+            current: depth,
+            max: max_depth,
+        };
+        contract.depth_budget = Some(depth_budget);
+        contract
     }
 
     pub fn from_identity(identity: ConstrainedSubagentIdentity) -> Self {
@@ -434,6 +494,25 @@ impl ConstrainedSubagentContractView {
         self
     }
 
+    pub fn with_workspace_root(mut self, workspace_root: PathBuf) -> Self {
+        self.workspace_root = Some(workspace_root);
+        self
+    }
+
+    pub fn with_isolation(mut self, isolation: ConstrainedSubagentIsolation) -> Self {
+        self.isolation = Some(isolation);
+        self
+    }
+
+    pub fn with_depth_budget(mut self, depth: usize, max_depth: usize) -> Self {
+        let depth_budget = ConstrainedSubagentBudgetSnapshot {
+            current: depth,
+            max: max_depth,
+        };
+        self.depth_budget = Some(depth_budget);
+        self
+    }
+
     pub fn resolved_profile(&self) -> Option<ConstrainedSubagentProfile> {
         self.profile
     }
@@ -443,22 +522,39 @@ impl ConstrainedSubagentContractView {
     }
 
     pub fn allows_child_delegation(&self) -> bool {
-        self.profile
-            .map(ConstrainedSubagentProfile::allows_child_delegation)
-            .unwrap_or(false)
+        let depth_budget = self.depth_budget;
+        let Some(depth_budget) = depth_budget else {
+            return false;
+        };
+        depth_budget.current < depth_budget.max
     }
 
     pub fn is_empty(&self) -> bool {
-        self.mode.is_none()
-            && self.identity.is_none()
-            && self.profile.is_none()
-            && self.depth_budget.is_none()
-            && self.active_child_budget.is_none()
-            && self.timeout_seconds.is_none()
-            && self.allow_shell_in_child.is_none()
-            && self.child_tool_allowlist.is_empty()
-            && self.runtime_narrowing.is_empty()
-            && self.runtime_binding.is_none()
+        let mode_missing = self.mode.is_none();
+        let identity_missing = self.identity.is_none();
+        let profile_missing = self.profile.is_none();
+        let isolation_missing = self.isolation.is_none();
+        let depth_budget_missing = self.depth_budget.is_none();
+        let active_child_budget_missing = self.active_child_budget.is_none();
+        let timeout_missing = self.timeout_seconds.is_none();
+        let shell_missing = self.allow_shell_in_child.is_none();
+        let allowlist_empty = self.child_tool_allowlist.is_empty();
+        let workspace_root_missing = self.workspace_root.is_none();
+        let narrowing_empty = self.runtime_narrowing.is_empty();
+        let binding_missing = self.runtime_binding.is_none();
+
+        mode_missing
+            && identity_missing
+            && profile_missing
+            && isolation_missing
+            && depth_budget_missing
+            && active_child_budget_missing
+            && timeout_missing
+            && shell_missing
+            && allowlist_empty
+            && workspace_root_missing
+            && narrowing_empty
+            && binding_missing
     }
 }
 
@@ -510,9 +606,11 @@ pub struct ConstrainedSubagentTerminalEventPayload {
 
 impl ConstrainedSubagentExecution {
     pub fn resolved_profile(&self) -> ConstrainedSubagentProfile {
-        self.profile.unwrap_or_else(|| {
-            ConstrainedSubagentProfile::for_child_depth(self.depth, self.max_depth)
-        })
+        let explicit_profile = self.profile;
+        if let Some(profile) = explicit_profile {
+            return profile;
+        }
+        ConstrainedSubagentProfile::for_child_depth(self.depth, self.max_depth)
     }
 
     pub fn with_resolved_profile(mut self) -> Self {
@@ -523,7 +621,9 @@ impl ConstrainedSubagentExecution {
     }
 
     pub fn allows_nested_delegate_children(&self) -> bool {
-        self.resolved_profile().allows_child_delegation() && self.depth < self.max_depth
+        let resolved_profile = self.resolved_profile();
+        let can_delegate = resolved_profile.allows_child_delegation();
+        can_delegate && self.depth < self.max_depth
     }
 
     pub fn contract_view(&self) -> ConstrainedSubagentContractView {
@@ -550,12 +650,15 @@ impl ConstrainedSubagentExecution {
         profile: Option<DelegateBuiltinProfile>,
         runtime_self_continuity: Option<&RuntimeSelfContinuity>,
     ) -> Value {
+        let task = task.to_owned();
+        let label = label.map(ToOwned::to_owned);
+        let runtime_self_continuity = runtime_self_continuity.cloned();
         json!(ConstrainedSubagentSpawnEventPayload {
-            task: task.to_owned(),
-            label: label.map(ToOwned::to_owned),
+            task,
+            label,
             profile,
             execution: self.clone(),
-            runtime_self_continuity: runtime_self_continuity.cloned(),
+            runtime_self_continuity,
         })
     }
 
@@ -566,22 +669,25 @@ impl ConstrainedSubagentExecution {
         turn_count: Option<usize>,
         error: Option<&str>,
     ) -> Value {
+        let error = error.map(ToOwned::to_owned);
         json!(ConstrainedSubagentTerminalEventPayload {
             terminal_reason,
             execution: self.clone(),
             duration_ms,
             turn_count,
-            error: error.map(ToOwned::to_owned),
+            error,
         })
     }
 
     pub fn from_event_payload(payload: &Value) -> Option<Self> {
-        let execution = payload.get("execution")?.clone();
+        let execution = payload.get("execution")?;
+        let execution = execution.clone();
         serde_json::from_value(execution).ok()
     }
 
     pub fn profile_from_event_payload(payload: &Value) -> Option<DelegateBuiltinProfile> {
-        let profile = payload.get("profile")?.clone();
+        let profile = payload.get("profile")?;
+        let profile = profile.clone();
         serde_json::from_value(profile).ok()
     }
 }
@@ -621,14 +727,11 @@ mod tests {
             Some("child"),
             Some(DelegateBuiltinProfile::Research),
         );
-        assert_eq!(
-            ConstrainedSubagentExecution::from_event_payload(&payload),
-            Some(execution)
-        );
-        assert_eq!(
-            ConstrainedSubagentExecution::profile_from_event_payload(&payload),
-            Some(DelegateBuiltinProfile::Research)
-        );
+        let restored_execution = ConstrainedSubagentExecution::from_event_payload(&payload);
+        let restored_profile = ConstrainedSubagentExecution::profile_from_event_payload(&payload);
+
+        assert_eq!(restored_execution, Some(execution));
+        assert_eq!(restored_profile, Some(DelegateBuiltinProfile::Research));
     }
 
     #[test]
@@ -669,7 +772,7 @@ mod tests {
         let payload = execution.spawn_payload_with_profile_and_runtime_self_continuity(
             "research",
             Some("child"),
-            None,
+            Some(DelegateBuiltinProfile::Plan),
             Some(&continuity),
         );
 
@@ -688,100 +791,41 @@ mod tests {
     }
 
     #[test]
-    fn constrained_subagent_execution_derives_legacy_profile_from_depth_budget() {
+    fn contract_view_copies_execution_profile_and_workspace_root() {
         let execution = ConstrainedSubagentExecution {
             mode: ConstrainedSubagentMode::Async,
-            isolation: ConstrainedSubagentIsolation::Shared,
+            isolation: ConstrainedSubagentIsolation::Worktree,
             depth: 1,
             max_depth: 3,
             active_children: 0,
-            max_active_children: 3,
-            timeout_seconds: 60,
-            allow_shell_in_child: false,
-            child_tool_allowlist: vec!["file.read".to_owned()],
-            workspace_root: None,
+            max_active_children: 4,
+            timeout_seconds: 90,
+            allow_shell_in_child: true,
+            child_tool_allowlist: vec!["file.read".to_owned(), "web.fetch".to_owned()],
+            workspace_root: Some(PathBuf::from("/tmp/delegate-worktree")),
             runtime_narrowing: ToolRuntimeNarrowing::default(),
             kernel_bound: false,
-            identity: None,
-            profile: None,
-        };
-
-        assert_eq!(
-            execution.resolved_profile(),
-            ConstrainedSubagentProfile {
-                role: ConstrainedSubagentRole::Orchestrator,
-                control_scope: ConstrainedSubagentControlScope::Children,
-            }
-        );
-        assert!(execution.allows_nested_delegate_children());
-    }
-
-    #[test]
-    fn constrained_subagent_execution_contract_view_normalizes_execution_semantics() {
-        let runtime_narrowing = ToolRuntimeNarrowing {
-            web_fetch: crate::tools::runtime_config::WebFetchRuntimeNarrowing {
-                allow_private_hosts: Some(false),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let execution = ConstrainedSubagentExecution {
-            mode: ConstrainedSubagentMode::Inline,
-            isolation: ConstrainedSubagentIsolation::Shared,
-            depth: 2,
-            max_depth: 3,
-            active_children: 1,
-            max_active_children: 4,
-            timeout_seconds: 45,
-            allow_shell_in_child: true,
-            child_tool_allowlist: vec!["file.read".to_owned(), "shell.exec".to_owned()],
-            workspace_root: None,
-            runtime_narrowing: runtime_narrowing.clone(),
-            kernel_bound: true,
             identity: Some(ConstrainedSubagentIdentity {
-                nickname: Some("child-researcher".to_owned()),
-                specialization: Some("reviewer".to_owned()),
-            }),
-            profile: Some(ConstrainedSubagentProfile::for_child_depth(2, 3)),
-        };
-
-        assert_eq!(
-            execution.contract_view(),
-            ConstrainedSubagentContractView {
-                mode: Some(ConstrainedSubagentMode::Inline),
-                identity: Some(ConstrainedSubagentIdentity {
-                    nickname: Some("child-researcher".to_owned()),
-                    specialization: Some("reviewer".to_owned()),
-                }),
-                profile: Some(ConstrainedSubagentProfile::for_child_depth(2, 3)),
-                depth_budget: Some(ConstrainedSubagentBudgetSnapshot { current: 2, max: 3 }),
-                active_child_budget: Some(ConstrainedSubagentBudgetSnapshot { current: 1, max: 4 }),
-                timeout_seconds: Some(45),
-                allow_shell_in_child: Some(true),
-                child_tool_allowlist: vec!["file.read".to_owned(), "shell.exec".to_owned()],
-                runtime_narrowing,
-                runtime_binding: Some(ConstrainedSubagentRuntimeBinding::KernelBound),
-            }
-        );
-    }
-
-    #[test]
-    fn subagent_surface_fields_derive_identity_and_profile_from_handle_contract() {
-        let handle = ConstrainedSubagentHandle::new("child-session").with_contract(Some(
-            ConstrainedSubagentContractView::from_identity(ConstrainedSubagentIdentity {
                 nickname: Some("child".to_owned()),
                 specialization: Some("reviewer".to_owned()),
-            })
-            .with_profile(ConstrainedSubagentProfile {
-                role: ConstrainedSubagentRole::Leaf,
-                control_scope: ConstrainedSubagentControlScope::None,
             }),
-        ));
-        let fields = subagent_surface_fields(Some(&handle));
+            profile: Some(ConstrainedSubagentProfile::for_child_depth(1, 3)),
+        };
 
-        assert_eq!(fields["subagent_identity"]["nickname"], "child");
-        assert_eq!(fields["subagent_identity"]["specialization"], "reviewer");
-        assert_eq!(fields["subagent_profile"]["role"], "leaf");
-        assert_eq!(fields["subagent"]["session_id"], "child-session");
+        let contract = execution.contract_view();
+
+        assert_eq!(
+            contract.profile,
+            Some(ConstrainedSubagentProfile::Orchestrator)
+        );
+        assert_eq!(
+            contract.isolation,
+            Some(ConstrainedSubagentIsolation::Worktree)
+        );
+        assert_eq!(
+            contract.workspace_root,
+            Some(PathBuf::from("/tmp/delegate-worktree"))
+        );
+        assert!(contract.allows_child_delegation());
     }
 }
