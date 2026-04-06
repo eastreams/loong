@@ -402,6 +402,127 @@ async fn fetch_available_models_rejects_missing_openai_credentials_before_transp
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn request_completion_auto_model_falls_forward_to_next_auth_profile_after_catalog_auth_failure()
+ {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind local provider listener");
+    let addr = listener.local_addr().expect("local addr");
+    let server = std::thread::spawn(move || {
+        listener
+            .set_nonblocking(true)
+            .expect("set listener nonblocking");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut requests = Vec::new();
+
+        while requests.len() < 3 {
+            if Instant::now() >= deadline {
+                panic!(
+                    "timed out waiting for provider auth-profile fallback requests: {requests:#?}"
+                );
+            }
+
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let request = read_local_provider_request(&mut stream, deadline);
+                    requests.push(request.clone());
+
+                    let request_index = requests.len();
+                    let (status_line, body) = if request_index == 1 {
+                        (
+                            "HTTP/1.1 401 Unauthorized",
+                            r#"{"error":{"message":"invalid oauth token"}}"#.to_owned(),
+                        )
+                    } else if request_index == 2 {
+                        (
+                            "HTTP/1.1 200 OK",
+                            r#"{"data":[{"id":"gpt-4.1-mini","object":"model"}]}"#.to_owned(),
+                        )
+                    } else {
+                        (
+                            "HTTP/1.1 200 OK",
+                            r#"{"choices":[{"message":{"role":"assistant","content":"fallback auth ok"}}]}"#
+                                .to_owned(),
+                        )
+                    };
+
+                    let response = format!(
+                        "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    stream
+                        .write_all(response.as_bytes())
+                        .expect("write response");
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("accept local provider request: {error}"),
+            }
+        }
+
+        requests
+    });
+
+    let config = test_config(ProviderConfig {
+        kind: ProviderKind::Openai,
+        base_url: format!("http://{addr}"),
+        model: "auto".to_owned(),
+        wire_api: crate::config::ProviderWireApi::ChatCompletions,
+        oauth_access_token: Some(SecretRef::Inline("oauth-token".to_owned())),
+        api_key: Some(SecretRef::Inline("api-key".to_owned())),
+        api_key_env: None,
+        oauth_access_token_env: None,
+        ..ProviderConfig::default()
+    });
+
+    let completion = request_completion(
+        &config,
+        &[json!({
+            "role": "user",
+            "content": "ping"
+        })],
+        ProviderRuntimeBinding::direct(),
+    )
+    .await
+    .expect("request should succeed with the next auth profile after catalog auth failure");
+
+    assert_eq!(completion, "fallback auth ok");
+
+    let requests = server.join().expect("join local provider server");
+    assert_eq!(requests.len(), 3);
+    assert!(
+        requests[0].starts_with("GET /v1/models "),
+        "first request should probe the model catalog: {requests:#?}"
+    );
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer oauth-token"),
+        "first catalog probe should use the first auth profile: {requests:#?}"
+    );
+    assert!(
+        requests[1].starts_with("GET /v1/models "),
+        "second request should retry the model catalog with the next auth profile: {requests:#?}"
+    );
+    assert!(
+        requests[1]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer api-key"),
+        "second catalog probe should use the fallback auth profile: {requests:#?}"
+    );
+    assert!(
+        requests[2].starts_with("POST /v1/chat/completions "),
+        "completion request should use the selected chat-completions endpoint: {requests:#?}"
+    );
+    assert!(
+        requests[2]
+            .to_ascii_lowercase()
+            .contains("authorization: bearer api-key"),
+        "completion request should stay on the auth profile that resolved the catalog successfully: {requests:#?}"
+    );
+}
+
 #[test]
 fn byteplus_auth_guidance_uses_byteplus_api_key_env() {
     let provider = ProviderConfig {
