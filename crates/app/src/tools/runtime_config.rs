@@ -187,6 +187,27 @@ fn intersect_private_host_setting(left: Option<bool>, right: Option<bool>) -> Op
     None
 }
 
+pub(crate) fn merge_runtime_narrowing_sources(
+    primary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+    secondary_runtime_narrowing: Option<ToolRuntimeNarrowing>,
+) -> Option<ToolRuntimeNarrowing> {
+    let primary_runtime_narrowing =
+        primary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+    let secondary_runtime_narrowing =
+        secondary_runtime_narrowing.filter(|runtime_narrowing| !runtime_narrowing.is_empty());
+
+    match (primary_runtime_narrowing, secondary_runtime_narrowing) {
+        (Some(primary_runtime_narrowing), Some(secondary_runtime_narrowing)) => {
+            let merged_runtime_narrowing =
+                primary_runtime_narrowing.intersect(&secondary_runtime_narrowing);
+            Some(merged_runtime_narrowing)
+        }
+        (Some(primary_runtime_narrowing), None) => Some(primary_runtime_narrowing),
+        (None, Some(secondary_runtime_narrowing)) => Some(secondary_runtime_narrowing),
+        (None, None) => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalSkillsRuntimePolicy {
     pub enabled: bool,
@@ -2987,6 +3008,58 @@ mod tests {
         assert_eq!(effective.web_fetch.timeout_seconds, Some(5));
         assert_eq!(effective.web_fetch.max_bytes, Some(4_096));
         assert_eq!(effective.web_fetch.max_redirects, Some(2));
+    }
+
+    #[test]
+    fn merge_runtime_narrowing_sources_intersects_delegate_and_policy_inputs() {
+        let delegate_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(1),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["docs.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-left.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+        let policy_runtime_narrowing = ToolRuntimeNarrowing {
+            browser: BrowserRuntimeNarrowing {
+                max_sessions: Some(3),
+                ..BrowserRuntimeNarrowing::default()
+            },
+            web_fetch: WebFetchRuntimeNarrowing {
+                allowed_domains: BTreeSet::from(["api.example.com".to_owned()]),
+                blocked_domains: BTreeSet::from(["deny-right.example.com".to_owned()]),
+                ..WebFetchRuntimeNarrowing::default()
+            },
+        };
+
+        let effective_runtime_narrowing = merge_runtime_narrowing_sources(
+            Some(delegate_runtime_narrowing),
+            Some(policy_runtime_narrowing),
+        )
+        .expect("effective runtime narrowing");
+
+        assert_eq!(effective_runtime_narrowing.browser.max_sessions, Some(1));
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .enforce_allowed_domains
+        );
+        assert!(
+            effective_runtime_narrowing
+                .web_fetch
+                .allowed_domains
+                .is_empty()
+        );
+        assert_eq!(
+            effective_runtime_narrowing.web_fetch.blocked_domains,
+            BTreeSet::from([
+                "deny-left.example.com".to_owned(),
+                "deny-right.example.com".to_owned(),
+            ])
+        );
     }
 
     #[test]

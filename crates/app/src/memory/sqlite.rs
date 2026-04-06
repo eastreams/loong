@@ -828,19 +828,7 @@ pub(super) fn ensure_memory_db_ready_with_diagnostics(
     let effective = path.unwrap_or_else(|| resolve_db_path(config));
     let (runtime, diagnostics) = acquire_sqlite_runtime_with_diagnostics(effective)?;
     runtime.with_connection_mut("memory.ensure_db_ready", |conn| {
-        let user_version = read_sqlite_user_version(conn)?;
-        let current_schema_ready = user_version == SQLITE_MEMORY_SCHEMA_VERSION
-            && sqlite_current_schema_objects_ready(conn)?;
-        if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
-            ensure_turn_session_index_and_state_metadata(conn)?;
-            ensure_approval_lifecycle_tables(conn)?;
-            ensure_session_tool_consent_storage(conn)?;
-            ensure_session_tool_policy_storage(conn)?;
-            ensure_summary_checkpoint_storage_layout(conn)?;
-            ensure_canonical_record_storage(conn)?;
-            write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
-        }
-        Ok(())
+        ensure_sqlite_schema_repairs_if_needed(conn)
     })?;
     Ok((runtime.path().to_path_buf(), diagnostics))
 }
@@ -1408,9 +1396,8 @@ fn open_sqlite_connection_with_diagnostics(
     diagnostics.configure_connection_ms = elapsed_ms(configure_started_at);
 
     let schema_upgrade_started_at = StdInstant::now();
-    let user_version = read_sqlite_user_version(&conn)?;
-    let current_schema_ready =
-        user_version == SQLITE_MEMORY_SCHEMA_VERSION && sqlite_current_schema_objects_ready(&conn)?;
+    let schema_probe = probe_sqlite_schema(&conn)?;
+    let current_schema_ready = schema_probe.current_schema_ready;
 
     if !current_schema_ready {
         let schema_init_started_at = StdInstant::now();
@@ -1606,15 +1593,7 @@ fn open_sqlite_connection_with_diagnostics(
         diagnostics.schema_init_ms = elapsed_ms(schema_init_started_at);
     }
 
-    if user_version < SQLITE_MEMORY_SCHEMA_VERSION || !current_schema_ready {
-        ensure_turn_session_index_and_state_metadata(&conn)?;
-        ensure_approval_lifecycle_tables(&conn)?;
-        ensure_session_tool_consent_storage(&mut conn)?;
-        ensure_session_tool_policy_storage(&conn)?;
-        ensure_summary_checkpoint_storage_layout(&conn)?;
-        ensure_canonical_record_storage(&conn)?;
-        write_sqlite_user_version(&conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
-    }
+    ensure_sqlite_schema_repairs_if_needed(&mut conn)?;
     ensure_control_plane_pairing_tables(&conn)?;
     diagnostics.schema_upgrade_ms = elapsed_ms(schema_upgrade_started_at);
 
@@ -1642,9 +1621,52 @@ fn read_sqlite_user_version(conn: &Connection) -> Result<i64, String> {
         .map_err(|error| format!("read sqlite user_version failed: {error}"))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SqliteSchemaProbe {
+    user_version: i64,
+    current_schema_ready: bool,
+}
+
+impl SqliteSchemaProbe {
+    fn requires_repairs(self) -> bool {
+        if self.user_version < SQLITE_MEMORY_SCHEMA_VERSION {
+            return true;
+        }
+        !self.current_schema_ready
+    }
+}
+
 fn write_sqlite_user_version(conn: &Connection, version: i64) -> Result<(), String> {
     conn.pragma_update(None, "user_version", version)
         .map_err(|error| format!("set sqlite user_version={version} failed: {error}"))
+}
+
+fn probe_sqlite_schema(conn: &Connection) -> Result<SqliteSchemaProbe, String> {
+    let user_version = read_sqlite_user_version(conn)?;
+    let current_schema_ready =
+        user_version == SQLITE_MEMORY_SCHEMA_VERSION && sqlite_current_schema_objects_ready(conn)?;
+
+    Ok(SqliteSchemaProbe {
+        user_version,
+        current_schema_ready,
+    })
+}
+
+fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), String> {
+    let schema_probe = probe_sqlite_schema(conn)?;
+    if !schema_probe.requires_repairs() {
+        return Ok(());
+    }
+
+    ensure_turn_session_index_and_state_metadata(conn)?;
+    ensure_approval_lifecycle_tables(conn)?;
+    ensure_session_tool_consent_storage(conn)?;
+    ensure_session_tool_policy_storage(conn)?;
+    ensure_summary_checkpoint_storage_layout(conn)?;
+    ensure_canonical_record_storage(conn)?;
+    write_sqlite_user_version(conn, SQLITE_MEMORY_SCHEMA_VERSION)?;
+
+    Ok(())
 }
 
 fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String> {
@@ -8629,6 +8651,101 @@ mod tests {
 
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].record.metadata["source"], "workspace-import");
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn cached_runtime_repair_path_recovers_stale_canonical_fts_metadata_schema() {
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-cached-runtime-stale-fts-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("cached-runtime-stale-fts.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        ensure_memory_db_ready(None, &config).expect("initialize sqlite db");
+
+        let runtime = acquire_memory_runtime(&config).expect("cached sqlite runtime");
+        runtime
+            .with_connection_mut("test.degrade_cached_runtime_canonical_fts", |conn| {
+                conn.execute_batch(
+                    "
+                    DROP TRIGGER IF EXISTS memory_canonical_records_ai;
+                    DROP TRIGGER IF EXISTS memory_canonical_records_ad;
+                    DROP TRIGGER IF EXISTS memory_canonical_records_au;
+                    DROP TABLE IF EXISTS memory_canonical_records_fts;
+                    CREATE VIRTUAL TABLE memory_canonical_records_fts
+                      USING fts5(content, content='memory_canonical_records', content_rowid='record_id');
+                    CREATE TRIGGER memory_canonical_records_ai
+                      AFTER INSERT ON memory_canonical_records
+                    BEGIN
+                      INSERT INTO memory_canonical_records_fts(rowid, content)
+                      VALUES (new.record_id, new.content);
+                    END;
+                    CREATE TRIGGER memory_canonical_records_ad
+                      AFTER DELETE ON memory_canonical_records
+                    BEGIN
+                      INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
+                      VALUES ('delete', old.record_id, old.content);
+                    END;
+                    CREATE TRIGGER memory_canonical_records_au
+                      AFTER UPDATE ON memory_canonical_records
+                    BEGIN
+                      INSERT INTO memory_canonical_records_fts(memory_canonical_records_fts, rowid, content)
+                      VALUES ('delete', old.record_id, old.content);
+                      INSERT INTO memory_canonical_records_fts(rowid, content)
+                      VALUES (new.record_id, new.content);
+                    END;
+                    PRAGMA user_version = 8;
+                    ",
+                )
+                .map_err(|error| format!("degrade cached canonical FTS schema failed: {error}"))?;
+                Ok(())
+            })
+            .expect("degrade cached canonical FTS schema");
+
+        let payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "release checklist",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+        append_turn_direct("workspace-session", "assistant", &payload, &config)
+            .expect("append structured canonical payload");
+
+        reset_sqlite_schema_repair_metrics_for_tests();
+        ensure_memory_db_ready_with_diagnostics(None, &config)
+            .expect("repair cached stale canonical FTS schema");
+
+        assert_eq!(
+            sqlite_schema_repair_count_for_tests("canonical_records"),
+            1,
+            "expected cached runtime repair path to repair canonical records once"
+        );
+
+        let hits = search_canonical_records_for_recall("release checklist", 5, None, &config)
+            .expect("search canonical memory after cached runtime repair");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.scope, MemoryScope::Workspace);
+        assert_eq!(hits[0].record.kind, CanonicalMemoryKind::ImportedProfile);
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

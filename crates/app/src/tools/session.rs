@@ -2735,15 +2735,10 @@ fn merge_session_tool_policy_runtime_narrowing(
     let policy_runtime_narrowing = session_tool_policy.and_then(|policy| {
         (!policy.runtime_narrowing.is_empty()).then_some(policy.runtime_narrowing.clone())
     });
-
-    match (delegate_runtime_narrowing, policy_runtime_narrowing) {
-        (Some(delegate_runtime_narrowing), Some(policy_runtime_narrowing)) => {
-            Some(delegate_runtime_narrowing.intersect(&policy_runtime_narrowing))
-        }
-        (Some(delegate_runtime_narrowing), None) => Some(delegate_runtime_narrowing),
-        (None, Some(policy_runtime_narrowing)) => Some(policy_runtime_narrowing),
-        (None, None) => None,
-    }
+    super::runtime_config::merge_runtime_narrowing_sources(
+        delegate_runtime_narrowing,
+        policy_runtime_narrowing,
+    )
 }
 
 #[cfg(feature = "memory-sqlite")]

@@ -1857,12 +1857,10 @@ fn inject_runtime_narrowing_context(
     payload: serde_json::Value,
     session_context: &SessionContext,
 ) -> serde_json::Value {
-    let Some(runtime_narrowing) = session_context.runtime_narrowing.as_ref() else {
+    let resolved_runtime_narrowing = session_context.resolved_runtime_narrowing();
+    let Some(runtime_narrowing) = resolved_runtime_narrowing else {
         return payload;
     };
-    if runtime_narrowing.is_empty() {
-        return payload;
-    }
 
     let serde_json::Value::Object(mut object) = payload else {
         return payload;
