@@ -3026,8 +3026,9 @@ fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<
                     Some(prefix) => format!("{prefix}.{key}"),
                     None => key.clone(),
                 };
-                out.insert(next_prefix.clone());
-                collect_config_paths(child, Some(next_prefix.as_str()), out);
+                if !child.is_null() {
+                    collect_config_paths(child, Some(next_prefix.as_str()), out);
+                }
             }
         }
         Value::Array(items) => {
@@ -3035,7 +3036,8 @@ fn collect_config_paths(value: &Value, prefix: Option<&str>, out: &mut BTreeSet<
                 collect_config_paths(child, prefix, out);
             }
         }
-        _ => {
+        Value::Null => {}
+        Value::Bool(_) | Value::Number(_) | Value::String(_) => {
             if let Some(prefix) = prefix {
                 out.insert(prefix.to_owned());
             }
