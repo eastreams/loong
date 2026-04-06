@@ -5,7 +5,11 @@ use std::path::Path;
 use loongclaw_contracts::{ToolCoreOutcome, ToolCoreRequest};
 use serde_json::{Map, Value, json};
 
-use crate::memory::{WorkspaceMemoryDocumentLocation, collect_workspace_memory_document_locations};
+use crate::memory::{
+    MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode, MemoryScope,
+    WorkspaceMemoryDocumentKind, WorkspaceMemoryDocumentLocation,
+    collect_workspace_memory_document_locations,
+};
 
 const DEFAULT_MEMORY_SEARCH_MAX_RESULTS: usize = 5;
 const MAX_MEMORY_SEARCH_RESULTS: usize = 8;
@@ -25,6 +29,7 @@ struct MemorySearchResult {
     end_line: Option<usize>,
     snippet: String,
     score: u32,
+    provenance: MemoryContextProvenance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +80,7 @@ pub(super) fn execute_memory_search_tool_with_config(
             let maybe_result = search_memory_location(
                 query_normalized.as_str(),
                 query_tokens.as_slice(),
+                config,
                 &location,
             )?;
             let Some(result) = maybe_result else {
@@ -189,6 +195,7 @@ pub(super) fn execute_memory_get_tool_with_config(
             "start_line": start_line,
             "end_line": end_line,
             "text": text,
+            "provenance": workspace_memory_location_provenance(config, matched_location),
         }),
     })
 }
@@ -341,6 +348,7 @@ fn invalid_numeric_field_message(
 fn search_memory_location(
     query: &str,
     query_tokens: &[String],
+    config: &super::runtime_config::ToolRuntimeConfig,
     location: &WorkspaceMemoryDocumentLocation,
 ) -> Result<Option<MemorySearchResult>, String> {
     let content = fs::read_to_string(location.path.as_path()).map_err(|error| {
@@ -381,6 +389,7 @@ fn search_memory_location(
         end_line: Some(end_line),
         snippet,
         score: best_match.score,
+        provenance: workspace_memory_location_provenance(config, location),
     };
 
     Ok(Some(result))
@@ -510,6 +519,7 @@ fn search_canonical_memory_results(
             let score = canonical_memory_match_score(query, query_tokens, &hit);
             let scope = hit.record.scope.as_str().to_owned();
             let kind = hit.record.kind.as_str().to_owned();
+            let provenance = canonical_memory_hit_provenance(config, &hit);
             MemorySearchResult {
                 source: "canonical_session",
                 path: None,
@@ -521,6 +531,7 @@ fn search_canonical_memory_results(
                 end_line: None,
                 snippet: hit.record.content,
                 score,
+                provenance,
             }
         })
         .collect())
@@ -566,7 +577,47 @@ fn memory_search_result_payload(result: &MemorySearchResult) -> Value {
         "end_line": result.end_line,
         "snippet": result.snippet,
         "score": result.score,
+        "provenance": result.provenance,
     })
+}
+
+fn workspace_memory_location_provenance(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    location: &WorkspaceMemoryDocumentLocation,
+) -> MemoryContextProvenance {
+    let scope = match location.kind {
+        WorkspaceMemoryDocumentKind::Curated => MemoryScope::Workspace,
+        WorkspaceMemoryDocumentKind::DailyLog => MemoryScope::Session,
+    };
+    let source_label = Some(location.label.clone());
+    let source_path = Some(location.path.display().to_string());
+
+    MemoryContextProvenance::new(
+        config.selected_memory_system_id.as_str(),
+        MemoryProvenanceSourceKind::WorkspaceDocument,
+        source_label,
+        source_path,
+        Some(scope),
+        MemoryRecallMode::OperatorInspection,
+    )
+}
+
+fn canonical_memory_hit_provenance(
+    config: &super::runtime_config::ToolRuntimeConfig,
+    hit: &crate::memory::CanonicalMemorySearchHit,
+) -> MemoryContextProvenance {
+    let source_label = Some(hit.record.kind.as_str().to_owned());
+    let source_path = None;
+    let scope = Some(hit.record.scope);
+
+    MemoryContextProvenance::new(
+        config.selected_memory_system_id.as_str(),
+        MemoryProvenanceSourceKind::CanonicalMemoryRecord,
+        source_label,
+        source_path,
+        scope,
+        MemoryRecallMode::OperatorInspection,
+    )
 }
 
 fn trim_trailing_line_endings(line: &str) -> &str {
@@ -638,6 +689,16 @@ mod tests {
                 .is_some_and(|value| value.contains("17:00 Beijing time")),
             "expected canonical snippet in result payload: {results:?}"
         );
+        assert_eq!(results[0]["provenance"]["memory_system_id"], "builtin");
+        assert_eq!(
+            results[0]["provenance"]["source_kind"],
+            "canonical_memory_record"
+        );
+        assert_eq!(results[0]["provenance"]["scope"], "session");
+        assert_eq!(
+            results[0]["provenance"]["recall_mode"],
+            "operator_inspection"
+        );
     }
 
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
@@ -694,6 +755,11 @@ mod tests {
         assert_eq!(results[0]["session_id"], "metadata-session");
         assert_eq!(results[0]["scope"], "workspace");
         assert_eq!(results[0]["kind"], "imported_profile");
+        assert_eq!(
+            results[0]["provenance"]["source_kind"],
+            "canonical_memory_record"
+        );
+        assert_eq!(results[0]["provenance"]["scope"], "workspace");
         assert!(
             results[0]["score"].as_u64().is_some_and(|value| value > 0),
             "metadata-only matches should keep a stable score: {results:?}"

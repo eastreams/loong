@@ -2801,6 +2801,14 @@ mod tests {
                 .all(|entry| entry["source"] == "workspace_file"),
             "expected workspace-file results only: {results:?}"
         );
+        assert!(
+            results.iter().all(|entry| {
+                entry["provenance"]["memory_system_id"] == "builtin"
+                    && entry["provenance"]["source_kind"] == "workspace_document"
+                    && entry["provenance"]["recall_mode"] == "operator_inspection"
+            }),
+            "expected structured operator-inspection provenance: {results:?}"
+        );
     }
 
     #[cfg(feature = "tool-file")]
@@ -2835,6 +2843,47 @@ mod tests {
         assert_eq!(outcome.payload["start_line"], 2);
         assert_eq!(outcome.payload["end_line"], 3);
         assert_eq!(outcome.payload["text"], "line two\nline three");
+        assert_eq!(outcome.payload["provenance"]["memory_system_id"], "builtin");
+        assert_eq!(
+            outcome.payload["provenance"]["source_kind"],
+            "workspace_document"
+        );
+        assert_eq!(outcome.payload["provenance"]["scope"], "workspace");
+        assert_eq!(
+            outcome.payload["provenance"]["recall_mode"],
+            "operator_inspection"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
+        let root = unique_tool_temp_dir("loongclaw-memory-get-selected-system");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, "line one\nline two\n").expect("write root memory");
+
+        let mut config = test_tool_runtime_config(root);
+        config.selected_memory_system_id = "workspace_recall".to_owned();
+
+        let outcome = execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 1
+                }),
+            },
+            &config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(
+            outcome.payload["provenance"]["memory_system_id"],
+            "workspace_recall"
+        );
     }
 
     #[cfg(feature = "tool-file")]
