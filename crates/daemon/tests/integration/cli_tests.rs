@@ -828,13 +828,13 @@ fn onboard_cli_accepts_personality_flag() {
         "--non-interactive",
         "--accept-risk",
         "--personality",
-        "friendly_collab",
+        "hermit",
     ])
     .expect("`--personality` should parse");
 
     match cli.command {
         Some(Commands::Onboard { personality, .. }) => {
-            assert_eq!(personality.as_deref(), Some("friendly_collab"));
+            assert_eq!(personality.as_deref(), Some("hermit"));
         }
         other => panic!("unexpected command parsed: {other:?}"),
     }

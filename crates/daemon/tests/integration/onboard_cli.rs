@@ -575,17 +575,17 @@ fn default_non_interactive_onboard_options(
 
 #[test]
 fn scripted_onboard_ui_select_one_accepts_slug_input() {
-    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let mut ui = ScriptedOnboardUi::new(["hermit"]);
     let options = vec![
         loongclaw_daemon::onboard_cli::SelectOption {
-            label: "calm engineering".to_owned(),
-            slug: "calm_engineering".to_owned(),
+            label: "classicist".to_owned(),
+            slug: "classicist".to_owned(),
             description: String::new(),
             recommended: true,
         },
         loongclaw_daemon::onboard_cli::SelectOption {
-            label: "friendly collab".to_owned(),
-            slug: "friendly_collab".to_owned(),
+            label: "hermit".to_owned(),
+            slug: "hermit".to_owned(),
             description: String::new(),
             recommended: false,
         },
@@ -738,15 +738,15 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 fn parse_prompt_personality_accepts_supported_ids() {
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("calm_engineering"),
-        Some(mvp::prompt::PromptPersonality::CalmEngineering)
+        Some(mvp::prompt::PromptPersonality::Classicist)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("friendly_collab"),
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("autonomous_executor"),
-        Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
+        Some(mvp::prompt::PromptPersonality::Pragmatist)
     );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("unknown"),
@@ -816,7 +816,7 @@ async fn non_interactive_personality_and_memory_profile_are_persisted() {
             api_key_env: Some("OPENAI_API_KEY".to_owned()),
             web_search_provider: None,
             web_search_api_key_env: None,
-            personality: Some("friendly_collab".to_owned()),
+            personality: Some("hermit".to_owned()),
             memory_profile: Some("profile_plus_window".to_owned()),
             system_prompt: None,
             skip_model_probe: true,
@@ -839,11 +839,58 @@ async fn non_interactive_personality_and_memory_profile_are_persisted() {
         .expect("load non-interactive personality/memory config");
     assert_eq!(
         config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         config.memory.profile,
         mvp::config::MemoryProfile::ProfilePlusWindow
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_interactive_legacy_personality_alias_still_maps_to_supported_preset() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "openai-test-token");
+    }
+
+    let output_path = unique_temp_path("non-interactive-legacy-personality-config.toml");
+    let transcript = run_scripted_onboard_flow(
+        crate::onboard_cli::OnboardCommandOptions {
+            output: output_path.to_str().map(str::to_owned),
+            force: false,
+            non_interactive: true,
+            accept_risk: true,
+            provider: Some("openai".to_owned()),
+            model: Some("openai/gpt-5.1".to_owned()),
+            api_key_env: Some("OPENAI_API_KEY".to_owned()),
+            web_search_provider: None,
+            web_search_api_key_env: None,
+            personality: Some("friendly_collab".to_owned()),
+            memory_profile: None,
+            system_prompt: None,
+            skip_model_probe: true,
+        },
+        std::iter::empty::<String>(),
+        None,
+        None,
+    )
+    .await
+    .expect("run non-interactive onboarding with legacy personality alias");
+
+    assert!(
+        transcript
+            .iter()
+            .any(|line| line.contains("onboarding complete")),
+        "non-interactive legacy personality path should still complete successfully: {transcript:#?}"
+    );
+
+    let (_, config) = mvp::config::load(output_path.to_str())
+        .expect("load non-interactive legacy personality config");
+
+    assert_eq!(
+        config.cli.personality,
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
 }
 
@@ -5534,7 +5581,7 @@ fn onboard_system_prompt_screen_wraps_long_current_prompt() {
 #[test]
 fn onboard_personality_selection_screen_shows_native_personality_choices() {
     let mut config = mvp::config::LoongClawConfig::default();
-    config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+    config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
 
@@ -5552,11 +5599,15 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         "personality screen should surface the native prompt-pack progress step: {lines:#?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("friendly_collab)")),
-        "personality screen should keep the canonical friendly_collab selector visible without bracket syntax: {lines:#?}"
+        lines.iter().any(|line| line.contains("hermit)")),
+        "personality screen should keep the canonical hermit selector visible without bracket syntax: {lines:#?}"
     );
     assert!(
-        lines.iter().all(|line| !line.contains("[friendly_collab]")),
+        lines.iter().any(|line| line.contains("experimental ·")),
+        "personality screen should mark sharper presets as experimental in the shared catalog-driven descriptions: {lines:#?}"
+    );
+    assert!(
+        lines.iter().all(|line| !line.contains("[hermit]")),
         "personality screen should not imply that brackets are part of the expected selector syntax: {lines:#?}"
     );
 }
@@ -6957,7 +7008,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
             provider_choice_input(mvp::config::ProviderKind::Openai),
             "gpt-4.1".to_owned(),
             "OPENAI_API_KEY".to_owned(),
-            "2".to_owned(),
+            "hermit".to_owned(),
             String::new(),
             "3".to_owned(),
             String::new(),
@@ -6989,7 +7040,7 @@ async fn onboard_current_setup_adjustments_capture_personality_and_memory_profil
         .expect("load current-setup personality/memory config");
     assert_eq!(
         config.cli.personality,
-        Some(mvp::prompt::PromptPersonality::FriendlyCollab)
+        Some(mvp::prompt::PromptPersonality::Hermit)
     );
     assert_eq!(
         config.memory.profile,
@@ -7259,7 +7310,7 @@ fn onboard_review_lines_include_core_setup_summary_for_fresh_setup() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- personality: calm_engineering")),
+            .any(|line| line.contains("- personality: classicist")),
         "review should surface the active native personality during onboarding: {lines:#?}"
     );
     assert!(
@@ -7618,7 +7669,7 @@ fn onboarding_success_summary_uses_compact_header() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("- personality: calm_engineering")),
+            .any(|line| line.contains("- personality: classicist")),
         "success summary should include the selected native personality: {lines:#?}"
     );
     assert!(
@@ -7696,7 +7747,7 @@ fn onboarding_success_summary_reports_existing_config_kept() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("calm_engineering".to_owned()),
+        personality: Some("classicist".to_owned()),
         prompt_addendum: None,
         memory_profile: "window_only".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
@@ -7803,7 +7854,7 @@ fn onboarding_success_summary_groups_domain_outcomes_by_decision() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("friendly_collab".to_owned()),
+        personality: Some("hermit".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),
@@ -7874,7 +7925,7 @@ fn onboarding_success_summary_wraps_domain_outcomes_for_narrow_width() {
             value: "OPENAI_API_KEY".to_owned(),
         }),
         prompt_mode: "native prompt pack".to_owned(),
-        personality: Some("friendly_collab".to_owned()),
+        personality: Some("hermit".to_owned()),
         prompt_addendum: Some("Keep answers direct.".to_owned()),
         memory_profile: "profile_plus_window".to_owned(),
         web_search_provider: "DuckDuckGo".to_owned(),

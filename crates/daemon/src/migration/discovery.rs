@@ -686,7 +686,7 @@ mod tests {
     #[test]
     fn cli_import_surface_detects_prompt_pack_metadata_changes() {
         let mut config = mvp::config::LoongClawConfig::default();
-        config.cli.personality = Some(mvp::prompt::PromptPersonality::FriendlyCollab);
+        config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
         let surfaces = collect_import_surfaces(&config);
 

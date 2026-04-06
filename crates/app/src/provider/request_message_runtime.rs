@@ -1093,7 +1093,7 @@ mod tests {
     #[test]
     fn message_builder_uses_rendered_prompt_from_pack_metadata() {
         let mut config = LoongClawConfig::default();
-        config.cli.personality = Some(crate::prompt::PromptPersonality::FriendlyCollab);
+        config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
         config.cli.system_prompt = String::new();
         let session_id = format!(
             "provider-rendered-prompt-{}",
@@ -1111,7 +1111,7 @@ mod tests {
             build_messages_for_session(&config, &session_id, true).expect("build messages");
         let system_content = messages[0]["content"].as_str().expect("system content");
 
-        assert!(system_content.contains("## Personality Overlay: Friendly Collaboration"));
+        assert!(system_content.contains("## Personality Overlay: Hermit"));
         assert!(system_content.contains("[tool_discovery_runtime]"));
 
         let _ = std::fs::remove_file(config.memory.sqlite_path.as_str());
@@ -1128,7 +1128,7 @@ mod tests {
         let system_content = system["content"].as_str().expect("system content");
 
         assert!(system_content.contains("You are a legacy inline prompt."));
-        assert!(!system_content.contains("## Personality Overlay: Calm Engineering"));
+        assert!(!system_content.contains("## Personality Overlay:"));
     }
 
     #[test]

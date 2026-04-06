@@ -2527,35 +2527,26 @@ fn resolve_personality_selection(
         .and_then(parse_prompt_personality)
         .unwrap_or_else(|| config.cli.resolved_personality());
 
-    let personalities = [
-        (
-            mvp::prompt::PromptPersonality::CalmEngineering,
-            "calm engineering",
-            "rigorous, direct, and technically grounded",
-        ),
-        (
-            mvp::prompt::PromptPersonality::FriendlyCollab,
-            "friendly collab",
-            "warm, cooperative, and explanatory when helpful",
-        ),
-        (
-            mvp::prompt::PromptPersonality::AutonomousExecutor,
-            "autonomous executor",
-            "decisive, high-initiative, and execution-oriented",
-        ),
-    ];
-    let select_options: Vec<SelectOption> = personalities
+    let personality_catalog = mvp::prompt::prompt_personality_catalog();
+    let select_options: Vec<SelectOption> = personality_catalog
         .iter()
-        .map(|(p, label, desc)| SelectOption {
-            label: label.to_string(),
-            slug: prompt_personality_id(*p).to_owned(),
-            description: desc.to_string(),
-            recommended: *p == default_personality,
+        .map(|descriptor| {
+            let label = descriptor.label.to_owned();
+            let slug = descriptor.id.to_owned();
+            let description = personality_selection_description(descriptor);
+            let recommended = descriptor.personality == default_personality;
+
+            SelectOption {
+                label,
+                slug,
+                description,
+                recommended,
+            }
         })
         .collect();
-    let default_idx = personalities
+    let default_idx = personality_catalog
         .iter()
-        .position(|(p, _, _)| *p == default_personality);
+        .position(|descriptor| descriptor.personality == default_personality);
 
     print_lines(
         ui,
@@ -2567,10 +2558,10 @@ fn resolve_personality_selection(
         default_idx,
         SelectInteractionMode::List,
     )?;
-    let (personality, _, _) = personalities
+    let descriptor = personality_catalog
         .get(idx)
         .ok_or_else(|| format!("personality selection index {idx} out of range"))?;
-    Ok(*personality)
+    Ok(descriptor.personality)
 }
 
 fn resolve_prompt_addendum_selection(
@@ -5503,31 +5494,22 @@ fn render_personality_selection_screen_lines_with_style(
     width: usize,
     color_enabled: bool,
 ) -> Vec<String> {
-    let options = [
-        (
-            mvp::prompt::PromptPersonality::CalmEngineering,
-            "calm engineering",
-            "rigorous, direct, and technically grounded",
-        ),
-        (
-            mvp::prompt::PromptPersonality::FriendlyCollab,
-            "friendly collab",
-            "warm, cooperative, and explanatory when helpful",
-        ),
-        (
-            mvp::prompt::PromptPersonality::AutonomousExecutor,
-            "autonomous executor",
-            "decisive, high-initiative, and execution-oriented",
-        ),
-    ]
-    .into_iter()
-    .map(|(personality, label, detail)| OnboardScreenOption {
-        key: prompt_personality_id(personality).to_owned(),
-        label: label.to_owned(),
-        detail_lines: vec![detail.to_owned()],
-        recommended: personality == default_personality,
-    })
-    .collect::<Vec<_>>();
+    let options = mvp::prompt::prompt_personality_catalog()
+        .iter()
+        .map(|descriptor| {
+            let key = descriptor.id.to_owned();
+            let label = descriptor.label.to_owned();
+            let detail = personality_selection_description(descriptor);
+            let recommended = descriptor.personality == default_personality;
+
+            OnboardScreenOption {
+                key,
+                label,
+                detail_lines: vec![detail],
+                recommended,
+            }
+        })
+        .collect::<Vec<_>>();
 
     render_onboard_choice_screen(
         OnboardHeaderStyle::Compact,
@@ -5574,6 +5556,18 @@ fn render_personality_selection_header_lines(
         true,
         true,
     )
+}
+
+fn personality_selection_description(
+    descriptor: &mvp::prompt::PromptPersonalityDescriptor,
+) -> String {
+    let summary = descriptor.selection_summary;
+
+    if descriptor.experimental {
+        return format!("experimental · {summary}");
+    }
+
+    summary.to_owned()
 }
 
 pub fn render_prompt_addendum_selection_screen_lines(
@@ -6124,18 +6118,7 @@ pub fn parse_provider_kind(raw: &str) -> Option<mvp::config::ProviderKind> {
 }
 
 pub fn parse_prompt_personality(raw: &str) -> Option<mvp::prompt::PromptPersonality> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "calm_engineering" | "engineering" | "calm" => {
-            Some(mvp::prompt::PromptPersonality::CalmEngineering)
-        }
-        "friendly_collab" | "friendly" | "collab" => {
-            Some(mvp::prompt::PromptPersonality::FriendlyCollab)
-        }
-        "autonomous_executor" | "autonomous" | "executor" => {
-            Some(mvp::prompt::PromptPersonality::AutonomousExecutor)
-        }
-        _ => None,
-    }
+    mvp::prompt::parse_prompt_personality(raw)
 }
 
 pub fn parse_memory_profile(raw: &str) -> Option<mvp::config::MemoryProfile> {
@@ -6164,11 +6147,7 @@ pub fn provider_kind_display_name(kind: mvp::config::ProviderKind) -> &'static s
 }
 
 pub fn prompt_personality_id(personality: mvp::prompt::PromptPersonality) -> &'static str {
-    match personality {
-        mvp::prompt::PromptPersonality::CalmEngineering => "calm_engineering",
-        mvp::prompt::PromptPersonality::FriendlyCollab => "friendly_collab",
-        mvp::prompt::PromptPersonality::AutonomousExecutor => "autonomous_executor",
-    }
+    personality.id()
 }
 
 pub fn memory_profile_id(profile: mvp::config::MemoryProfile) -> &'static str {
@@ -6187,8 +6166,8 @@ pub fn supported_provider_list() -> String {
         .join(", ")
 }
 
-pub fn supported_personality_list() -> &'static str {
-    "calm_engineering, friendly_collab, autonomous_executor"
+pub fn supported_personality_list() -> String {
+    mvp::prompt::supported_prompt_personality_list()
 }
 
 pub fn supported_memory_profile_list() -> &'static str {
@@ -9200,8 +9179,8 @@ mod tests {
     fn render_onboard_option_lines_align_wrapped_labels_with_option_prefix() {
         let lines = render_onboard_option_lines(
             &[OnboardScreenOption {
-                key: "friendly_collab".to_owned(),
-                label: "friendly collab keeps longer wrapped labels aligned".to_owned(),
+                key: "classicist".to_owned(),
+                label: "classicist keeps longer wrapped labels aligned".to_owned(),
                 detail_lines: Vec::new(),
                 recommended: false,
             }],
@@ -9214,11 +9193,7 @@ mod tests {
 
         assert!(
             continuation.starts_with(
-                &" ".repeat(
-                    render_onboard_option_prefix("friendly_collab")
-                        .chars()
-                        .count()
-                )
+                &" ".repeat(render_onboard_option_prefix("classicist").chars().count())
             ),
             "wrapped option labels should continue under the label text instead of snapping back to a fixed indent: {lines:#?}"
         );
@@ -9382,17 +9357,17 @@ mod tests {
 
     #[test]
     fn test_onboard_ui_select_one_accepts_slug_input() {
-        let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
+        let mut ui = TestOnboardUi::with_inputs(["hermit"]);
         let options = vec![
             SelectOption {
-                label: "calm engineering".to_owned(),
-                slug: "calm_engineering".to_owned(),
+                label: "classicist".to_owned(),
+                slug: "classicist".to_owned(),
                 description: String::new(),
                 recommended: true,
             },
             SelectOption {
-                label: "friendly collab".to_owned(),
-                slug: "friendly_collab".to_owned(),
+                label: "hermit".to_owned(),
+                slug: "hermit".to_owned(),
                 description: String::new(),
                 recommended: false,
             },

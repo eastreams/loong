@@ -2674,7 +2674,7 @@ api_key_env = "{secret}"
         let path_string = path.display().to_string();
         let mut config = LoongClawConfig::default();
         config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
-        config.cli.personality = Some(crate::prompt::PromptPersonality::AutonomousExecutor);
+        config.cli.personality = Some(crate::prompt::PromptPersonality::CyberRadical);
 
         write(Some(&path_string), &config, true).expect("config write should pass");
         let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
@@ -2685,7 +2685,36 @@ api_key_env = "{secret}"
         );
         assert_eq!(
             loaded.cli.personality,
-            Some(crate::prompt::PromptPersonality::AutonomousExecutor)
+            Some(crate::prompt::PromptPersonality::CyberRadical)
+        );
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    #[cfg(feature = "config-toml")]
+    fn load_accepts_legacy_prompt_personality_ids() {
+        let path = unique_config_path("loongclaw-legacy-prompt-config");
+        let path_string = path.display().to_string();
+        let mut config = LoongClawConfig::default();
+        config.cli.prompt_pack_id = Some("loongclaw-core-v1".to_owned());
+        config.cli.personality = Some(crate::prompt::PromptPersonality::Hermit);
+
+        write(Some(&path_string), &config, true).expect("config write should pass");
+
+        let raw = fs::read_to_string(&path).expect("read config text");
+        let legacy_raw = raw.replace(
+            "personality = \"hermit\"",
+            "personality = \"friendly_collab\"",
+        );
+
+        fs::write(&path, legacy_raw).expect("write legacy config text");
+
+        let (_, loaded) = load(Some(&path_string)).expect("config load should pass");
+
+        assert_eq!(
+            loaded.cli.personality,
+            Some(crate::prompt::PromptPersonality::Hermit)
         );
 
         let _ = fs::remove_file(path);
