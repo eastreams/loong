@@ -133,6 +133,8 @@ use crate::conversation::workspace_isolation::{
     prepare_delegate_workspace_root,
 };
 #[cfg(all(test, feature = "memory-sqlite"))]
+use crate::session::recovery::RECOVERY_EVENT_KIND;
+#[cfg(all(test, feature = "memory-sqlite"))]
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
