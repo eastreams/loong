@@ -15108,6 +15108,7 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
                 degraded: false,
                 derivation_error: None,
                 retrieval_error: None,
+                rank_error: None,
                 recent_window_count: recent_window.len(),
                 entry_count: entries.len(),
             },

@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-06T10:23:34Z
+- Generated at: 2026-04-06T13:33:43Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -15,7 +15,7 @@
 | spec_runtime | `foundation` | `crates/spec/src/spec_runtime.rs` | 3528 | 3600 | 72 | 65 | 65 | 0 | 100.0% | TIGHT | 3455 | 2.1% | PASS | 65 |
 | spec_execution | `foundation` | `crates/spec/src/spec_execution.rs` | 3573 | 3700 | 127 | 48 | 80 | 32 | 96.6% | TIGHT | 3547 | 0.7% | PASS | 43 |
 | provider_mod | `foundation` | `crates/app/src/provider/mod.rs` | 376 | 1000 | 624 | 10 | 20 | 10 | 50.0% | HEALTHY | 375 | 0.3% | PASS | 10 |
-| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 355 | 650 | 295 | 14 | 16 | 2 | 87.5% | WATCH | 356 | -0.3% | PASS | 14 |
+| memory_mod | `foundation` | `crates/app/src/memory/mod.rs` | 361 | 650 | 289 | 14 | 16 | 2 | 87.5% | WATCH | 356 | 1.4% | PASS | 14 |
 | acp_manager | `operational_density` | `crates/app/src/acp/manager.rs` | 3391 | 3600 | 209 | 8 | 12 | 4 | 94.2% | WATCH | 3383 | 0.2% | PASS | 8 |
 | acpx_runtime | `operational_density` | `crates/app/src/acp/acpx.rs` | 2795 | 2800 | 5 | 48 | 65 | 17 | 99.8% | TIGHT | 2698 | 3.6% | PASS | 56 |
 | channel_registry | `structural_size` | `crates/app/src/channel/registry.rs` | 10222 | 10500 | 278 | 72 | 90 | 18 | 97.4% | TIGHT | 9922 | 3.0% | PASS | 88 |
@@ -61,7 +61,7 @@
 <!-- arch-hotspot key=spec_runtime lines=3528 functions=65 -->
 <!-- arch-hotspot key=spec_execution lines=3573 functions=48 -->
 <!-- arch-hotspot key=provider_mod lines=376 functions=10 -->
-<!-- arch-hotspot key=memory_mod lines=355 functions=14 -->
+<!-- arch-hotspot key=memory_mod lines=361 functions=14 -->
 <!-- arch-hotspot key=acp_manager lines=3391 functions=8 -->
 <!-- arch-hotspot key=acpx_runtime lines=2795 functions=48 -->
 <!-- arch-hotspot key=channel_registry lines=10222 functions=72 -->
