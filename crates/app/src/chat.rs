@@ -1,6 +1,4 @@
 use std::collections::BTreeMap;
-#[cfg(feature = "memory-sqlite")]
-use std::collections::BTreeSet;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
@@ -9,15 +7,10 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-#[cfg(feature = "memory-sqlite")]
-use loongclaw_contracts::Capability;
 use tokio::sync::Notify;
 
 use crate::CliResult;
-use crate::acp::{
-    AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink,
-    resolve_acp_backend_selection,
-};
+use crate::acp::{AcpConversationTurnOptions, AcpTurnEventSink, JsonlAcpTurnEventSink};
 use crate::context::{DEFAULT_TOKEN_TTL_S, bootstrap_kernel_context_with_config};
 
 mod cli_input;
@@ -27,9 +20,50 @@ mod latest_session_selector_tests;
 mod operator_surfaces;
 
 use self::cli_input::ConcurrentCliInputReader;
+#[cfg(test)]
+use self::operator_surfaces::CliChatStartupSummary;
+#[cfg(test)]
+use self::operator_surfaces::ManualCompactionResult;
+#[cfg(test)]
+use self::operator_surfaces::ManualCompactionStatus;
+#[cfg(test)]
+use self::operator_surfaces::build_cli_chat_startup_summary;
+use self::operator_surfaces::is_cli_chat_status_command;
+use self::operator_surfaces::is_manual_compaction_command;
+use self::operator_surfaces::is_turn_checkpoint_repair_command;
+#[cfg(test)]
+use self::operator_surfaces::load_history_lines;
+#[cfg(test)]
+use self::operator_surfaces::load_manual_compaction_result;
+#[cfg(test)]
+use self::operator_surfaces::manual_compaction_status_from_report;
+use self::operator_surfaces::parse_exact_chat_command;
+use self::operator_surfaces::parse_fast_lane_summary_limit;
+use self::operator_surfaces::parse_safe_lane_summary_limit;
+#[cfg(test)]
+use self::operator_surfaces::parse_summary_limit;
+use self::operator_surfaces::parse_turn_checkpoint_summary_limit;
+use self::operator_surfaces::print_cli_chat_startup;
+use self::operator_surfaces::print_cli_chat_status;
+use self::operator_surfaces::print_help;
+use self::operator_surfaces::print_history;
+use self::operator_surfaces::print_manual_compaction;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_help_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_history_lines_with_width;
+use self::operator_surfaces::render_cli_chat_missing_config_decline_lines_with_width;
+use self::operator_surfaces::render_cli_chat_missing_config_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_startup_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_cli_chat_status_lines_with_width;
+#[cfg(test)]
+use self::operator_surfaces::render_manual_compaction_lines_with_width;
+use self::operator_surfaces::should_run_missing_config_onboard;
 
 use super::config::{self, ConversationConfig, LoongClawConfig};
-#[cfg(any(test, feature = "memory-sqlite"))]
+#[cfg(test)]
 use super::conversation::ContextCompactionReport;
 #[cfg(test)]
 use super::conversation::TurnCheckpointTailRepairRuntimeProbe;
@@ -62,9 +96,9 @@ use super::session::LATEST_SESSION_SELECTOR;
 #[cfg(feature = "memory-sqlite")]
 use super::session::latest_resumable_root_session_id;
 use super::tui_surface::{
-    TuiActionSpec, TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec,
-    TuiHeaderStyle, TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec,
-    render_tui_message_spec, render_tui_screen_spec,
+    TuiCalloutTone, TuiChecklistItemSpec, TuiChecklistStatus, TuiChoiceSpec, TuiHeaderStyle,
+    TuiKeyValueSpec, TuiMessageSpec, TuiScreenSpec, TuiSectionSpec, render_tui_message_spec,
+    render_tui_screen_spec,
 };
 
 pub const DEFAULT_FIRST_PROMPT: &str = "Summarize this repository and suggest the best next step.";
@@ -235,30 +269,6 @@ enum CliChatLoopControl {
     AssistantText(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CliChatStartupSummary {
-    config_path: String,
-    memory_label: String,
-    session_id: String,
-    context_engine_id: String,
-    context_engine_source: String,
-    compaction_enabled: bool,
-    compaction_min_messages: Option<usize>,
-    compaction_trigger_estimated_tokens: Option<usize>,
-    compaction_preserve_recent_turns: usize,
-    compaction_fail_open: bool,
-    acp_enabled: bool,
-    dispatch_enabled: bool,
-    conversation_routing: String,
-    allowed_channels: Vec<String>,
-    acp_backend_id: String,
-    acp_backend_source: String,
-    explicit_acp_request: bool,
-    event_stream_enabled: bool,
-    bootstrap_mcp_servers: Vec<String>,
-    working_directory: Option<String>,
-}
-
 type CliChatLiveSurfaceSink = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -312,31 +322,6 @@ struct CliChatLiveSurfaceObserver {
     render_width: usize,
     render_sink: CliChatLiveSurfaceSink,
     state: StdMutex<CliChatLiveSurfaceState>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ManualCompactionResult {
-    status: ManualCompactionStatus,
-    before_turns: usize,
-    after_turns: usize,
-    estimated_tokens_before: Option<usize>,
-    estimated_tokens_after: Option<usize>,
-    summary_headline: Option<String>,
-    detail: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ManualCompactionStatus {
-    Applied,
-    NoChange,
-    FailedOpen,
-}
-
-#[cfg(feature = "memory-sqlite")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ManualCompactionWindowSnapshot {
-    turns: Vec<memory::WindowTurn>,
-    turn_count: Option<usize>,
 }
 
 #[allow(clippy::print_stdout)] // CLI REPL output
@@ -797,147 +782,6 @@ async fn process_cli_chat_input(
     ))
 }
 
-#[allow(clippy::print_stdout)] // CLI output
-fn print_cli_chat_startup(runtime: &CliTurnRuntime, options: &CliChatOptions) -> CliResult<()> {
-    let summary = build_cli_chat_startup_summary(runtime, options)?;
-    for line in render_cli_chat_startup_lines(&summary) {
-        println!("{line}");
-    }
-    Ok(())
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-async fn print_cli_chat_status(
-    runtime: &CliTurnRuntime,
-    options: &CliChatOptions,
-) -> CliResult<()> {
-    operator_surfaces::print_cli_chat_status(runtime, options).await
-}
-
-fn build_cli_chat_startup_summary(
-    runtime: &CliTurnRuntime,
-    options: &CliChatOptions,
-) -> CliResult<CliChatStartupSummary> {
-    operator_surfaces::build_cli_chat_startup_summary(runtime, options)
-}
-
-fn render_cli_chat_startup_lines(summary: &CliChatStartupSummary) -> Vec<String> {
-    operator_surfaces::render_cli_chat_startup_lines(summary)
-}
-
-fn should_run_missing_config_onboard(read: usize, input: &str) -> bool {
-    if read == 0 {
-        return false;
-    }
-
-    let normalized_input = input.trim().to_ascii_lowercase();
-
-    if normalized_input.is_empty() {
-        return true;
-    }
-
-    matches!(normalized_input.as_str(), "y" | "yes")
-}
-
-fn render_cli_chat_missing_config_lines_with_width(
-    onboard_hint: &str,
-    width: usize,
-) -> Vec<String> {
-    let screen_spec = build_cli_chat_missing_config_screen_spec(onboard_hint);
-    render_tui_screen_spec(&screen_spec, width, false)
-}
-
-fn build_cli_chat_missing_config_screen_spec(onboard_hint: &str) -> TuiScreenSpec {
-    let intro_lines = vec![
-        format!("Welcome to {}!", config::PRODUCT_DISPLAY_NAME),
-        "No configuration found for interactive chat.".to_owned(),
-    ];
-    let sections = vec![TuiSectionSpec::ActionGroup {
-        title: Some("setup command".to_owned()),
-        inline_title_when_wide: true,
-        items: vec![TuiActionSpec {
-            label: "start setup".to_owned(),
-            command: onboard_hint.to_owned(),
-        }],
-    }];
-    let choices = vec![
-        TuiChoiceSpec {
-            key: "y".to_owned(),
-            label: "run setup wizard".to_owned(),
-            detail_lines: vec!["Create a config now and return to interactive chat.".to_owned()],
-            recommended: true,
-        },
-        TuiChoiceSpec {
-            key: "n".to_owned(),
-            label: "skip for now".to_owned(),
-            detail_lines: vec!["Exit chat now and keep the setup command for later.".to_owned()],
-            recommended: false,
-        },
-    ];
-    let footer_lines = vec!["Press Enter to accept y.".to_owned()];
-
-    TuiScreenSpec {
-        header_style: TuiHeaderStyle::Compact,
-        subtitle: Some("interactive chat".to_owned()),
-        title: Some("setup required".to_owned()),
-        progress_line: None,
-        intro_lines,
-        sections,
-        choices,
-        footer_lines,
-    }
-}
-
-fn render_cli_chat_missing_config_decline_lines_with_width(
-    onboard_hint: &str,
-    width: usize,
-) -> Vec<String> {
-    let message_spec = build_cli_chat_missing_config_decline_message_spec(onboard_hint);
-    render_tui_message_spec(&message_spec, width)
-}
-
-fn build_cli_chat_missing_config_decline_message_spec(onboard_hint: &str) -> TuiMessageSpec {
-    let setup_hint = format!("You can run '{onboard_hint}' later to get started.");
-    let sections = vec![
-        TuiSectionSpec::Callout {
-            tone: TuiCalloutTone::Info,
-            title: Some("setup skipped".to_owned()),
-            lines: vec![setup_hint],
-        },
-        TuiSectionSpec::ActionGroup {
-            title: Some("start later".to_owned()),
-            inline_title_when_wide: true,
-            items: vec![TuiActionSpec {
-                label: "setup command".to_owned(),
-                command: onboard_hint.to_owned(),
-            }],
-        },
-    ];
-
-    TuiMessageSpec {
-        role: "chat".to_owned(),
-        caption: Some("setup required".to_owned()),
-        sections,
-        footer_lines: Vec::new(),
-    }
-}
-
-#[cfg(test)]
-fn render_cli_chat_startup_lines_with_width(
-    summary: &CliChatStartupSummary,
-    width: usize,
-) -> Vec<String> {
-    operator_surfaces::render_cli_chat_startup_lines_with_width(summary, width)
-}
-
-#[cfg(test)]
-fn render_cli_chat_status_lines_with_width(
-    summary: &CliChatStartupSummary,
-    width: usize,
-) -> Vec<String> {
-    operator_surfaces::render_cli_chat_status_lines_with_width(summary, width)
-}
-
 fn detect_cli_chat_render_width() -> usize {
     crate::presentation::detect_render_width()
 }
@@ -947,50 +791,6 @@ fn print_rendered_cli_chat_lines(lines: &[String]) {
     for line in lines {
         println!("{line}");
     }
-}
-
-fn render_cli_chat_history_lines_with_width(
-    session_id: &str,
-    limit: usize,
-    history_lines: &[String],
-    width: usize,
-) -> Vec<String> {
-    let message_spec = build_cli_chat_history_message_spec(session_id, limit, history_lines);
-    render_tui_message_spec(&message_spec, width)
-}
-
-#[cfg(test)]
-fn render_cli_chat_help_lines_with_width(width: usize) -> Vec<String> {
-    operator_surfaces::render_cli_chat_help_lines_with_width(width)
-}
-
-fn build_cli_chat_history_message_spec(
-    session_id: &str,
-    limit: usize,
-    history_lines: &[String],
-) -> TuiMessageSpec {
-    let caption = format!("session={session_id} limit={limit}");
-    let history_section = TuiSectionSpec::Narrative {
-        title: Some("sliding window".to_owned()),
-        lines: history_lines.to_vec(),
-    };
-
-    TuiMessageSpec {
-        role: "history".to_owned(),
-        caption: Some(caption),
-        sections: vec![history_section],
-        footer_lines: Vec::new(),
-    }
-}
-
-#[cfg(test)]
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn render_manual_compaction_lines_with_width(
-    session_id: &str,
-    result: &ManualCompactionResult,
-    width: usize,
-) -> Vec<String> {
-    operator_surfaces::render_manual_compaction_lines_with_width(session_id, result, width)
 }
 
 fn render_cli_chat_assistant_lines_with_width(assistant_text: &str, width: usize) -> Vec<String> {
@@ -2243,239 +2043,6 @@ fn is_exit_command(config: &LoongClawConfig, input: &str) -> bool {
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .any(|value| !value.is_empty() && value == lower)
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-fn print_help() {
-    operator_surfaces::print_help();
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-async fn print_manual_compaction(runtime: &CliTurnRuntime) -> CliResult<()> {
-    operator_surfaces::print_manual_compaction(runtime).await
-}
-
-#[allow(clippy::print_stdout)] // CLI output
-async fn print_history(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    #[cfg(feature = "memory-sqlite")] memory_config: &MemoryRuntimeConfig,
-) -> CliResult<()> {
-    #[cfg(feature = "memory-sqlite")]
-    {
-        let history_lines = load_history_lines(session_id, limit, binding, memory_config).await?;
-        let render_width = detect_cli_chat_render_width();
-        let rendered_lines = render_cli_chat_history_lines_with_width(
-            session_id,
-            limit,
-            &history_lines,
-            render_width,
-        );
-        print_rendered_cli_chat_lines(&rendered_lines);
-        Ok(())
-    }
-
-    #[cfg(not(feature = "memory-sqlite"))]
-    {
-        let _ = (session_id, limit, binding);
-        let render_width = detect_cli_chat_render_width();
-        let rendered_lines = render_cli_chat_feature_unavailable_lines_with_width(
-            "history",
-            "history unavailable: memory-sqlite feature disabled",
-            render_width,
-        );
-
-        print_rendered_cli_chat_lines(&rendered_lines);
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-#[cfg(feature = "memory-sqlite")]
-async fn load_manual_compaction_result(
-    config: &LoongClawConfig,
-    session_id: &str,
-    turn_coordinator: &ConversationTurnCoordinator,
-    binding: ConversationRuntimeBinding<'_>,
-    _memory_config: &MemoryRuntimeConfig,
-) -> CliResult<ManualCompactionResult> {
-    operator_surfaces::load_manual_compaction_result(
-        config,
-        session_id,
-        turn_coordinator,
-        binding,
-        _memory_config,
-    )
-    .await
-}
-
-#[cfg(test)]
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn manual_compaction_status_from_report(
-    report: &ContextCompactionReport,
-) -> CliResult<ManualCompactionStatus> {
-    operator_surfaces::manual_compaction_status_from_report(report)
-}
-
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn format_window_history_lines(turns: &[memory::WindowTurn]) -> Vec<String> {
-    if turns.is_empty() {
-        return vec!["(no history yet)".to_owned()];
-    }
-
-    turns
-        .iter()
-        .map(|turn| {
-            format!(
-                "[{}] {}: {}",
-                turn.ts.unwrap_or_default(),
-                turn.role,
-                turn.content
-            )
-        })
-        .collect()
-}
-
-#[cfg(any(test, feature = "memory-sqlite"))]
-fn format_prompt_context_history_lines(entries: &[memory::MemoryContextEntry]) -> Vec<String> {
-    if entries.is_empty() {
-        return vec!["(no history yet)".to_owned()];
-    }
-
-    let mut lines = Vec::new();
-    for entry in entries {
-        match entry.kind {
-            memory::MemoryContextKind::Profile => {
-                lines.push("[profile]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Summary => {
-                lines.push("[summary]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::RetrievedMemory => {
-                lines.push("[retrieved_memory]".to_owned());
-                lines.push(entry.content.clone());
-            }
-            memory::MemoryContextKind::Turn => {
-                lines.push(format!("{}: {}", entry.role, entry.content));
-            }
-        }
-    }
-    lines
-}
-
-#[cfg(feature = "memory-sqlite")]
-async fn load_history_lines(
-    session_id: &str,
-    limit: usize,
-    binding: ConversationRuntimeBinding<'_>,
-    memory_config: &MemoryRuntimeConfig,
-) -> CliResult<Vec<String>> {
-    if let Some(ctx) = binding.kernel_context() {
-        let request = memory::build_window_request(session_id, limit);
-        let caps = BTreeSet::from([Capability::MemoryRead]);
-        let outcome = ctx
-            .kernel
-            .execute_memory_core(ctx.pack_id(), &ctx.token, &caps, None, request)
-            .await
-            .map_err(|error| format!("load history via kernel failed: {error}"))?;
-        if outcome.status != "ok" {
-            return Err(format!(
-                "load history via kernel returned non-ok status: {}",
-                outcome.status
-            ));
-        }
-        let turns = memory::decode_window_turns(&outcome.payload);
-        return Ok(format_window_history_lines(&turns));
-    }
-
-    let entries = memory::load_prompt_context(session_id, memory_config)
-        .map_err(|error| format!("load history failed: {error}"))?;
-    Ok(format_prompt_context_history_lines(&entries))
-}
-
-fn parse_safe_lane_summary_limit(input: &str, default_window: usize) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/safe_lane_summary", "/safe-lane-summary"],
-    )
-}
-
-fn parse_fast_lane_summary_limit(input: &str, default_window: usize) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/fast_lane_summary", "/fast-lane-summary"],
-    )
-}
-
-fn parse_summary_limit(
-    input: &str,
-    default_window: usize,
-    aliases: &[&str],
-) -> CliResult<Option<usize>> {
-    let Some(primary_alias) = aliases.first().copied() else {
-        return Ok(None);
-    };
-
-    let mut tokens = input.split_whitespace();
-    let Some(command) = tokens.next() else {
-        return Ok(None);
-    };
-    if !aliases.contains(&command) {
-        return Ok(None);
-    }
-
-    let usage = format!("usage: {primary_alias} [limit]");
-    let default_limit = default_window.saturating_mul(4).max(64);
-    let limit = match tokens.next() {
-        Some(raw) => raw
-            .parse::<usize>()
-            .map_err(|error| format!("invalid {primary_alias} limit `{raw}`: {error}; {usage}"))?,
-        None => default_limit,
-    };
-    if limit == 0 {
-        return Err(format!("invalid {primary_alias} limit `0`; {usage}"));
-    }
-    if tokens.next().is_some() {
-        return Err(usage);
-    }
-    Ok(Some(limit))
-}
-
-fn parse_turn_checkpoint_summary_limit(
-    input: &str,
-    default_window: usize,
-) -> CliResult<Option<usize>> {
-    parse_summary_limit(
-        input,
-        default_window,
-        &["/turn_checkpoint_summary", "/turn-checkpoint-summary"],
-    )
-}
-
-fn parse_exact_chat_command(input: &str, aliases: &[&str], usage: &str) -> CliResult<bool> {
-    operator_surfaces::parse_exact_chat_command(input, aliases, usage)
-}
-
-fn is_manual_compaction_command(input: &str) -> CliResult<bool> {
-    operator_surfaces::is_manual_compaction_command(input)
-}
-
-fn is_cli_chat_status_command(input: &str) -> CliResult<bool> {
-    operator_surfaces::is_cli_chat_status_command(input)
-}
-
-fn is_turn_checkpoint_repair_command(input: &str) -> CliResult<bool> {
-    let aliases = [
-        CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND,
-        CLI_CHAT_TURN_CHECKPOINT_REPAIR_COMMAND_ALIAS,
-    ];
-    let usage = "usage: /turn_checkpoint_repair";
-    parse_exact_chat_command(input, &aliases, usage)
 }
 
 #[allow(clippy::print_stdout)] // CLI output
