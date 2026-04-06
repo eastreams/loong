@@ -2,13 +2,11 @@ use std::path::Path;
 #[cfg(test)]
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::config::MemoryMode;
-
 use super::{
-    DEFAULT_MEMORY_SYSTEM_ID, DerivedMemoryKind, MemoryContextEntry, MemoryRetrievalRequest,
-    MemoryScope, MemoryStageFamily, MemorySystemMetadata, StageDiagnostics, StageEnvelope,
-    StageOutcome, WindowTurn, builtin_pre_assembly_stage_families, describe_memory_system,
-    load_prompt_context, runtime_config::MemoryRuntimeConfig,
+    BuiltinMemoryPreAssemblyExecutor, DEFAULT_MEMORY_SYSTEM_ID, MemoryContextEntry,
+    MemoryPreAssemblyContext, MemoryPreAssemblyExecutor, MemoryStageFamily, MemorySystemMetadata,
+    StageDiagnostics, StageEnvelope, StageOutcome, WindowTurn, builtin_pre_assembly_stage_families,
+    load_prompt_context, resolve_memory_system, runtime_config::MemoryRuntimeConfig,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,38 +117,15 @@ impl BuiltinMemoryOrchestrator {
         config: &MemoryRuntimeConfig,
         metadata: &MemorySystemMetadata,
     ) -> Result<StageEnvelope, String> {
-        let recent_window = recent_window_records(session_id, config)?;
-        let mut entries = load_prompt_context(session_id, config)?;
-        let retrieval_request = metadata
-            .supports_pre_assembly_stage_family(MemoryStageFamily::Retrieve)
-            .then(|| build_builtin_retrieval_request(session_id, config, &recent_window))
-            .flatten();
+        let executor = BuiltinMemoryPreAssemblyExecutor;
 
-        let derive = run_pre_assembly_stage(MemoryStageFamily::Derive, metadata, config, || {
-            run_derivation_stage(session_id, config, &recent_window)
-        })?;
-        entries.extend(derive.records);
-
-        let retrieve =
-            run_pre_assembly_stage(MemoryStageFamily::Retrieve, metadata, config, || {
-                run_retrieval_stage(session_id, workspace_root, config, &recent_window)
-            })?;
-        entries.extend(retrieve.records);
-
-        let rank = run_rank_stage(entries, metadata);
-        let diagnostics = vec![derive.diagnostics, retrieve.diagnostics, rank.diagnostics];
-
-        Ok(StageEnvelope {
-            hydrated: HydratedMemoryContext::from_stage_parts(
-                rank.records,
-                recent_window,
-                diagnostics.as_slice(),
-                metadata.id,
-                config,
-            ),
-            retrieval_request,
-            diagnostics,
-        })
+        hydrate_stage_envelope_with_executor(
+            session_id,
+            workspace_root,
+            config,
+            metadata,
+            &executor,
+        )
     }
 
     pub fn hydrate(
@@ -164,6 +139,58 @@ impl BuiltinMemoryOrchestrator {
             .hydrate_stage_envelope(session_id, workspace_root, config, metadata)?
             .hydrated)
     }
+}
+
+fn hydrate_stage_envelope_with_executor(
+    session_id: &str,
+    workspace_root: Option<&Path>,
+    config: &MemoryRuntimeConfig,
+    metadata: &MemorySystemMetadata,
+    executor: &dyn MemoryPreAssemblyExecutor,
+) -> Result<StageEnvelope, String> {
+    let recent_window = recent_window_records(session_id, config)?;
+    let mut entries = load_prompt_context(session_id, config)?;
+    let context = MemoryPreAssemblyContext {
+        session_id,
+        workspace_root,
+        config,
+        recent_window: recent_window.as_slice(),
+    };
+
+    let supports_retrieve =
+        metadata.supports_pre_assembly_stage_family(MemoryStageFamily::Retrieve);
+    let retrieval_request = if supports_retrieve {
+        executor.retrieval_request(&context)
+    } else {
+        None
+    };
+
+    let derive = run_pre_assembly_stage(MemoryStageFamily::Derive, metadata, config, || {
+        run_derivation_stage(session_id, executor, &context)
+    })?;
+    entries.extend(derive.records);
+
+    let retrieve = run_pre_assembly_stage(MemoryStageFamily::Retrieve, metadata, config, || {
+        run_retrieval_stage(session_id, executor, &context)
+    })?;
+    entries.extend(retrieve.records);
+
+    let rank = run_rank_stage(entries, metadata, config, executor, &context)?;
+    let diagnostics = vec![derive.diagnostics, retrieve.diagnostics, rank.diagnostics];
+    let hydrated = HydratedMemoryContext::from_stage_parts(
+        rank.records,
+        recent_window,
+        diagnostics.as_slice(),
+        metadata.id,
+        config,
+    );
+    let envelope = StageEnvelope {
+        hydrated,
+        retrieval_request,
+        diagnostics,
+    };
+
+    Ok(envelope)
 }
 
 impl HydratedMemoryContext {
@@ -266,19 +293,46 @@ where
 fn run_rank_stage(
     entries: Vec<MemoryContextEntry>,
     metadata: &MemorySystemMetadata,
-) -> StageRunResult {
+    config: &MemoryRuntimeConfig,
+    executor: &dyn MemoryPreAssemblyExecutor,
+    context: &MemoryPreAssemblyContext<'_>,
+) -> Result<StageRunResult, String> {
     if !metadata.supports_pre_assembly_stage_family(MemoryStageFamily::Rank) {
-        return StageRunResult {
+        return Ok(StageRunResult {
             records: entries,
             diagnostics: skipped_stage_diagnostics(MemoryStageFamily::Rank, None),
-        };
+        });
     }
 
-    // Slice 1 keeps ranking as an identity stage until compaction and external
-    // ranking hooks graduate beyond the built-in pipeline contract.
-    StageRunResult {
-        records: entries,
-        diagnostics: StageDiagnostics::succeeded(MemoryStageFamily::Rank),
+    let fallback_entries = if config.effective_fail_open() {
+        Some(entries.clone())
+    } else {
+        None
+    };
+    let rank_result = executor.rank(entries, context);
+
+    match rank_result {
+        Ok(records) => Ok(StageRunResult {
+            records,
+            diagnostics: StageDiagnostics::succeeded(MemoryStageFamily::Rank),
+        }),
+        Err(error) if config.effective_fail_open() => {
+            let records = fallback_entries.unwrap_or_default();
+            let diagnostics = StageDiagnostics {
+                family: MemoryStageFamily::Rank,
+                outcome: StageOutcome::Fallback,
+                budget_ms: None,
+                elapsed_ms: None,
+                fallback_activated: true,
+                message: Some(error),
+            };
+            let outcome = StageRunResult {
+                records,
+                diagnostics,
+            };
+            Ok(outcome)
+        }
+        Err(error) => Err(format!("memory rank stage failed: {error}")),
     }
 }
 
@@ -301,21 +355,7 @@ pub async fn run_compact_stage(
     workspace_root: Option<&Path>,
     config: &MemoryRuntimeConfig,
 ) -> Result<StageDiagnostics, String> {
-    let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
-        .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-
-    match selected_system_id.as_str() {
-        DEFAULT_MEMORY_SYSTEM_ID => {
-            run_builtin_compact_stage(session_id, workspace_root, config).await
-        }
-        _ => Ok(skipped_stage_diagnostics(
-            MemoryStageFamily::Compact,
-            Some(
-                "memory system is registered but has no compact-stage execution adapter yet"
-                    .to_owned(),
-            ),
-        )),
-    }
+    run_builtin_compact_stage(session_id, workspace_root, config).await
 }
 
 #[cfg(not(feature = "memory-sqlite"))]
@@ -368,105 +408,6 @@ async fn run_builtin_compact_stage(
     }
 }
 
-fn build_builtin_retrieval_request(
-    session_id: &str,
-    config: &MemoryRuntimeConfig,
-    recent_window: &[WindowTurn],
-) -> Option<MemoryRetrievalRequest> {
-    if !matches!(config.mode, MemoryMode::WindowPlusSummary) {
-        return None;
-    }
-
-    let query = retrieval_query_from_recent_window(recent_window);
-
-    let budget_items = if recent_window.is_empty() {
-        6
-    } else {
-        config.sliding_window.min(6)
-    };
-
-    Some(MemoryRetrievalRequest {
-        session_id: session_id.to_owned(),
-        query,
-        scopes: vec![
-            MemoryScope::Session,
-            MemoryScope::Workspace,
-            MemoryScope::Agent,
-            MemoryScope::User,
-        ],
-        budget_items,
-        allowed_kinds: vec![
-            DerivedMemoryKind::Profile,
-            DerivedMemoryKind::Fact,
-            DerivedMemoryKind::Episode,
-            DerivedMemoryKind::Procedure,
-            DerivedMemoryKind::Overview,
-        ],
-    })
-}
-
-fn retrieval_query_from_recent_window(recent_window: &[WindowTurn]) -> Option<String> {
-    recent_window.iter().rev().find_map(|turn| {
-        if turn.role != "user" {
-            return None;
-        }
-
-        let trimmed_content = turn.content.trim();
-        if trimmed_content.is_empty() {
-            return None;
-        }
-
-        Some(trimmed_content.to_owned())
-    })
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn render_cross_session_recall_block(hits: &[super::sqlite::CanonicalMemorySearchHit]) -> String {
-    let mut sections = Vec::new();
-    sections.push("## Advisory Cross-Session Recall".to_owned());
-    sections.push(
-        "These snippets were retrieved from prior persisted sessions. Treat them as advisory hints and verify before acting."
-            .to_owned(),
-    );
-
-    for hit in hits {
-        let turn_label = hit
-            .session_turn_index
-            .map(|value| format!("turn {value}"))
-            .unwrap_or_else(|| "turn ?".to_owned());
-        let role_label = hit.record.role.as_deref();
-        let content = truncate_recall_content(hit.record.content.as_str(), 280);
-        sections.push(format!(
-            "### {} · {} · {} · {}",
-            hit.record.session_id,
-            turn_label,
-            hit.record.scope.as_str(),
-            hit.record.kind.as_str()
-        ));
-        let recall_line = match role_label {
-            Some(role_label) => format!("{role_label}: {content}"),
-            None => content,
-        };
-        sections.push(recall_line);
-    }
-
-    sections.join("\n\n")
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn truncate_recall_content(input: &str, max_chars: usize) -> String {
-    let char_count = input.chars().count();
-    if char_count <= max_chars {
-        return input.to_owned();
-    }
-    if max_chars <= 3 {
-        return input.chars().take(max_chars).collect();
-    }
-
-    let prefix = input.chars().take(max_chars - 3).collect::<String>();
-    format!("{prefix}...")
-}
-
 fn stage_error_message(
     stage_diagnostics: &[StageDiagnostics],
     family: MemoryStageFamily,
@@ -481,26 +422,29 @@ fn stage_error_message(
 }
 
 fn run_derivation_stage(
-    _session_id: &str,
-    _config: &MemoryRuntimeConfig,
-    _recent_window: &[WindowTurn],
+    session_id: &str,
+    executor: &dyn MemoryPreAssemblyExecutor,
+    context: &MemoryPreAssemblyContext<'_>,
 ) -> Result<Vec<MemoryContextEntry>, String> {
+    let _ = session_id;
+
     #[cfg(test)]
-    if let Some(error) = matching_memory_orchestrator_test_faults(_session_id)
+    if let Some(error) = matching_memory_orchestrator_test_faults(session_id)
         .and_then(|faults| faults.derivation_error)
     {
         return Err(error);
     }
 
-    Ok(Vec::new())
+    executor.derive(context)
 }
 
 fn run_retrieval_stage(
     session_id: &str,
-    workspace_root: Option<&Path>,
-    config: &MemoryRuntimeConfig,
-    recent_window: &[WindowTurn],
+    executor: &dyn MemoryPreAssemblyExecutor,
+    context: &MemoryPreAssemblyContext<'_>,
 ) -> Result<Vec<MemoryContextEntry>, String> {
+    let _ = session_id;
+
     #[cfg(test)]
     if let Some(error) = matching_memory_orchestrator_test_faults(session_id)
         .and_then(|faults| faults.retrieval_error)
@@ -508,26 +452,7 @@ fn run_retrieval_stage(
         return Err(error);
     }
 
-    let mut entries = super::load_durable_recall_entries(workspace_root, config)?;
-
-    #[cfg(feature = "memory-sqlite")]
-    if let Some(query) = retrieval_query_from_recent_window(recent_window) {
-        let hits = super::sqlite::search_canonical_records_for_recall(
-            query.as_str(),
-            config.sliding_window.min(6),
-            Some(session_id),
-            config,
-        )?;
-        if !hits.is_empty() {
-            entries.push(MemoryContextEntry {
-                kind: super::MemoryContextKind::RetrievedMemory,
-                role: "system".to_owned(),
-                content: render_cross_session_recall_block(hits.as_slice()),
-            });
-        }
-    }
-
-    Ok(entries)
+    executor.retrieve(context)
 }
 
 pub fn hydrate_memory_context(
@@ -559,14 +484,17 @@ pub(crate) fn hydrate_stage_envelope_with_workspace_root(
 ) -> Result<StageEnvelope, String> {
     let selected_system_id = super::registered_memory_system_id(Some(config.selected_system_id()))
         .unwrap_or_else(|| DEFAULT_MEMORY_SYSTEM_ID.to_owned());
-    let metadata = describe_memory_system(Some(selected_system_id.as_str()))?;
+    let system = resolve_memory_system(Some(selected_system_id.as_str()))?;
+    let metadata = system.metadata();
+    let executor = system.pre_assembly_executor();
 
-    if metadata.id == DEFAULT_MEMORY_SYSTEM_ID {
-        return BuiltinMemoryOrchestrator.hydrate_stage_envelope(
+    if let Some(executor) = executor {
+        return hydrate_stage_envelope_with_executor(
             session_id,
             workspace_root,
             config,
             &metadata,
+            executor.as_ref(),
         );
     }
 
@@ -643,9 +571,9 @@ mod tests {
     use super::*;
     use crate::config::{MemoryMode, MemoryProfile};
     use crate::memory::{
-        MemoryContextKind, MemoryStageFamily, MemorySystem, MemorySystemCapability,
-        MemorySystemMetadata, StageOutcome, append_turn_direct,
-        builtin_pre_assembly_stage_families, register_memory_system,
+        DerivedMemoryKind, MemoryContextKind, MemoryScope, MemoryStageFamily, MemorySystem,
+        MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID, StageOutcome,
+        append_turn_direct, builtin_pre_assembly_stage_families, register_memory_system,
     };
 
     struct RegistryRetrieveOnlyMemorySystem;
@@ -1043,7 +971,8 @@ mod tests {
         ];
 
         let query =
-            retrieval_query_from_recent_window(recent_window.as_slice()).expect("query fallback");
+            crate::memory::execution::retrieval_query_from_recent_window(recent_window.as_slice())
+                .expect("query fallback");
 
         assert_eq!(query, "release rollback plan");
     }
@@ -1065,7 +994,7 @@ mod tests {
             session_turn_index: Some(2),
         }];
 
-        let rendered = render_cross_session_recall_block(hits.as_slice());
+        let rendered = crate::memory::execution::render_cross_session_recall_block(hits.as_slice());
 
         assert!(
             rendered.contains("Imported release checklist with smoke tests."),
@@ -1232,6 +1161,87 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
+    fn recall_first_selected_system_executes_real_pre_assembly_pipeline() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-recall-first");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("recall-first.sqlite3");
+        let memory_file = tmp.join("MEMORY.md");
+        let _ = std::fs::remove_file(&db_path);
+
+        std::fs::write(
+            &memory_file,
+            "Release checklist includes rollback verification and smoke tests.",
+        )
+        .expect("write durable recall file");
+
+        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id = Some(RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned());
+
+        append_turn_direct("recall-first", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("recall-first", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("recall-first", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let envelope = hydrate_stage_envelope_with_workspace_root(
+            "recall-first",
+            Some(tmp.as_path()),
+            &config,
+        )
+        .expect("hydrate staged envelope for recall-first");
+
+        assert_eq!(
+            envelope.hydrated.diagnostics.system_id,
+            RECALL_FIRST_MEMORY_SYSTEM_ID
+        );
+        assert_eq!(
+            envelope
+                .diagnostics
+                .iter()
+                .map(|diag| (diag.family, diag.outcome))
+                .collect::<Vec<_>>(),
+            vec![
+                (MemoryStageFamily::Derive, StageOutcome::Skipped),
+                (MemoryStageFamily::Retrieve, StageOutcome::Succeeded),
+                (MemoryStageFamily::Rank, StageOutcome::Succeeded),
+            ]
+        );
+
+        let ranked_kinds = envelope
+            .hydrated
+            .entries
+            .iter()
+            .map(|entry| entry.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ranked_kinds,
+            vec![
+                MemoryContextKind::RetrievedMemory,
+                MemoryContextKind::Turn,
+                MemoryContextKind::Turn,
+            ]
+        );
+        assert!(
+            envelope.hydrated.entries[0]
+                .content
+                .contains("## Advisory Durable Recall"),
+            "expected recall-first system to prioritize durable recall content"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_file(&memory_file);
+        let _ = std::fs::remove_dir(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
     fn unknown_registry_selected_system_falls_back_to_builtin_hydration() {
         let tmp = hydrated_memory_temp_dir("loongclaw-stage-envelope-unknown-selected");
         let _ = std::fs::create_dir_all(&tmp);
@@ -1385,7 +1395,7 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[tokio::test]
-    async fn compact_stage_skips_for_registry_selected_system_without_executor() {
+    async fn compact_stage_remains_runtime_owned_for_registry_selected_system_without_executor() {
         register_memory_system("registry-retrieve-only", || {
             Box::new(RegistryRetrieveOnlyMemorySystem)
         })
@@ -1426,7 +1436,44 @@ mod tests {
         .expect("run compact stage");
 
         assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
-        assert_eq!(diagnostics.outcome, StageOutcome::Skipped);
+        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
+        assert!(!diagnostics.fallback_activated);
+
+        let _ = std::fs::remove_file(&db_path);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_stage_remains_runtime_owned_for_recall_first_selected_system() {
+        let tmp = hydrated_memory_temp_dir("loongclaw-compact-stage-recall-first");
+        let _ = std::fs::create_dir_all(&tmp);
+        let db_path = tmp.join("compact-stage-recall-first.sqlite3");
+        let _ = std::fs::remove_file(&db_path);
+
+        let mut config = crate::memory::runtime_config::MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..crate::memory::runtime_config::MemoryRuntimeConfig::default()
+        };
+        config.resolved_system_id = Some(RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned());
+
+        append_turn_direct("compact-stage-recall-first", "user", "turn 1", &config)
+            .expect("append turn 1 should succeed");
+        append_turn_direct("compact-stage-recall-first", "assistant", "turn 2", &config)
+            .expect("append turn 2 should succeed");
+        append_turn_direct("compact-stage-recall-first", "user", "turn 3", &config)
+            .expect("append turn 3 should succeed");
+
+        let diagnostics =
+            run_compact_stage("compact-stage-recall-first", Some(tmp.as_path()), &config)
+                .await
+                .expect("run compact stage");
+
+        assert_eq!(diagnostics.family, MemoryStageFamily::Compact);
+        assert_eq!(diagnostics.outcome, StageOutcome::Succeeded);
         assert!(!diagnostics.fallback_activated);
 
         let _ = std::fs::remove_file(&db_path);

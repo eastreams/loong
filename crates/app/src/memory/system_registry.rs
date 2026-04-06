@@ -12,6 +12,7 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
+    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem,
 };
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
@@ -87,6 +88,10 @@ fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
         map.insert(
             DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
             Arc::new(|| Box::new(BuiltinMemorySystem)),
+        );
+        map.insert(
+            RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(RecallFirstMemorySystem)),
         );
         RwLock::new(map)
     })
@@ -409,11 +414,15 @@ mod tests {
     }
 
     #[test]
-    fn memory_system_registry_stays_builtin_only_until_adapter_lands() {
+    fn memory_system_registry_includes_in_tree_recall_first_system() {
         let ids = list_memory_system_ids().expect("list memory-system ids");
         assert!(
+            ids.iter().any(|id| id == RECALL_FIRST_MEMORY_SYSTEM_ID),
+            "expected in-tree alternate memory system to be registered"
+        );
+        assert!(
             !ids.iter().any(|id| id == "lucid"),
-            "future adapter ids should not appear before the adapter actually lands"
+            "future adapter ids should still stay hidden until they actually land"
         );
     }
 

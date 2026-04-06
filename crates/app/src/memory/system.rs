@@ -1,9 +1,13 @@
 use std::collections::BTreeSet;
 
-use super::{MemoryStageFamily, builtin_pre_assembly_stage_families};
+use super::{
+    BuiltinMemoryPreAssemblyExecutor, MemoryPreAssemblyExecutor, MemoryStageFamily,
+    RecallFirstMemoryPreAssemblyExecutor, builtin_pre_assembly_stage_families,
+};
 
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
 pub const DEFAULT_MEMORY_SYSTEM_ID: &str = "builtin";
+pub const RECALL_FIRST_MEMORY_SYSTEM_ID: &str = "recall_first";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemorySystemCapability {
@@ -76,6 +80,10 @@ pub trait MemorySystem: Send + Sync {
     fn id(&self) -> &'static str;
 
     fn metadata(&self) -> MemorySystemMetadata;
+
+    fn pre_assembly_executor(&self) -> Option<Box<dyn MemoryPreAssemblyExecutor>> {
+        None
+    }
 }
 
 impl<T> MemorySystem for Box<T>
@@ -88,6 +96,10 @@ where
 
     fn metadata(&self) -> MemorySystemMetadata {
         self.as_ref().metadata()
+    }
+
+    fn pre_assembly_executor(&self) -> Option<Box<dyn MemoryPreAssemblyExecutor>> {
+        self.as_ref().pre_assembly_executor()
     }
 }
 
@@ -111,6 +123,39 @@ impl MemorySystem for BuiltinMemorySystem {
             "Built-in SQLite-backed canonical memory with deterministic prompt hydration.",
         )
         .with_supported_pre_assembly_stage_families(builtin_pre_assembly_stage_families())
+    }
+
+    fn pre_assembly_executor(&self) -> Option<Box<dyn MemoryPreAssemblyExecutor>> {
+        let executor = BuiltinMemoryPreAssemblyExecutor;
+        let boxed_executor = Box::new(executor);
+        Some(boxed_executor)
+    }
+}
+
+#[derive(Default)]
+pub struct RecallFirstMemorySystem;
+
+impl MemorySystem for RecallFirstMemorySystem {
+    fn id(&self) -> &'static str {
+        RECALL_FIRST_MEMORY_SYSTEM_ID
+    }
+
+    fn metadata(&self) -> MemorySystemMetadata {
+        MemorySystemMetadata::new(
+            RECALL_FIRST_MEMORY_SYSTEM_ID,
+            [MemorySystemCapability::PromptHydration],
+            "In-tree alternate memory system that prioritizes advisory recall before summary when recall is available.",
+        )
+        .with_supported_pre_assembly_stage_families([
+            MemoryStageFamily::Retrieve,
+            MemoryStageFamily::Rank,
+        ])
+    }
+
+    fn pre_assembly_executor(&self) -> Option<Box<dyn MemoryPreAssemblyExecutor>> {
+        let executor = RecallFirstMemoryPreAssemblyExecutor;
+        let boxed_executor = Box::new(executor);
+        Some(boxed_executor)
     }
 }
 
@@ -161,6 +206,19 @@ mod tests {
     }
 
     #[test]
+    fn recall_first_memory_system_metadata_is_stable() {
+        let metadata = RecallFirstMemorySystem.metadata();
+
+        assert_eq!(metadata.id, RECALL_FIRST_MEMORY_SYSTEM_ID);
+        assert_eq!(metadata.api_version, MEMORY_SYSTEM_API_VERSION);
+        assert_eq!(metadata.capability_names(), vec!["prompt_hydration"]);
+        assert_eq!(
+            metadata.supported_pre_assembly_stage_families,
+            vec![MemoryStageFamily::Retrieve, MemoryStageFamily::Rank]
+        );
+    }
+
+    #[test]
     fn memory_system_field_allows_custom_registry_stage_family_sets() {
         let custom = StageAwareRegistryMemorySystem.metadata();
         assert_eq!(custom.id, "registry-stage-aware");
@@ -177,6 +235,11 @@ mod tests {
             metadata
                 .iter()
                 .any(|entry| entry.id == DEFAULT_MEMORY_SYSTEM_ID)
+        );
+        assert!(
+            metadata
+                .iter()
+                .any(|entry| entry.id == RECALL_FIRST_MEMORY_SYSTEM_ID)
         );
     }
 
