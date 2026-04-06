@@ -62,7 +62,7 @@ pub(super) async fn prepare_provider_request_session(
     );
     let auto_model_mode = config.provider.model_selection_requires_fetch();
     let model_candidates = if auto_model_mode {
-        let mut resolved = None;
+        let mut resolved_candidates = None;
         let mut last_error = None;
         for profile in &auth_profiles {
             match resolve_request_models(
@@ -76,7 +76,7 @@ pub(super) async fn prepare_provider_request_session(
             .await
             {
                 Ok(candidates) => {
-                    resolved = Some(candidates);
+                    resolved_candidates = Some(candidates);
                     break;
                 }
                 Err(error) => {
@@ -87,7 +87,7 @@ pub(super) async fn prepare_provider_request_session(
                             classify_profile_failure_reason_from_message(error.as_str()),
                         );
                     }
-                    tracing::warn!(
+                    tracing::debug!(
                         target: "loongclaw.provider",
                         provider_id = %config.provider.kind.profile().id,
                         auth_profile_id = %profile.id,
@@ -99,11 +99,24 @@ pub(super) async fn prepare_provider_request_session(
                 }
             }
         }
-        resolved.ok_or_else(|| {
-            last_error.unwrap_or_else(|| {
+        if let Some(model_candidates) = resolved_candidates {
+            model_candidates
+        } else {
+            let error_message = last_error.unwrap_or_else(|| {
                 "provider model-list unavailable for every auth profile".to_owned()
-            })
-        })?
+            });
+
+            tracing::warn!(
+                target: "loongclaw.provider",
+                provider_id = %config.provider.kind.profile().id,
+                auth_profile_count = auth_profiles.len(),
+                auto_model_mode,
+                error = %crate::observability::summarize_error(error_message.as_str()),
+                "provider model catalog resolution failed for every auth profile"
+            );
+
+            return Err(error_message);
+        }
     } else {
         resolve_request_models(
             config,
