@@ -6156,15 +6156,9 @@ allowed_decisions: yes / auto / full / esc";
 
         let binding = ConversationRuntimeBinding::kernel(&kernel_ctx);
         let turn_coordinator = ConversationTurnCoordinator::new();
-        let result = load_manual_compaction_result(
-            &config,
-            session_id,
-            &turn_coordinator,
-            binding,
-            &memory_config,
-        )
-        .await
-        .expect("manual compaction should succeed");
+        let result = load_manual_compaction_result(&config, session_id, &turn_coordinator, binding)
+            .await
+            .expect("manual compaction should succeed");
 
         assert_eq!(result.status, ManualCompactionStatus::Applied);
         assert_eq!(result.before_turns, 8);
