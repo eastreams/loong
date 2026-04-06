@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::OnceLock;
 
+use loongclaw_kernel::ToolConcurrencyClass;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -293,6 +294,13 @@ impl ToolDescriptor {
         self.policy.scheduling_class
     }
 
+    pub fn concurrency_class(&self) -> ToolConcurrencyClass {
+        match self.scheduling_class() {
+            ToolSchedulingClass::ParallelSafe => ToolConcurrencyClass::ReadOnly,
+            ToolSchedulingClass::SerialOnly => ToolConcurrencyClass::Mutating,
+        }
+    }
+
     pub fn governance_profile(&self) -> ToolGovernanceProfile {
         self.policy.governance_profile
     }
@@ -320,6 +328,7 @@ pub struct ToolCatalogEntry {
     pub availability: ToolAvailability,
     pub capability_action_class: CapabilityActionClass,
     pub scheduling_class: ToolSchedulingClass,
+    pub concurrency_class: ToolConcurrencyClass,
 }
 
 impl ToolCatalogEntry {
@@ -1664,6 +1673,7 @@ fn descriptor_to_entry(descriptor: &ToolDescriptor) -> ToolCatalogEntry {
         availability: descriptor.availability,
         capability_action_class: descriptor.capability_action_class(),
         scheduling_class: descriptor.scheduling_class(),
+        concurrency_class: descriptor.concurrency_class(),
     }
 }
 
@@ -4717,6 +4727,17 @@ mod tests {
                 .scheduling_class(),
             ToolSchedulingClass::SerialOnly
         );
+    }
+
+    #[test]
+    fn tool_catalog_entries_expose_concurrency_class() {
+        let search = find_tool_catalog_entry("tool.search").expect("tool.search catalog entry");
+        assert_eq!(search.scheduling_class, ToolSchedulingClass::ParallelSafe);
+        assert_eq!(search.concurrency_class, ToolConcurrencyClass::ReadOnly);
+
+        let invoke = find_tool_catalog_entry("tool.invoke").expect("tool.invoke catalog entry");
+        assert_eq!(invoke.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(invoke.concurrency_class, ToolConcurrencyClass::Mutating);
     }
 
     #[test]

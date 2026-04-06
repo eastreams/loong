@@ -83,10 +83,40 @@ pub use runtime::{
 pub use task_supervisor::TaskSupervisor;
 pub use tool::{
     CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
-    ToolExtensionRequest, ToolPlane, ToolTier,
+    ToolConcurrencyClass, ToolExtensionRequest, ToolPlane, ToolTier,
 };
 
 pub mod test_support;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[test]
+fn core_tool_adapter_defaults_to_unknown_concurrency_class() {
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    struct CoreToolAdapterWithoutConcurrencyClass;
+
+    #[async_trait]
+    impl CoreToolAdapter for CoreToolAdapterWithoutConcurrencyClass {
+        fn name(&self) -> &str {
+            "core-tool-without-concurrency-class"
+        }
+
+        async fn execute_core_tool(
+            &self,
+            request: ToolCoreRequest,
+        ) -> Result<ToolCoreOutcome, ToolPlaneError> {
+            Ok(ToolCoreOutcome {
+                status: "ok".to_owned(),
+                payload: json!({"tool_name": request.tool_name}),
+            })
+        }
+    }
+
+    let adapter = CoreToolAdapterWithoutConcurrencyClass;
+    assert_eq!(adapter.concurrency_class(), ToolConcurrencyClass::Unknown);
+    assert_eq!(adapter.concurrency_class().as_str(), "unknown");
+}
