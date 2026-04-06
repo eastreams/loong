@@ -7,8 +7,10 @@
 use super::*;
 use serde_json::Value;
 use std::{
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::MutexGuard,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -36,6 +38,57 @@ fn artifact_path_suffix(path: &Path) -> String {
     let suffix_parts = normalized_path.rsplit('/').take(2).collect::<Vec<_>>();
     let ordered_suffix_parts = suffix_parts.into_iter().rev().collect::<Vec<_>>();
     ordered_suffix_parts.join("/")
+}
+
+struct RuntimeCapabilityEnvironmentGuard {
+    _lock: MutexGuard<'static, ()>,
+    saved: Vec<(String, Option<OsString>)>,
+}
+
+impl RuntimeCapabilityEnvironmentGuard {
+    fn set(root: &Path) -> Self {
+        let lock = super::lock_daemon_test_environment();
+        let home = root.join("home");
+        let loongclaw_home = home.join(".loongclaw");
+        fs::create_dir_all(&loongclaw_home).expect("create isolated loongclaw home");
+        let home_text = home.to_string_lossy().into_owned();
+        let loongclaw_home_text = loongclaw_home.to_string_lossy().into_owned();
+
+        let pairs = [
+            ("HOME", Some(home_text.as_str())),
+            ("LOONGCLAW_HOME", Some(loongclaw_home_text.as_str())),
+            ("LOONGCLAW_BROWSER_COMPANION_READY", None),
+        ];
+        let mut saved = Vec::new();
+        for (key, value) in pairs {
+            saved.push((key.to_owned(), std::env::var_os(key)));
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(key);
+                },
+            }
+        }
+
+        Self { _lock: lock, saved }
+    }
+}
+
+impl Drop for RuntimeCapabilityEnvironmentGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..).rev() {
+            match value {
+                Some(value) => unsafe {
+                    std::env::set_var(&key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&key);
+                },
+            }
+        }
+    }
 }
 
 fn write_runtime_capability_config(root: &Path) -> PathBuf {
@@ -232,6 +285,7 @@ fn finish_runtime_experiment(
     PathBuf,
     loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
+    let _env_guard = RuntimeCapabilityEnvironmentGuard::set(root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
@@ -283,6 +337,7 @@ fn finish_runtime_experiment_with_compare_delta(
     PathBuf,
     loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
+    let _env_guard = RuntimeCapabilityEnvironmentGuard::set(root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
@@ -406,6 +461,7 @@ fn finish_runtime_experiment_variant_with_memory_compare_delta(
     PathBuf,
     loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
+    let _env_guard = RuntimeCapabilityEnvironmentGuard::set(root);
     let config_path = write_runtime_capability_config(root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
@@ -467,6 +523,7 @@ fn finish_runtime_experiment_variant(
     PathBuf,
     loongclaw_daemon::runtime_experiment_cli::RuntimeExperimentArtifactDocument,
 ) {
+    let _env_guard = RuntimeCapabilityEnvironmentGuard::set(root);
     let (baseline_snapshot_path, baseline_snapshot_payload) = write_snapshot_artifact(
         root,
         config_path,
