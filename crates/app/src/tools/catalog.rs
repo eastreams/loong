@@ -297,7 +297,7 @@ impl ToolDescriptor {
     pub fn concurrency_class(&self) -> ToolConcurrencyClass {
         match self.scheduling_class() {
             ToolSchedulingClass::ParallelSafe => ToolConcurrencyClass::ReadOnly,
-            ToolSchedulingClass::SerialOnly => ToolConcurrencyClass::Mutating,
+            ToolSchedulingClass::SerialOnly => ToolConcurrencyClass::Unknown,
         }
     }
 
@@ -4737,7 +4737,12 @@ mod tests {
 
         let invoke = find_tool_catalog_entry("tool.invoke").expect("tool.invoke catalog entry");
         assert_eq!(invoke.scheduling_class, ToolSchedulingClass::SerialOnly);
-        assert_eq!(invoke.concurrency_class, ToolConcurrencyClass::Mutating);
+        assert_eq!(invoke.concurrency_class, ToolConcurrencyClass::Unknown);
+
+        let status =
+            find_tool_catalog_entry("session_status").expect("session_status catalog entry");
+        assert_eq!(status.scheduling_class, ToolSchedulingClass::SerialOnly);
+        assert_eq!(status.concurrency_class, ToolConcurrencyClass::Unknown);
     }
 
     #[test]
