@@ -20,6 +20,9 @@ use crate::session::repository::{
 use crate::trust::{
     delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
 };
+use crate::trust::{
+    delegate_child_trust_event, embed_trust_event_payload, extract_trust_event_payload,
+};
 
 use super::session_graph::OperatorSessionGraph;
 
@@ -165,6 +168,135 @@ fn build_delegate_child_execution(
         identity,
         profile: Some(profile),
     }
+}
+
+fn build_delegate_child_request(
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<String>,
+    task: &str,
+    runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+    execution: &ConstrainedSubagentExecution,
+    mode: ConstrainedSubagentMode,
+) -> CreateSessionWithEventRequest {
+    let session_state = delegate_child_session_state(mode);
+    let event_kind = delegate_child_event_kind(mode);
+    let source_surface = delegate_child_source_surface(mode);
+    let event_payload_json = build_delegate_child_event_payload(
+        parent_session_id,
+        child_session_id,
+        task,
+        child_label.as_deref(),
+        runtime_self_continuity,
+        execution,
+        source_surface,
+    );
+    let session = NewSessionRecord {
+        session_id: child_session_id.to_owned(),
+        kind: SessionKind::DelegateChild,
+        parent_session_id: Some(parent_session_id.to_owned()),
+        label: child_label,
+        state: session_state,
+    };
+
+    CreateSessionWithEventRequest {
+        session,
+        event_kind: event_kind.to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json,
+    }
+}
+
+fn delegate_child_session_state(mode: ConstrainedSubagentMode) -> SessionState {
+    match mode {
+        ConstrainedSubagentMode::Inline => SessionState::Running,
+        ConstrainedSubagentMode::Async => SessionState::Ready,
+    }
+}
+
+fn delegate_child_event_kind(mode: ConstrainedSubagentMode) -> &'static str {
+    match mode {
+        ConstrainedSubagentMode::Inline => "delegate_started",
+        ConstrainedSubagentMode::Async => "delegate_queued",
+    }
+}
+
+fn delegate_child_source_surface(mode: ConstrainedSubagentMode) -> &'static str {
+    match mode {
+        ConstrainedSubagentMode::Inline => "delegate.inline",
+        ConstrainedSubagentMode::Async => "delegate.async",
+    }
+}
+
+fn build_delegate_child_event_payload(
+    parent_session_id: &str,
+    child_session_id: &str,
+    task: &str,
+    child_label: Option<&str>,
+    runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+    execution: &ConstrainedSubagentExecution,
+    source_surface: &str,
+) -> Value {
+    let trust_event =
+        delegate_child_trust_event(parent_session_id, child_session_id, source_surface);
+    let event_payload_json = execution.spawn_payload_with_runtime_self_continuity(
+        task,
+        child_label,
+        runtime_self_continuity,
+    );
+    let payload_with_trust =
+        embed_trust_event_payload(event_payload_json.clone(), trust_event.clone());
+    let extracted_trust_event = extract_trust_event_payload(&payload_with_trust);
+    if extracted_trust_event.as_ref() != Some(&trust_event) {
+        return event_payload_json;
+    }
+
+    payload_with_trust
+}
+
+pub(crate) fn create_delegate_child_session(
+    repo: &SessionRepository,
+    config: &LoongClawConfig,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<String>,
+    child_identity: Option<ConstrainedSubagentIdentity>,
+    task: &str,
+    mode: ConstrainedSubagentMode,
+    timeout_seconds: u64,
+    binding: ConversationRuntimeBinding<'_>,
+    runtime_self_continuity: Option<&RuntimeSelfContinuity>,
+) -> Result<(CreateSessionWithEventResult, ConstrainedSubagentExecution), String> {
+    let next_child_depth =
+        next_delegate_child_depth(repo, parent_session_id, config.tools.delegate.max_depth)?;
+    let max_active_children = config.tools.delegate.max_active_children;
+    let child_session_id = child_session_id.to_owned();
+    let parent_session_id = parent_session_id.to_owned();
+    let task = task.to_owned();
+
+    repo.create_delegate_child_session_with_event_if_within_limit(
+        &parent_session_id,
+        max_active_children,
+        |active_children| {
+            let child_label = child_label.clone();
+            let child_identity = child_identity.clone();
+            let seed = build_delegate_child_lifecycle_seed(
+                config,
+                binding,
+                mode,
+                timeout_seconds,
+                next_child_depth,
+                active_children,
+                &parent_session_id,
+                &child_session_id,
+                child_label,
+                &task,
+                runtime_self_continuity,
+                child_identity,
+            );
+            Ok((seed.request, seed.execution))
+        },
+    )
 }
 
 fn build_delegate_child_request(

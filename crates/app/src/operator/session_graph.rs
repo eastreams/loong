@@ -12,10 +12,6 @@ impl<'a> OperatorSessionGraph<'a> {
         Self { repo }
     }
 
-    pub(crate) fn lineage_depth(&self, session_id: &str) -> Result<usize, String> {
-        self.repo.session_lineage_depth(session_id)
-    }
-
     pub(crate) fn lineage_root_session_id(
         &self,
         session_id: &str,
@@ -54,24 +50,6 @@ impl<'a> OperatorSessionGraph<'a> {
         }
 
         Ok(parent_session_id.to_owned())
-    }
-
-    pub(crate) fn next_delegate_child_depth(
-        &self,
-        session_id: &str,
-        max_depth: usize,
-    ) -> Result<usize, String> {
-        let current_depth = self.lineage_depth(session_id)?;
-        let next_child_depth = current_depth.saturating_add(1);
-
-        if next_child_depth > max_depth {
-            let error = format!(
-                "delegate_depth_exceeded: next child depth {next_child_depth} exceeds configured max_depth {max_depth}"
-            );
-            return Err(error);
-        }
-
-        Ok(next_child_depth)
     }
 }
 
@@ -158,54 +136,6 @@ mod tests {
             .expect("compute lineage root");
 
         assert_eq!(lineage_root_session_id.as_deref(), Some("root-session"));
-    }
-
-    #[test]
-    fn operator_session_graph_computes_next_delegate_child_depth() {
-        let memory_config = isolated_memory_config("next-child-depth");
-        let repo = SessionRepository::new(&memory_config).expect("create session repository");
-
-        seed_session(&repo, "root-session", SessionKind::Root, None);
-        seed_session(
-            &repo,
-            "child-session",
-            SessionKind::DelegateChild,
-            Some("root-session"),
-        );
-
-        let session_graph = OperatorSessionGraph::new(&repo);
-        let root_child_depth = session_graph
-            .next_delegate_child_depth("root-session", 3)
-            .expect("compute root child depth");
-        let nested_child_depth = session_graph
-            .next_delegate_child_depth("child-session", 3)
-            .expect("compute nested child depth");
-
-        assert_eq!(root_child_depth, 1);
-        assert_eq!(nested_child_depth, 2);
-    }
-
-    #[test]
-    fn operator_session_graph_rejects_delegate_child_depth_over_limit() {
-        let memory_config = isolated_memory_config("depth-limit");
-        let repo = SessionRepository::new(&memory_config).expect("create session repository");
-
-        seed_session(&repo, "root-session", SessionKind::Root, None);
-        seed_session(
-            &repo,
-            "child-session",
-            SessionKind::DelegateChild,
-            Some("root-session"),
-        );
-
-        let session_graph = OperatorSessionGraph::new(&repo);
-        let result = session_graph.next_delegate_child_depth("child-session", 1);
-        let error = result.expect_err("depth overflow should fail");
-
-        assert!(
-            error.contains("delegate_depth_exceeded"),
-            "unexpected error: {error}"
-        );
     }
 
     #[test]
