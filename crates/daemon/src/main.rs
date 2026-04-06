@@ -55,11 +55,29 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
+fn check_legacy_home_migration() {
+    let user_home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .unwrap_or_default();
+    if let Some(legacy) = mvp::config::detect_legacy_home(&user_home) {
+        let new_home = user_home.join(mvp::config::HOME_DIR_NAME);
+        tracing::warn!(
+            "Legacy home directory {} found, but {} does not exist. To migrate: mv {} {}",
+            legacy.display(),
+            new_home.display(),
+            legacy.display(),
+            new_home.display(),
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
+    check_legacy_home_migration();
     let cli = parse_cli();
     let command_source = if cli.command.is_some() {
         "explicit"

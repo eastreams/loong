@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::{Once, OnceLock},
+    sync::OnceLock,
 };
 
 use loongclaw_contracts::SecretRef;
@@ -12,6 +12,8 @@ pub(super) const DEFAULT_CONFIG_FILE: &str = "config.toml";
 pub(super) const DEFAULT_SQLITE_FILE: &str = "memory.sqlite3";
 pub const CLI_COMMAND_NAME: &str = "loong";
 pub const LEGACY_CLI_COMMAND_NAME: &str = "loongclaw";
+pub const HOME_DIR_NAME: &str = ".loong";
+pub const LEGACY_HOME_DIR_NAME: &str = ".loongclaw";
 pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
 static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
@@ -518,41 +520,21 @@ fn resolve_loongclaw_home(
     loongclaw_home
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loong"))
+        .unwrap_or_else(|| resolve_user_home(home, userprofile).join(HOME_DIR_NAME))
 }
 
-static LEGACY_HOME_WARNING: Once = Once::new();
-
-/// Returns `Some(legacy_path)` if `~/.loongclaw` exists but `~/.loong` does not.
-fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
-    let new_home = user_home.join(".loong");
+/// Returns `Some(legacy_path)` if the legacy home exists but the new home does not.
+pub fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
+    let new_home = user_home.join(HOME_DIR_NAME);
     if new_home.exists() {
         return None;
     }
-    let legacy_home = user_home.join(".loongclaw");
+    let legacy_home = user_home.join(LEGACY_HOME_DIR_NAME);
     if legacy_home.exists() {
         Some(legacy_home)
     } else {
         None
     }
-}
-
-/// Emits a one-time migration hint when the legacy home directory
-/// exists but the new one does not.
-pub(super) fn warn_legacy_home_once() {
-    LEGACY_HOME_WARNING.call_once(|| {
-        let user_home = get_user_home();
-        if let Some(legacy) = detect_legacy_home(&user_home) {
-            let new_home = user_home.join(".loong");
-            tracing::warn!(
-                "Legacy home directory {} found, but {} does not exist. To migrate: mv {} {}",
-                legacy.display(),
-                new_home.display(),
-                legacy.display(),
-                new_home.display(),
-            );
-        }
-    });
 }
 
 pub(super) fn default_loongclaw_home() -> PathBuf {
