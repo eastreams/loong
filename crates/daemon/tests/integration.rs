@@ -60,7 +60,7 @@ impl MigrationEnvironmentGuard {
             ));
             match home_override {
                 Some(home) => unsafe {
-                    std::env::set_var("LOONGCLAW_HOME", home.join(".loongclaw"))
+                    std::env::set_var("LOONGCLAW_HOME", home.join(mvp::config::HOME_DIR_NAME))
                 },
                 None => unsafe { std::env::remove_var("LOONGCLAW_HOME") },
             }
