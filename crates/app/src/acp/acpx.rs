@@ -1006,10 +1006,7 @@ fn quote_command_part(value: &str) -> String {
     }
     if value.chars().all(|ch| {
         ch.is_ascii_alphanumeric()
-            || matches!(
-                ch,
-                '_' | '.' | '/' | ':' | '@' | '+' | '=' | ',' | '-'
-            )
+            || matches!(ch, '_' | '.' | '/' | ':' | '@' | '+' | '=' | ',' | '-')
     }) {
         return value.to_owned();
     }
