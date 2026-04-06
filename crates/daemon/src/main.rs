@@ -56,14 +56,16 @@ fn redacted_command_name(command: &Commands) -> &'static str {
 }
 
 fn check_legacy_home_migration() {
-    let user_home = std::env::var_os("HOME")
+    let Some(user_home) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
-        .unwrap_or_default();
+    else {
+        return;
+    };
     if let Some(legacy) = mvp::config::detect_legacy_home(&user_home) {
         let new_home = user_home.join(mvp::config::HOME_DIR_NAME);
         tracing::warn!(
-            "Legacy home directory {} found, but {} does not exist. To migrate: mv {} {}",
+            "Legacy home directory {} found, but {} does not exist. Rename {} to {} to migrate.",
             legacy.display(),
             new_home.display(),
             legacy.display(),
