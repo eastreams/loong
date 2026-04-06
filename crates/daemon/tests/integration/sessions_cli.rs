@@ -603,6 +603,7 @@ async fn execute_sessions_command_archive_dry_run_surfaces_archive_action() {
                 "child_session_id": "delegate:session-1",
                 "result": "ok"
             }),
+            frozen_result: None,
         },
     )
     .expect("finalize child session");

@@ -103,7 +103,7 @@ impl PromptWindowQueryDiagnostics {
 }
 
 const SUMMARY_FORMAT_VERSION: i64 = 1;
-const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 9;
+const SQLITE_MEMORY_SCHEMA_VERSION: i64 = 10;
 const CANONICAL_REBUILD_BATCH_SIZE: i64 = 256;
 const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
@@ -1665,6 +1665,7 @@ fn ensure_sqlite_schema_repairs_if_needed(conn: &mut Connection) -> Result<(), S
     }
 
     ensure_turn_session_index_and_state_metadata(conn)?;
+    ensure_session_terminal_outcome_storage(conn)?;
     ensure_approval_lifecycle_tables(conn)?;
     ensure_session_tool_consent_storage(conn)?;
     ensure_session_tool_policy_storage(conn)?;
@@ -1689,8 +1690,10 @@ fn sqlite_current_schema_objects_ready(conn: &Connection) -> Result<bool, String
         .map_err(|error| format!("probe sqlite current schema objects failed: {error}"))?;
     let object_count_ready = object_count == SQLITE_CURRENT_SCHEMA_OBJECT_COUNT;
     let canonical_fts_ready = !canonical_record_fts_needs_rebuild(conn)?;
+    let terminal_outcome_storage_ready =
+        sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;
 
-    Ok(object_count_ready && canonical_fts_ready)
+    Ok(object_count_ready && canonical_fts_ready && terminal_outcome_storage_ready)
 }
 
 fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(), String> {
@@ -1754,6 +1757,7 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
           session_id TEXT PRIMARY KEY,
           status TEXT NOT NULL,
           payload_json TEXT NOT NULL,
+          frozen_result_json TEXT NULL,
           recorded_at INTEGER NOT NULL
         );
         ",
@@ -1782,6 +1786,39 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         [],
     )
     .map_err(|error| format!("remove stale session turn count metadata failed: {error}"))?;
+
+    Ok(())
+}
+
+fn ensure_session_terminal_outcome_storage(conn: &Connection) -> Result<(), String> {
+    #[cfg(test)]
+    test_support::record_sqlite_schema_repair("session_terminal_outcomes");
+
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
+          session_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          frozen_result_json TEXT NULL,
+          recorded_at INTEGER NOT NULL
+        );
+        ",
+    )
+    .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
+
+    let has_frozen_result_column =
+        sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;
+    if !has_frozen_result_column {
+        conn.execute(
+            "ALTER TABLE session_terminal_outcomes
+             ADD COLUMN frozen_result_json TEXT NULL",
+            [],
+        )
+        .map_err(|error| {
+            format!("add session terminal outcome frozen result column failed: {error}")
+        })?;
+    }
 
     Ok(())
 }
@@ -5000,6 +5037,67 @@ mod tests {
             .expect("read sqlite user_version");
 
         assert_eq!(user_version, SQLITE_MEMORY_SCHEMA_VERSION);
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn ensure_memory_db_ready_repairs_session_terminal_outcome_frozen_result_column() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let _guard = sqlite_runtime_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-session-terminal-outcome-frozen-column-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("terminal-outcome.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let conn = Connection::open(&db_path).expect("open legacy sqlite db");
+        configure_sqlite_connection(&conn).expect("configure legacy sqlite db");
+        conn.execute_batch(
+            "
+            CREATE TABLE turns(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              session_id TEXT NOT NULL,
+              role TEXT NOT NULL,
+              content TEXT NOT NULL,
+              ts INTEGER NOT NULL
+            );
+            CREATE TABLE session_terminal_outcomes(
+              session_id TEXT PRIMARY KEY,
+              status TEXT NOT NULL,
+              payload_json TEXT NOT NULL,
+              recorded_at INTEGER NOT NULL
+            );
+            PRAGMA user_version = 9;
+            ",
+        )
+        .expect("create legacy terminal outcome schema");
+        drop(conn);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            ..MemoryRuntimeConfig::default()
+        };
+
+        ensure_memory_db_ready(Some(db_path.clone()), &config).expect("repair sqlite db");
+
+        let conn = Connection::open(&db_path).expect("open repaired sqlite db");
+        let columns = sqlite_table_columns(&conn, "session_terminal_outcomes")
+            .expect("session_terminal_outcomes columns");
+
+        assert!(columns.iter().any(|column| column == "frozen_result_json"));
 
         let _ = fs::remove_file(&db_path);
         let _ = fs::remove_dir_all(&tmp);

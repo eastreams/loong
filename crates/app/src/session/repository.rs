@@ -7,6 +7,7 @@ use rusqlite::{
 };
 use serde_json::Value;
 
+use super::frozen_result::FrozenResult;
 use crate::config::ToolConsentMode;
 use crate::memory;
 use crate::memory::runtime_config::MemoryRuntimeConfig;
@@ -94,6 +95,7 @@ pub struct SessionTerminalOutcomeRecord {
     pub session_id: String,
     pub status: String,
     pub payload_json: Value,
+    pub frozen_result: Option<FrozenResult>,
     pub recorded_at: i64,
 }
 
@@ -426,6 +428,7 @@ pub struct FinalizeSessionTerminalRequest {
     pub event_payload_json: Value,
     pub outcome_status: String,
     pub outcome_payload_json: Value,
+    pub frozen_result: Option<FrozenResult>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2198,6 +2201,16 @@ impl SessionRepository {
         status: &str,
         payload_json: Value,
     ) -> Result<SessionTerminalOutcomeRecord, String> {
+        self.upsert_terminal_outcome_with_frozen_result(session_id, status, payload_json, None)
+    }
+
+    pub fn upsert_terminal_outcome_with_frozen_result(
+        &self,
+        session_id: &str,
+        status: &str,
+        payload_json: Value,
+        frozen_result: Option<FrozenResult>,
+    ) -> Result<SessionTerminalOutcomeRecord, String> {
         let session_id = normalize_required_text(session_id, "session_id")?;
         let status = normalize_required_text(status, "status")?;
         if self.load_session(&session_id)?.is_none() {
@@ -2206,16 +2219,29 @@ impl SessionRepository {
 
         let encoded_payload = serde_json::to_string(&payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let recorded_at = unix_ts_now();
         let conn = self.open_connection()?;
         conn.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = excluded.frozen_result_json,
                 recorded_at = excluded.recorded_at",
-            params![session_id, status, encoded_payload, recorded_at],
+            params![
+                session_id,
+                status,
+                encoded_payload,
+                encoded_frozen_result,
+                recorded_at
+            ],
         )
         .map_err(|error| format!("upsert session terminal outcome failed: {error}"))?;
 
@@ -2223,6 +2249,7 @@ impl SessionRepository {
             session_id,
             status,
             payload_json,
+            frozen_result,
             recorded_at,
         })
     }
@@ -2239,10 +2266,12 @@ impl SessionRepository {
         let last_error = normalize_optional_text(request.last_error);
         let event_payload_json = request.event_payload_json;
         let outcome_payload_json = request.outcome_payload_json;
+        let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -2282,13 +2311,25 @@ impl SessionRepository {
         .map_err(|error| format!("insert session terminal event failed: {error}"))?;
         let event_id = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = excluded.frozen_result_json,
                 recorded_at = excluded.recorded_at",
-            params![session_id, outcome_status, encoded_outcome_payload, ts],
+            params![
+                session_id,
+                outcome_status,
+                encoded_outcome_payload,
+                encoded_frozen_result,
+                ts
+            ],
         )
         .map_err(|error| format!("upsert session terminal outcome in finalize failed: {error}"))?;
         tx.commit()
@@ -2312,6 +2353,7 @@ impl SessionRepository {
                 session_id,
                 status: outcome_status,
                 payload_json: outcome_payload_json,
+                frozen_result,
                 recorded_at: ts,
             },
         })
@@ -2330,10 +2372,12 @@ impl SessionRepository {
         let last_error = normalize_optional_text(request.last_error);
         let event_payload_json = request.event_payload_json;
         let outcome_payload_json = request.outcome_payload_json;
+        let frozen_result = request.frozen_result;
         let encoded_event_payload = serde_json::to_string(&event_payload_json)
             .map_err(|error| format!("encode session terminal event payload failed: {error}"))?;
         let encoded_outcome_payload = serde_json::to_string(&outcome_payload_json)
             .map_err(|error| format!("encode session terminal outcome payload failed: {error}"))?;
+        let encoded_frozen_result = encode_optional_frozen_result(&frozen_result)?;
         let ts = unix_ts_now();
 
         let mut conn = self.open_connection()?;
@@ -2374,13 +2418,25 @@ impl SessionRepository {
         .map_err(|error| format!("insert conditional session terminal event failed: {error}"))?;
         let event_id = tx.last_insert_rowid();
         tx.execute(
-            "INSERT INTO session_terminal_outcomes(session_id, status, payload_json, recorded_at)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO session_terminal_outcomes(
+                session_id,
+                status,
+                payload_json,
+                frozen_result_json,
+                recorded_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
+                frozen_result_json = excluded.frozen_result_json,
                 recorded_at = excluded.recorded_at",
-            params![session_id, outcome_status, encoded_outcome_payload, ts],
+            params![
+                session_id,
+                outcome_status,
+                encoded_outcome_payload,
+                encoded_frozen_result,
+                ts
+            ],
         )
         .map_err(|error| {
             format!("upsert session terminal outcome in conditional finalize failed: {error}")
@@ -2407,6 +2463,7 @@ impl SessionRepository {
                 session_id,
                 status: outcome_status,
                 payload_json: outcome_payload_json,
+                frozen_result,
                 recorded_at: ts,
             },
         }))
@@ -3035,7 +3092,7 @@ impl SessionRepository {
     ) -> Result<Option<SessionTerminalOutcomeRecord>, String> {
         let raw = conn
             .query_row(
-                "SELECT session_id, status, payload_json, recorded_at
+                "SELECT session_id, status, payload_json, frozen_result_json, recorded_at
                  FROM session_terminal_outcomes
                  WHERE session_id = ?1",
                 params![session_id],
@@ -3044,7 +3101,8 @@ impl SessionRepository {
                         session_id: row.get(0)?,
                         status: row.get(1)?,
                         payload_json: row.get(2)?,
-                        recorded_at: row.get(3)?,
+                        frozen_result_json: row.get(3)?,
+                        recorded_at: row.get(4)?,
                     })
                 },
             )
@@ -3221,6 +3279,7 @@ struct RawSessionTerminalOutcomeRecord {
     session_id: String,
     status: String,
     payload_json: String,
+    frozen_result_json: Option<String>,
     recorded_at: i64,
 }
 
@@ -3348,15 +3407,44 @@ impl SessionEventRecord {
 
 impl SessionTerminalOutcomeRecord {
     fn try_from_raw(raw: RawSessionTerminalOutcomeRecord) -> Result<Self, String> {
+        let payload_json = serde_json::from_str(&raw.payload_json)
+            .map_err(|error| format!("decode session terminal outcome payload failed: {error}"))?;
+        let frozen_result = decode_optional_frozen_result(raw.frozen_result_json)?;
+
         Ok(Self {
             session_id: raw.session_id,
             status: raw.status,
-            payload_json: serde_json::from_str(&raw.payload_json).map_err(|error| {
-                format!("decode session terminal outcome payload failed: {error}")
-            })?,
+            payload_json,
+            frozen_result,
             recorded_at: raw.recorded_at,
         })
     }
+}
+
+fn encode_optional_frozen_result(
+    frozen_result: &Option<FrozenResult>,
+) -> Result<Option<String>, String> {
+    let Some(frozen_result) = frozen_result else {
+        return Ok(None);
+    };
+
+    let encoded_frozen_result = serde_json::to_string(frozen_result)
+        .map_err(|error| format!("encode frozen session result failed: {error}"))?;
+
+    Ok(Some(encoded_frozen_result))
+}
+
+fn decode_optional_frozen_result(
+    raw_frozen_result: Option<String>,
+) -> Result<Option<FrozenResult>, String> {
+    let Some(raw_frozen_result) = raw_frozen_result else {
+        return Ok(None);
+    };
+
+    let frozen_result = serde_json::from_str(&raw_frozen_result)
+        .map_err(|error| format!("decode frozen session result failed: {error}"))?;
+
+    Ok(Some(frozen_result))
 }
 
 impl ApprovalRequestRecord {
@@ -4493,7 +4581,7 @@ mod tests {
     }
 
     #[test]
-    fn session_terminal_outcome_round_trips_payload() {
+    fn session_terminal_outcome_round_trips_payload_and_frozen_result() {
         let config = isolated_memory_config("terminal-outcome-round-trip");
         let repo = SessionRepository::new(&config).expect("repository");
         repo.create_session(NewSessionRecord {
@@ -4505,7 +4593,14 @@ mod tests {
         })
         .expect("create child");
 
-        repo.upsert_terminal_outcome(
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+
+        repo.upsert_terminal_outcome_with_frozen_result(
             "child-session",
             "ok",
             json!({
@@ -4513,6 +4608,7 @@ mod tests {
                 "final_output": "done",
                 "duration_ms": 12
             }),
+            Some(frozen_result.clone()),
         )
         .expect("upsert terminal outcome");
 
@@ -4524,6 +4620,7 @@ mod tests {
         assert_eq!(outcome.session_id, "child-session");
         assert_eq!(outcome.status, "ok");
         assert_eq!(outcome.payload_json["final_output"], "done");
+        assert_eq!(outcome.frozen_result, Some(frozen_result));
         assert!(outcome.recorded_at > 0);
     }
 
@@ -4597,6 +4694,7 @@ mod tests {
                         "turn_count": 2,
                         "duration_ms": 15
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize session");
@@ -4659,6 +4757,7 @@ mod tests {
                 outcome_payload_json: json!({
                     "error": "first"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize first terminal state");
@@ -4678,6 +4777,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize second terminal state");
@@ -4731,6 +4831,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("conditionally finalize session")
@@ -4795,6 +4896,7 @@ mod tests {
                     outcome_payload_json: json!({
                         "error": "delegate_timeout"
                     }),
+                    frozen_result: None,
                 },
             )
             .expect("conditionally finalize session");
@@ -4858,6 +4960,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "done"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");

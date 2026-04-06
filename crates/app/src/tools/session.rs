@@ -2246,6 +2246,7 @@ fn apply_session_recover_plan(
             event_payload_json,
             outcome_status,
             outcome_payload_json: outcome_payload,
+            frozen_result: None,
         },
     )?;
     if finalized.is_none() {
@@ -2530,6 +2531,7 @@ fn apply_session_cancel_plan(
                     }),
                     outcome_status,
                     outcome_payload_json: outcome_payload,
+                    frozen_result: None,
                 },
             )?;
             if finalized.is_none() {
@@ -3738,6 +3740,7 @@ fn session_terminal_outcome_json(
         "session_id": outcome.session_id,
         "status": outcome.status,
         "payload": outcome.payload_json,
+        "frozen_result": outcome.frozen_result,
         "recorded_at": outcome.recorded_at,
     })
 }
@@ -4066,6 +4069,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");
@@ -4136,6 +4140,7 @@ mod tests {
                 event_payload_json: json!({ "result": "ok" }),
                 outcome_status: "ok".to_owned(),
                 outcome_payload_json: json!({ "child_session_id": "archived-child" }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");
@@ -6867,6 +6872,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "result": "ok"
                 }),
+                frozen_result: None,
             },
         )
         .expect("finalize child");
@@ -6957,6 +6963,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");
@@ -7070,6 +7077,7 @@ mod tests {
                     event_payload_json: json!({ "result": "ok" }),
                     outcome_status: "ok".to_owned(),
                     outcome_payload_json: json!({ "child_session_id": session_id }),
+                    frozen_result: None,
                 },
             )
             .expect("finalize child");

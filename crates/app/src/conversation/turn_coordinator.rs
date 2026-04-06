@@ -32,6 +32,8 @@ use crate::operator::delegate_runtime::{
     DelegateChildExecutionPolicy, build_delegate_child_lifecycle_seed, next_delegate_child_depth,
 };
 use crate::runtime_self_continuity;
+#[cfg(feature = "memory-sqlite")]
+use crate::session::frozen_result::capture_frozen_result;
 
 use super::super::config::{LoongClawConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
@@ -4438,6 +4440,7 @@ async fn enqueue_delegate_async_with_runtime<R: ConversationRuntime + ?Sized>(
             timeout_seconds: delegate_policy.timeout_seconds,
             binding: OwnedConversationRuntimeBinding::from_borrowed(binding),
         },
+        config.tools.delegate.max_frozen_bytes,
     );
 
     let mut outcome = crate::tools::delegate::delegate_async_queued_outcome(
@@ -4605,6 +4608,8 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
+            let frozen_result =
+                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
                 child_session_id,
@@ -4621,6 +4626,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     ),
                     outcome_status: outcome.status.clone(),
                     outcome_payload_json: outcome.payload.clone(),
+                    frozen_result: Some(frozen_result),
                 },
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
@@ -4662,6 +4668,8 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
+            let frozen_result =
+                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
                 child_session_id,
@@ -4678,6 +4686,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     ),
                     outcome_status: outcome.status.clone(),
                     outcome_payload_json: outcome.payload.clone(),
+                    frozen_result: Some(frozen_result),
                 },
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
@@ -4720,6 +4729,8 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
+            let frozen_result =
+                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
                 child_session_id,
@@ -4736,6 +4747,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     ),
                     outcome_status: outcome.status.clone(),
                     outcome_payload_json: outcome.payload.clone(),
+                    frozen_result: Some(frozen_result),
                 },
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
@@ -4777,6 +4789,8 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
+            let frozen_result =
+                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
             finalize_delegate_child_terminal_with_recovery(
                 &repo,
                 child_session_id,
@@ -4793,6 +4807,7 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                     ),
                     outcome_status: outcome.status.clone(),
                     outcome_payload_json: outcome.payload.clone(),
+                    frozen_result: Some(frozen_result),
                 },
             )?;
             if execution.mode == ConstrainedSubagentMode::Async {
@@ -4827,6 +4842,7 @@ fn finalize_async_delegate_spawn_failure(
     label: Option<String>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure(
@@ -4836,6 +4852,7 @@ fn finalize_async_delegate_spawn_failure(
         label,
         profile,
         execution,
+        max_frozen_bytes,
         error,
     )
 }
@@ -4848,6 +4865,7 @@ fn finalize_async_delegate_spawn_failure_with_recovery(
     label: Option<String>,
     profile: Option<crate::conversation::DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     crate::operator::delegate_runtime::finalize_async_delegate_spawn_failure_with_recovery(
@@ -4857,6 +4875,7 @@ fn finalize_async_delegate_spawn_failure_with_recovery(
         label,
         profile,
         execution,
+        max_frozen_bytes,
         error,
     )
 }
@@ -4880,6 +4899,7 @@ fn spawn_async_delegate_detached(
     memory_config: MemoryRuntimeConfig,
     spawner: std::sync::Arc<dyn AsyncDelegateSpawner>,
     request: AsyncDelegateSpawnRequest,
+    max_frozen_bytes: usize,
 ) {
     let child_session_id = request.child_session_id.clone();
     let parent_session_id = request.parent_session_id.clone();
@@ -4904,6 +4924,8 @@ fn spawn_async_delegate_detached(
                 label.clone(),
                 profile,
                 &execution,
+                error.clone(),
+                max_frozen_bytes,
                 error.clone(),
             );
             if let Err(finalize_error) = finalize_result {
@@ -8097,6 +8119,7 @@ mod tests {
                 outcome_payload_json: json!({
                     "error": "delegate_recovered"
                 }),
+                frozen_result: None,
             },
         )
         .expect("recover child terminal state")
@@ -8146,6 +8169,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "late success",
                 }),
+                frozen_result: None,
             },
         )
         .expect("stale running finalizer should no-op");
@@ -8228,6 +8252,9 @@ mod tests {
             Some("Child".to_owned()),
             None,
             &execution,
+            crate::config::ToolConfig::default()
+                .delegate
+                .max_frozen_bytes,
             "spawn unavailable".to_owned(),
         )
         .expect("stale queued spawn failure finalizer should no-op");
@@ -8288,6 +8315,7 @@ mod tests {
                     "child_session_id": "child-session",
                     "final_output": "late success",
                 }),
+                frozen_result: None,
             },
         )
         .expect_err("missing child session should not be treated as stale");
@@ -8337,6 +8365,9 @@ mod tests {
             Some("Child".to_owned()),
             None,
             &execution,
+            crate::config::ToolConfig::default()
+                .delegate
+                .max_frozen_bytes,
             "spawn unavailable".to_owned(),
         )
         .expect_err("missing child session should not bypass spawn failure recovery");

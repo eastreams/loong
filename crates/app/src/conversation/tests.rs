@@ -19911,6 +19911,12 @@ async fn handle_turn_with_runtime_executes_delegate_via_coordinator() {
         terminal_outcome.payload_json["final_output"],
         "Child final output"
     );
+    let frozen_result = terminal_outcome.frozen_result.expect("frozen result");
+    assert!(!frozen_result.truncated);
+    assert_eq!(
+        frozen_result.content,
+        crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
+    );
 
     let requested = runtime
         .turn_requested_tool_views
@@ -20222,6 +20228,12 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     assert_eq!(
         terminal_outcome.payload_json["final_output"],
         "Child final output"
+    );
+    let frozen_result = terminal_outcome.frozen_result.expect("frozen result");
+    assert!(!frozen_result.truncated);
+    assert_eq!(
+        frozen_result.content,
+        crate::session::frozen_result::FrozenContent::Text("Child final output".to_owned())
     );
 
     assert_eq!(

@@ -217,6 +217,8 @@ pub struct DelegateToolConfig {
     pub child_tool_allowlist: Vec<String>,
     #[serde(default)]
     pub allow_shell_in_child: bool,
+    #[serde(default = "default_delegate_max_frozen_bytes")]
+    pub max_frozen_bytes: usize,
     #[serde(default)]
     pub child_runtime: DelegateChildRuntimeConfig,
 }
@@ -607,6 +609,7 @@ impl Default for DelegateToolConfig {
             timeout_seconds: default_delegate_timeout_seconds(),
             child_tool_allowlist: default_delegate_child_tool_allowlist(),
             allow_shell_in_child: false,
+            max_frozen_bytes: default_delegate_max_frozen_bytes(),
             child_runtime: DelegateChildRuntimeConfig::default(),
         }
     }
@@ -818,6 +821,14 @@ impl ToolConfig {
                 MAX_WEB_FETCH_MAX_REDIRECTS,
             )
         {
+            issues.push(*issue);
+        }
+        if let Err(issue) = validate_numeric_range(
+            "tools.delegate.max_frozen_bytes",
+            self.delegate.max_frozen_bytes,
+            1,
+            usize::MAX,
+        ) {
             issues.push(*issue);
         }
         let timeout_as_usize = usize::try_from(self.web_search.timeout_seconds).map_err(|_e| {
@@ -1248,6 +1259,10 @@ const fn default_delegate_timeout_seconds() -> u64 {
     60
 }
 
+const fn default_delegate_max_frozen_bytes() -> usize {
+    256 * 1024
+}
+
 const fn default_browser_max_sessions() -> usize {
     DEFAULT_BROWSER_MAX_SESSIONS
 }
@@ -1337,6 +1352,7 @@ mod tests {
         assert_eq!(config.delegate.max_depth, 1);
         assert_eq!(config.delegate.max_active_children, 5);
         assert_eq!(config.delegate.timeout_seconds, 60);
+        assert_eq!(config.delegate.max_frozen_bytes, 256 * 1024);
         assert_eq!(
             config.delegate.child_tool_allowlist,
             vec![
@@ -1591,6 +1607,21 @@ mod tests {
     }
 
     #[test]
+    fn validate_rejects_zero_delegate_max_frozen_bytes() {
+        let mut config = ToolConfig::default();
+        config.delegate.max_frozen_bytes = 0;
+
+        let issues = config.validate();
+
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.field_path == "tools.delegate.max_frozen_bytes"),
+            "expected delegate max_frozen_bytes validation issue, got {issues:?}"
+        );
+    }
+
+    #[test]
     fn validate_rejects_zero_tool_execution_per_tool_timeout() {
         let mut config = ToolConfig::default();
         config
@@ -1704,6 +1735,7 @@ max_depth = 2
 max_active_children = 4
 timeout_seconds = 90
 allow_shell_in_child = true
+max_frozen_bytes = 131072
 child_tool_allowlist = ["file.read", "shell.exec"]
 
 [tools.delegate.child_runtime.web]
@@ -1744,6 +1776,7 @@ max_text_chars = 1024
         assert_eq!(parsed.tools.delegate.max_active_children, 4);
         assert_eq!(parsed.tools.delegate.timeout_seconds, 90);
         assert!(parsed.tools.delegate.allow_shell_in_child);
+        assert_eq!(parsed.tools.delegate.max_frozen_bytes, 131072);
         assert_eq!(
             parsed.tools.delegate.child_tool_allowlist,
             vec!["file.read".to_owned(), "shell.exec".to_owned()]

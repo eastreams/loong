@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::config::LoongClawConfig;
 use crate::conversation::{
@@ -10,6 +10,7 @@ use crate::conversation::{
 };
 use crate::memory::runtime_config::MemoryRuntimeConfig;
 use crate::runtime_self_continuity::RuntimeSelfContinuity;
+use crate::session::frozen_result::capture_frozen_result;
 use crate::session::recovery::{
     RECOVERY_EVENT_KIND, build_async_spawn_failure_recovery_payload,
     build_terminal_finalize_recovery_payload,
@@ -277,6 +278,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     let repo = SessionRepository::new(memory_config)?;
@@ -288,6 +290,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
         error.clone(),
         0,
     );
+    let frozen_result = capture_frozen_result(&outcome, max_frozen_bytes);
     let request = FinalizeSessionTerminalRequest {
         state: SessionState::Failed,
         last_error: Some(error.clone()),
@@ -301,6 +304,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure(
         ),
         outcome_status: outcome.status,
         outcome_payload_json: outcome.payload,
+        frozen_result: Some(frozen_result),
     };
     finalize_terminal_if_current_allowing_stale_state(
         &repo,
@@ -319,6 +323,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
     label: Option<String>,
     profile: Option<DelegateBuiltinProfile>,
     execution: &ConstrainedSubagentExecution,
+    max_frozen_bytes: usize,
     error: String,
 ) -> Result<(), String> {
     let recovery_label = label.clone();
@@ -329,6 +334,7 @@ pub(crate) fn finalize_async_delegate_spawn_failure_with_recovery(
         label,
         profile,
         execution,
+        max_frozen_bytes,
         error.clone(),
     );
     match finalize_result {
@@ -428,7 +434,26 @@ pub(crate) fn finalize_delegate_child_terminal_with_recovery(
                 },
             );
             match transition_result {
-                Ok(Some(_)) => Err(recovery_error),
+                Ok(Some(_)) => {
+                    let recovery_outcome_payload = json!({
+                        "error": recovery_error.as_str(),
+                    });
+                    let upsert_result = repo.upsert_terminal_outcome_with_frozen_result(
+                        child_session_id,
+                        "error",
+                        recovery_outcome_payload,
+                        recovery_request.frozen_result,
+                    );
+                    match upsert_result {
+                        Ok(_) => Err(recovery_error),
+                        Err(persist_error) => {
+                            let message = format!(
+                                "{recovery_error}; delegate_terminal_recovery_outcome_persist_failed: {persist_error}"
+                            );
+                            Err(message)
+                        }
+                    }
+                }
                 Ok(None) => {
                     delegate_terminal_recovery_skipped_error(repo, child_session_id, recovery_error)
                 }
@@ -502,6 +527,7 @@ fn delegate_terminal_recovery_skipped_error(
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Connection;
     use serde_json::json;
 
     use super::*;
@@ -511,6 +537,11 @@ mod tests {
     use crate::trust::extract_trust_event_payload;
 
     fn isolated_repo(test_name: &str) -> SessionRepository {
+        let (repo, _sqlite_path) = isolated_repo_with_path(test_name);
+        repo
+    }
+
+    fn isolated_repo_with_path(test_name: &str) -> (SessionRepository, std::path::PathBuf) {
         let sqlite_path = std::env::temp_dir().join(format!(
             "loongclaw-operator-delegate-runtime-{test_name}-{}.sqlite3",
             std::process::id()
@@ -520,8 +551,10 @@ mod tests {
             sqlite_path: Some(sqlite_path),
             ..MemoryRuntimeConfig::default()
         };
+        let repo = SessionRepository::new(&config).expect("session repository");
+        let sqlite_path = config.sqlite_path.expect("sqlite path");
 
-        SessionRepository::new(&config).expect("session repository")
+        (repo, sqlite_path)
     }
 
     #[test]
@@ -674,5 +707,92 @@ mod tests {
 
         let trust_event = extract_trust_event_payload(&seed.request.event_payload_json);
         assert!(trust_event.is_some(), "expected trust event payload");
+    }
+
+    #[test]
+    fn finalize_delegate_child_terminal_with_recovery_persists_frozen_result_after_recovery_event()
+    {
+        let (repo, sqlite_path) = isolated_repo_with_path("terminal-recovery-frozen-result");
+        repo.create_session(NewSessionRecord {
+            session_id: "root-session".to_owned(),
+            kind: SessionKind::Root,
+            parent_session_id: None,
+            label: Some("Root".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create root session");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Running,
+        })
+        .expect("create child session");
+
+        let conn = Connection::open(&sqlite_path).expect("open sqlite connection");
+        conn.execute(
+            "CREATE TRIGGER fail_delegate_completed_event
+             BEFORE INSERT ON session_events
+             WHEN NEW.event_kind = 'delegate_completed'
+             BEGIN
+                SELECT RAISE(FAIL, 'forced delegate_completed event failure');
+             END;",
+            [],
+        )
+        .expect("create event failure trigger");
+        drop(conn);
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: std::time::SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+        let error = finalize_delegate_child_terminal_with_recovery(
+            &repo,
+            "child-session",
+            FinalizeSessionTerminalRequest {
+                state: SessionState::Completed,
+                last_error: None,
+                event_kind: "delegate_completed".to_owned(),
+                actor_session_id: Some("root-session".to_owned()),
+                event_payload_json: json!({
+                    "turn_count": 1,
+                }),
+                outcome_status: "ok".to_owned(),
+                outcome_payload_json: json!({
+                    "child_session_id": "child-session",
+                    "final_output": "done",
+                }),
+                frozen_result: Some(frozen_result.clone()),
+            },
+        )
+        .expect_err("forced finalize failure should surface recovery error");
+
+        assert!(error.contains("delegate_terminal_finalize_failed"));
+
+        let child = repo
+            .load_session("child-session")
+            .expect("load child session")
+            .expect("child session row");
+        assert_eq!(child.state, SessionState::Failed);
+
+        let events = repo
+            .list_recent_events("child-session", 10)
+            .expect("list child events");
+        let event_kinds: Vec<&str> = events
+            .iter()
+            .map(|event| event.event_kind.as_str())
+            .collect();
+        assert!(event_kinds.contains(&RECOVERY_EVENT_KIND));
+        assert!(!event_kinds.contains(&"delegate_completed"));
+
+        let terminal_outcome = repo
+            .load_terminal_outcome("child-session")
+            .expect("load terminal outcome")
+            .expect("terminal outcome row");
+        assert_eq!(terminal_outcome.status, "error");
+        assert_eq!(terminal_outcome.frozen_result, Some(frozen_result));
     }
 }
