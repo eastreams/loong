@@ -9,8 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyModifiers,
-    MouseButton, MouseEvent, MouseEventKind,
+    Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -43,7 +42,7 @@ use super::dialog::ClarifyDialog;
 use super::events::UiEvent;
 use super::focus::{FocusLayer, FocusStack};
 use super::history::{self, PaneView};
-use super::input::InputView;
+use super::input::{self, InputView};
 use super::layout;
 use super::message::Message;
 use super::observer::build_tui_observer;
@@ -118,6 +117,9 @@ impl StatusBarView for state::Pane {
     }
     fn session_display_label(&self) -> Option<&str> {
         self.session_display_label.as_deref()
+    }
+    fn workspace_display_label(&self) -> Option<&str> {
+        self.workspace_display_label.as_deref()
     }
     fn busy_input_mode(&self) -> state::BusyInputMode {
         self.busy_input_mode()
@@ -355,7 +357,7 @@ impl TerminalGuard {
         enable_raw_mode().map_err(|error| format!("failed to enable raw mode: {error}"))?;
 
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableMouseCapture) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
             let _ = disable_raw_mode();
             return Err(format!("failed to enter alternate screen: {error}"));
         }
@@ -365,18 +367,14 @@ impl TerminalGuard {
             Ok(terminal) => terminal,
             Err(error) => {
                 let _ = disable_raw_mode();
-                let _ = execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen);
+                let _ = execute!(io::stdout(), LeaveAlternateScreen);
                 return Err(format!("failed to initialize TUI terminal: {error}"));
             }
         };
 
         if let Err(error) = terminal.hide_cursor() {
             let _ = disable_raw_mode();
-            let _ = execute!(
-                terminal.backend_mut(),
-                DisableMouseCapture,
-                LeaveAlternateScreen
-            );
+            let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
             return Err(format!("failed to hide TUI cursor: {error}"));
         }
 
@@ -399,11 +397,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            DisableMouseCapture,
-            LeaveAlternateScreen
-        );
+        let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         let _ = self.terminal.show_cursor();
     }
 }
@@ -1118,7 +1112,7 @@ fn history_page_step(textarea: &tui_textarea::TextArea<'_>) -> u16 {
     let (width, height) = terminal_size.unwrap_or((80, 24));
 
     let area = ratatui::layout::Rect::new(0, 0, width, height);
-    let input_height = textarea.lines().len() as u16 + 2;
+    let input_height = input::preferred_input_height(textarea, width);
     let shell_areas = layout::compute(area, input_height);
     let history_height = shell_areas.history.height;
     let page_step = history_height.saturating_sub(1);
@@ -1137,7 +1131,7 @@ fn terminal_shell_areas(textarea: &tui_textarea::TextArea<'_>) -> layout::ShellA
     let terminal_size = crossterm::terminal::size();
     let (width, height) = terminal_size.unwrap_or((80, 24));
     let area = ratatui::layout::Rect::new(0, 0, width, height);
-    let input_height = textarea.lines().len() as u16 + 2;
+    let input_height = input::preferred_input_height(textarea, width);
 
     layout::compute(area, input_height)
 }
@@ -2041,17 +2035,19 @@ fn slash_command_palette_area(
 
     let shell_areas = terminal_shell_areas(textarea);
     let input_area = shell_areas.input;
-    let popup_height = matches.len().min(5) as u16 + 2;
-    let popup_width = input_area.width.clamp(28, 72);
-    let popup_x = input_area.x;
-    let popup_y = input_area.y.saturating_sub(popup_height.saturating_sub(1));
+    let terminal_size = crossterm::terminal::size();
+    let (width, height) = terminal_size.unwrap_or((80, 24));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let selected_index = shell.slash_command_selection % matches.len();
+    let max_visible_matches = render::slash_palette_max_visible_matches(area, input_area);
+    let window_start =
+        render::slash_palette_window_start(matches.len(), selected_index, max_visible_matches);
+    let visible_count = matches
+        .len()
+        .saturating_sub(window_start)
+        .min(max_visible_matches);
 
-    Some(ratatui::layout::Rect::new(
-        popup_x,
-        popup_y,
-        popup_width,
-        popup_height,
-    ))
+    Some(render::slash_palette_area(area, input_area, visible_count))
 }
 
 fn apply_selected_slash_command(
@@ -2111,6 +2107,11 @@ fn slash_command_index_at_mouse_row(
     textarea: &tui_textarea::TextArea<'_>,
     mouse_row: u16,
 ) -> Option<usize> {
+    let matches = slash_command_matches(shell, textarea);
+    if matches.is_empty() {
+        return None;
+    }
+
     let palette_area = slash_command_palette_area(shell, textarea)?;
     let inner_top = palette_area.y.saturating_add(1);
     let inner_bottom = palette_area
@@ -2120,7 +2121,18 @@ fn slash_command_index_at_mouse_row(
         return None;
     }
 
-    Some(usize::from(mouse_row.saturating_sub(inner_top)))
+    let shell_areas = terminal_shell_areas(textarea);
+    let input_area = shell_areas.input;
+    let terminal_size = crossterm::terminal::size();
+    let (width, height) = terminal_size.unwrap_or((80, 24));
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
+    let selected_index = shell.slash_command_selection % matches.len();
+    let max_visible_matches = render::slash_palette_max_visible_matches(area, input_area);
+    let window_start =
+        render::slash_palette_window_start(matches.len(), selected_index, max_visible_matches);
+    let relative_index = usize::from(mouse_row.saturating_sub(inner_top));
+
+    Some(window_start.saturating_add(relative_index))
 }
 
 fn transcript_plain_lines(shell: &state::Shell) -> Vec<String> {
@@ -3088,6 +3100,7 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
         has_explicit_permission_policy,
     };
     shell.pane.session_display_label = current_session_display_label(shell);
+    shell.pane.workspace_display_label = current_workspace_display_label(shell);
 }
 
 fn current_session_display_label(shell: &state::Shell) -> Option<String> {
@@ -3102,6 +3115,21 @@ fn current_session_display_label(shell: &state::Shell) -> Option<String> {
         .find(|session| session.session_id == current_session_id)?;
 
     Some(subagent_session_primary_label(current_session, locale))
+}
+
+fn current_workspace_display_label(shell: &state::Shell) -> Option<String> {
+    let workspace_root = worktree_root_for_suggestions(shell)?;
+    let workspace_name = workspace_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned);
+    if workspace_name.is_some() {
+        return workspace_name;
+    }
+
+    Some(workspace_root.display().to_string())
 }
 
 fn capture_subagent_surface_snapshot(shell: &state::Shell) -> state::SubagentSurfaceSnapshot {

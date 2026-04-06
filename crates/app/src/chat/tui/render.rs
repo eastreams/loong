@@ -101,7 +101,7 @@ pub(super) fn draw(
         return;
     }
 
-    let input_height = textarea.lines().len() as u16 + 2; // +2 for borders
+    let input_height = input::preferred_input_height(textarea, area.width);
     let areas = resolve_shell_areas(frame, state, textarea, input_height);
 
     // 1. History (message transcript)
@@ -224,8 +224,11 @@ fn intro_layout_config(
     if transcript_line_count > 8 {
         return None;
     }
+    if !PaneView::messages(pane).is_empty() {
+        return None;
+    }
 
-    let input_height = textarea.lines().len() as u16 + 2;
+    let input_height = input::preferred_input_height(textarea, area.width);
     let clamped_input_height = input_height.clamp(3, 12);
     let minimum_history_height = 5_u16;
     let history_height = u16::try_from(transcript_line_count)
@@ -1297,39 +1300,38 @@ fn render_command_palette(
         return;
     }
 
-    let max_visible_matches = 5_usize;
+    let area = frame.area();
+    let selected_index = slash_command_selection % matches.len();
+    let max_visible_matches = slash_palette_max_visible_matches(area, input_area);
+    let window_start =
+        slash_palette_window_start(matches.len(), selected_index, max_visible_matches);
     let visible_matches = matches
-        .into_iter()
+        .iter()
+        .skip(window_start)
         .take(max_visible_matches)
         .collect::<Vec<_>>();
-    let selected_index = slash_command_selection % visible_matches.len();
-    let popup_height = visible_matches.len() as u16 + 2;
-    let popup_width = input_area.width.clamp(28, 72);
-    let popup_x = input_area.x;
-    let popup_y = input_area.y.saturating_sub(popup_height.saturating_sub(1));
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    let visible_selected_index = selected_index.saturating_sub(window_start);
+    let popup_area = slash_palette_area(area, input_area, visible_matches.len());
 
     frame.render_widget(Clear, popup_area);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(palette.info))
-        .title(Span::styled(
-            " Commands ",
-            Style::default()
-                .fg(palette.info)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let block = Block::default().style(Style::default().bg(palette.surface_alt));
     let inner_area = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let mut lines = Vec::new();
+    let mut lines = vec![Line::from(Span::styled(
+        " Commands",
+        Style::default()
+            .fg(palette.dim)
+            .add_modifier(Modifier::BOLD),
+    ))];
     for (index, entry) in visible_matches.into_iter().enumerate() {
-        let is_selected = index == selected_index;
+        let is_selected = index == visible_selected_index;
         let command_style = if is_selected {
             Style::default()
                 .fg(palette.brand)
                 .add_modifier(Modifier::BOLD)
+                .bg(palette.surface)
         } else {
             Style::default()
                 .fg(palette.text)
@@ -1340,19 +1342,65 @@ fn render_command_palette(
         } else {
             Style::default().fg(palette.dim)
         };
-        let command_span = Span::styled(format!("{:<28}", entry.label), command_style);
+        let prefix = if is_selected { "› " } else { "  " };
+        let prefix_style = if is_selected {
+            Style::default().fg(palette.brand).bg(palette.surface)
+        } else {
+            Style::default().fg(palette.separator)
+        };
+        let command_span = Span::styled(format!("{:<26}", entry.label), command_style);
         let separator_span = Span::styled(" ", Style::default().fg(palette.separator));
         let category_span = Span::styled(
             format!("[{}] ", entry.meta),
             Style::default().fg(palette.dim),
         );
-        let help_span = Span::styled(entry.detail, help_style);
-        let line = Line::from(vec![command_span, separator_span, category_span, help_span]);
+        let help_span = Span::styled(entry.detail.clone(), help_style);
+        let line = Line::from(vec![
+            Span::styled(prefix, prefix_style),
+            command_span,
+            separator_span,
+            category_span,
+            help_span,
+        ]);
         lines.push(line);
     }
 
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, inner_area);
+}
+
+pub(super) fn slash_palette_max_visible_matches(area: Rect, input_area: Rect) -> usize {
+    let available_above = input_area.y.saturating_sub(area.y);
+    let visible_rows = available_above.saturating_sub(2).clamp(1, 12);
+
+    usize::from(visible_rows)
+}
+
+pub(super) fn slash_palette_window_start(
+    total_matches: usize,
+    selected_index: usize,
+    max_visible_matches: usize,
+) -> usize {
+    if total_matches <= max_visible_matches {
+        return 0;
+    }
+
+    let centered_start = selected_index.saturating_sub(max_visible_matches / 2);
+    let max_start = total_matches.saturating_sub(max_visible_matches);
+
+    centered_start.min(max_start)
+}
+
+pub(super) fn slash_palette_area(area: Rect, input_area: Rect, visible_count: usize) -> Rect {
+    let popup_height = u16::try_from(visible_count.saturating_add(1))
+        .unwrap_or(u16::MAX)
+        .saturating_add(1);
+    let popup_width = input_area.width.clamp(28, 90);
+    let popup_x = input_area.x;
+    let popup_y = input_area.y.saturating_sub(popup_height.saturating_sub(1));
+    let clamped_popup_y = popup_y.max(area.y);
+
+    Rect::new(popup_x, clamped_popup_y, popup_width, popup_height)
 }
 
 // ---------------------------------------------------------------------------
@@ -2219,6 +2267,7 @@ mod tests {
         clarify_dialog: Option<ClarifyDialog>,
         stats_overlay: Option<StatsOverlayView<'static>>,
         session_picker: Option<state::SessionPickerState>,
+        slash_palette_entries_override: Option<Vec<SlashPaletteEntry>>,
         tool_inspector: Option<TestToolInspector>,
         slash_command_selection: usize,
     }
@@ -2232,6 +2281,7 @@ mod tests {
                 clarify_dialog: None,
                 stats_overlay: None,
                 session_picker: None,
+                slash_palette_entries_override: None,
                 tool_inspector: None,
                 slash_command_selection: 0,
             }
@@ -2281,6 +2331,10 @@ mod tests {
             self.slash_command_selection
         }
         fn slash_palette_entries(&self, draft_prefix: &str) -> Vec<SlashPaletteEntry> {
+            if let Some(entries) = self.slash_palette_entries_override.as_ref() {
+                return entries.clone();
+            }
+
             commands::completions(draft_prefix)
                 .into_iter()
                 .map(|spec| SlashPaletteEntry {
@@ -2623,6 +2677,83 @@ mod tests {
         assert!(
             text.contains("/review"),
             "matching command should be rendered: {text:?}"
+        );
+    }
+
+    #[test]
+    fn draw_scrolls_slash_command_palette_with_selection() {
+        let backend = TestBackend::new(96, 18);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let entries = (0..16)
+            .map(|index| SlashPaletteEntry {
+                replacement: format!("/cmd-{index}"),
+                label: format!("/cmd-{index}"),
+                meta: "Test".to_owned(),
+                detail: format!("detail {index}"),
+                immediate: false,
+                submit_on_select: false,
+            })
+            .collect::<Vec<_>>();
+        let shell = TestShell {
+            slash_palette_entries_override: Some(entries),
+            slash_command_selection: 12,
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.insert_str("/");
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("/cmd-12"),
+            "selected command should stay visible when scrolled: {text:?}"
+        );
+        assert!(
+            !text.contains("/cmd-0"),
+            "palette should scroll past the earliest commands: {text:?}"
+        );
+    }
+
+    #[test]
+    fn draw_command_palette_shows_more_than_three_commands() {
+        let backend = TestBackend::new(100, 22);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let shell = TestShell::idle();
+        let palette = Palette::dark();
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.insert_str("/");
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("/help"),
+            "palette should show /help: {text:?}"
+        );
+        assert!(
+            text.contains("/commands"),
+            "palette should show /commands: {text:?}"
+        );
+        assert!(text.contains("/new"), "palette should show /new: {text:?}");
+        assert!(
+            text.contains("/rename"),
+            "palette should show /rename: {text:?}"
+        );
+        assert!(
+            text.contains("/clear"),
+            "palette should show /clear: {text:?}"
         );
     }
 

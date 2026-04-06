@@ -2344,6 +2344,7 @@ dependencies = [
  "tui-textarea",
  "unicode-normalization",
  "unicode-segmentation",
+ "unicode-width 0.2.0",
  "wait-timeout",
  "which",
 ]

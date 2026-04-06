@@ -25,6 +25,9 @@ pub(super) trait StatusBarView {
     fn session_display_label(&self) -> Option<&str> {
         None
     }
+    fn workspace_display_label(&self) -> Option<&str> {
+        None
+    }
     fn busy_input_mode(&self) -> BusyInputMode;
     fn pending_submission_count(&self) -> usize {
         0
@@ -69,6 +72,9 @@ pub(super) fn render_status_bar(
         .session_display_label()
         .unwrap_or_else(|| pane.session_id());
     let session_display = truncate_str(raw_session_display, 16, "no session");
+    let workspace_display = pane
+        .workspace_display_label()
+        .map(|label| truncate_str(label, 22, "no workspace"));
 
     let total = pane.input_tokens().saturating_add(pane.output_tokens());
     let ctx = pane.context_length();
@@ -123,6 +129,16 @@ pub(super) fn render_status_bar(
         session_display,
         Style::default().fg(palette.dim),
     ));
+    if let Some(workspace_display) = workspace_display {
+        spans.push(Span::styled(
+            " · ".to_string(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(
+            workspace_display,
+            Style::default().fg(palette.dim),
+        ));
+    }
     spans.push(Span::styled(
         " · ".to_string(),
         Style::default().fg(palette.separator),
@@ -310,6 +326,7 @@ mod tests {
         output_tokens: u32,
         context_length: u32,
         session_id: String,
+        workspace_display_label: Option<String>,
         busy_input_mode: BusyInputMode,
         pending_submission_count: usize,
         running_task_count: Option<usize>,
@@ -336,6 +353,9 @@ mod tests {
         }
         fn session_id(&self) -> &str {
             &self.session_id
+        }
+        fn workspace_display_label(&self) -> Option<&str> {
+            self.workspace_display_label.as_deref()
         }
         fn busy_input_mode(&self) -> BusyInputMode {
             self.busy_input_mode
@@ -393,6 +413,7 @@ mod tests {
             output_tokens: 234,
             context_length: 10000,
             session_id: "sess-abc123".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -429,6 +450,7 @@ mod tests {
             output_tokens: 100,
             context_length: 10000,
             session_id: "sess-ops".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 1,
             running_task_count: Some(3),
@@ -509,6 +531,7 @@ mod tests {
             output_tokens: 100,
             context_length: 0,
             session_id: "s1".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -542,6 +565,7 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-live".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -578,6 +602,7 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-scroll".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -614,6 +639,7 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-input".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -650,6 +676,7 @@ mod tests {
             output_tokens: 0,
             context_length: 0,
             session_id: "sess-output".into(),
+            workspace_display_label: None,
             busy_input_mode: BusyInputMode::Queue,
             pending_submission_count: 0,
             running_task_count: None,
@@ -741,6 +768,7 @@ mod tests {
                 output_tokens: 0,
                 context_length: 0,
                 session_id: "sess-select".into(),
+                workspace_display_label: None,
                 busy_input_mode: BusyInputMode::Queue,
                 pending_submission_count: 0,
                 running_task_count: None,
@@ -766,6 +794,43 @@ mod tests {
         assert!(
             text.contains("SEL 4"),
             "status bar should show selection count: {text:?}"
+        );
+    }
+
+    #[test]
+    fn status_bar_shows_workspace_label_when_available() {
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let bar = TestBar {
+            model: "gpt-5.4".into(),
+            input_tokens: 800,
+            output_tokens: 200,
+            context_length: 10000,
+            session_id: "sess-workspace".into(),
+            workspace_display_label: Some("issue-689-tui-polish-clean".into()),
+            busy_input_mode: BusyInputMode::Queue,
+            pending_submission_count: 0,
+            running_task_count: None,
+            overdue_task_count: None,
+            pending_approval_count: None,
+            attention_approval_count: None,
+            visible_session_count: None,
+            scroll_offset: 0,
+            status_message: None,
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_status_bar(f, f.area(), &bar, FocusLayer::Composer, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+
+        assert!(
+            text.contains("issue-689-tui-polish"),
+            "status bar should include the workspace label: {text:?}"
         );
     }
 }

@@ -90,6 +90,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.12"
+unicode-width = "0.2"
 # Kept unconditional because conversation/turn_shared.rs uses Regex to strip
 # leaked <think> tags even when tool-websearch is compiled out.
 regex.workspace = true

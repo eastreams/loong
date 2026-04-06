@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Paragraph},
 };
+use unicode_width::UnicodeWidthStr;
 
 use super::focus::FocusLayer;
 use super::state::BusyInputMode;
@@ -31,6 +32,37 @@ pub(super) trait InputView {
 
 fn textarea_is_empty(textarea: &tui_textarea::TextArea<'_>) -> bool {
     textarea.lines().iter().all(|line| line.is_empty())
+}
+
+fn wrapped_visual_line_count(line: &str, content_width: usize) -> u16 {
+    let clamped_content_width = content_width.max(1);
+    let visual_width = UnicodeWidthStr::width(line);
+    if visual_width == 0 {
+        return 1;
+    }
+
+    let wrapped_lines = visual_width.div_ceil(clamped_content_width);
+    u16::try_from(wrapped_lines).unwrap_or(u16::MAX)
+}
+
+fn textarea_visual_line_count(textarea: &tui_textarea::TextArea<'_>, content_width: usize) -> u16 {
+    textarea
+        .lines()
+        .iter()
+        .map(|line| wrapped_visual_line_count(line, content_width))
+        .sum::<u16>()
+        .max(1)
+}
+
+pub(super) fn preferred_input_height(
+    textarea: &tui_textarea::TextArea<'_>,
+    area_width: u16,
+) -> u16 {
+    let content_width = usize::from(area_width.saturating_sub(4).max(1));
+    let visual_line_count = textarea_visual_line_count(textarea, content_width);
+    let required_height = visual_line_count.saturating_add(1);
+
+    required_height.max(3)
 }
 
 fn review_prompt_hint(selection_count: usize) -> &'static str {
@@ -451,6 +483,19 @@ mod tests {
         assert!(
             text.contains("Explain the layered kernel design"),
             "placeholder text should render inside the empty composer: {text:?}"
+        );
+    }
+
+    #[test]
+    fn preferred_input_height_grows_for_wrapped_wide_text() {
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.insert_str("派三个subagents去给我分别搜索一下今天的国际新闻");
+
+        let input_height = preferred_input_height(&textarea, 24);
+
+        assert!(
+            input_height > 3,
+            "wrapped CJK text should grow the input area: {input_height}"
         );
     }
 }
