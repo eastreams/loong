@@ -32,7 +32,6 @@ use crate::operator::delegate_runtime::{
     build_delegate_child_lifecycle_seed, next_delegate_child_depth,
 };
 use crate::runtime_self_continuity;
-use crate::tools::runtime_tool_view_for_config;
 
 use super::super::config::LoongClawConfig;
 use super::ConversationSessionAddress;
@@ -1160,9 +1159,10 @@ impl ConversationTurnCoordinator {
         runtime: &R,
         binding: ConversationRuntimeBinding<'_>,
     ) -> CliResult<ContextCompactionReport> {
-        let tool_view = runtime_tool_view_for_config(&config.tools);
+        let session_context = runtime.session_context(config, session_id, binding)?;
+        let tool_view = session_context.tool_view.clone();
         let before_messages = runtime
-            .build_messages(config, session_id, false, &tool_view, binding)
+            .build_messages(config, session_id, true, &tool_view, binding)
             .await?;
         let estimated_tokens_before = estimate_tokens(&before_messages);
         let compaction_outcome = maybe_compact_context(
@@ -1180,16 +1180,24 @@ impl ConversationTurnCoordinator {
         let mut estimated_tokens_after = estimated_tokens_before;
 
         if compaction_outcome == ContextCompactionOutcome::Completed {
-            let after_messages = runtime
-                .build_messages(config, session_id, false, &tool_view, binding)
-                .await?;
-            let did_change = before_messages != after_messages;
-            let next_estimated_tokens = estimate_tokens(&after_messages);
+            match runtime
+                .build_messages(config, session_id, true, &tool_view, binding)
+                .await
+            {
+                Ok(after_messages) => {
+                    let did_change = before_messages != after_messages;
+                    let next_estimated_tokens = estimate_tokens(&after_messages);
 
-            estimated_tokens_after = next_estimated_tokens;
+                    estimated_tokens_after = next_estimated_tokens;
 
-            if !did_change {
-                status = TurnCheckpointProgressStatus::Skipped;
+                    if !did_change {
+                        status = TurnCheckpointProgressStatus::Skipped;
+                    }
+                }
+                Err(_error) => {
+                    status = TurnCheckpointProgressStatus::Skipped;
+                    estimated_tokens_after = estimated_tokens_before;
+                }
             }
         }
 
@@ -6949,6 +6957,124 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "memory-sqlite")]
+    struct CompactSessionBuildMessagesRuntime {
+        session_tool_view: crate::tools::ToolView,
+        build_messages_calls: StdMutex<Vec<(bool, crate::tools::ToolView)>>,
+        fail_after_first_readback: bool,
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    impl CompactSessionBuildMessagesRuntime {
+        fn new(session_tool_view: crate::tools::ToolView, fail_after_first_readback: bool) -> Self {
+            Self {
+                session_tool_view,
+                build_messages_calls: StdMutex::new(Vec::new()),
+                fail_after_first_readback,
+            }
+        }
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[async_trait]
+    impl ConversationRuntime for CompactSessionBuildMessagesRuntime {
+        fn session_context(
+            &self,
+            _config: &LoongClawConfig,
+            session_id: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<SessionContext> {
+            Ok(SessionContext::root_with_tool_view(
+                session_id,
+                self.session_tool_view.clone(),
+            ))
+        }
+
+        async fn build_messages(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            include_system_prompt: bool,
+            tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<Vec<Value>> {
+            let mut build_messages_calls = self
+                .build_messages_calls
+                .lock()
+                .expect("build_messages lock should not be poisoned");
+            build_messages_calls.push((include_system_prompt, tool_view.clone()));
+            let call_count = build_messages_calls.len();
+
+            if self.fail_after_first_readback && call_count > 1 {
+                return Err("post-compaction readback failed".to_owned());
+            }
+
+            let tool_names = tool_view.tool_names().collect::<Vec<_>>();
+            let tool_names = tool_names.join(",");
+
+            Ok(vec![json!({
+                "role": "system",
+                "content": format!(
+                    "include_system_prompt={include_system_prompt} tools={tool_names}"
+                ),
+            })])
+        }
+
+        async fn request_completion(
+            &self,
+            _config: &LoongClawConfig,
+            _messages: &[Value],
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<String> {
+            Ok(String::new())
+        }
+
+        async fn request_turn(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn should not be called in compact_session tests")
+        }
+
+        async fn request_turn_streaming(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _turn_id: &str,
+            _messages: &[Value],
+            _tool_view: &crate::tools::ToolView,
+            _binding: ConversationRuntimeBinding<'_>,
+            _on_token: crate::provider::StreamingTokenCallback,
+        ) -> CliResult<ProviderTurn> {
+            panic!("request_turn_streaming should not be called in compact_session tests")
+        }
+
+        async fn persist_turn(
+            &self,
+            _session_id: &str,
+            _role: &str,
+            _content: &str,
+            _binding: ConversationRuntimeBinding<'_>,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+
+        async fn compact_context(
+            &self,
+            _config: &LoongClawConfig,
+            _session_id: &str,
+            _messages: &[Value],
+            _kernel_ctx: &KernelContext,
+        ) -> CliResult<()> {
+            Ok(())
+        }
+    }
+
     #[derive(Default)]
     struct ObserverStreamingRuntime {
         streaming_calls: StdMutex<usize>,
@@ -8235,6 +8361,114 @@ mod tests {
         assert_eq!(*compact_calls, 0);
 
         let _ = std::fs::remove_dir_all(&workspace_root_parent);
+        let _ = std::fs::remove_file(&sqlite_path);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_session_uses_session_context_tool_view_and_turn_like_build_flags() {
+        let mut config = LoongClawConfig::default();
+        let sqlite_path = unique_sqlite_path("compact-session-build-messages");
+        let _ = std::fs::remove_file(&sqlite_path);
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct(
+            "compact-session-build-messages",
+            "user",
+            "remember this detail",
+            &memory_config,
+        )
+        .expect("append user turn");
+
+        let expected_tool_view = crate::tools::ToolView::from_tool_names(["status.inspect"]);
+        let runtime = CompactSessionBuildMessagesRuntime::new(expected_tool_view.clone(), false);
+        let kernel_ctx = bootstrap_test_kernel_context("compact-session-build-messages", 3600)
+            .expect("bootstrap kernel context");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+        let coordinator = ConversationTurnCoordinator::new();
+
+        let report = coordinator
+            .compact_session_with_runtime(
+                &config,
+                "compact-session-build-messages",
+                &runtime,
+                binding,
+            )
+            .await
+            .expect("manual compaction should succeed");
+
+        assert!(report.was_skipped());
+
+        let build_messages_calls = runtime
+            .build_messages_calls
+            .lock()
+            .expect("build_messages lock should not be poisoned");
+        assert_eq!(build_messages_calls.len(), 2);
+        assert!(
+            build_messages_calls
+                .iter()
+                .all(|(include_system_prompt, _tool_view)| *include_system_prompt),
+            "compact_session should mirror turn assembly by keeping the system prompt enabled"
+        );
+        assert!(
+            build_messages_calls
+                .iter()
+                .all(|(_include_system_prompt, tool_view)| { *tool_view == expected_tool_view }),
+            "compact_session should reuse the session-context tool view for both snapshots"
+        );
+
+        let _ = std::fs::remove_file(&sqlite_path);
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[tokio::test]
+    async fn compact_session_skips_when_post_compaction_readback_fails() {
+        let mut config = LoongClawConfig::default();
+        let sqlite_path = unique_sqlite_path("compact-session-readback-fail");
+        let _ = std::fs::remove_file(&sqlite_path);
+        config.memory.sqlite_path = sqlite_path.display().to_string();
+
+        let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+        crate::memory::append_turn_direct(
+            "compact-session-readback-fail",
+            "user",
+            "keep the context intact",
+            &memory_config,
+        )
+        .expect("append user turn");
+
+        let runtime = CompactSessionBuildMessagesRuntime::new(
+            crate::tools::ToolView::from_tool_names(["status.inspect"]),
+            true,
+        );
+        let kernel_ctx = bootstrap_test_kernel_context("compact-session-readback-fail", 3600)
+            .expect("bootstrap kernel context");
+        let binding = ConversationRuntimeBinding::from_optional_kernel_context(Some(&kernel_ctx));
+        let coordinator = ConversationTurnCoordinator::new();
+
+        let report = coordinator
+            .compact_session_with_runtime(
+                &config,
+                "compact-session-readback-fail",
+                &runtime,
+                binding,
+            )
+            .await
+            .expect("manual compaction should degrade to skipped");
+
+        assert!(report.was_skipped());
+        assert_eq!(
+            report.estimated_tokens_after,
+            report.estimated_tokens_before
+        );
+
+        let build_messages_calls = runtime
+            .build_messages_calls
+            .lock()
+            .expect("build_messages lock should not be poisoned");
+        assert_eq!(build_messages_calls.len(), 2);
+
         let _ = std::fs::remove_file(&sqlite_path);
     }
 

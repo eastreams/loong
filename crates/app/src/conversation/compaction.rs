@@ -78,8 +78,8 @@ fn render_summary(turns: &[WindowTurn]) -> String {
         .into_iter()
         .filter_map(|idx| all_lines.get(idx).cloned())
         .collect::<Vec<_>>();
-    let omitted_turns = all_lines.len().saturating_sub(selected_lines.len());
-    render_structured_summary(&selected_lines, omitted_turns)
+    let omitted_lines = all_lines.len().saturating_sub(selected_lines.len());
+    render_structured_summary(&selected_lines, omitted_lines)
 }
 
 fn extend_summary_indices(
@@ -181,7 +181,7 @@ struct RenderedSummaryLine {
     is_user: bool,
 }
 
-fn render_structured_summary(lines: &[RenderedSummaryLine], omitted_turns: usize) -> String {
+fn render_structured_summary(lines: &[RenderedSummaryLine], omitted_lines: usize) -> String {
     let mut sections = Vec::new();
     let scope_note = runtime_self_continuity::compaction_summary_scope_note();
     sections.push(scope_note.to_owned());
@@ -192,9 +192,9 @@ fn render_structured_summary(lines: &[RenderedSummaryLine], omitted_turns: usize
     let assistant_lines = collect_summary_group(lines, false);
     append_summary_section(&mut sections, ASSISTANT_PROGRESS_HEADING, &assistant_lines);
 
-    if omitted_turns > 0 {
+    if omitted_lines > 0 {
         let omitted_line =
-            format!("{OMITTED_CONTEXT_PREFIX} {omitted_turns} earlier turns omitted.");
+            format!("{OMITTED_CONTEXT_PREFIX} {omitted_lines} earlier turns omitted.");
         sections.push(omitted_line);
     }
 
@@ -362,15 +362,12 @@ fn trim_to_chars(value: &str, max_chars: usize) -> String {
     let remaining_chars = max_chars - 3;
     let head_chars = remaining_chars / 2;
     let tail_chars = remaining_chars - head_chars;
+    let char_count = value.chars().count();
 
     let prefix = value.chars().take(head_chars).collect::<String>();
     let suffix = value
         .chars()
-        .rev()
-        .take(tail_chars)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
+        .skip(char_count.saturating_sub(tail_chars))
         .collect::<String>();
 
     format!("{prefix}...{suffix}")
