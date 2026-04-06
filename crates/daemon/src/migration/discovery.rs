@@ -426,7 +426,7 @@ fn memory_sqlite_path_looks_default(
         && candidate_path
             .parent()
             .and_then(Path::file_name)
-            .is_some_and(|component| component == ".loongclaw")
+            .is_some_and(|component| component == ".loong" || component == ".loongclaw")
 }
 
 fn map_surface_level(level: ImportSurfaceLevel) -> PreviewStatus {
