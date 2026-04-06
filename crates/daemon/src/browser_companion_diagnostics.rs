@@ -1,7 +1,7 @@
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
-#[cfg(unix)]
+#[cfg(any(test, unix))]
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
@@ -385,6 +385,11 @@ fn browser_companion_probe_shell_interpreter(command: &str) -> Option<String> {
     }
 
     Some(first_token.to_owned())
+}
+
+#[cfg(not(unix))]
+fn browser_companion_probe_shell_interpreter(_command: &str) -> Option<String> {
+    None
 }
 
 fn observed_output(stdout: &[u8], stderr: &[u8]) -> String {
