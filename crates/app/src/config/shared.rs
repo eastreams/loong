@@ -3,7 +3,7 @@ use std::{
     env,
     ffi::OsStr,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Once, OnceLock},
 };
 
 use loongclaw_contracts::SecretRef;
@@ -521,6 +521,43 @@ fn resolve_loongclaw_home(
         .unwrap_or_else(|| resolve_user_home(home, userprofile).join(".loong"))
 }
 
+static LEGACY_HOME_WARNING: Once = Once::new();
+
+/// Returns `Some(legacy_path)` if `~/.loongclaw` exists but `~/.loong` does not.
+fn detect_legacy_home(user_home: &Path) -> Option<PathBuf> {
+    let new_home = user_home.join(".loong");
+    if new_home.exists() {
+        return None;
+    }
+    let legacy_home = user_home.join(".loongclaw");
+    if legacy_home.exists() {
+        Some(legacy_home)
+    } else {
+        None
+    }
+}
+
+/// Prints a one-time migration hint to stderr when the legacy home directory
+/// exists but the new one does not.
+pub(super) fn warn_legacy_home_once() {
+    LEGACY_HOME_WARNING.call_once(|| {
+        let user_home = get_user_home();
+        if let Some(legacy) = detect_legacy_home(&user_home) {
+            let new_home = user_home.join(".loong");
+            eprintln!(
+                "[loong] Legacy home directory {} found, but {} does not exist.",
+                legacy.display(),
+                new_home.display(),
+            );
+            eprintln!(
+                "[loong] To migrate: mv {} {}",
+                legacy.display(),
+                new_home.display(),
+            );
+        }
+    });
+}
+
 pub(super) fn default_loongclaw_home() -> PathBuf {
     get_loongclaw_home()
 }
@@ -969,5 +1006,45 @@ mod tests {
         let resolved = default_loongclaw_home();
 
         assert_eq!(resolved, home.join(".loongclaw"));
+    }
+}
+
+#[cfg(test)]
+mod legacy_home_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn detect_legacy_home_finds_legacy_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let legacy = temp.path().join(".loongclaw");
+        fs::create_dir_all(&legacy).unwrap();
+        // .loong does NOT exist
+        let result = detect_legacy_home(temp.path());
+        assert!(
+            result.is_some(),
+            "should detect legacy home when .loongclaw exists but .loong does not"
+        );
+    }
+
+    #[test]
+    fn detect_legacy_home_no_warning_when_new_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let new_home = temp.path().join(".loong");
+        let legacy = temp.path().join(".loongclaw");
+        fs::create_dir_all(&new_home).unwrap();
+        fs::create_dir_all(&legacy).unwrap();
+        let result = detect_legacy_home(temp.path());
+        assert!(
+            result.is_none(),
+            "should not detect legacy when .loong already exists"
+        );
+    }
+
+    #[test]
+    fn detect_legacy_home_no_warning_fresh_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = detect_legacy_home(temp.path());
+        assert!(result.is_none(), "should not detect legacy on fresh install");
     }
 }
