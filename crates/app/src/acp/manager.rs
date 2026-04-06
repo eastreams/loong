@@ -263,23 +263,19 @@ impl AcpSessionManager {
                 metadata.touch();
                 self.store.upsert(metadata)?;
                 tracing::debug!(
-                                    target: "loongclaw.acp",
-                                    backend_id = %handle.backend_id,
-                                    has_trace_id,
-                                    state = ?result.state,
-                                    stop_reason = ?result.stop_reason,
-                                    reported_event_count,
-                                    streamed_event_count,
-                                    merged_event_count = result.events.len(),
-                                    end_to_end_duration_ms,
-                                    execution_duration_ms,
-                                    queue_wait_ms,
-                <<<<<<< HEAD
-                                    has_trace_id = redacted_trace_id.is_some(),
-                =======
-                >>>>>>> 74954002 (fix(conversation): harden delegate continuation and probe followups)
-                                    "ACP turn completed"
-                                );
+                    target: "loongclaw.acp",
+                    backend_id = %handle.backend_id,
+                    has_trace_id,
+                    state = ?result.state,
+                    stop_reason = ?result.stop_reason,
+                    reported_event_count,
+                    streamed_event_count,
+                    merged_event_count = result.events.len(),
+                    end_to_end_duration_ms,
+                    execution_duration_ms,
+                    queue_wait_ms,
+                    "ACP turn completed"
+                );
                 Ok(result)
             }
             Err(error) => {
