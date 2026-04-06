@@ -218,7 +218,7 @@ use super::telegram;
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
-use super::turn_feedback::ChannelTurnFeedbackCapture;
+use super::runtime::turn_feedback::ChannelTurnFeedbackCapture;
 #[cfg(any(
     feature = "channel-telegram",
     feature = "channel-feishu",
@@ -226,7 +226,7 @@ use super::turn_feedback::ChannelTurnFeedbackCapture;
     feature = "channel-wecom",
     feature = "channel-whatsapp",
 ))]
-use super::turn_feedback::ChannelTurnFeedbackPolicy;
+use super::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 #[cfg(feature = "channel-webhook")]
 use super::webhook;
 #[cfg(feature = "channel-wecom")]

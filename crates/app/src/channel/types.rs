@@ -60,7 +60,7 @@ use super::runtime_state::ChannelOperationRuntimeTracker;
     feature = "channel-wecom",
     feature = "channel-whatsapp"
 ))]
-use super::turn_feedback::ChannelTurnFeedbackPolicy;
+use super::runtime::turn_feedback::ChannelTurnFeedbackPolicy;
 use crate::CliResult;
 #[cfg(any(
     feature = "channel-telegram",
