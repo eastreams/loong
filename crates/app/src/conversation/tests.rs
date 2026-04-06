@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::super::config::{
-    AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
+    AuditMode, AutonomyProfile, LoongClawConfig, MemoryProfile, MemorySystemKind, ProviderConfig,
 };
 use super::persistence::format_provider_error_reply;
 use super::runtime::DefaultConversationRuntime;
@@ -1662,10 +1662,12 @@ impl ConversationRuntime for FakeRuntime {
 }
 
 fn test_config() -> LoongClawConfig {
-    LoongClawConfig {
+    let mut config = LoongClawConfig {
         provider: ProviderConfig::default(),
         ..LoongClawConfig::default()
-    }
+    };
+    config.audit.mode = AuditMode::InMemory;
+    config
 }
 
 fn enable_guided_autonomy(config: &mut LoongClawConfig) {
