@@ -6562,6 +6562,7 @@ async fn onboard_current_setup_shortcut_can_install_minimax_office_pack() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn onboard_detected_setup_shortcut_flow_skips_detailed_edit_screens() {
+    let _env_guard = DetectedEnvironmentGuard::without_detected_environment();
     let workspace_root = unique_temp_path("detected-shortcut-workspace");
     std::fs::create_dir_all(&workspace_root).expect("create workspace root");
     std::fs::write(workspace_root.join("AGENTS.md"), "# local guidance\n")
