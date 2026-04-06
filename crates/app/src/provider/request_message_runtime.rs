@@ -855,6 +855,7 @@ mod tests {
                 degraded: false,
                 derivation_error: None,
                 retrieval_error: None,
+                rank_error: None,
                 recent_window_count: 1,
                 entry_count: 0,
             },
