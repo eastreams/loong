@@ -15,6 +15,7 @@ mod context;
 #[cfg(feature = "memory-sqlite")]
 mod durable_flush;
 mod durable_recall;
+mod execution;
 mod kernel_adapter;
 mod orchestrator;
 mod protocol;
@@ -38,6 +39,10 @@ pub use context::load_prompt_context;
 #[cfg(feature = "memory-sqlite")]
 pub(crate) use durable_flush::flush_pre_compaction_durable_memory;
 pub(crate) use durable_recall::load_durable_recall_entries;
+pub use execution::{
+    BuiltinMemoryPreAssemblyExecutor, MemoryPreAssemblyContext, MemoryPreAssemblyExecutor,
+    RecallFirstMemoryPreAssemblyExecutor,
+};
 pub use kernel_adapter::MvpMemoryAdapter;
 pub(crate) use orchestrator::run_compact_stage;
 pub use orchestrator::{
@@ -65,7 +70,8 @@ pub use stage::{
 };
 pub use system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MEMORY_SYSTEM_API_VERSION, MemorySystem,
-    MemorySystemCapability, MemorySystemMetadata,
+    MemorySystemCapability, MemorySystemMetadata, RECALL_FIRST_MEMORY_SYSTEM_ID,
+    RecallFirstMemorySystem,
 };
 pub use system_registry::{
     MEMORY_SYSTEM_ENV, MemorySystemPolicySnapshot, MemorySystemRuntimeSnapshot,

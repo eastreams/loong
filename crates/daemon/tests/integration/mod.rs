@@ -1483,6 +1483,9 @@ fn render_memory_system_snapshot_text_reports_fail_open_policy() {
     assert!(rendered.contains(
         "- builtin api_version=1 capabilities=canonical_store,deterministic_summary,profile_note_projection,prompt_hydration pre_assembly_stages=derive,retrieve,rank"
     ));
+    assert!(rendered.contains(
+        "- recall_first api_version=1 capabilities=prompt_hydration pre_assembly_stages=retrieve,rank"
+    ));
 }
 
 #[test]
