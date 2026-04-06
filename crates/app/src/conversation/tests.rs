@@ -7000,6 +7000,14 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
     let entries = latest_discovery_payload["entries"]
         .as_array()
         .expect("tool discovery entries should be an array");
+    let prompt_frame_payloads =
+        persisted_conversation_event_payloads_by_name(&persisted, "provider_prompt_frame_snapshot");
+    let initial_prompt_frame = prompt_frame_payloads
+        .first()
+        .expect("initial prompt-frame snapshot should be persisted");
+    let followup_prompt_frame = prompt_frame_payloads
+        .get(1)
+        .expect("followup prompt-frame snapshot should be persisted");
 
     assert!(
         latest_discovery_payload["turn_id"]
@@ -7021,6 +7029,17 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
     assert!(
         entries.iter().all(|entry| entry.get("lease").is_none()),
         "persisted discovery state must not retain executable leases: {latest_discovery_payload:?}"
+    );
+    assert_eq!(prompt_frame_payloads.len(), 2);
+    assert_eq!(initial_prompt_frame["phase"], json!("initial"));
+    assert_eq!(followup_prompt_frame["phase"], json!("followup"));
+    assert_eq!(
+        initial_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"],
+        followup_prompt_frame["prompt_frame"]["stable_prefix_hash_sha256"]
+    );
+    assert_ne!(
+        initial_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"],
+        followup_prompt_frame["prompt_frame"]["turn_ephemeral_hash_sha256"]
     );
 }
 
