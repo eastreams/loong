@@ -672,35 +672,75 @@ async fn process_cli_chat_input(
     if is_exit_command(&runtime.config, input) {
         return Ok(CliChatLoopControl::Exit);
     }
-    if parse_exact_chat_command(input, &[CLI_CHAT_HELP_COMMAND], "usage: /help")? {
-        print_help();
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(parse_exact_chat_command(
+        input,
+        &[CLI_CHAT_HELP_COMMAND],
+        "usage: /help",
+    ))? {
+        ChatCommandMatchResult::Matched => {
+            print_help();
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = vec![usage];
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if is_cli_chat_status_command(input)? {
-        print_cli_chat_status(runtime, options).await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(is_cli_chat_status_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_cli_chat_status(runtime, options).await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = vec![usage];
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if is_manual_compaction_command(input)? {
-        print_manual_compaction(runtime).await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(is_manual_compaction_command(input))? {
+        ChatCommandMatchResult::Matched => {
+            print_manual_compaction(runtime).await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = vec![usage];
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
-    if parse_exact_chat_command(input, &[CLI_CHAT_HISTORY_COMMAND], "usage: /history")? {
-        #[cfg(feature = "memory-sqlite")]
-        print_history(
-            &runtime.session_id,
-            runtime.config.memory.sliding_window,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-            &runtime.memory_config,
-        )
-        .await?;
-        #[cfg(not(feature = "memory-sqlite"))]
-        print_history(
-            &runtime.session_id,
-            runtime.config.memory.sliding_window,
-            ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
-        )
-        .await?;
-        return Ok(CliChatLoopControl::Continue);
+    match classify_chat_command_match_result(parse_exact_chat_command(
+        input,
+        &[CLI_CHAT_HISTORY_COMMAND],
+        "usage: /history",
+    ))? {
+        ChatCommandMatchResult::Matched => {
+            #[cfg(feature = "memory-sqlite")]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+                &runtime.memory_config,
+            )
+            .await?;
+            #[cfg(not(feature = "memory-sqlite"))]
+            print_history(
+                &runtime.session_id,
+                runtime.config.memory.sliding_window,
+                ConversationRuntimeBinding::kernel(&runtime.kernel_ctx),
+            )
+            .await?;
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::UsageError(usage) => {
+            let usage_lines = vec![usage];
+            print_rendered_cli_chat_lines(&usage_lines);
+            return Ok(CliChatLoopControl::Continue);
+        }
+        ChatCommandMatchResult::NotMatched => {}
     }
     if let Some(limit) = parse_fast_lane_summary_limit(input, runtime.config.memory.sliding_window)?
     {
@@ -780,6 +820,24 @@ async fn process_cli_chat_input(
     Ok(CliChatLoopControl::AssistantText(
         run_cli_turn(runtime, input, event_sink, true).await?,
     ))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChatCommandMatchResult {
+    Matched,
+    NotMatched,
+    UsageError(String),
+}
+
+fn classify_chat_command_match_result(
+    result: CliResult<bool>,
+) -> CliResult<ChatCommandMatchResult> {
+    match result {
+        Ok(true) => Ok(ChatCommandMatchResult::Matched),
+        Ok(false) => Ok(ChatCommandMatchResult::NotMatched),
+        Err(error) if error.starts_with("usage:") => Ok(ChatCommandMatchResult::UsageError(error)),
+        Err(error) => Err(error),
+    }
 }
 
 fn detect_cli_chat_render_width() -> usize {
@@ -3894,17 +3952,6 @@ mod tests {
     }
 
     #[cfg(feature = "memory-sqlite")]
-    fn unique_memory_sqlite_path(suffix: &str) -> String {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("clock")
-            .as_nanos();
-        let file_name = format!("loongclaw-chat-{suffix}-{nanos}.sqlite");
-        let path = std::env::temp_dir().join(file_name);
-        path.display().to_string()
-    }
-
-    #[cfg(feature = "memory-sqlite")]
     fn test_kernel_context_with_memory(
         agent_id: &str,
         memory_config: &MemoryRuntimeConfig,
@@ -5094,6 +5141,32 @@ mod tests {
     }
 
     #[test]
+    fn render_turn_checkpoint_startup_health_lines_surface_non_durable_recovery() {
+        let summary = TurnCheckpointEventSummary {
+            session_state: TurnCheckpointSessionState::NotDurable,
+            checkpoint_durable: false,
+            reply_durable: false,
+            requires_recovery: true,
+            ..TurnCheckpointEventSummary::default()
+        };
+        let diagnostics = test_turn_checkpoint_diagnostics(summary, None);
+
+        let lines = render_turn_checkpoint_startup_health_lines_with_width(
+            "session-health",
+            &diagnostics,
+            80,
+        )
+        .expect("non-durable recovery should still render");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("recovery needed: yes")),
+            "startup health should surface non-durable recovery cases: {lines:#?}"
+        );
+    }
+
+    #[test]
     fn render_turn_checkpoint_status_health_lines_surface_non_durable_sessions() {
         let summary = TurnCheckpointEventSummary {
             session_state: TurnCheckpointSessionState::NotDurable,
@@ -6112,6 +6185,24 @@ allowed_decisions: yes / auto / full / esc";
     }
 
     #[test]
+    fn classify_chat_command_match_result_treats_usage_as_non_fatal() {
+        let usage_result =
+            classify_chat_command_match_result(Err("usage: /help".to_owned())).expect("classify");
+        assert_eq!(
+            usage_result,
+            ChatCommandMatchResult::UsageError("usage: /help".to_owned())
+        );
+
+        let matched_result =
+            classify_chat_command_match_result(Ok(true)).expect("classify matched");
+        assert_eq!(matched_result, ChatCommandMatchResult::Matched);
+
+        let not_matched_result =
+            classify_chat_command_match_result(Ok(false)).expect("classify non-match");
+        assert_eq!(not_matched_result, ChatCommandMatchResult::NotMatched);
+    }
+
+    #[test]
     fn manual_compaction_status_from_report_maps_failed_open() {
         let report = ContextCompactionReport {
             status: TurnCheckpointProgressStatus::FailedOpen,
@@ -6129,9 +6220,9 @@ allowed_decisions: yes / auto / full / esc";
     #[tokio::test]
     async fn manual_compaction_result_applies_and_surfaces_continuity_checkpoint() {
         let mut config = test_config();
-        let db_path = unique_memory_sqlite_path("chat-manual-compaction");
-        let _ = std::fs::remove_file(&db_path);
-        config.memory.sqlite_path = db_path.clone();
+        let sqlite_path = unique_chat_sqlite_path("chat-manual-compaction");
+        cleanup_chat_test_memory(&sqlite_path);
+        config.memory.sqlite_path = sqlite_path.display().to_string();
         config.memory.sliding_window = 32;
         config.conversation.compact_enabled = false;
         config.conversation.compact_preserve_recent_turns = 2;
@@ -6191,7 +6282,7 @@ allowed_decisions: yes / auto / full / esc";
             "manual compaction should persist the continuity-aware checkpoint"
         );
 
-        let _ = std::fs::remove_file(&db_path);
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     fn test_turn_checkpoint_diagnostics(
