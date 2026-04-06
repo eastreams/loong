@@ -1,7 +1,7 @@
 # Architecture Drift Report 2026-04
 
 ## Summary
-- Generated at: 2026-04-06T12:06:06Z
+- Generated at: 2026-04-06T13:15:36Z
 - Report month: `2026-04`
 - Baseline report: docs/releases/architecture-drift-2026-03.md
 - Hotspots tracked: 14
@@ -24,7 +24,7 @@
 | channel_mod | `structural_size,operational_density` | `crates/app/src/channel/mod.rs` | 1788 | 6400 | 4612 | 0 | 110 | 110 | 27.9% | HEALTHY | 1779 | 0.5% | PASS | 0 |
 | turn_coordinator | `structural_size,operational_density` | `crates/app/src/conversation/turn_coordinator.rs` | 10638 | 11200 | 562 | 94 | 120 | 26 | 95.0% | WATCH | 10831 | -1.8% | PASS | 98 |
 | tools_mod | `structural_size` | `crates/app/src/tools/mod.rs` | 14857 | 15000 | 143 | 53 | 70 | 17 | 99.0% | TIGHT | 14472 | 2.7% | PASS | 54 |
-| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6382 | 6500 | 118 | 198 | 210 | 12 | 98.2% | TIGHT | 6324 | 0.9% | PASS | 210 |
+| daemon_lib | `structural_size` | `crates/daemon/src/lib.rs` | 6384 | 6500 | 116 | 198 | 210 | 12 | 98.2% | TIGHT | 6324 | 0.9% | PASS | 210 |
 | onboard_cli | `structural_size` | `crates/daemon/src/onboard_cli.rs` | 9723 | 9800 | 77 | 235 | 250 | 15 | 99.2% | TIGHT | 9519 | 2.1% | PASS | 228 |
 
 ## Prioritization Signals
@@ -70,7 +70,7 @@
 <!-- arch-hotspot key=channel_mod lines=1788 functions=0 -->
 <!-- arch-hotspot key=turn_coordinator lines=10638 functions=94 -->
 <!-- arch-hotspot key=tools_mod lines=14857 functions=53 -->
-<!-- arch-hotspot key=daemon_lib lines=6382 functions=198 -->
+<!-- arch-hotspot key=daemon_lib lines=6384 functions=198 -->
 <!-- arch-hotspot key=onboard_cli lines=9723 functions=235 -->
 <!-- arch-boundary key=memory_literals status=PASS -->
 <!-- arch-boundary key=provider_mod_helper_definitions status=PASS -->
