@@ -6,8 +6,11 @@ const SUMMARY_MAX_RENDERED_TURNS: usize = 4;
 const SUMMARY_PREFERRED_USER_TURNS: usize = 3;
 const SUMMARY_PREFERRED_ASSISTANT_TURNS: usize = 1;
 const SUMMARY_TURN_EXCERPT_CHARS: usize = 96;
-const SUMMARY_TOTAL_CHARS_MAX: usize = 480;
+const COMPACTED_SUMMARY_MAX_CHARS: usize = 480;
+const SUMMARY_TOTAL_CHARS_MAX: usize = COMPACTED_SUMMARY_MAX_CHARS;
 const PRIOR_COMPACTED_SUMMARY_PLACEHOLDER: &str = "[prior compacted summary]";
+pub(crate) const COMPACTED_SUMMARY_MARKER: &str = "[session_local_recall_compacted_window]";
+const COMPACTED_SUMMARY_DISCLAIMER: &str = "This compacted checkpoint is session-local recall only. It does not replace Runtime Self Context, Resolved Runtime Identity, Session Profile, or advisory durable recall.";
 const USER_CONTEXT_HEADING: &str = "User context:";
 const ASSISTANT_PROGRESS_HEADING: &str = "Assistant progress:";
 const OMITTED_CONTEXT_PREFIX: &str = "More omitted context:";
@@ -39,11 +42,7 @@ pub fn compact_window(turns: &[WindowTurn], policy: CompactPolicy) -> Option<Vec
 
     let summary = WindowTurn {
         role: "user".to_owned(),
-        content: format!(
-            "{COMPACTED_SUMMARY_PREFIX}{} earlier turns\n{}",
-            older.len(),
-            render_summary(older)
-        ),
+        content: render_compacted_summary(older.len(), older),
         ts: older.last().and_then(|turn| turn.ts),
     };
 
@@ -175,6 +174,52 @@ fn select_balanced_indices(indices: &[usize], limit: usize) -> Vec<usize> {
     selected
 }
 
+fn render_compacted_summary(compacted_turn_count: usize, turns: &[WindowTurn]) -> String {
+    let rendered_summary = render_summary(turns);
+    let header_sections = [
+        COMPACTED_SUMMARY_MARKER.to_owned(),
+        COMPACTED_SUMMARY_DISCLAIMER.to_owned(),
+        format!("Compacted {compacted_turn_count} earlier turns"),
+    ];
+    let header = header_sections.join("\n");
+    let available_summary_chars =
+        COMPACTED_SUMMARY_MAX_CHARS.saturating_sub(header.chars().count().saturating_add(1));
+    let bounded_summary =
+        bound_compacted_summary_body(rendered_summary.as_str(), available_summary_chars);
+    let mut sections = Vec::new();
+
+    sections.extend(header_sections);
+    sections.push(bounded_summary);
+
+    sections.join("\n")
+}
+
+fn bound_compacted_summary_body(summary: &str, max_chars: usize) -> String {
+    let omitted_line = summary
+        .lines()
+        .last()
+        .filter(|line| line.starts_with("... "))
+        .map(str::to_owned);
+
+    let Some(omitted_line) = omitted_line else {
+        return trim_to_chars(summary, max_chars);
+    };
+
+    let body = summary
+        .strip_suffix(omitted_line.as_str())
+        .unwrap_or(summary)
+        .trim_end_matches('\n');
+    let reserved_chars = omitted_line.chars().count().saturating_add(1);
+    let body_chars = max_chars.saturating_sub(reserved_chars);
+    let bounded_body = trim_to_chars(body, body_chars);
+
+    if bounded_body.is_empty() {
+        return trim_to_chars(omitted_line.as_str(), max_chars);
+    }
+
+    format!("{bounded_body}\n{omitted_line}")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RenderedSummaryLine {
     text: String,
@@ -304,7 +349,7 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
         return Vec::new();
     }
 
-    if is_compacted_summary_content(&turn.content) {
+    if is_compacted_summary_content(turn.content.as_str()) {
         let lines = extract_prior_summary_lines(&turn.content);
         if !lines.is_empty() {
             return lines;
@@ -322,11 +367,15 @@ fn render_summary_lines(turn: &WindowTurn) -> Vec<RenderedSummaryLine> {
 }
 
 fn is_compacted_summary_turn(turn: &WindowTurn) -> bool {
-    is_compacted_summary_content(&turn.content)
+    is_compacted_summary_content(turn.content.as_str())
 }
 
 pub(crate) fn is_compacted_summary_content(content: &str) -> bool {
-    content.trim_start().starts_with(COMPACTED_SUMMARY_PREFIX)
+    let trimmed = content.trim_start();
+    let has_marker = trimmed.starts_with(COMPACTED_SUMMARY_MARKER);
+    let has_legacy_prefix = trimmed.starts_with(COMPACTED_SUMMARY_PREFIX);
+
+    has_marker || has_legacy_prefix
 }
 
 fn is_internal_assistant_event_turn(turn: &WindowTurn) -> bool {

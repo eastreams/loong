@@ -17045,6 +17045,121 @@ async fn load_fast_lane_tool_batch_event_summary_accepts_explicit_runtime_bindin
     let _ = std::fs::remove_file(&db_path);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn load_prompt_frame_event_summary_accepts_explicit_runtime_binding() {
+    let payloads = [json!({
+        "type": "conversation_event",
+        "event": "provider_prompt_frame_snapshot",
+        "payload": {
+            "provider_round": 1,
+            "phase": "initial",
+            "prompt_frame": {
+                "schema_version": 1,
+                "total_estimated_tokens": 42,
+                "stable_runtime_segment_count": 1,
+                "stable_runtime_estimated_tokens": 12,
+                "session_latched_segment_count": 1,
+                "session_latched_estimated_tokens": 8,
+                "advisory_profile_segment_count": 1,
+                "advisory_profile_estimated_tokens": 6,
+                "session_local_recall_segment_count": 1,
+                "session_local_recall_estimated_tokens": 5,
+                "recent_window_segment_count": 1,
+                "recent_window_estimated_tokens": 7,
+                "turn_ephemeral_segment_count": 0,
+                "turn_ephemeral_estimated_tokens": 0,
+                "stable_runtime_hash": "stable-a",
+                "session_latched_hash": "latched-a",
+                "stable_prefix_hash_sha256": "prefix-a",
+                "cached_prefix_sha256": "cached-a",
+                "advisory_profile_hash": "profile-a",
+                "session_local_recall_hash": "recall-a",
+                "recent_window_hash": "window-a",
+                "turn_ephemeral_hash": null
+            }
+        }
+    })
+    .to_string()];
+
+    let (db_path, mem_config) = prepare_discovery_first_summary_test(
+        "conversation-prompt-frame-summary",
+        "session-prompt-frame-summary-direct",
+        &payloads,
+    );
+
+    let direct_summary = load_prompt_frame_event_summary(
+        "session-prompt-frame-summary-direct",
+        40,
+        ConversationRuntimeBinding::direct(),
+        &mem_config,
+    )
+    .await
+    .expect("load prompt-frame summary via direct binding");
+    assert_eq!(direct_summary.snapshot_events, 1);
+    assert_eq!(direct_summary.initial_snapshot_events, 1);
+    assert_eq!(direct_summary.followup_snapshot_events, 0);
+    assert_eq!(direct_summary.latest_phase.as_deref(), Some("initial"));
+    assert_eq!(direct_summary.latest_total_estimated_tokens, Some(42));
+    assert_eq!(direct_summary.latest_stable_runtime_segment_count, Some(1));
+    assert_eq!(direct_summary.latest_session_latched_segment_count, Some(1));
+    assert_eq!(
+        direct_summary.latest_advisory_profile_segment_count,
+        Some(1)
+    );
+    assert_eq!(
+        direct_summary.latest_stable_prefix_hash.as_deref(),
+        Some("prefix-a")
+    );
+    assert_eq!(
+        direct_summary.latest_cached_prefix_hash.as_deref(),
+        Some("cached-a")
+    );
+
+    let audit = Arc::new(InMemoryAuditSink::default());
+    let (kernel_ctx, invocations) =
+        build_kernel_context_with_window_turns(audit, discovery_first_window_turns(&payloads));
+
+    let kernel_summary = load_prompt_frame_event_summary(
+        "session-prompt-frame-summary-kernel",
+        56,
+        ConversationRuntimeBinding::kernel(&kernel_ctx),
+        &mem_config,
+    )
+    .await
+    .expect("load prompt-frame summary via kernel binding");
+    assert_eq!(kernel_summary.snapshot_events, 1);
+    assert_eq!(kernel_summary.initial_snapshot_events, 1);
+    assert_eq!(kernel_summary.followup_snapshot_events, 0);
+    assert_eq!(kernel_summary.latest_phase.as_deref(), Some("initial"));
+    assert_eq!(kernel_summary.latest_total_estimated_tokens, Some(42));
+    assert_eq!(kernel_summary.latest_stable_runtime_segment_count, Some(1));
+    assert_eq!(kernel_summary.latest_session_latched_segment_count, Some(1));
+    assert_eq!(
+        kernel_summary.latest_advisory_profile_segment_count,
+        Some(1)
+    );
+    assert_eq!(
+        kernel_summary.latest_stable_prefix_hash.as_deref(),
+        Some("prefix-a")
+    );
+    assert_eq!(
+        kernel_summary.latest_cached_prefix_hash.as_deref(),
+        Some("cached-a")
+    );
+
+    let captured = invocations.lock().expect("invocations lock");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].operation, crate::memory::MEMORY_OP_WINDOW);
+    assert_eq!(
+        captured[0].payload["session_id"],
+        "session-prompt-frame-summary-kernel"
+    );
+    assert_eq!(captured[0].payload["limit"], json!(56));
+    assert_eq!(captured[0].payload["allow_extended_limit"], json!(true));
+
+    let _ = std::fs::remove_file(&db_path);
+}
+
 #[cfg(not(feature = "memory-sqlite"))]
 #[tokio::test]
 async fn persist_turn_without_memory_sqlite_is_noop_with_kernel_context() {
@@ -25672,7 +25787,7 @@ async fn durable_turn_checkpoint_repair_persists_failed_terminal_checkpoint_then
 
 #[test]
 fn compact_window_preserves_recent_turns_and_summarizes_history() {
-    use super::compaction::{CompactPolicy, compact_window};
+    use super::compaction::{COMPACTED_SUMMARY_MARKER, CompactPolicy, compact_window};
 
     let turns = vec![
         crate::memory::WindowTurn {
@@ -25711,6 +25826,8 @@ fn compact_window_preserves_recent_turns_and_summarizes_history() {
 
     assert_eq!(compacted.len(), 3);
     assert_eq!(compacted[0].role, "user");
+    assert!(compacted[0].content.contains(COMPACTED_SUMMARY_MARKER));
+    assert!(compacted[0].content.contains("session-local recall only"));
     assert!(compacted[0].content.contains("Compacted 4 earlier turns"));
     assert!(
         compacted[0]
@@ -25720,6 +25837,41 @@ fn compact_window_preserves_recent_turns_and_summarizes_history() {
     assert!(compacted[0].content.contains("User context:"));
     assert_eq!(compacted[1].content, "recent ask");
     assert_eq!(compacted[2].content, "recent reply");
+}
+
+#[test]
+fn compact_window_marks_compacted_summary_as_session_local_recall() {
+    use super::compaction::{COMPACTED_SUMMARY_MARKER, CompactPolicy, compact_window};
+
+    let turns = vec![
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "older ask".into(),
+            ts: Some(1),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "older reply".into(),
+            ts: Some(2),
+        },
+        crate::memory::WindowTurn {
+            role: "user".into(),
+            content: "recent ask".into(),
+            ts: Some(3),
+        },
+        crate::memory::WindowTurn {
+            role: "assistant".into(),
+            content: "recent reply".into(),
+            ts: Some(4),
+        },
+    ];
+
+    let compacted = compact_window(&turns, CompactPolicy::new(2)).expect("should compact");
+    let summary = compacted[0].content.as_str();
+
+    assert!(summary.starts_with(COMPACTED_SUMMARY_MARKER));
+    assert!(summary.contains("Runtime Self Context"));
+    assert!(summary.contains("Resolved Runtime Identity"));
 }
 
 #[test]

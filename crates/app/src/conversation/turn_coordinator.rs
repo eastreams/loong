@@ -31,6 +31,8 @@ use crate::runtime_self_continuity;
 
 use super::super::config::{LoongClawConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
+use super::PromptFrame;
+use super::PromptFrameSummary;
 use super::ProviderErrorMode;
 use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
@@ -492,6 +494,7 @@ struct SafeLaneRoundExecution {
 struct ProviderTurnSessionState {
     messages: Vec<Value>,
     estimated_tokens: Option<usize>,
+    prompt_frame: PromptFrame,
 }
 
 impl ProviderTurnSessionState {
@@ -500,7 +503,15 @@ impl ProviderTurnSessionState {
         user_input: &str,
         ingress: Option<&ConversationIngressContext>,
     ) -> Self {
-        let mut messages = assembled_context.messages;
+        let AssembledConversationContext {
+            messages,
+            artifacts,
+            estimated_tokens,
+            prompt_fragments,
+            system_prompt_addition,
+        } = assembled_context;
+        let mut messages = messages;
+        let turn_ephemeral_start_index = messages.len();
         if let Some(ingress) = ingress.filter(|value| value.has_contextual_hints()) {
             messages.push(ingress.as_system_message());
         }
@@ -508,9 +519,24 @@ impl ProviderTurnSessionState {
             "role": "user",
             "content": user_input,
         }));
-        Self {
+        let prompt_frame = PromptFrame::from_context_parts(
+            prompt_fragments.as_slice(),
+            messages.as_slice(),
+            artifacts.as_slice(),
+            estimated_tokens,
+            Some(turn_ephemeral_start_index),
+        );
+        let assembled_context = AssembledConversationContext {
             messages,
-            estimated_tokens: assembled_context.estimated_tokens,
+            artifacts,
+            estimated_tokens,
+            prompt_fragments,
+            system_prompt_addition,
+        };
+        Self {
+            messages: assembled_context.messages,
+            estimated_tokens,
+            prompt_frame,
         }
     }
 
@@ -521,6 +547,10 @@ impl ProviderTurnSessionState {
             "content": reply,
         }));
         messages
+    }
+
+    fn prompt_frame_summary(&self) -> &PromptFrameSummary {
+        &self.prompt_frame.summary
     }
 }
 
@@ -599,10 +629,18 @@ impl ProviderTurnPreparation {
     }
 
     fn for_followup_messages(&self, messages: Vec<Value>) -> Self {
+        let base_message_count = self.session.messages.len();
+        let followup_tail_slice = messages.get(base_message_count..);
+        let followup_tail_messages = followup_tail_slice.unwrap_or(&[]).to_vec();
+        let prompt_frame = self
+            .session
+            .prompt_frame
+            .with_turn_ephemeral_messages(followup_tail_messages.as_slice(), None);
         Self {
             session: ProviderTurnSessionState {
                 messages,
                 estimated_tokens: None,
+                prompt_frame,
             },
             lane_plan: self.lane_plan.clone(),
             raw_tool_output_requested: self.raw_tool_output_requested,
@@ -3087,6 +3125,15 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                             followup_context_estimated_tokens,
                         );
                     observe_turn_phase(observer, followup_request_event);
+                    emit_prompt_frame_event(
+                        runtime,
+                        session_id,
+                        next_provider_round,
+                        "followup",
+                        followup_preparation.session.prompt_frame_summary(),
+                        binding,
+                    )
+                    .await;
                     emit_discovery_first_event(
                         runtime,
                         session_id,
@@ -3393,6 +3440,29 @@ async fn emit_discovery_first_event<R: ConversationRuntime + ?Sized>(
             },
         );
     }
+}
+
+async fn emit_prompt_frame_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    session_id: &str,
+    provider_round: usize,
+    phase: &str,
+    summary: &PromptFrameSummary,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    let payload = json!({
+        "provider_round": provider_round,
+        "phase": phase,
+        "prompt_frame": summary.to_event_payload(),
+    });
+    let _ = persist_conversation_event(
+        runtime,
+        session_id,
+        "provider_prompt_frame_snapshot",
+        payload,
+        binding,
+    )
+    .await;
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -9323,6 +9393,16 @@ mod tests {
         assert_eq!(session.messages.len(), 2);
         assert_eq!(session.messages[1]["role"], "user");
         assert_eq!(session.messages[1]["content"], "hello world");
+        assert_eq!(
+            session.prompt_frame_summary().turn_ephemeral_segment_count,
+            1
+        );
+        assert!(
+            session
+                .prompt_frame_summary()
+                .turn_ephemeral_estimated_tokens
+                > 0
+        );
     }
 
     #[test]
@@ -9366,6 +9446,84 @@ mod tests {
         assert_eq!(phase.after_turn_messages().len(), 3);
         assert_eq!(phase.after_turn_messages()[2]["role"], "assistant");
         assert_eq!(phase.after_turn_messages()[2]["content"], "done");
+    }
+
+    #[test]
+    fn provider_turn_followup_preparation_preserves_stable_prefix_hash_and_updates_tail_hash() {
+        let base_fragment = crate::conversation::PromptFragment::new(
+            "base-system",
+            crate::conversation::PromptLane::BaseSystem,
+            "base-system",
+            "base system prompt",
+            crate::conversation::ContextArtifactKind::SystemPrompt,
+        )
+        .with_cacheable(true);
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                serde_json::json!({
+                    "role": "system",
+                    "content": "base system prompt"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "recent assistant turn"
+                }),
+            ],
+            artifacts: vec![
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: crate::conversation::ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: crate::conversation::ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: Some(24),
+            prompt_fragments: vec![base_fragment],
+            system_prompt_addition: None,
+        };
+        let preparation = ProviderTurnPreparation::from_assembled_context(
+            &LoongClawConfig::default(),
+            assembled,
+            "use the recent result",
+            None,
+        );
+        let mut followup_messages = preparation.session.messages.clone();
+
+        followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] compacted tail"
+        }));
+        followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue"
+        }));
+
+        let followup_preparation = preparation.for_followup_messages(followup_messages);
+        let initial_summary = preparation.session.prompt_frame_summary();
+        let followup_summary = followup_preparation.session.prompt_frame_summary();
+
+        assert_eq!(
+            initial_summary.stable_prefix_hash_sha256,
+            followup_summary.stable_prefix_hash_sha256
+        );
+        assert_eq!(
+            initial_summary.cached_prefix_sha256,
+            followup_summary.cached_prefix_sha256
+        );
+        assert_ne!(
+            initial_summary.turn_ephemeral_hash_sha256,
+            followup_summary.turn_ephemeral_hash_sha256
+        );
+        assert!(
+            followup_summary.turn_ephemeral_segment_count
+                > initial_summary.turn_ephemeral_segment_count
+        );
     }
 
     #[test]

@@ -13,6 +13,7 @@ pub mod plan_executor;
 pub mod plan_ir;
 pub mod plan_verifier;
 mod prompt_fragments;
+mod prompt_frame;
 mod prompt_orchestrator;
 mod runtime;
 mod runtime_binding;
@@ -36,14 +37,14 @@ pub(crate) mod workspace_isolation;
 
 pub use analytics::{
     ConversationEventRecord, DiscoveryFirstEventSummary, FastLaneToolBatchEventSummary,
-    FastLaneToolBatchSegmentSnapshot, SafeLaneEventSummary, SafeLaneFinalStatus,
-    SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot, SafeLaneToolOutputSnapshot,
-    TurnCheckpointEventSummary, TurnCheckpointFailureStep, TurnCheckpointProgressStatus,
-    TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason, TurnCheckpointRepairPlan,
-    TurnCheckpointSessionState, TurnCheckpointStage, build_turn_checkpoint_repair_plan,
-    parse_conversation_event, plan_turn_checkpoint_recovery, summarize_discovery_first_events,
-    summarize_fast_lane_tool_batch_events, summarize_safe_lane_events,
-    summarize_turn_checkpoint_events,
+    FastLaneToolBatchSegmentSnapshot, PromptFrameEventSummary, SafeLaneEventSummary,
+    SafeLaneFinalStatus, SafeLaneHealthSignalSnapshot, SafeLaneMetricsSnapshot,
+    SafeLaneToolOutputSnapshot, TurnCheckpointEventSummary, TurnCheckpointFailureStep,
+    TurnCheckpointProgressStatus, TurnCheckpointRecoveryAction, TurnCheckpointRepairManualReason,
+    TurnCheckpointRepairPlan, TurnCheckpointSessionState, TurnCheckpointStage,
+    build_turn_checkpoint_repair_plan, parse_conversation_event, plan_turn_checkpoint_recovery,
+    summarize_discovery_first_events, summarize_fast_lane_tool_batch_events,
+    summarize_prompt_frame_events, summarize_safe_lane_events, summarize_turn_checkpoint_events,
 };
 pub(crate) use compaction::is_compacted_summary_content;
 pub use context_engine::{
@@ -65,7 +66,14 @@ pub use ingress::{
     ConversationIngressPrivateContext,
 };
 pub use lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
-pub use prompt_fragments::{PromptFragment, PromptLane, PromptRenderPolicy};
+pub use prompt_fragments::{
+    PromptFragment, PromptFrameAuthority, PromptFrameLayer, PromptLane, PromptRenderPolicy,
+};
+pub use prompt_frame::{
+    PromptFrame, PromptFrameBucketSummary, PromptFrameFragmentSummary, PromptFrameLayerStats,
+    PromptFrameMessageSummary, PromptFrameSummary, summarize_assembled_prompt_frame,
+    summarize_followup_prompt_frame,
+};
 pub use prompt_orchestrator::{PromptCompilation, PromptCompiler};
 #[allow(unused_imports)]
 pub use runtime::{
@@ -89,6 +97,7 @@ pub use session_address::{
 };
 pub use session_history::{
     load_discovery_first_event_summary, load_discovery_first_event_summary_with_kernel_context,
+    load_prompt_frame_event_summary,
 };
 pub use session_history::{
     load_fast_lane_tool_batch_event_summary, load_safe_lane_event_summary,
