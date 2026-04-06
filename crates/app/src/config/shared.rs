@@ -985,7 +985,7 @@ mod tests {
         let resolved =
             resolve_loongclaw_home(Some(std::ffi::OsStr::new("")), Some(home.as_os_str()), None);
 
-        assert_eq!(resolved, home.join(".loongclaw"));
+        assert_eq!(resolved, home.join(".loong"));
     }
 
     #[test]
@@ -1002,7 +1002,7 @@ mod tests {
 
         let resolved = default_loongclaw_home();
 
-        assert_eq!(resolved, home.join(".loongclaw"));
+        assert_eq!(resolved, home.join(".loong"));
     }
 }
 
