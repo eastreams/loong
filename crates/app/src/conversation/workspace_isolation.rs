@@ -93,9 +93,10 @@ pub(super) fn cleanup_delegate_workspace_root(
 }
 
 fn resolve_git_repo_root(base_root: &Path) -> Result<PathBuf, String> {
+    let base_root_arg = git_command_path_arg(base_root);
     let args = [
         OsStr::new("-C"),
-        base_root.as_os_str(),
+        base_root_arg.as_os_str(),
         OsStr::new("rev-parse"),
         OsStr::new("--show-toplevel"),
     ];
@@ -154,13 +155,15 @@ fn remove_stale_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
 }
 
 fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), String> {
+    let repo_root_arg = git_command_path_arg(repo_root);
+    let worktree_root_arg = git_command_path_arg(worktree_root);
     let args = [
         OsStr::new("-C"),
-        repo_root.as_os_str(),
+        repo_root_arg.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("add"),
         OsStr::new("--detach"),
-        worktree_root.as_os_str(),
+        worktree_root_arg.as_os_str(),
         OsStr::new("HEAD"),
     ];
     let output = run_git_command(&args)?;
@@ -177,13 +180,15 @@ fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), S
 
 fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
     let repo_root = resolve_git_repo_root(worktree_root)?;
+    let repo_root_arg = git_command_path_arg(repo_root.as_path());
+    let worktree_root_arg = git_command_path_arg(worktree_root);
     let args = [
         OsStr::new("-C"),
-        repo_root.as_os_str(),
+        repo_root_arg.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
-        worktree_root.as_os_str(),
+        worktree_root_arg.as_os_str(),
     ];
     let display_path = worktree_root.display();
 
@@ -199,6 +204,9 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
             }
 
             let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            if should_treat_missing_worktree_as_removed(worktree_root, stderr.as_str()) {
+                return Ok(());
+            }
             let has_retry_budget = attempt_index + 1 < REMOVE_RETRY_ATTEMPTS;
             let should_retry =
                 has_retry_budget && should_retry_delegate_worktree_remove(stderr.as_str());
@@ -221,6 +229,9 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
         }
 
         let stderr = String::from_utf8_lossy(&output.stderr);
+        if should_treat_missing_worktree_as_removed(worktree_root, stderr.as_ref()) {
+            return Ok(());
+        }
         return Err(format!(
             "remove delegate worktree `{display_path}` failed: {stderr}"
         ));
@@ -236,10 +247,24 @@ fn should_retry_delegate_worktree_remove(stderr: &str) -> bool {
     lowercase_stderr.contains("permission denied") || lowercase_stderr.contains("access is denied")
 }
 
+fn should_treat_missing_worktree_as_removed(worktree_root: &Path, stderr: &str) -> bool {
+    let lowercase_stderr = stderr.to_ascii_lowercase();
+    let reports_missing_worktree = lowercase_stderr.contains("is not a working tree");
+    if !reports_missing_worktree {
+        return false;
+    }
+    if !worktree_root.exists() {
+        return true;
+    }
+
+    std::fs::remove_dir_all(worktree_root).is_ok() || !worktree_root.exists()
+}
+
 fn delegate_worktree_is_dirty(workspace_root: &Path) -> Result<bool, String> {
+    let workspace_root_arg = git_command_path_arg(workspace_root);
     let args = [
         OsStr::new("-C"),
-        workspace_root.as_os_str(),
+        workspace_root_arg.as_os_str(),
         OsStr::new("status"),
         OsStr::new("--porcelain"),
     ];
@@ -262,6 +287,21 @@ fn run_git_command(args: &[&OsStr]) -> Result<std::process::Output, String> {
         .args(args)
         .output()
         .map_err(|error| format!("spawn git command failed: {error}"))
+}
+
+fn git_command_path_arg(path: &Path) -> OsString {
+    #[cfg(windows)]
+    {
+        let raw_path = path.as_os_str().to_string_lossy();
+        if let Some(stripped) = raw_path.strip_prefix(r"\\?\UNC\") {
+            return OsString::from(format!(r"\\{stripped}"));
+        }
+        if let Some(stripped) = raw_path.strip_prefix(r"\\?\") {
+            return OsString::from(stripped);
+        }
+    }
+
+    path.as_os_str().to_os_string()
 }
 
 pub(crate) fn resolve_git_executable() -> Result<&'static Path, String> {
