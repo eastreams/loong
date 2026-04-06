@@ -688,6 +688,14 @@ pub enum ProviderKind {
     VolcengineCoding,
     #[serde(alias = "xai_compatible", alias = "grok")]
     Xai,
+    #[serde(
+        alias = "xiaomi_compatible",
+        alias = "xiaomi_mimo",
+        alias = "xiaomi-mimo",
+        alias = "mimo",
+        alias = "mimo_compatible"
+    )]
+    Xiaomi,
     #[serde(alias = "zai_compatible", alias = "z.ai")]
     Zai,
     #[serde(alias = "zhipu_compatible", alias = "glm", alias = "bigmodel")]
@@ -2560,6 +2568,7 @@ impl ProviderKind {
             ProviderKind::Volcengine => "Volcengine",
             ProviderKind::VolcengineCoding => "Volcengine Coding",
             ProviderKind::Xai => "xAI",
+            ProviderKind::Xiaomi => "Xiaomi",
             ProviderKind::Zai => "Z.ai",
             ProviderKind::Zhipu => "Zhipu",
         }
@@ -2610,6 +2619,7 @@ impl ProviderKind {
             volcengine,
             volcengine_coding,
             xai,
+            xiaomi,
             zai,
             zhipu,
         ] = &PROVIDER_PROFILES;
@@ -2654,6 +2664,7 @@ impl ProviderKind {
             ProviderKind::Volcengine => volcengine,
             ProviderKind::VolcengineCoding => volcengine_coding,
             ProviderKind::Xai => xai,
+            ProviderKind::Xiaomi => xiaomi,
             ProviderKind::Zai => zai,
             ProviderKind::Zhipu => zhipu,
         }
@@ -2855,7 +2866,8 @@ impl ProviderKind {
             | ProviderKind::Vllm
             | ProviderKind::Volcengine
             | ProviderKind::VolcengineCoding
-            | ProviderKind::Xai => None,
+            | ProviderKind::Xai
+            | ProviderKind::Xiaomi => None,
         }
     }
 
@@ -2991,7 +3003,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -3031,11 +3043,12 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 41] = [
     ProviderKind::Volcengine,
     ProviderKind::VolcengineCoding,
     ProviderKind::Xai,
+    ProviderKind::Xiaomi,
     ProviderKind::Zai,
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 41] = [
+const PROVIDER_PROFILES: [ProviderProfile; 42] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -3714,6 +3727,29 @@ const PROVIDER_PROFILES: [ProviderProfile; 41] = [
         default_headers: &[],
         default_api_key_env: Some("XAI_API_KEY"),
         api_key_env_aliases: &[],
+        default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::Xiaomi,
+        id: "xiaomi",
+        aliases: &[
+            "xiaomi_compatible",
+            "xiaomi_mimo",
+            "xiaomi-mimo",
+            "mimo",
+            "mimo_compatible",
+        ],
+        base_url: "https://api.xiaomimimo.com",
+        chat_completions_path: "/v1/chat/completions",
+        models_path: Some("/v1/models"),
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[],
+        default_api_key_env: Some("XIAOMI_API_KEY"),
+        api_key_env_aliases: &["MIMO_API_KEY", "XIAOMIMIMO_API_KEY"],
         default_user_agent: None,
         default_oauth_access_token_env: None,
         oauth_access_token_env_aliases: &[],
@@ -4760,6 +4796,10 @@ api_key_env = "OPENAI_API_KEY"
         assert_eq!(
             ProviderKind::Minimax.recommended_onboarding_model(),
             Some("MiniMax-M2.7")
+        );
+        assert_eq!(
+            ProviderKind::Xiaomi.recommended_onboarding_model(),
+            Some("mimo-v2-flash")
         );
         assert_eq!(
             ProviderKind::KimiCoding.recommended_onboarding_model(),

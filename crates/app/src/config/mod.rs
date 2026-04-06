@@ -485,6 +485,7 @@ mod tests {
                 "volcengine",
                 "volcengine_coding",
                 "xai",
+                "xiaomi",
                 "zai",
                 "zhipu"
             ]
@@ -529,6 +530,10 @@ mod tests {
                 "https://ark.cn-beijing.volces.com/api/v3/chat/completions",
             ),
             (ProviderKind::Xai, "https://api.x.ai/v1/chat/completions"),
+            (
+                ProviderKind::Xiaomi,
+                "https://api.xiaomimimo.com/v1/chat/completions",
+            ),
             (
                 ProviderKind::Zai,
                 "https://api.z.ai/api/paas/v4/chat/completions",
