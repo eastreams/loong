@@ -1196,7 +1196,7 @@ async fn multi_channel_serve_ctrl_c_waits_for_background_joins_and_reports_shutd
 #[tokio::test(flavor = "current_thread")]
 async fn multi_channel_serve_cooperative_stop_clears_channel_runtime_running_state() {
     let temp_home = unique_runtime_dir("cooperative-stop-home");
-    let runtime_dir = temp_home.join(".loongclaw").join("channel-runtime");
+    let runtime_dir = temp_home.join(".loong").join("channel-runtime");
     let _env =
         MigrationEnvironmentGuard::set(&[("HOME", Some(temp_home.to_string_lossy().as_ref()))]);
     let runtime_entered = Arc::new(Notify::new());
