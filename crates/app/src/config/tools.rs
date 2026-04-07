@@ -19,7 +19,9 @@ pub const DEFAULT_BROWSER_MAX_TEXT_CHARS: usize = 6000;
 pub const DEFAULT_BROWSER_COMPANION_TIMEOUT_SECONDS: u64 = 30;
 pub const DEFAULT_RUNTIME_SELF_MAX_SOURCE_CHARS: usize = 20_000;
 pub const DEFAULT_RUNTIME_SELF_MAX_TOTAL_CHARS: usize = 150_000;
+pub const DEFAULT_DELEGATE_MAX_FROZEN_BYTES: usize = 256 * 1024;
 pub const DEFAULT_EXTERNAL_SKILLS_BLOCKED_DOMAIN_RULES: [&str; 1] = ["*.clawhub.io"];
+pub(crate) const MIN_DELEGATE_MAX_FROZEN_BYTES: usize = 1;
 pub(crate) const MIN_WEB_FETCH_MAX_BYTES: usize = 1024;
 pub const MAX_WEB_FETCH_MAX_BYTES: usize = 5 * 1024 * 1024;
 pub(crate) const MIN_WEB_FETCH_TIMEOUT_SECONDS: usize = 1;
@@ -826,7 +828,7 @@ impl ToolConfig {
         if let Err(issue) = validate_numeric_range(
             "tools.delegate.max_frozen_bytes",
             self.delegate.max_frozen_bytes,
-            1,
+            MIN_DELEGATE_MAX_FROZEN_BYTES,
             usize::MAX,
         ) {
             issues.push(*issue);
@@ -1260,7 +1262,7 @@ const fn default_delegate_timeout_seconds() -> u64 {
 }
 
 const fn default_delegate_max_frozen_bytes() -> usize {
-    256 * 1024
+    DEFAULT_DELEGATE_MAX_FROZEN_BYTES
 }
 
 const fn default_browser_max_sessions() -> usize {
@@ -1352,7 +1354,10 @@ mod tests {
         assert_eq!(config.delegate.max_depth, 1);
         assert_eq!(config.delegate.max_active_children, 5);
         assert_eq!(config.delegate.timeout_seconds, 60);
-        assert_eq!(config.delegate.max_frozen_bytes, 256 * 1024);
+        assert_eq!(
+            config.delegate.max_frozen_bytes,
+            DEFAULT_DELEGATE_MAX_FROZEN_BYTES
+        );
         assert_eq!(
             config.delegate.child_tool_allowlist,
             vec![

@@ -69,6 +69,16 @@ pub struct SqliteContextLoadDiagnostics {
     pub summary_catch_up_ms: f64,
 }
 
+const SESSION_TERMINAL_OUTCOMES_TABLE_SQL: &str = "
+CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
+  session_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  frozen_result_json TEXT NULL,
+  recorded_at INTEGER NOT NULL
+);
+";
+
 #[derive(Debug, Clone, Default)]
 struct SqliteConnectionBootstrapDiagnostics {
     parent_dir_create_ms: f64,
@@ -1753,16 +1763,12 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         );
         CREATE INDEX IF NOT EXISTS idx_session_events_session_id
           ON session_events(session_id, id);
-        CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
-          session_id TEXT PRIMARY KEY,
-          status TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          frozen_result_json TEXT NULL,
-          recorded_at INTEGER NOT NULL
-        );
         ",
     )
     .map_err(|error| format!("backfill session turn index metadata failed: {error}"))?;
+
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_TABLE_SQL)
+        .map_err(|error| format!("backfill session terminal outcome storage failed: {error}"))?;
 
     conn.execute(
         "INSERT INTO memory_session_state(session_id, turn_count)
@@ -1794,18 +1800,8 @@ fn ensure_session_terminal_outcome_storage(conn: &Connection) -> Result<(), Stri
     #[cfg(test)]
     test_support::record_sqlite_schema_repair("session_terminal_outcomes");
 
-    conn.execute_batch(
-        "
-        CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
-          session_id TEXT PRIMARY KEY,
-          status TEXT NOT NULL,
-          payload_json TEXT NOT NULL,
-          frozen_result_json TEXT NULL,
-          recorded_at INTEGER NOT NULL
-        );
-        ",
-    )
-    .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_TABLE_SQL)
+        .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
 
     let has_frozen_result_column =
         sqlite_table_has_column(conn, "session_terminal_outcomes", "frozen_result_json")?;

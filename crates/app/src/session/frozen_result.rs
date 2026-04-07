@@ -136,20 +136,20 @@ fn extract_error_code(status: &str, payload: &Value) -> String {
 }
 
 fn extract_error_message(status: &str, payload: &Value) -> String {
-    let payload_error = payload.get("error");
-    let payload_error_text = payload_error.and_then(Value::as_str);
-    let trimmed_payload_error = payload_error_text.map(str::trim);
-    let meaningful_payload_error = trimmed_payload_error.filter(|value| !value.is_empty());
-    if let Some(meaningful_payload_error) = meaningful_payload_error {
-        return meaningful_payload_error.to_owned();
-    }
-
     let payload_message = payload.get("message");
     let payload_message_text = payload_message.and_then(Value::as_str);
     let trimmed_payload_message = payload_message_text.map(str::trim);
     let meaningful_payload_message = trimmed_payload_message.filter(|value| !value.is_empty());
     if let Some(meaningful_payload_message) = meaningful_payload_message {
         return meaningful_payload_message.to_owned();
+    }
+
+    let payload_error = payload.get("error");
+    let payload_error_text = payload_error.and_then(Value::as_str);
+    let trimmed_payload_error = payload_error_text.map(str::trim);
+    let meaningful_payload_error = trimmed_payload_error.filter(|value| !value.is_empty());
+    if let Some(meaningful_payload_error) = meaningful_payload_error {
+        return meaningful_payload_error.to_owned();
     }
 
     let encoded_payload = serde_json::to_string(payload).unwrap_or_else(|_| "null".to_owned());
@@ -245,6 +245,28 @@ mod tests {
             FrozenContent::Error {
                 code: "delegate_panic".to_owned(),
                 message: "delegate_panic".to_owned(),
+            }
+        );
+        assert!(!frozen_result.truncated);
+    }
+
+    #[test]
+    fn capture_frozen_result_prefers_error_message_field_when_present() {
+        let outcome = loongclaw_contracts::ToolCoreOutcome {
+            status: "error".to_owned(),
+            payload: json!({
+                "error": "delegate_timeout",
+                "message": "timed out after 30s",
+            }),
+        };
+
+        let frozen_result = capture_frozen_result(&outcome, 256);
+
+        assert_eq!(
+            frozen_result.content,
+            FrozenContent::Error {
+                code: "delegate_timeout".to_owned(),
+                message: "timed out after 30s".to_owned(),
             }
         );
         assert!(!frozen_result.truncated);
