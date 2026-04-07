@@ -23486,21 +23486,7 @@ async fn handle_turn_with_runtime_delegate_async_spawn_failure_persistence_recov
         .collect();
     assert!(event_kinds.contains(&"delegate_queued"));
     assert!(!event_kinds.contains(&"delegate_spawn_failed"));
-
-    let recovery_event = events
-        .iter()
-        .find(|event| event.event_kind == "delegate_recovery_applied")
-        .expect("delegate recovery event");
-    assert_eq!(
-        recovery_event.payload_json["recovery_kind"],
-        "async_spawn_failure_persist_failed"
-    );
-    assert_eq!(recovery_event.payload_json["recovered_state"], "failed");
-    assert_eq!(
-        recovery_event.payload_json["original_error"],
-        "spawn unavailable"
-    );
-
+    assert!(!event_kinds.contains(&"delegate_recovery_applied"));
     assert!(
         repo.load_terminal_outcome(&child.session_id)
             .expect("load terminal outcome")

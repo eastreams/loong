@@ -2233,7 +2233,10 @@ impl SessionRepository {
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
-                frozen_result_json = excluded.frozen_result_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
             params![
                 session_id,
@@ -2245,13 +2248,8 @@ impl SessionRepository {
         )
         .map_err(|error| format!("upsert session terminal outcome failed: {error}"))?;
 
-        Ok(SessionTerminalOutcomeRecord {
-            session_id,
-            status,
-            payload_json,
-            frozen_result,
-            recorded_at,
-        })
+        self.load_terminal_outcome(&session_id)?
+            .ok_or_else(|| format!("session `{session_id}` missing after terminal outcome upsert"))
     }
 
     pub fn finalize_session_terminal(
@@ -2321,7 +2319,10 @@ impl SessionRepository {
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
-                frozen_result_json = excluded.frozen_result_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
             params![
                 session_id,
@@ -2338,24 +2339,21 @@ impl SessionRepository {
         let session = self
             .load_session(&session_id)?
             .ok_or_else(|| format!("session `{session_id}` missing after terminal finalize"))?;
+        let terminal_outcome = self.load_terminal_outcome(&session_id)?.ok_or_else(|| {
+            format!("session `{session_id}` missing terminal outcome after terminal finalize")
+        })?;
 
         Ok(FinalizeSessionTerminalResult {
             session,
             event: SessionEventRecord {
                 id: event_id,
-                session_id: session_id.clone(),
+                session_id,
                 event_kind,
                 actor_session_id,
                 payload_json: event_payload_json,
                 ts,
             },
-            terminal_outcome: SessionTerminalOutcomeRecord {
-                session_id,
-                status: outcome_status,
-                payload_json: outcome_payload_json,
-                frozen_result,
-                recorded_at: ts,
-            },
+            terminal_outcome,
         })
     }
 
@@ -2428,7 +2426,10 @@ impl SessionRepository {
              ON CONFLICT(session_id) DO UPDATE SET
                 status = excluded.status,
                 payload_json = excluded.payload_json,
-                frozen_result_json = excluded.frozen_result_json,
+                frozen_result_json = COALESCE(
+                    excluded.frozen_result_json,
+                    session_terminal_outcomes.frozen_result_json
+                ),
                 recorded_at = excluded.recorded_at",
             params![
                 session_id,
@@ -2448,24 +2449,23 @@ impl SessionRepository {
         let session = self.load_session(&session_id)?.ok_or_else(|| {
             format!("session `{session_id}` missing after conditional terminal finalize")
         })?;
+        let terminal_outcome = self.load_terminal_outcome(&session_id)?.ok_or_else(|| {
+            format!(
+                "session `{session_id}` missing terminal outcome after conditional terminal finalize"
+            )
+        })?;
 
         Ok(Some(FinalizeSessionTerminalResult {
             session,
             event: SessionEventRecord {
                 id: event_id,
-                session_id: session_id.clone(),
+                session_id,
                 event_kind,
                 actor_session_id,
                 payload_json: event_payload_json,
                 ts,
             },
-            terminal_outcome: SessionTerminalOutcomeRecord {
-                session_id,
-                status: outcome_status,
-                payload_json: outcome_payload_json,
-                frozen_result,
-                recorded_at: ts,
-            },
+            terminal_outcome,
         }))
     }
 
@@ -4663,6 +4663,51 @@ mod tests {
     }
 
     #[test]
+    fn session_terminal_outcome_upsert_preserves_existing_frozen_result_when_none_is_supplied() {
+        let config = isolated_memory_config("terminal-outcome-preserve-frozen-result");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Failed,
+        })
+        .expect("create child");
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+
+        repo.upsert_terminal_outcome_with_frozen_result(
+            "child-session",
+            "error",
+            json!({
+                "error": "first"
+            }),
+            Some(frozen_result.clone()),
+        )
+        .expect("upsert terminal outcome with frozen result");
+
+        let outcome = repo
+            .upsert_terminal_outcome(
+                "child-session",
+                "timeout",
+                json!({
+                    "error": "delegate_timeout"
+                }),
+            )
+            .expect("upsert terminal outcome without frozen result");
+
+        assert_eq!(outcome.status, "timeout");
+        assert_eq!(outcome.payload_json["error"], "delegate_timeout");
+        assert_eq!(outcome.frozen_result, Some(frozen_result));
+    }
+
+    #[test]
     fn finalize_session_terminal_writes_state_event_and_outcome_together() {
         let config = isolated_memory_config("finalize-session-terminal");
         let repo = SessionRepository::new(&config).expect("repository");
@@ -4864,6 +4909,65 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(outcome.status, "error");
         assert_eq!(outcome.payload_json["error"], "delegate_timeout");
+    }
+
+    #[test]
+    fn finalize_session_terminal_if_current_preserves_existing_frozen_result_when_none_is_supplied()
+    {
+        let config = isolated_memory_config("finalize-if-current-preserve-frozen-result");
+        let repo = SessionRepository::new(&config).expect("repository");
+        repo.create_session(NewSessionRecord {
+            session_id: "child-session".to_owned(),
+            kind: SessionKind::DelegateChild,
+            parent_session_id: Some("root-session".to_owned()),
+            label: Some("Child".to_owned()),
+            state: SessionState::Ready,
+        })
+        .expect("create child");
+
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text("done".to_owned()),
+            captured_at: SystemTime::now(),
+            byte_len: "done".len(),
+            truncated: false,
+        };
+        repo.upsert_terminal_outcome_with_frozen_result(
+            "child-session",
+            "ok",
+            json!({
+                "final_output": "done"
+            }),
+            Some(frozen_result.clone()),
+        )
+        .expect("seed terminal outcome");
+
+        let finalized = repo
+            .finalize_session_terminal_if_current(
+                "child-session",
+                SessionState::Ready,
+                FinalizeSessionTerminalRequest {
+                    state: SessionState::Failed,
+                    last_error: Some("delegate_timeout".to_owned()),
+                    event_kind: "delegate_recovery_applied".to_owned(),
+                    actor_session_id: Some("root-session".to_owned()),
+                    event_payload_json: json!({
+                        "kind": "queued_async_overdue_marked_failed",
+                        "reference": "queued"
+                    }),
+                    outcome_status: "error".to_owned(),
+                    outcome_payload_json: json!({
+                        "error": "delegate_timeout"
+                    }),
+                    frozen_result: None,
+                },
+            )
+            .expect("conditionally finalize session")
+            .expect("conditional finalize result");
+
+        assert_eq!(
+            finalized.terminal_outcome.frozen_result,
+            Some(frozen_result)
+        );
     }
 
     #[test]
