@@ -17,9 +17,6 @@ pub const RECALL_FIRST_MEMORY_SYSTEM_ID: &str = "recall_first";
 #[cfg(feature = "memory-sqlite")]
 const MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES: usize = 16;
 
-#[cfg(feature = "memory-sqlite")]
-const MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES: usize = 16;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemorySystemCapability {
     CanonicalStore,
