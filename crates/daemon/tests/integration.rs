@@ -45,7 +45,7 @@ impl MigrationEnvironmentGuard {
             .find_map(|(key, value)| (*key == "HOME").then_some(*value))
             .flatten()
             .map(std::path::PathBuf::from);
-        let explicit_loongclaw_home = pairs.iter().any(|(key, _)| *key == "LOONGCLAW_HOME");
+        let explicit_loongclaw_home = pairs.iter().any(|(key, _)| *key == "LOONG_HOME");
         for (key, value) in pairs {
             saved.push(((*key).to_owned(), std::env::var_os(key)));
             match value {
@@ -55,14 +55,14 @@ impl MigrationEnvironmentGuard {
         }
         if !explicit_loongclaw_home {
             saved.push((
-                "LOONGCLAW_HOME".to_owned(),
-                std::env::var_os("LOONGCLAW_HOME"),
+                "LOONG_HOME".to_owned(),
+                std::env::var_os("LOONG_HOME"),
             ));
             match home_override {
                 Some(home) => unsafe {
-                    std::env::set_var("LOONGCLAW_HOME", home.join(mvp::config::HOME_DIR_NAME))
+                    std::env::set_var("LOONG_HOME", home.join(mvp::config::HOME_DIR_NAME))
                 },
-                None => unsafe { std::env::remove_var("LOONGCLAW_HOME") },
+                None => unsafe { std::env::remove_var("LOONG_HOME") },
             }
         }
         Self { _lock: lock, saved }

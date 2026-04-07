@@ -113,7 +113,7 @@ impl ChatCliFixture {
             .arg("chat")
             .current_dir(&self.root)
             .env("HOME", &self.home_dir)
-            .env("LOONGCLAW_HOME", &loongclaw_home)
+            .env("LOONG_HOME", &loongclaw_home)
             .env_remove("LOONGCLAW_CONFIG_PATH")
             .env_remove("USERPROFILE")
             .stdin(Stdio::piped())

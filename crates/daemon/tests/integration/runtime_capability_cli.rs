@@ -56,7 +56,7 @@ impl RuntimeCapabilityEnvironmentGuard {
 
         let pairs = [
             ("HOME", Some(home_text.as_str())),
-            ("LOONGCLAW_HOME", Some(loongclaw_home_text.as_str())),
+            ("LOONG_HOME", Some(loongclaw_home_text.as_str())),
             ("LOONGCLAW_BROWSER_COMPANION_READY", None),
         ];
         let mut saved = Vec::new();
