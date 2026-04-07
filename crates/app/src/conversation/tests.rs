@@ -4153,7 +4153,7 @@ async fn default_runtime_kernel_build_context_preserves_profile_projection() {
 
 #[cfg(feature = "memory-sqlite")]
 #[tokio::test]
-async fn default_runtime_build_context_with_registry_selected_system_skips_builtin_memory_projection()
+async fn default_runtime_build_context_with_registry_selected_system_keeps_runtime_owned_summary_projection()
  {
     register_memory_system("registry-retrieve-only-conversation", || {
         Box::new(RegistryRetrieveOnlyConversationMemorySystem)
@@ -4205,14 +4205,16 @@ async fn default_runtime_build_context_with_registry_selected_system_skips_built
             ("user".to_owned(), "turn 3".to_owned()),
         ]
     );
+    let summary_present = assembled.messages.iter().any(|message| {
+        let role = message["role"].as_str();
+        let content = message["content"].as_str();
+        let is_summary = content.is_some_and(|value| value.contains("## Memory Summary"));
+        role == Some("system") && is_summary
+    });
+
     assert!(
-        !assembled.messages.iter().any(|message| {
-            message["role"] == "system"
-                && message["content"]
-                    .as_str()
-                    .is_some_and(|content| content.contains("## Memory Summary"))
-        }),
-        "registry-selected systems without executors should not reuse builtin summary projection"
+        summary_present,
+        "registry-selected systems without executors should keep runtime-owned summary projection"
     );
 
     let _ = std::fs::remove_file(sqlite_path);
@@ -15976,6 +15978,7 @@ fn staged_memory_envelope_payload_from_window_turns(window_turns: &Value) -> Val
             kind: crate::memory::MemoryContextKind::Turn,
             role: turn.role.clone(),
             content: turn.content.clone(),
+            provenance: Vec::new(),
         })
         .collect::<Vec<_>>();
     let envelope = crate::memory::StageEnvelope {
