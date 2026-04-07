@@ -408,9 +408,15 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
             path.display()
         ))
     })?;
+    let original_permissions = fs::metadata(path)
+        .map(|m| m.permissions())
+        .ok();
+
     let reader = BufReader::new(file);
     let mut repaired_lines: Vec<Vec<u8>> = Vec::new();
-    let mut previous_hash: Option<String> = None;
+    let mut rebuilt_previous_hash: Option<String> = None;
+    let mut source_previous_hash: Option<String> = None;
+    let mut protected_chain_started = false;
     let mut total_events = 0usize;
     let mut repaired_events = 0usize;
     let mut already_valid_events = 0usize;
@@ -449,8 +455,21 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 });
             }
 
-            // Check if the entry is internally consistent: does entry_hash
-            // match the event data when computed with the entry's own prev_hash?
+            // Validate source chain: prev_hash must match the previous
+            // source entry_hash (mirrors verify_jsonl_audit_journal).
+            if protected_chain_started && integrity.prev_hash != source_previous_hash {
+                return Ok(AuditRepairReport {
+                    total_events,
+                    repaired_events,
+                    already_valid_events,
+                    outcome: AuditRepairOutcome::Refused {
+                        line: line_number,
+                        reason: "prev_hash mismatch in source chain".to_owned(),
+                    },
+                });
+            }
+
+            // Check self-consistency: does entry_hash match the event data?
             let self_consistent_hash =
                 compute_audit_event_entry_hash(&event, integrity.prev_hash.as_deref(), path)?;
             if integrity.entry_hash != self_consistent_hash {
@@ -465,9 +484,12 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 });
             }
 
-            if repaired_events == 0 && integrity.prev_hash == previous_hash {
+            protected_chain_started = true;
+            source_previous_hash = Some(integrity.entry_hash.clone());
+
+            if repaired_events == 0 && integrity.prev_hash == rebuilt_previous_hash {
                 // No prior repairs and chain is continuous — keep as-is.
-                previous_hash = Some(integrity.entry_hash.clone());
+                rebuilt_previous_hash = Some(integrity.entry_hash.clone());
                 already_valid_events += 1;
                 let mut encoded = line.into_bytes();
                 encoded.push(b'\n');
@@ -475,22 +497,41 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
             } else {
                 // Prior legacy entries were repaired, so the chain position
                 // changed. Re-seal this entry with the rebuilt prev_hash.
-                let entry_hash =
-                    compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
+                let entry_hash = compute_audit_event_entry_hash(
+                    &event,
+                    rebuilt_previous_hash.as_deref(),
+                    path,
+                )?;
                 let resealed =
-                    event_with_integrity(event, previous_hash.clone(), entry_hash.clone());
+                    event_with_integrity(event, rebuilt_previous_hash.clone(), entry_hash.clone());
                 let encoded = serialize_audit_event_line(&resealed, path)?;
                 repaired_lines.push(encoded);
-                previous_hash = Some(entry_hash);
+                rebuilt_previous_hash = Some(entry_hash);
                 repaired_events += 1;
             }
         } else {
-            let entry_hash =
-                compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
-            let repaired = event_with_integrity(event, previous_hash.clone(), entry_hash.clone());
+            if protected_chain_started {
+                return Ok(AuditRepairReport {
+                    total_events,
+                    repaired_events,
+                    already_valid_events,
+                    outcome: AuditRepairOutcome::Refused {
+                        line: line_number,
+                        reason: "missing integrity envelope after protected chain started"
+                            .to_owned(),
+                    },
+                });
+            }
+            let entry_hash = compute_audit_event_entry_hash(
+                &event,
+                rebuilt_previous_hash.as_deref(),
+                path,
+            )?;
+            let repaired =
+                event_with_integrity(event, rebuilt_previous_hash.clone(), entry_hash.clone());
             let encoded = serialize_audit_event_line(&repaired, path)?;
             repaired_lines.push(encoded);
-            previous_hash = Some(entry_hash);
+            rebuilt_previous_hash = Some(entry_hash);
             repaired_events += 1;
         }
     }
@@ -512,6 +553,9 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 temp_path.display()
             ))
         })?;
+        if let Some(permissions) = &original_permissions {
+            let _ = fs::set_permissions(&temp_path, permissions.clone());
+        }
         for line_bytes in &repaired_lines {
             temp_file.write_all(line_bytes).map_err(|error| {
                 AuditError::Sink(format!(
