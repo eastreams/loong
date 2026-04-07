@@ -9137,7 +9137,7 @@ async fn handle_turn_with_runtime_safe_lane_plan_skips_runtime_events_when_disab
     let temp_home = crate::test_support::unique_temp_dir("safe-lane-runtime-events-home");
     std::fs::create_dir_all(&temp_home).expect("create safe-lane runtime-events home");
     env.set("HOME", &temp_home);
-    env.remove("LOONGCLAW_HOME");
+    env.remove("LOONG_HOME");
 
     let runtime = FakeRuntime::with_turn_and_completion(
         vec![],
