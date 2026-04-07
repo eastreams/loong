@@ -4074,10 +4074,7 @@ mod tests {
             searchable.required_fields.is_empty(),
             "search should not flatten grouped alternatives into required_fields"
         );
-        assert_eq!(
-            searchable.required_field_groups,
-            Vec::<Vec<String>>::new()
-        );
+        assert_eq!(searchable.required_field_groups, Vec::<Vec<String>>::new());
     }
 
     #[cfg(feature = "memory-sqlite")]
