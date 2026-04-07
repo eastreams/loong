@@ -4060,7 +4060,7 @@ mod tests {
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
     #[test]
-    fn tool_search_reports_alternative_required_fields_for_bundled_skill_install() {
+    fn tool_search_reports_no_required_field_groups_for_bundled_skill_install() {
         let descriptor = catalog::tool_catalog()
             .descriptor("external_skills.install")
             .expect("external_skills.install should exist in the catalog");
