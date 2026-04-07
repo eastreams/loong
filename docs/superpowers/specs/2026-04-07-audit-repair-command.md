@@ -10,10 +10,10 @@
 |---|---|
 | missing integrity envelope | **Repair**: compute and inject SHA256 hash chain |
 | healthy (already has valid integrity) | **Skip**: report as already healthy |
-| prev_hash mismatch | **Refuse**: report as tampered, do not reseal |
-| entry_hash mismatch | **Refuse**: report as tampered, do not reseal |
+| prev_hash mismatch (after legacy prefix repair) | **Re-seal**: rebuild chain with new prev_hash |
+| entry_hash vs event data mismatch | **Refuse**: report as tampered, do not reseal |
 
-Repair writes a new journal file (`.repaired`), then atomically renames. Original is never modified in-place.
+Repair writes a new journal file (`.jsonl.repair-tmp`), then atomically renames. Original is never modified in-place. Temp file is cleaned up on rename failure. **Must be run while daemon is stopped** (running `JsonlAuditSink` holds stale file handle).
 
 ## Result Type
 
@@ -41,13 +41,15 @@ pub enum AuditRepairOutcome {
 
 ## Algorithm
 
-1. First run `verify`. If valid → return `Healthy`
-2. Read journal line by line, rebuild hash chain:
-   - Event has valid integrity → verify chain continuity, keep as-is
-   - Event missing integrity → compute entry_hash from event + prev_hash, inject integrity envelope
-   - Event has mismatched hash → return `Refused`
-3. Write repaired lines to temp file
+1. Read journal line by line, rebuild hash chain:
+   - Event missing integrity → compute entry_hash from event + prev_hash, inject envelope
+   - Event has integrity, chain matches, no prior repairs → keep as-is
+   - Event has integrity, prior entries were repaired → re-seal with rebuilt prev_hash
+   - Event entry_hash doesn't match its own event data → `Refused` (tampering)
+2. If no events were repaired → return `Healthy`
+3. Write repaired lines to `.jsonl.repair-tmp` temp file
 4. Atomic rename temp → original
+5. If rename fails, remove temp file and return error
 
 ## Out of Scope
 
