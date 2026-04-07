@@ -7616,11 +7616,11 @@ mod tests {
     }
 
     fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
-        for descriptor in mvp::config::web_search_provider_descriptors() {
-            if let Some(default_env) = descriptor.default_api_key_env {
+        for d in mvp::config::web_search_provider_descriptors() {
+            if let Some(default_env) = d.default_api_key_env {
                 env.remove(default_env);
             }
-            for env_name in descriptor.api_key_env_names {
+            for env_name in d.api_key_env_names {
                 env.remove(*env_name);
             }
         }
