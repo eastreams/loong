@@ -2762,7 +2762,7 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "tokio",
- "wasmparser 0.246.1",
+ "wasmparser 0.246.2",
  "wasmtime",
  "wat",
 ]
