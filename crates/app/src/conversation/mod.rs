@@ -57,6 +57,8 @@ pub use context_engine_registry::{
     context_engine_id_from_env, describe_context_engine, list_context_engine_ids,
     list_context_engine_metadata, register_context_engine, resolve_context_engine,
 };
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound;
 pub use ingress::{
     ConversationIngressChannel, ConversationIngressContext, ConversationIngressDelivery,
     ConversationIngressDeliveryResource, ConversationIngressFeishuCallbackContext,
@@ -109,13 +111,10 @@ pub use turn_checkpoint::{
     TurnCheckpointTailRepairRuntimeProbe, TurnCheckpointTailRepairSource,
     TurnCheckpointTailRepairStatus,
 };
+#[cfg(feature = "memory-sqlite")]
+pub(crate) use turn_coordinator::run_started_delegate_child_turn_with_runtime;
 pub use turn_coordinator::{
     ContextCompactionReport, ConversationTurnCoordinator, spawn_background_delegate_with_runtime,
-};
-#[cfg(feature = "memory-sqlite")]
-pub(crate) use turn_coordinator::{
-    run_started_delegate_child_turn_with_runtime,
-    with_prepared_subagent_spawn_cleanup_if_kernel_bound,
 };
 pub use turn_engine::{
     AppToolDispatcher, DefaultAppToolDispatcher, NoopAppToolDispatcher, ProviderTurn, ToolDecision,

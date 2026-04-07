@@ -746,7 +746,7 @@ impl AsyncDelegateSpawner for DefaultAsyncDelegateSpawner {
         let parent_session_id_for_spawn = parent_session_id.clone();
         let borrowed_binding = binding.as_borrowed();
         let child_binding = binding.clone();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime_ref,
             &parent_session_id,
             &child_session_id,
