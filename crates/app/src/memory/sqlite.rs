@@ -197,11 +197,6 @@ const SQL_QUERY_RECENT_TURNS_NO_ID: &str = "SELECT role, content, ts, session_tu
              WHERE session_id = ?1
              ORDER BY id DESC
              LIMIT ?2";
-const SQL_QUERY_RECENT_PROMPT_TURNS: &str = "SELECT role, content
-             FROM turns
-             WHERE session_id = ?1
-             ORDER BY id DESC
-             LIMIT ?2";
 #[cfg(test)]
 const SQL_QUERY_RECENT_TURNS_WITH_BOUNDARY_ID: &str =
     "SELECT role, content, ts, id, session_turn_index
@@ -277,7 +272,7 @@ const SQL_QUERY_INITIAL_SUMMARY_ROWS_BY_SESSION_TURN_INDEX: &str = "SELECT id, r
 const SQL_QUERY_INITIAL_SUMMARY_ROWS_AFTER_SEED_SESSION_INDEX: &str = "SELECT id, role, content
              FROM turns
              WHERE session_id = ?1
-               AND session_turn_index > 2
+               AND session_turn_index > 1
              ORDER BY session_turn_index ASC";
 const SQL_QUERY_SUMMARY_BOUNDARY_TURN_ID_BY_SESSION_TURN_COUNT: &str = "WITH state AS (
              SELECT turn_count
@@ -2659,6 +2654,12 @@ fn reset_sqlite_runtime_test_state() {
     test_support::reset_test_state();
 }
 
+#[cfg(test)]
+fn sqlite_runtime_test_lock() -> &'static Mutex<()> {
+    static SQLITE_RUNTIME_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    SQLITE_RUNTIME_TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub(super) fn drop_cached_sqlite_runtime(path: &Path) -> Result<bool, String> {
     let normalized_path = normalize_runtime_db_path(path)?;
     let mut registry = sqlite_runtime_registry()
@@ -2774,35 +2775,14 @@ fn query_recent_prompt_turns(
     session_id: &str,
     limit: usize,
 ) -> Result<Vec<PromptWindowTurn>, String> {
-    let mut stmt = prepare_cached_sqlite_statement(
-        conn,
-        SQL_QUERY_RECENT_PROMPT_TURNS,
-        "prepare prompt window query failed",
-    )?;
-    let mut rows = stmt
-        .query(rusqlite::params![session_id, limit as i64])
-        .map_err(|error| format!("query prompt window failed: {error}"))?;
-    let mut turns = Vec::with_capacity(limit);
-    while let Some(row) = rows
-        .next()
-        .map_err(|error| format!("read prompt window row failed: {error}"))?
-    {
-        let role = row
-            .get::<_, String>(0)
-            .map_err(|error| format!("decode prompt window role failed: {error}"))?;
-        let content = row
-            .get::<_, String>(1)
-            .map_err(|error| format!("decode prompt window content failed: {error}"))?;
-        let include_turn =
-            prompt_window_turn_is_visible(session_id, role.as_str(), content.as_str());
+    let mut recent_rows = query_recent_prompt_turn_rows_with_ids(conn, session_id, limit)?;
 
-        if !include_turn {
-            continue;
-        }
+    recent_rows.reverse();
+    let turns = recent_rows
+        .into_iter()
+        .map(|(_, turn)| turn)
+        .collect::<Vec<_>>();
 
-        turns.push(PromptWindowTurn { role, content });
-    }
-    turns.reverse();
     Ok(turns)
 }
 
@@ -3035,6 +3015,9 @@ fn query_recent_prompt_turn_rows_with_ids(
             }
 
             recent_rows.push((turn_id, PromptWindowTurn { role, content }));
+            if recent_rows.len() >= limit {
+                break;
+            }
         }
 
         let reached_visible_limit = recent_rows.len() >= limit;
@@ -3142,6 +3125,9 @@ fn query_recent_prompt_turn_rows_with_ids_and_checkpoint_meta(
             }
 
             recent_rows.push((turn_id, PromptWindowTurn { role, content }));
+            if recent_rows.len() >= limit {
+                break;
+            }
         }
 
         let reached_visible_limit = recent_rows.len() >= limit;
@@ -4388,6 +4374,10 @@ fn collect_initial_summary_visible_turns(
             continue;
         }
 
+        if first_visible_turn_id.as_ref() == Some(&turn_id) {
+            continue;
+        }
+
         *second_visible_turn_id = Some(turn_id);
         return Ok(());
     }
@@ -4495,11 +4485,6 @@ mod tests {
         fn drop(&mut self) {
             std::env::set_current_dir(&self.original).expect("restore current dir");
         }
-    }
-
-    fn sqlite_runtime_test_lock() -> &'static Mutex<()> {
-        static SQLITE_RUNTIME_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        SQLITE_RUNTIME_TEST_LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn set_current_dir_for_test(path: &Path) -> CurrentDirGuard {
@@ -9284,6 +9269,7 @@ mod tests {
 #[cfg(test)]
 mod test_support {
     use super::*;
+    use crate::config::{MemoryMode, MemoryProfile};
     use std::sync::Condvar;
 
     #[derive(Default)]
@@ -9300,6 +9286,12 @@ mod test_support {
         target_waiters: usize,
         waiting_threads: usize,
         released: bool,
+    }
+
+    fn sqlite_runtime_test_support_lock() -> &'static Mutex<()> {
+        static SQLITE_RUNTIME_TEST_SUPPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+        SQLITE_RUNTIME_TEST_SUPPORT_LOCK.get_or_init(|| Mutex::new(()))
     }
 
     fn bootstrap_counts() -> &'static Mutex<HashMap<PathBuf, usize>> {
@@ -9721,6 +9713,124 @@ mod test_support {
             "user",
             plain_user
         ));
+    }
+
+    #[test]
+    fn prompt_window_mixed_overflow_regression() {
+        let runtime_test_support_lock = sqlite_runtime_test_support_lock();
+        let guard_result = runtime_test_support_lock.lock();
+        let _guard = match guard_result {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        reset_sqlite_runtime_test_state();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-prompt-window-mixed-overflow-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).expect("create temp dir");
+        let db_path = tmp.join("prompt-window-mixed-overflow.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowOnly,
+            mode: MemoryMode::WindowOnly,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 3,
+            ..MemoryRuntimeConfig::default()
+        };
+        let hidden_inner = crate::memory::build_conversation_event_content(
+            "provider_prompt_frame_snapshot",
+            serde_json::json!({"phase": "initial"}),
+        );
+        let hidden_tail = crate::memory::build_tool_decision_content(
+            "turn-4",
+            "call-1",
+            serde_json::json!({"decision": "allow"}),
+        );
+
+        assert!(!prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_inner.as_str()
+        ));
+        assert!(!prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_tail.as_str()
+        ));
+        assert!(prompt_window_turn_is_visible(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 4"
+        ));
+
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 1",
+            &config,
+        )
+        .expect("append visible turn 1");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_inner.as_str(),
+            &config,
+        )
+        .expect("append hidden inner record");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 2",
+            &config,
+        )
+        .expect("append visible turn 2");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 3",
+            &config,
+        )
+        .expect("append visible turn 3");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            hidden_tail.as_str(),
+            &config,
+        )
+        .expect("append hidden tail record");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "assistant",
+            "visible 4",
+            &config,
+        )
+        .expect("append visible turn 4");
+        append_turn_direct(
+            "prompt-window-mixed-overflow-session",
+            "user",
+            "visible 5",
+            &config,
+        )
+        .expect("append visible turn 5");
+
+        let snapshot = load_context_snapshot("prompt-window-mixed-overflow-session", &config)
+            .expect("load mixed-overflow context snapshot");
+        let window_contents = snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(snapshot.window_turns.len(), 3);
+        assert_eq!(window_contents, vec!["visible 3", "visible 4", "visible 5"]);
+        assert!(snapshot.summary_body.is_none());
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     pub(super) fn reset_test_state() {

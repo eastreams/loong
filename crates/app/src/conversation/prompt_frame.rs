@@ -282,12 +282,23 @@ impl PromptFrame {
     ) -> Self {
         let tail_summary = summarize_followup_prompt_frame(messages);
         let mut summary = self.summary.clone();
+        let rebuilt_messages = replace_turn_ephemeral_messages(
+            summary.messages.as_slice(),
+            tail_summary.messages.as_slice(),
+        );
+        let rebuilt_buckets = replace_turn_ephemeral_bucket(
+            summary.buckets.as_slice(),
+            tail_summary.bucket(PromptFrameLayer::TurnEphemeralTail),
+        );
 
+        summary.messages = rebuilt_messages;
+        summary.buckets = rebuilt_buckets;
         summary.turn_ephemeral_tail = tail_summary.turn_ephemeral_tail;
         summary.turn_ephemeral_segment_count = tail_summary.turn_ephemeral_segment_count;
         summary.turn_ephemeral_estimated_tokens = tail_summary.turn_ephemeral_estimated_tokens;
         summary.turn_ephemeral_hash = tail_summary.turn_ephemeral_hash;
         summary.turn_ephemeral_hash_sha256 = tail_summary.turn_ephemeral_hash_sha256;
+        summary.refresh_derived_fields();
         let total_estimated_tokens =
             estimated_tokens.unwrap_or_else(|| summary.estimated_total_from_layers());
 
@@ -771,35 +782,94 @@ fn hash_text(text: &str) -> String {
 }
 
 fn hash_blocks(blocks: &[String]) -> Option<String> {
-    if blocks.is_empty() {
-        return None;
-    }
-
-    let joined_blocks = blocks.join("\n\n");
-    let digest = Sha256::digest(joined_blocks.as_bytes());
-    let digest_hex = hex_encode(digest);
-
-    Some(digest_hex)
+    hash_length_prefixed_parts(blocks)
 }
 
 fn hash_serialized_parts(serialized_parts: &[String]) -> Option<String> {
-    if serialized_parts.is_empty() {
+    hash_length_prefixed_parts(serialized_parts)
+}
+
+fn hash_length_prefixed_parts(parts: &[String]) -> Option<String> {
+    if parts.is_empty() {
         return None;
     }
 
     let mut hasher = Sha256::new();
 
-    for serialized_part in serialized_parts {
-        let part_bytes = serialized_part.as_bytes();
+    for part in parts {
+        let part_bytes = part.as_bytes();
 
-        hasher.update(part_bytes);
-        hasher.update(b"\n--prompt-frame-boundary--\n");
+        update_hasher_with_length_prefixed_part(&mut hasher, part_bytes);
     }
 
     let digest = hasher.finalize();
     let encoded = hex_encode(digest);
 
     Some(encoded)
+}
+
+fn update_hasher_with_length_prefixed_part(hasher: &mut Sha256, part_bytes: &[u8]) {
+    let part_length = u64::try_from(part_bytes.len()).unwrap_or(u64::MAX);
+    let part_length_bytes = part_length.to_be_bytes();
+
+    hasher.update(part_length_bytes);
+    hasher.update(part_bytes);
+}
+
+fn replace_turn_ephemeral_messages(
+    existing_messages: &[PromptFrameMessageSummary],
+    tail_messages: &[PromptFrameMessageSummary],
+) -> Vec<PromptFrameMessageSummary> {
+    let mut rebuilt_messages = Vec::new();
+
+    for existing_message in existing_messages {
+        if existing_message.frame_layer == PromptFrameLayer::TurnEphemeralTail {
+            continue;
+        }
+
+        rebuilt_messages.push(existing_message.clone());
+    }
+
+    let next_message_index = rebuilt_messages
+        .last()
+        .map(|message| message.message_index.saturating_add(1))
+        .unwrap_or(0);
+
+    for (tail_offset, tail_message) in tail_messages.iter().enumerate() {
+        let mut rebuilt_tail_message = tail_message.clone();
+        let tail_message_index = next_message_index.saturating_add(tail_offset);
+
+        rebuilt_tail_message.message_index = tail_message_index;
+        rebuilt_messages.push(rebuilt_tail_message);
+    }
+
+    rebuilt_messages
+}
+
+fn replace_turn_ephemeral_bucket(
+    existing_buckets: &[PromptFrameBucketSummary],
+    tail_bucket: Option<&PromptFrameBucketSummary>,
+) -> Vec<PromptFrameBucketSummary> {
+    let replacement_tail_bucket = tail_bucket.cloned().unwrap_or(PromptFrameBucketSummary {
+        frame_layer: PromptFrameLayer::TurnEphemeralTail,
+        fragment_count: 0,
+        message_count: 0,
+        content_chars: 0,
+        content_sha256: None,
+    });
+    let mut rebuilt_buckets = Vec::with_capacity(existing_buckets.len());
+
+    for existing_bucket in existing_buckets {
+        let bucket = if existing_bucket.frame_layer == PromptFrameLayer::TurnEphemeralTail {
+            replacement_tail_bucket.clone()
+        } else {
+            existing_bucket.clone()
+        };
+
+        rebuilt_buckets.push(bucket);
+    }
+
+    rebuilt_buckets
 }
 
 fn count_chars_as_u32(content: &str) -> u32 {
@@ -940,6 +1010,90 @@ mod tests {
         assert_eq!(summary.turn_ephemeral_tail.message_count, 2);
         assert!(summary.turn_ephemeral_hash_sha256.is_some());
         assert!(summary.stable_prefix_hash_sha256.is_none());
+    }
+
+    #[test]
+    fn with_turn_ephemeral_messages_rebuilds_tail_buckets_and_message_indexes() {
+        let prompt_fragments = vec![
+            PromptFragment::new(
+                "base-system",
+                PromptLane::BaseSystem,
+                "base-system",
+                "base system",
+                ContextArtifactKind::SystemPrompt,
+            )
+            .with_cacheable(true),
+            PromptFragment::new(
+                "runtime-identity",
+                PromptLane::RuntimeIdentity,
+                "runtime-identity",
+                "resolved identity",
+                ContextArtifactKind::Profile,
+            )
+            .with_cacheable(true)
+            .with_frame_authority(PromptFrameAuthority::RuntimeIdentity),
+        ];
+        let messages = vec![
+            json!({
+                "role": "system",
+                "content": "compiled system"
+            }),
+            json!({
+                "role": "assistant",
+                "content": "recent assistant turn"
+            }),
+        ];
+        let artifacts = vec![
+            ContextArtifactDescriptor {
+                message_index: 0,
+                artifact_kind: ContextArtifactKind::SystemPrompt,
+                maskable: false,
+                streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+            },
+            ContextArtifactDescriptor {
+                message_index: 1,
+                artifact_kind: ContextArtifactKind::ConversationTurn,
+                maskable: false,
+                streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+            },
+        ];
+        let prompt_frame = PromptFrame::from_context_parts(
+            prompt_fragments.as_slice(),
+            messages.as_slice(),
+            artifacts.as_slice(),
+            None,
+            None,
+        );
+        let followup_messages = vec![
+            json!({
+                "role": "assistant",
+                "content": "[tool_result]\\nchunk a"
+            }),
+            json!({
+                "role": "user",
+                "content": "continue with the tool result"
+            }),
+        ];
+        let followup_prompt_frame =
+            prompt_frame.with_turn_ephemeral_messages(followup_messages.as_slice(), None);
+        let followup_summary = followup_prompt_frame.summary;
+        let tail_bucket = followup_summary
+            .bucket(PromptFrameLayer::TurnEphemeralTail)
+            .expect("turn ephemeral bucket");
+        let tail_messages = followup_summary
+            .messages
+            .iter()
+            .filter(|message| message.frame_layer == PromptFrameLayer::TurnEphemeralTail)
+            .collect::<Vec<_>>();
+
+        assert_eq!(tail_bucket.message_count, 2);
+        assert_eq!(tail_messages.len(), 2);
+        assert_eq!(tail_messages[0].message_index, 2);
+        assert_eq!(tail_messages[1].message_index, 3);
+        assert_eq!(
+            u32::try_from(tail_bucket.content_chars).unwrap_or(u32::MAX),
+            followup_summary.turn_ephemeral_tail.total_chars,
+        );
     }
 
     #[test]
@@ -1099,5 +1253,33 @@ mod tests {
 
         assert_eq!(recall_bucket.message_count, 1);
         assert_eq!(recent_bucket.message_count, 1);
+    }
+
+    #[test]
+    fn hash_serialized_parts_is_sequence_safe() {
+        let left = vec![
+            "alpha".to_owned(),
+            "beta\n--prompt-frame-boundary--\ngamma".to_owned(),
+        ];
+        let right = vec![
+            "alpha\n--prompt-frame-boundary--\nbeta".to_owned(),
+            "gamma".to_owned(),
+        ];
+
+        let left_hash = hash_serialized_parts(left.as_slice());
+        let right_hash = hash_serialized_parts(right.as_slice());
+
+        assert_ne!(left_hash, right_hash);
+    }
+
+    #[test]
+    fn hash_blocks_is_sequence_safe() {
+        let left = vec!["alpha".to_owned(), "\n\nbeta".to_owned()];
+        let right = vec!["alpha\n".to_owned(), "\nbeta".to_owned()];
+
+        let left_hash = hash_blocks(left.as_slice());
+        let right_hash = hash_blocks(right.as_slice());
+
+        assert_ne!(left_hash, right_hash);
     }
 }

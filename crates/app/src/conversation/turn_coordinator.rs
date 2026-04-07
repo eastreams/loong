@@ -1983,6 +1983,15 @@ impl ConversationTurnCoordinator {
                 ),
             );
             observe_turn_phase(observer.as_ref(), initial_request_event);
+            emit_prompt_frame_event(
+                runtime,
+                session_id,
+                1,
+                "initial",
+                preparation.session.prompt_frame_summary(),
+                binding,
+            )
+            .await;
 
             let provider_turn_result = request_provider_turn_with_observer(
                 config,

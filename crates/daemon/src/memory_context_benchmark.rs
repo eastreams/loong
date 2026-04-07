@@ -8,17 +8,23 @@ use std::{
 
 use loongclaw_app::{
     config::{MemoryMode, MemoryProfile},
+    conversation::{
+        ContextArtifactDescriptor, ContextArtifactKind, PromptFragment, PromptFrame,
+        PromptFrameAuthority, PromptLane, ToolOutputStreamingPolicy,
+    },
     memory::{
         self, MemoryContextEntry, MemoryContextKind, SqliteBootstrapDiagnostics,
         SqliteContextLoadDiagnostics, runtime_config::MemoryRuntimeConfig,
     },
 };
 use loongclaw_bench::{
-    MemoryContextBenchmarkSuiteSamples, MemoryContextColdPathPhaseSamples, MemoryContextShape,
-    copy_benchmark_file,
+    MemoryContextBenchmarkReportAugmentContext, MemoryContextBenchmarkSuiteSamples,
+    MemoryContextColdPathPhaseSamples, MemoryContextShape, copy_benchmark_file,
     run_memory_context_benchmark_cli_with_suite_runner as run_bench_memory_context_benchmark_cli,
 };
 use rusqlite::Connection;
+use serde::Serialize;
+use serde_json::{Value, json};
 
 use crate::CliResult;
 
@@ -50,6 +56,7 @@ pub fn run_memory_context_benchmark_cli(
         enforce_gate,
         min_steady_state_speedup_ratio,
         run_memory_context_benchmark_suite,
+        Some(augment_memory_context_benchmark_report),
     )
 }
 
@@ -65,6 +72,31 @@ struct PromptContextReadObservation {
     rss_delta_kib: Option<f64>,
     shape: MemoryContextShape,
     load_diagnostics: SqliteContextLoadDiagnostics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MemoryContextPromptFrameLayerTokenSignals {
+    stable_prefix: usize,
+    advisory_profile: usize,
+    session_local_recall: usize,
+    recent_window: usize,
+    followup_turn_ephemeral: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MemoryContextPromptFrameBenchmarkSignals {
+    representative_scenario: String,
+    initial_stable_prefix_hash_sha256: Option<String>,
+    followup_stable_prefix_hash_sha256: Option<String>,
+    initial_cached_prefix_sha256: Option<String>,
+    followup_cached_prefix_sha256: Option<String>,
+    initial_total_estimated_tokens: usize,
+    followup_total_estimated_tokens: usize,
+    layer_estimated_tokens: MemoryContextPromptFrameLayerTokenSignals,
+    followup_turn_ephemeral_share_of_total: Option<f64>,
+    stable_prefix_preserved_on_followup: bool,
+    cached_prefix_preserved_on_followup: bool,
+    turn_ephemeral_hash_changed_on_followup: bool,
 }
 
 fn run_memory_context_benchmark_suite(
@@ -288,6 +320,266 @@ fn run_memory_context_benchmark_suite(
 
     let _ = fs::remove_dir_all(&temp_root);
     result
+}
+
+fn augment_memory_context_benchmark_report(
+    report: &mut Value,
+    suite_runs: &[MemoryContextBenchmarkSuiteSamples],
+    context: &MemoryContextBenchmarkReportAugmentContext,
+) -> CliResult<()> {
+    let representative_suite = suite_runs
+        .last()
+        .ok_or_else(|| "memory context benchmark requires at least one suite run".to_owned())?;
+    let prompt_frame_signals =
+        build_memory_context_prompt_frame_benchmark_signals(representative_suite, context)?;
+    let prompt_frame_value = serde_json::to_value(prompt_frame_signals)
+        .map_err(|error| format!("failed to serialize prompt-frame benchmark signals: {error}"))?;
+    let report_object = report
+        .as_object_mut()
+        .ok_or_else(|| "memory context benchmark report must be a JSON object".to_owned())?;
+
+    report_object.insert("prompt_frame_stability".to_owned(), prompt_frame_value);
+
+    Ok(())
+}
+
+fn build_memory_context_prompt_frame_benchmark_signals(
+    representative_suite: &MemoryContextBenchmarkSuiteSamples,
+    context: &MemoryContextBenchmarkReportAugmentContext,
+) -> CliResult<MemoryContextPromptFrameBenchmarkSignals> {
+    let prompt_fragments = build_memory_context_benchmark_prompt_fragments();
+    let (messages, artifacts) =
+        build_memory_context_benchmark_messages(representative_suite, context);
+    let prompt_frame = PromptFrame::from_context_parts(
+        prompt_fragments.as_slice(),
+        messages.as_slice(),
+        artifacts.as_slice(),
+        None,
+        None,
+    );
+    let initial_summary = prompt_frame.summary.clone();
+    let followup_messages =
+        build_memory_context_benchmark_followup_messages(context.words_per_turn);
+    let followup_prompt_frame =
+        prompt_frame.with_turn_ephemeral_messages(followup_messages.as_slice(), None);
+    let followup_summary = followup_prompt_frame.summary;
+
+    let initial_total_estimated_tokens = initial_summary.total_estimated_tokens.unwrap_or_default();
+    let followup_total_estimated_tokens =
+        followup_summary.total_estimated_tokens.unwrap_or_default();
+    let stable_prefix_estimated_tokens = initial_summary
+        .stable_runtime_estimated_tokens
+        .saturating_add(initial_summary.session_latched_estimated_tokens);
+    let advisory_profile_estimated_tokens = initial_summary.advisory_profile_estimated_tokens;
+    let session_local_recall_estimated_tokens =
+        initial_summary.session_local_recall_estimated_tokens;
+    let recent_window_estimated_tokens = initial_summary.recent_window_estimated_tokens;
+    let followup_turn_ephemeral_estimated_tokens = followup_summary.turn_ephemeral_estimated_tokens;
+    let followup_turn_ephemeral_share_of_total = ratio_option_from_counts(
+        followup_turn_ephemeral_estimated_tokens,
+        followup_total_estimated_tokens,
+    );
+    let stable_prefix_preserved_on_followup =
+        initial_summary.stable_prefix_hash_sha256 == followup_summary.stable_prefix_hash_sha256;
+    let cached_prefix_preserved_on_followup =
+        initial_summary.cached_prefix_sha256 == followup_summary.cached_prefix_sha256;
+    let turn_ephemeral_hash_changed_on_followup =
+        initial_summary.turn_ephemeral_hash_sha256 != followup_summary.turn_ephemeral_hash_sha256;
+    let layer_estimated_tokens = MemoryContextPromptFrameLayerTokenSignals {
+        stable_prefix: stable_prefix_estimated_tokens,
+        advisory_profile: advisory_profile_estimated_tokens,
+        session_local_recall: session_local_recall_estimated_tokens,
+        recent_window: recent_window_estimated_tokens,
+        followup_turn_ephemeral: followup_turn_ephemeral_estimated_tokens,
+    };
+
+    Ok(MemoryContextPromptFrameBenchmarkSignals {
+        representative_scenario: "summary_steady_state".to_owned(),
+        initial_stable_prefix_hash_sha256: initial_summary.stable_prefix_hash_sha256,
+        followup_stable_prefix_hash_sha256: followup_summary.stable_prefix_hash_sha256,
+        initial_cached_prefix_sha256: initial_summary.cached_prefix_sha256,
+        followup_cached_prefix_sha256: followup_summary.cached_prefix_sha256,
+        initial_total_estimated_tokens,
+        followup_total_estimated_tokens,
+        layer_estimated_tokens,
+        followup_turn_ephemeral_share_of_total,
+        stable_prefix_preserved_on_followup,
+        cached_prefix_preserved_on_followup,
+        turn_ephemeral_hash_changed_on_followup,
+    })
+}
+
+fn build_memory_context_benchmark_prompt_fragments() -> Vec<PromptFragment> {
+    let base_system_fragment = PromptFragment::new(
+        "memory-benchmark-base-system",
+        PromptLane::BaseSystem,
+        "memory-benchmark-base-system",
+        "memory benchmark base system guidance",
+        ContextArtifactKind::SystemPrompt,
+    )
+    .with_cacheable(true);
+    let runtime_identity_fragment = PromptFragment::new(
+        "memory-benchmark-runtime-identity",
+        PromptLane::RuntimeIdentity,
+        "memory-benchmark-runtime-identity",
+        "memory benchmark runtime identity",
+        ContextArtifactKind::Profile,
+    )
+    .with_cacheable(true)
+    .with_frame_authority(PromptFrameAuthority::RuntimeIdentity);
+
+    vec![base_system_fragment, runtime_identity_fragment]
+}
+
+fn build_memory_context_benchmark_messages(
+    representative_suite: &MemoryContextBenchmarkSuiteSamples,
+    context: &MemoryContextBenchmarkReportAugmentContext,
+) -> (Vec<Value>, Vec<ContextArtifactDescriptor>) {
+    let representative_shape = representative_suite.summary_steady_state_shape;
+    let summary_chars = representative_shape.summary_chars.max(64);
+    let recent_turn_count = representative_shape
+        .turn_entries
+        .min(context.sliding_window.max(1));
+    let system_message_content = build_memory_context_benchmark_text(
+        "compiled system guidance for the memory context benchmark",
+        96,
+    );
+    let runtime_contract_content = format!(
+        "runtime_contract window={} summary_budget={} history_turns={}",
+        context.sliding_window, context.summary_max_chars, context.history_turns
+    );
+    let advisory_profile_content = build_memory_context_benchmark_text(
+        "advisory profile prefers concise benchmark summaries",
+        72,
+    );
+    let summary_content = build_memory_context_benchmark_text(
+        "session local recall summary checkpoint",
+        summary_chars,
+    );
+    let mut messages = Vec::new();
+    let mut artifacts = Vec::new();
+
+    push_memory_context_benchmark_message(
+        &mut messages,
+        &mut artifacts,
+        "system",
+        system_message_content,
+        ContextArtifactKind::SystemPrompt,
+    );
+    push_memory_context_benchmark_message(
+        &mut messages,
+        &mut artifacts,
+        "system",
+        runtime_contract_content,
+        ContextArtifactKind::RuntimeContract,
+    );
+    push_memory_context_benchmark_message(
+        &mut messages,
+        &mut artifacts,
+        "system",
+        advisory_profile_content,
+        ContextArtifactKind::Profile,
+    );
+    if representative_shape.summary_chars > 0 {
+        push_memory_context_benchmark_message(
+            &mut messages,
+            &mut artifacts,
+            "assistant",
+            summary_content,
+            ContextArtifactKind::Summary,
+        );
+    }
+
+    for turn_index in 0..recent_turn_count {
+        let role = if turn_index.is_multiple_of(2) {
+            "user"
+        } else {
+            "assistant"
+        };
+        let content = build_memory_context_turn_content(turn_index, context.words_per_turn);
+
+        push_memory_context_benchmark_message(
+            &mut messages,
+            &mut artifacts,
+            role,
+            content,
+            ContextArtifactKind::ConversationTurn,
+        );
+    }
+
+    (messages, artifacts)
+}
+
+fn push_memory_context_benchmark_message(
+    messages: &mut Vec<Value>,
+    artifacts: &mut Vec<ContextArtifactDescriptor>,
+    role: &str,
+    content: String,
+    artifact_kind: ContextArtifactKind,
+) {
+    let message_index = messages.len();
+    let maskable = matches!(
+        artifact_kind,
+        ContextArtifactKind::Profile | ContextArtifactKind::Summary
+    );
+    let message = json!({
+        "role": role,
+        "content": content,
+    });
+    let artifact = ContextArtifactDescriptor {
+        message_index,
+        artifact_kind,
+        maskable,
+        streaming_policy: ToolOutputStreamingPolicy::BufferFull,
+    };
+
+    messages.push(message);
+    artifacts.push(artifact);
+}
+
+fn build_memory_context_benchmark_followup_messages(words_per_turn: usize) -> Vec<Value> {
+    let tool_output_words = words_per_turn
+        .saturating_mul(2)
+        .max(words_per_turn.saturating_add(4));
+    let tool_output_content = build_memory_context_turn_content(10_000, tool_output_words);
+    let assistant_followup_content = format!("[tool_result]\n{tool_output_content}");
+    let user_followup_content =
+        "Use the benchmark tool output above to produce a concise summary.".to_owned();
+    let assistant_message = json!({
+        "role": "assistant",
+        "content": assistant_followup_content,
+    });
+    let user_message = json!({
+        "role": "user",
+        "content": user_followup_content,
+    });
+
+    vec![assistant_message, user_message]
+}
+
+fn build_memory_context_benchmark_text(seed: &str, target_chars: usize) -> String {
+    let minimum_chars = target_chars.max(seed.len());
+    let mut content = String::new();
+
+    while content.chars().count() < minimum_chars {
+        if !content.is_empty() {
+            content.push(' ');
+        }
+        content.push_str(seed);
+    }
+
+    content.chars().take(minimum_chars).collect()
+}
+
+fn ratio_option_from_counts(numerator: usize, denominator: usize) -> Option<f64> {
+    if denominator == 0 {
+        return None;
+    }
+
+    let numerator = numerator as f64;
+    let denominator = denominator as f64;
+
+    Some(numerator / denominator)
 }
 
 fn sample_window_only_context(
@@ -1517,5 +1809,80 @@ mod tests {
         assert_eq!(shape.turn_entries, 1);
         assert_eq!(shape.summary_chars, "summary block".len());
         assert_eq!(shape.payload_chars, expected_payload_chars);
+    }
+
+    #[test]
+    fn prompt_frame_benchmark_signals_preserve_stable_prefix_on_followup() {
+        let shape = MemoryContextShape {
+            entry_count: 6,
+            turn_entries: 3,
+            summary_chars: 128,
+            payload_chars: 256,
+        };
+        let suite = MemoryContextBenchmarkSuiteSamples {
+            seed_db_bytes: 1024,
+            window_only_samples: vec![1.0],
+            summary_window_cover_samples: vec![1.1],
+            summary_rebuild_samples: vec![2.0],
+            summary_rebuild_budget_change_samples: vec![1.3],
+            summary_metadata_realign_samples: vec![1.2],
+            summary_steady_state_samples: vec![0.8],
+            window_shrink_catch_up_samples: vec![0.9],
+            window_only_append_pre_overflow_samples: vec![0.7],
+            window_only_append_cold_overflow_samples: vec![0.75],
+            summary_append_pre_overflow_samples: vec![0.95],
+            summary_append_cold_overflow_samples: vec![1.05],
+            summary_append_saturated_samples: vec![1.0],
+            window_only_rss_deltas_kib: vec![0.0],
+            summary_window_cover_rss_deltas_kib: vec![0.0],
+            summary_rebuild_rss_deltas_kib: vec![0.0],
+            summary_rebuild_budget_change_rss_deltas_kib: vec![0.0],
+            summary_metadata_realign_rss_deltas_kib: vec![0.0],
+            summary_steady_state_rss_deltas_kib: vec![0.0],
+            window_shrink_catch_up_rss_deltas_kib: vec![0.0],
+            window_only_append_pre_overflow_rss_deltas_kib: vec![0.0],
+            window_only_append_cold_overflow_rss_deltas_kib: vec![0.0],
+            summary_append_pre_overflow_rss_deltas_kib: vec![0.0],
+            summary_append_cold_overflow_rss_deltas_kib: vec![0.0],
+            summary_append_saturated_rss_deltas_kib: vec![0.0],
+            summary_rebuild_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+            summary_rebuild_budget_change_phase_samples: MemoryContextColdPathPhaseSamples::default(
+            ),
+            summary_metadata_realign_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+            window_shrink_catch_up_phase_samples: MemoryContextColdPathPhaseSamples::default(),
+            window_only_shape: shape,
+            summary_window_cover_shape: shape,
+            summary_rebuild_shape: shape,
+            summary_rebuild_budget_change_shape: shape,
+            summary_metadata_realign_shape: shape,
+            summary_steady_state_shape: shape,
+            window_shrink_catch_up_shape: shape,
+        };
+        let context = MemoryContextBenchmarkReportAugmentContext {
+            output_path: "memory-context-benchmark.json".to_owned(),
+            benchmark_temp_root: PathBuf::from("/tmp/memory-context-benchmark"),
+            history_turns: 24,
+            sliding_window: 6,
+            window_shrink_source_window: 4,
+            summary_max_chars: 256,
+            words_per_turn: 12,
+            rebuild_iterations: 2,
+            hot_iterations: 4,
+            warmup_iterations: 1,
+            suite_repetitions: 2,
+            enforce_gate: false,
+            min_steady_state_speedup_ratio: 1.10,
+        };
+
+        let signals = build_memory_context_prompt_frame_benchmark_signals(&suite, &context)
+            .expect("prompt frame benchmark signals");
+
+        assert!(signals.stable_prefix_preserved_on_followup);
+        assert!(signals.cached_prefix_preserved_on_followup);
+        assert!(signals.turn_ephemeral_hash_changed_on_followup);
+        assert!(
+            signals.layer_estimated_tokens.followup_turn_ephemeral > 0,
+            "expected followup tail token estimate to be recorded"
+        );
     }
 }

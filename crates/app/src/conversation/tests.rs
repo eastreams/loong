@@ -7002,6 +7002,7 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
         .expect("tool discovery entries should be an array");
     let prompt_frame_payloads =
         persisted_conversation_event_payloads_by_name(&persisted, "provider_prompt_frame_snapshot");
+    assert_eq!(prompt_frame_payloads.len(), 2);
     let initial_prompt_frame = prompt_frame_payloads
         .first()
         .expect("initial prompt-frame snapshot should be persisted");
@@ -7030,7 +7031,6 @@ async fn handle_turn_with_runtime_tool_search_requests_a_followup_provider_turn(
         entries.iter().all(|entry| entry.get("lease").is_none()),
         "persisted discovery state must not retain executable leases: {latest_discovery_payload:?}"
     );
-    assert_eq!(prompt_frame_payloads.len(), 2);
     assert_eq!(initial_prompt_frame["phase"], json!("initial"));
     assert_eq!(followup_prompt_frame["phase"], json!("followup"));
     assert_eq!(

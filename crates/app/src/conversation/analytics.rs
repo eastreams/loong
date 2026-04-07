@@ -1060,7 +1060,9 @@ fn update_hash_change_count(
         *change_count = change_count.saturating_add(1);
     }
 
-    *previous_hash = current_hash;
+    if let Some(current_hash) = current_hash {
+        *previous_hash = Some(current_hash);
+    }
 }
 
 fn prompt_frame_total_estimated_tokens(summary: &PromptFrameSummary) -> usize {
@@ -3392,6 +3394,53 @@ mod tests {
         assert_eq!(
             summary.latest_turn_ephemeral_hash.as_deref(),
             Some("tail-b")
+        );
+    }
+
+    #[test]
+    fn summarize_prompt_frame_events_preserves_previous_hash_across_missing_tail_hash() {
+        let payloads = [
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":1,"phase":"initial","prompt_frame":{"schema_version":1,"total_estimated_tokens":42,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":1,"turn_ephemeral_estimated_tokens":4,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-a"}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":2,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":55,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":0,"turn_ephemeral_estimated_tokens":0,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":null}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":3,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":60,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":1,"turn_ephemeral_estimated_tokens":5,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-b"}}}"#,
+        ];
+
+        let summary = summarize_prompt_frame_events(payloads.iter().copied());
+
+        assert_eq!(summary.turn_ephemeral_hash_change_events, 1);
+        assert_eq!(
+            summary.latest_turn_ephemeral_hash.as_deref(),
+            Some("tail-b")
+        );
+    }
+
+    #[test]
+    fn summarize_prompt_frame_events_counts_session_latched_drift_as_prefix_drift() {
+        let payloads = [
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":1,"phase":"initial","prompt_frame":{"schema_version":1,"total_estimated_tokens":42,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":0,"turn_ephemeral_estimated_tokens":0,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-a","stable_prefix_hash_sha256":"prefix-a","cached_prefix_sha256":"cached-a","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":null}}}"#,
+            r#"{"type":"conversation_event","event":"provider_prompt_frame_snapshot","payload":{"provider_round":2,"phase":"followup","prompt_frame":{"schema_version":1,"total_estimated_tokens":55,"stable_runtime_segment_count":1,"stable_runtime_estimated_tokens":12,"session_latched_segment_count":1,"session_latched_estimated_tokens":8,"advisory_profile_segment_count":1,"advisory_profile_estimated_tokens":6,"session_local_recall_segment_count":1,"session_local_recall_estimated_tokens":5,"recent_window_segment_count":1,"recent_window_estimated_tokens":7,"turn_ephemeral_segment_count":2,"turn_ephemeral_estimated_tokens":11,"stable_runtime_hash":"stable-a","session_latched_hash":"latched-b","stable_prefix_hash_sha256":"prefix-b","cached_prefix_sha256":"cached-b","advisory_profile_hash":"profile-a","session_local_recall_hash":"recall-a","recent_window_hash":"window-a","turn_ephemeral_hash":"tail-b"}}}"#,
+        ];
+
+        let summary = summarize_prompt_frame_events(payloads.iter().copied());
+
+        assert_eq!(summary.snapshot_events, 2);
+        assert_eq!(summary.stable_runtime_hash_change_events, 0);
+        assert_eq!(summary.session_latched_hash_change_events, 1);
+        assert_eq!(summary.stable_prefix_hash_change_events, 1);
+        assert_eq!(summary.cached_prefix_hash_change_events, 1);
+        assert_eq!(summary.advisory_profile_hash_change_events, 0);
+        assert_eq!(summary.latest_phase.as_deref(), Some("followup"));
+        assert_eq!(
+            summary.latest_session_latched_hash.as_deref(),
+            Some("latched-b")
+        );
+        assert_eq!(
+            summary.latest_stable_prefix_hash.as_deref(),
+            Some("prefix-b")
+        );
+        assert_eq!(
+            summary.latest_cached_prefix_hash.as_deref(),
+            Some("cached-b")
         );
     }
 
