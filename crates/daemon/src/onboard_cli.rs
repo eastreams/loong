@@ -7625,7 +7625,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn recommend_web_search_provider_from_available_credentials_prefers_unique_ready_provider() {
         let mut config = mvp::config::LoongClawConfig::default();
