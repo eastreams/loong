@@ -18,12 +18,12 @@ cd "$REPO_ROOT"
 violations=0
 
 # Extract workspace-internal dependency edges from cargo metadata.
-# Output: "from_crate -> to_crate" lines for loong-* packages only.
-PREFIX="loong-"
+# Output: "from_crate -> to_crate" lines for loongclaw-* packages only.
+PREFIX="loongclaw-"
 edges="$(cargo metadata --format-version 1 2>/dev/null \
   | python3 -c '
 import json, sys
-PREFIX = "loong-"
+PREFIX = "loongclaw-"
 meta = json.load(sys.stdin)
 ws_ids = {p["id"] for p in meta["packages"] if p["name"].startswith(PREFIX)}
 ws_names = {p["id"]: p["name"][len(PREFIX):] for p in meta["packages"] if p["id"] in ws_ids}
