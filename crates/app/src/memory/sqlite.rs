@@ -5642,10 +5642,17 @@ mod tests {
         assert_eq!(snapshot.window_turns.len(), 2);
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT role, content\n             FROM turns"
+                "SELECT id, role, content\n             FROM turns"
             ),
             1,
-            "expected window-only prompt snapshots to use a prompt-hydration query that does not fetch timestamps"
+            "expected window-only prompt snapshots to use the visible-turn prompt query that can skip internal persisted records without fetching timestamps"
+        );
+        assert_eq!(
+            cached_prepare_count_for_sql_fragment_for_tests(
+                "SELECT role, content\n             FROM turns"
+            ),
+            0,
+            "expected window-only prompt snapshots to retire the older lean query shape now that internal records require visible-turn filtering by id"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests("SELECT role, content, ts"),
@@ -8434,17 +8441,17 @@ mod tests {
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT role, content\n             FROM turns"
+                "SELECT id, role, content\n             FROM turns"
             ),
             1,
-            "expected exact-window summary snapshots to reuse the lean window query once turn-count metadata proves there is no summarized prefix"
+            "expected exact-window summary snapshots to reuse the visible-turn prompt query once turn-count metadata proves there is no summarized prefix"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests(
-                "SELECT id, role, content\n             FROM turns"
+                "SELECT role, content\n             FROM turns"
             ),
             0,
-            "expected exact-window summary snapshots to retire the older limit+1 overflow-probe query shape"
+            "expected exact-window summary snapshots to retire the older lean prompt query shape now that internal records require visible-turn filtering by id"
         );
         assert_eq!(
             cached_prepare_count_for_sql_fragment_for_tests("state.turn_count"),
