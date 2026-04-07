@@ -986,6 +986,28 @@ mod tests {
 
         assert_eq!(resolved, home.join(".loong"));
     }
+
+    #[test]
+    fn default_loongclaw_home_reads_loong_home_env() {
+        let mut env = ScopedEnv::new();
+        let override_home = std::env::temp_dir().join("loong-home-env-test");
+        env.set("LOONG_HOME", &override_home);
+        env.remove("LOONGCLAW_HOME");
+
+        assert_eq!(default_loongclaw_home(), override_home);
+    }
+
+    #[test]
+    fn default_loongclaw_home_prefers_loong_home_over_loongclaw_home() {
+        let mut env = ScopedEnv::new();
+        let new_home = std::env::temp_dir().join("loong-home-preferred");
+        let old_home = std::env::temp_dir().join("loongclaw-home-deprecated");
+        env.set("LOONG_HOME", &new_home);
+        env.set("LOONGCLAW_HOME", &old_home);
+
+        // The constant reads LOONG_HOME, so LOONGCLAW_HOME is ignored
+        assert_eq!(default_loongclaw_home(), new_home);
+    }
 }
 
 #[cfg(test)]
