@@ -2703,9 +2703,26 @@ api_key_env = "{secret}"
         write(Some(&path_string), &config, true).expect("config write should pass");
 
         let raw = fs::read_to_string(&path).expect("read config text");
-        let legacy_raw = raw.replace(
-            "personality = \"hermit\"",
-            "personality = \"friendly_collab\"",
+        let serialized_personality = "personality = \"hermit\"";
+        let legacy_personality = "personality = \"friendly_collab\"";
+        let fixture_contains_serialized_personality = raw.contains(serialized_personality);
+
+        assert!(
+            fixture_contains_serialized_personality,
+            "serialized personality fixture changed unexpectedly: {raw}"
+        );
+
+        let legacy_raw = raw.replacen(serialized_personality, legacy_personality, 1);
+        let replacement_happened = legacy_raw != raw;
+        let legacy_personality_written = legacy_raw.contains(legacy_personality);
+
+        assert!(
+            replacement_happened,
+            "fixture rewrite failed; serialized personality format changed"
+        );
+        assert!(
+            legacy_personality_written,
+            "fixture rewrite did not persist the legacy personality alias"
         );
 
         fs::write(&path, legacy_raw).expect("write legacy config text");

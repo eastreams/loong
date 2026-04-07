@@ -430,10 +430,28 @@ impl loongclaw_daemon::onboard_cli::OnboardUi for ScriptedOnboardUi {
                 options.len()
             ));
         }
-        options
+        let direct_match = options
             .iter()
-            .position(|option| option.slug.eq_ignore_ascii_case(trimmed))
-            .ok_or_else(|| format!("invalid scripted selection input: {trimmed}"))
+            .position(|option| option.slug.eq_ignore_ascii_case(trimmed));
+
+        if let Some(index) = direct_match {
+            return Ok(index);
+        }
+
+        let parsed_personality = loongclaw_daemon::onboard_cli::parse_prompt_personality(trimmed);
+
+        if let Some(personality) = parsed_personality {
+            let canonical_slug = loongclaw_daemon::onboard_cli::prompt_personality_id(personality);
+            let canonical_match = options
+                .iter()
+                .position(|option| option.slug.eq_ignore_ascii_case(canonical_slug));
+
+            if let Some(index) = canonical_match {
+                return Ok(index);
+            }
+        }
+
+        Err(format!("invalid scripted selection input: {trimmed}"))
     }
 }
 
@@ -605,6 +623,37 @@ fn scripted_onboard_ui_select_one_accepts_slug_input() {
 }
 
 #[test]
+fn scripted_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
+    let mut ui = ScriptedOnboardUi::new(["friendly_collab"]);
+    let options = vec![
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "classicist".to_owned(),
+            slug: "classicist".to_owned(),
+            description: String::new(),
+            recommended: true,
+        },
+        loongclaw_daemon::onboard_cli::SelectOption {
+            label: "hermit".to_owned(),
+            slug: "hermit".to_owned(),
+            description: String::new(),
+            recommended: false,
+        },
+    ];
+
+    let index = loongclaw_daemon::onboard_cli::OnboardUi::select_one(
+        &mut ui,
+        "Personality",
+        &options,
+        Some(0),
+        loongclaw_daemon::onboard_cli::SelectInteractionMode::List,
+    )
+    .expect("legacy personality aliases should stay accepted in scripted selection");
+
+    assert_eq!(index, 1);
+    assert_eq!(ui.transcript(), vec!["SELECT Personality".to_owned()]);
+}
+
+#[test]
 fn parse_provider_kind_accepts_primary_and_legacy_aliases() {
     assert_eq!(
         loongclaw_daemon::onboard_cli::parse_provider_kind("openai"),
@@ -736,6 +785,34 @@ fn provider_kind_id_mapping_includes_kimi_coding() {
 
 #[test]
 fn parse_prompt_personality_accepts_supported_ids() {
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("classicist"),
+        Some(mvp::prompt::PromptPersonality::Classicist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("pragmatist"),
+        Some(mvp::prompt::PromptPersonality::Pragmatist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("idealist"),
+        Some(mvp::prompt::PromptPersonality::Idealist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("romanticist"),
+        Some(mvp::prompt::PromptPersonality::Romanticist)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("hermit"),
+        Some(mvp::prompt::PromptPersonality::Hermit)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("cyber_radical"),
+        Some(mvp::prompt::PromptPersonality::CyberRadical)
+    );
+    assert_eq!(
+        crate::onboard_cli::parse_prompt_personality("nihilist"),
+        Some(mvp::prompt::PromptPersonality::Nihilist)
+    );
     assert_eq!(
         crate::onboard_cli::parse_prompt_personality("calm_engineering"),
         Some(mvp::prompt::PromptPersonality::Classicist)
@@ -883,6 +960,19 @@ async fn non_interactive_legacy_personality_alias_still_maps_to_supported_preset
             .iter()
             .any(|line| line.contains("onboarding complete")),
         "non-interactive legacy personality path should still complete successfully: {transcript:#?}"
+    );
+
+    let raw_config = std::fs::read_to_string(&output_path).expect("read written config");
+    let canonical_personality = "personality = \"hermit\"";
+    let legacy_personality = "personality = \"friendly_collab\"";
+
+    assert!(
+        raw_config.contains(canonical_personality),
+        "non-interactive onboarding should persist the canonical personality id: {raw_config}"
+    );
+    assert!(
+        !raw_config.contains(legacy_personality),
+        "non-interactive onboarding should not persist the legacy alias: {raw_config}"
     );
 
     let (_, config) = mvp::config::load(output_path.to_str())
@@ -5584,6 +5674,27 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
     config.cli.personality = Some(mvp::prompt::PromptPersonality::Hermit);
 
     let lines = crate::onboard_cli::render_personality_selection_screen_lines(&config, 80);
+    let expected_personality_ids = [
+        "classicist",
+        "pragmatist",
+        "idealist",
+        "romanticist",
+        "hermit",
+        "cyber_radical",
+        "nihilist",
+    ];
+    let selector_line_count = lines
+        .iter()
+        .filter(|line| {
+            expected_personality_ids
+                .iter()
+                .any(|personality_id| line.contains(&format!("{personality_id})")))
+        })
+        .count();
+    let experimental_line_count = lines
+        .iter()
+        .filter(|line| line.contains("experimental ·"))
+        .count();
 
     assert_compact_loongclaw_header(&lines, "personality screen");
     assert!(
@@ -5598,13 +5709,27 @@ fn onboard_personality_selection_screen_shows_native_personality_choices() {
         lines.iter().any(|line| line == "step 4 of 8 · personality"),
         "personality screen should surface the native prompt-pack progress step: {lines:#?}"
     );
-    assert!(
-        lines.iter().any(|line| line.contains("hermit)")),
-        "personality screen should keep the canonical hermit selector visible without bracket syntax: {lines:#?}"
+
+    for personality_id in expected_personality_ids {
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("{personality_id})"))),
+            "personality screen should surface every catalog personality id: {lines:#?}"
+        );
+    }
+
+    assert_eq!(
+        selector_line_count, 7,
+        "personality screen should render exactly seven selector lines from the shared catalog: {lines:#?}"
     );
     assert!(
         lines.iter().any(|line| line.contains("experimental ·")),
         "personality screen should mark sharper presets as experimental in the shared catalog-driven descriptions: {lines:#?}"
+    );
+    assert_eq!(
+        experimental_line_count, 2,
+        "personality screen should label both experimental personalities: {lines:#?}"
     );
     assert!(
         lines.iter().all(|line| !line.contains("[hermit]")),

@@ -15,6 +15,8 @@ system prompt.
       `cyber_radical`, and `nihilist`.
 - [ ] Personality metadata is defined in one shared catalog so prompt rendering,
       onboarding selection, and CLI validation do not drift apart.
+- [ ] Onboarding clearly labels experimental personalities so operators can
+      distinguish sharper presets from the stable baseline set.
 - [ ] Legacy personality ids from the earlier three-preset rollout continue to
       load and map onto supported personalities so existing configs remain
       readable.
@@ -37,8 +39,8 @@ system prompt.
 | `idealist` | Principled, long-horizon, mission-driven | Emphasizes values and durable impact |
 | `romanticist` | Expressive, image-rich, metaphor-aware | Adds tasteful literary texture without hiding substance |
 | `hermit` | Gentle, patient, grounding | Optimized for calm emotional tone and paced guidance |
-| `cyber_radical` | Bold, unconventional, high-energy | Experimental; must stay compliant and safety-bounded |
-| `nihilist` | Dry, skeptical, darkly witty | Experimental; must suppress dark humor in sensitive contexts |
+| `cyber_radical` | Bold, unconventional, high-energy | Experimental; onboarding should label it accordingly and it must stay compliant and safety-bounded |
+| `nihilist` | Dry, skeptical, darkly witty | Experimental; onboarding should label it accordingly and it must suppress dark humor in sensitive contexts |
 
 ## Out of Scope
 

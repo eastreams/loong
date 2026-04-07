@@ -866,10 +866,17 @@ fn parse_select_one_input(trimmed: &str, options: &[SelectOption]) -> Option<usi
     {
         return Some(selected - 1);
     }
-    options.iter().position(|option| {
+
+    let direct_match = options.iter().position(|option| {
         option.slug.eq_ignore_ascii_case(trimmed)
             || select_option_input_slug(option).eq_ignore_ascii_case(trimmed)
-    })
+    });
+
+    if direct_match.is_some() {
+        return direct_match;
+    }
+
+    parse_prompt_personality_select_input(trimmed, options)
 }
 
 fn render_select_one_invalid_input_message(options: &[SelectOption]) -> String {
@@ -888,6 +895,33 @@ fn resolve_select_one_eof(default: Option<usize>) -> CliResult<usize> {
     default.ok_or_else(|| {
         "onboarding cancelled: stdin closed while waiting for required selection".to_owned()
     })
+}
+
+fn parse_prompt_personality_select_input(trimmed: &str, options: &[SelectOption]) -> Option<usize> {
+    let prompt_personality_options = select_options_are_prompt_personalities(options);
+
+    if !prompt_personality_options {
+        return None;
+    }
+
+    let personality = parse_prompt_personality(trimmed)?;
+    let canonical_slug = prompt_personality_id(personality);
+
+    options
+        .iter()
+        .position(|option| option.slug.eq_ignore_ascii_case(canonical_slug))
+}
+
+fn select_options_are_prompt_personalities(options: &[SelectOption]) -> bool {
+    for option in options {
+        let parsed_personality = parse_prompt_personality(&option.slug);
+
+        if parsed_personality.is_none() {
+            return false;
+        }
+    }
+
+    true
 }
 
 fn print_lines(ui: &mut impl OnboardUi, lines: impl IntoIterator<Item = String>) -> CliResult<()> {
@@ -9381,6 +9415,36 @@ mod tests {
                 SelectInteractionMode::List,
             )
             .expect("test ui should stay aligned with shared slug-selection behavior");
+
+        assert_eq!(index, 1);
+    }
+
+    #[test]
+    fn test_onboard_ui_select_one_accepts_legacy_personality_alias_input() {
+        let mut ui = TestOnboardUi::with_inputs(["friendly_collab"]);
+        let options = vec![
+            SelectOption {
+                label: "classicist".to_owned(),
+                slug: "classicist".to_owned(),
+                description: String::new(),
+                recommended: true,
+            },
+            SelectOption {
+                label: "hermit".to_owned(),
+                slug: "hermit".to_owned(),
+                description: String::new(),
+                recommended: false,
+            },
+        ];
+
+        let index = ui
+            .select_one(
+                "Personality",
+                &options,
+                Some(0),
+                SelectInteractionMode::List,
+            )
+            .expect("legacy personality aliases should still resolve in selector mode");
 
         assert_eq!(index, 1);
     }

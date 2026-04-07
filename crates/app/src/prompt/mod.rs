@@ -20,6 +20,7 @@ pub enum PromptPersonality {
 pub struct PromptPersonalityDescriptor {
     pub personality: PromptPersonality,
     pub id: &'static str,
+    pub aliases: &'static [&'static str],
     pub label: &'static str,
     pub selection_summary: &'static str,
     pub overlay_title: &'static str,
@@ -27,16 +28,11 @@ pub struct PromptPersonalityDescriptor {
     pub experimental: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PromptPersonalityAlias {
-    alias: &'static str,
-    personality: PromptPersonality,
-}
-
 const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Classicist,
         id: "classicist",
+        aliases: &["calm_engineering", "engineering", "calm", "classical"],
         label: "classicist",
         selection_summary: "formal, precise, and orderly",
         overlay_title: "Classicist",
@@ -50,6 +46,13 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Pragmatist,
         id: "pragmatist",
+        aliases: &[
+            "autonomous_executor",
+            "autonomous",
+            "executor",
+            "pragmatic",
+            "practical",
+        ],
         label: "pragmatist",
         selection_summary: "lean, decisive, and outcome-first",
         overlay_title: "Pragmatist",
@@ -63,6 +66,7 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Idealist,
         id: "idealist",
+        aliases: &["idealism"],
         label: "idealist",
         selection_summary: "principled, long-horizon, and mission-driven",
         overlay_title: "Idealist",
@@ -76,6 +80,7 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Romanticist,
         id: "romanticist",
+        aliases: &["romantic"],
         label: "romanticist",
         selection_summary: "vivid, expressive, and metaphor-aware",
         overlay_title: "Romanticist",
@@ -89,6 +94,7 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Hermit,
         id: "hermit",
+        aliases: &["friendly_collab", "friendly", "collab", "watcher"],
         label: "hermit",
         selection_summary: "gentle, patient, and grounding",
         overlay_title: "Hermit",
@@ -102,6 +108,7 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::CyberRadical,
         id: "cyber_radical",
+        aliases: &["cyberpunk", "radical"],
         label: "cyber radical",
         selection_summary: "bold, unconventional, and high-energy",
         overlay_title: "Cyber Radical",
@@ -115,6 +122,7 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
     PromptPersonalityDescriptor {
         personality: PromptPersonality::Nihilist,
         id: "nihilist",
+        aliases: &["nihilism"],
         label: "nihilist",
         selection_summary: "dry, skeptical, and darkly witty",
         overlay_title: "Nihilist",
@@ -124,81 +132,6 @@ const PROMPT_PERSONALITY_CATALOG: [PromptPersonalityDescriptor; 7] = [
 - Confirmation threshold: medium. Do not let detachment erase caution.
 - Tool-use bias: unsentimental and direct."#,
         experimental: true,
-    },
-];
-
-const PROMPT_PERSONALITY_ALIASES: [PromptPersonalityAlias; 18] = [
-    PromptPersonalityAlias {
-        alias: "romantic",
-        personality: PromptPersonality::Romanticist,
-    },
-    PromptPersonalityAlias {
-        alias: "idealism",
-        personality: PromptPersonality::Idealist,
-    },
-    PromptPersonalityAlias {
-        alias: "pragmatic",
-        personality: PromptPersonality::Pragmatist,
-    },
-    PromptPersonalityAlias {
-        alias: "practical",
-        personality: PromptPersonality::Pragmatist,
-    },
-    PromptPersonalityAlias {
-        alias: "nihilism",
-        personality: PromptPersonality::Nihilist,
-    },
-    PromptPersonalityAlias {
-        alias: "calm_engineering",
-        personality: PromptPersonality::Classicist,
-    },
-    PromptPersonalityAlias {
-        alias: "engineering",
-        personality: PromptPersonality::Classicist,
-    },
-    PromptPersonalityAlias {
-        alias: "calm",
-        personality: PromptPersonality::Classicist,
-    },
-    PromptPersonalityAlias {
-        alias: "classical",
-        personality: PromptPersonality::Classicist,
-    },
-    PromptPersonalityAlias {
-        alias: "cyberpunk",
-        personality: PromptPersonality::CyberRadical,
-    },
-    PromptPersonalityAlias {
-        alias: "radical",
-        personality: PromptPersonality::CyberRadical,
-    },
-    PromptPersonalityAlias {
-        alias: "friendly_collab",
-        personality: PromptPersonality::Hermit,
-    },
-    PromptPersonalityAlias {
-        alias: "friendly",
-        personality: PromptPersonality::Hermit,
-    },
-    PromptPersonalityAlias {
-        alias: "collab",
-        personality: PromptPersonality::Hermit,
-    },
-    PromptPersonalityAlias {
-        alias: "watcher",
-        personality: PromptPersonality::Hermit,
-    },
-    PromptPersonalityAlias {
-        alias: "autonomous_executor",
-        personality: PromptPersonality::Pragmatist,
-    },
-    PromptPersonalityAlias {
-        alias: "autonomous",
-        personality: PromptPersonality::Pragmatist,
-    },
-    PromptPersonalityAlias {
-        alias: "executor",
-        personality: PromptPersonality::Pragmatist,
     },
 ];
 
@@ -294,18 +227,10 @@ pub fn parse_prompt_personality(raw: &str) -> Option<PromptPersonality> {
     let normalized_id = normalized.as_str();
 
     for descriptor in prompt_personality_catalog() {
-        let matches_descriptor = descriptor.id == normalized_id;
+        let matches_descriptor = prompt_personality_matches_token(descriptor, normalized_id);
 
         if matches_descriptor {
             return Some(descriptor.personality);
-        }
-    }
-
-    for alias in PROMPT_PERSONALITY_ALIASES {
-        let matches_alias = alias.alias == normalized_id;
-
-        if matches_alias {
-            return Some(alias.personality);
         }
     }
 
@@ -331,8 +256,7 @@ pub fn render_system_prompt(input: PromptRenderInput) -> String {
     let descriptor = prompt_personality_descriptor(input.personality);
     let overlay_section = render_personality_overlay(descriptor);
     let mut sections = vec![base_prompt().to_owned(), overlay_section];
-    let trimmed_addendum = input.addendum.map(|value| value.trim().to_owned());
-    let addendum = trimmed_addendum.filter(|value| !value.is_empty());
+    let addendum = input.addendum.filter(|value| !value.trim().is_empty());
 
     if let Some(addendum) = addendum {
         let addendum_section = format!("## User Addendum\n{addendum}");
@@ -422,6 +346,28 @@ fn normalize_prompt_personality_token(raw: &str) -> String {
     normalized.trim_matches('_').to_owned()
 }
 
+fn prompt_personality_matches_token(
+    descriptor: &PromptPersonalityDescriptor,
+    normalized_id: &str,
+) -> bool {
+    let matches_id = descriptor.id == normalized_id;
+
+    if matches_id {
+        return true;
+    }
+
+    for alias in descriptor.aliases {
+        let normalized_alias = normalize_prompt_personality_token(alias);
+        let matches_alias = normalized_alias == normalized_id;
+
+        if matches_alias {
+            return true;
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -439,10 +385,47 @@ mod tests {
     }
 
     #[test]
+    fn personality_catalog_aliases_are_unique_and_do_not_shadow_ids() {
+        let mut tokens = BTreeSet::new();
+
+        for descriptor in prompt_personality_catalog() {
+            let normalized_id = normalize_prompt_personality_token(descriptor.id);
+            let inserted_id = tokens.insert(normalized_id.clone());
+
+            assert!(
+                inserted_id,
+                "duplicate normalized personality token: {}",
+                normalized_id
+            );
+
+            for alias in descriptor.aliases {
+                let normalized_alias = normalize_prompt_personality_token(alias);
+                let inserted_alias = tokens.insert(normalized_alias.clone());
+
+                assert!(
+                    inserted_alias,
+                    "duplicate normalized personality token: {}",
+                    normalized_alias
+                );
+            }
+        }
+    }
+
+    #[test]
     fn default_prompt_personality_is_classicist() {
         let default_id = PromptPersonality::default().id();
 
         assert_eq!(default_id, "classicist");
+    }
+
+    #[test]
+    fn descriptor_lookup_matches_catalog_personality_entries() {
+        for descriptor in prompt_personality_catalog() {
+            let resolved = prompt_personality_descriptor(descriptor.personality);
+
+            assert_eq!(resolved.id, descriptor.id);
+            assert_eq!(resolved.personality, descriptor.personality);
+        }
     }
 
     #[test]
@@ -491,6 +474,17 @@ mod tests {
 
         assert!(rendered.contains("Always prefer concise summaries."));
         assert!(rendered.contains("## User Addendum"));
+    }
+
+    #[test]
+    fn render_prompt_preserves_non_empty_addendum_whitespace() {
+        let addendum = "  Keep the indentation.\n";
+        let rendered = render_system_prompt(PromptRenderInput {
+            personality: PromptPersonality::Hermit,
+            addendum: Some(addendum.to_owned()),
+        });
+
+        assert!(rendered.contains(addendum));
     }
 
     #[test]
