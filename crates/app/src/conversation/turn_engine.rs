@@ -1728,6 +1728,10 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
+fn is_repairable_tool_preflight_denial(reason: &str) -> bool {
+    reason.starts_with("tool_preflight_denied: tool input needs repair:")
+}
+
 fn render_app_tool_denied_reason(reason: &str) -> String {
     reason
         .strip_prefix("app_tool_denied: ")
@@ -3496,8 +3500,11 @@ impl TurnEngine {
                 });
             }
             Err(reason) if reason.starts_with("tool_preflight_denied:") => {
-                let turn_result =
-                    TurnResult::policy_denied("tool_preflight_denied", reason.clone());
+                let turn_result = if is_repairable_tool_preflight_denial(reason.as_str()) {
+                    TurnResult::retryable_tool_error("tool_preflight_denied", reason.clone())
+                } else {
+                    TurnResult::policy_denied("tool_preflight_denied", reason.clone())
+                };
                 let denial_decision = ToolDecisionTelemetry::deny(
                     effective_tool_name.as_str(),
                     reason,
