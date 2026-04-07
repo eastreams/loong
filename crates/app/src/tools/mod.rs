@@ -2427,12 +2427,9 @@ mod tests {
         assert!(tool_search_properties.contains_key("query"));
         assert!(tool_search_properties.contains_key("exact_tool_id"));
         assert!(!tool_search_required.contains(&Value::String("query".to_owned())));
-        assert_eq!(
-            tool_search["function"]["parameters"]["anyOf"],
-            json!([
-                { "required": ["query"] },
-                { "required": ["exact_tool_id"] }
-            ])
+        assert!(
+            tool_search["function"]["parameters"].get("anyOf").is_none(),
+            "anyOf removed for OpenAI-compatible provider compatibility"
         );
     }
 
@@ -4079,7 +4076,7 @@ mod tests {
         );
         assert_eq!(
             searchable.required_field_groups,
-            vec![vec!["path".to_owned()], vec!["bundled_skill_id".to_owned()]]
+            Vec::<Vec<String>>::new()
         );
     }
 
