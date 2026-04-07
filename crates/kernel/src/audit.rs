@@ -408,9 +408,7 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
             path.display()
         ))
     })?;
-    let original_permissions = fs::metadata(path)
-        .map(|m| m.permissions())
-        .ok();
+    let original_permissions = fs::metadata(path).map(|m| m.permissions()).ok();
 
     let reader = BufReader::new(file);
     let mut repaired_lines: Vec<Vec<u8>> = Vec::new();
@@ -497,11 +495,8 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
             } else {
                 // Prior legacy entries were repaired, so the chain position
                 // changed. Re-seal this entry with the rebuilt prev_hash.
-                let entry_hash = compute_audit_event_entry_hash(
-                    &event,
-                    rebuilt_previous_hash.as_deref(),
-                    path,
-                )?;
+                let entry_hash =
+                    compute_audit_event_entry_hash(&event, rebuilt_previous_hash.as_deref(), path)?;
                 let resealed =
                     event_with_integrity(event, rebuilt_previous_hash.clone(), entry_hash.clone());
                 let encoded = serialize_audit_event_line(&resealed, path)?;
@@ -522,11 +517,8 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                     },
                 });
             }
-            let entry_hash = compute_audit_event_entry_hash(
-                &event,
-                rebuilt_previous_hash.as_deref(),
-                path,
-            )?;
+            let entry_hash =
+                compute_audit_event_entry_hash(&event, rebuilt_previous_hash.as_deref(), path)?;
             let repaired =
                 event_with_integrity(event, rebuilt_previous_hash.clone(), entry_hash.clone());
             let encoded = serialize_audit_event_line(&repaired, path)?;
