@@ -99,6 +99,12 @@ struct MemoryContextPromptFrameBenchmarkSignals {
     turn_ephemeral_hash_changed_on_followup: bool,
 }
 
+fn require_prompt_frame_metric<T>(value: Option<T>, metric_name: &str) -> CliResult<T> {
+    value.ok_or_else(|| {
+        format!("memory context benchmark missing prompt frame metric: {metric_name}")
+    })
+}
+
 fn run_memory_context_benchmark_suite(
     temp_root_override: Option<&Path>,
     history_turns: usize,
@@ -364,12 +370,34 @@ fn build_memory_context_prompt_frame_benchmark_signals(
         prompt_frame.with_turn_ephemeral_messages(followup_messages.as_slice(), None);
     let followup_summary = followup_prompt_frame.summary;
 
-    let initial_total_estimated_tokens = initial_summary
-        .total_estimated_tokens
-        .ok_or_else(|| "missing initial prompt-frame total_estimated_tokens".to_owned())?;
-    let followup_total_estimated_tokens = followup_summary
-        .total_estimated_tokens
-        .ok_or_else(|| "missing followup prompt-frame total_estimated_tokens".to_owned())?;
+    let initial_total_estimated_tokens = require_prompt_frame_metric(
+        initial_summary.total_estimated_tokens,
+        "initial.total_estimated_tokens",
+    )?;
+    let followup_total_estimated_tokens = require_prompt_frame_metric(
+        followup_summary.total_estimated_tokens,
+        "followup.total_estimated_tokens",
+    )?;
+    let initial_stable_prefix_hash = require_prompt_frame_metric(
+        initial_summary.stable_prefix_hash_sha256.clone(),
+        "initial.stable_prefix_hash_sha256",
+    )?;
+    let followup_stable_prefix_hash = require_prompt_frame_metric(
+        followup_summary.stable_prefix_hash_sha256.clone(),
+        "followup.stable_prefix_hash_sha256",
+    )?;
+    let initial_cached_prefix_hash = require_prompt_frame_metric(
+        initial_summary.cached_prefix_sha256.clone(),
+        "initial.cached_prefix_sha256",
+    )?;
+    let followup_cached_prefix_hash = require_prompt_frame_metric(
+        followup_summary.cached_prefix_sha256.clone(),
+        "followup.cached_prefix_sha256",
+    )?;
+    let followup_turn_ephemeral_hash = require_prompt_frame_metric(
+        followup_summary.turn_ephemeral_hash_sha256.clone(),
+        "followup.turn_ephemeral_hash_sha256",
+    )?;
     let stable_prefix_estimated_tokens = initial_summary
         .stable_runtime_estimated_tokens
         .saturating_add(initial_summary.session_latched_estimated_tokens);
@@ -382,24 +410,15 @@ fn build_memory_context_prompt_frame_benchmark_signals(
         followup_turn_ephemeral_estimated_tokens,
         followup_total_estimated_tokens,
     );
-    let stable_prefix_preserved_on_followup = matches!(
-        (
-            initial_summary.stable_prefix_hash_sha256.as_deref(),
-            followup_summary.stable_prefix_hash_sha256.as_deref(),
-        ),
-        (Some(initial_hash), Some(followup_hash)) if initial_hash == followup_hash
-    );
-    let cached_prefix_preserved_on_followup = matches!(
-        (
-            initial_summary.cached_prefix_sha256.as_deref(),
-            followup_summary.cached_prefix_sha256.as_deref(),
-        ),
-        (Some(initial_hash), Some(followup_hash)) if initial_hash == followup_hash
-    );
-    let initial_turn_ephemeral_hash = initial_summary.turn_ephemeral_hash_sha256.as_deref();
-    let followup_turn_ephemeral_hash = followup_summary.turn_ephemeral_hash_sha256.as_deref();
-    let turn_ephemeral_hash_changed_on_followup = followup_turn_ephemeral_hash
-        .is_some_and(|followup_hash| initial_turn_ephemeral_hash != Some(followup_hash));
+    let stable_prefix_preserved_on_followup =
+        initial_stable_prefix_hash == followup_stable_prefix_hash;
+    let cached_prefix_preserved_on_followup =
+        initial_cached_prefix_hash == followup_cached_prefix_hash;
+    let turn_ephemeral_hash_changed_on_followup = initial_summary
+        .turn_ephemeral_hash_sha256
+        .as_ref()
+        .map(|initial_hash| initial_hash != &followup_turn_ephemeral_hash)
+        .unwrap_or(true);
     let layer_estimated_tokens = MemoryContextPromptFrameLayerTokenSignals {
         stable_prefix: stable_prefix_estimated_tokens,
         advisory_profile: advisory_profile_estimated_tokens,
@@ -410,10 +429,10 @@ fn build_memory_context_prompt_frame_benchmark_signals(
 
     Ok(MemoryContextPromptFrameBenchmarkSignals {
         representative_scenario: "summary_steady_state".to_owned(),
-        initial_stable_prefix_hash_sha256: initial_summary.stable_prefix_hash_sha256,
-        followup_stable_prefix_hash_sha256: followup_summary.stable_prefix_hash_sha256,
-        initial_cached_prefix_sha256: initial_summary.cached_prefix_sha256,
-        followup_cached_prefix_sha256: followup_summary.cached_prefix_sha256,
+        initial_stable_prefix_hash_sha256: Some(initial_stable_prefix_hash),
+        followup_stable_prefix_hash_sha256: Some(followup_stable_prefix_hash),
+        initial_cached_prefix_sha256: Some(initial_cached_prefix_hash),
+        followup_cached_prefix_sha256: Some(followup_cached_prefix_hash),
         initial_total_estimated_tokens,
         followup_total_estimated_tokens,
         layer_estimated_tokens,

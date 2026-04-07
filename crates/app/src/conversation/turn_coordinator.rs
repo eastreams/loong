@@ -34,6 +34,8 @@ use crate::runtime_self_continuity;
 
 use super::super::config::{LoongClawConfig, ToolConsentMode};
 use super::ConversationSessionAddress;
+use super::PromptFrame;
+use super::PromptFrameSummary;
 use super::ProviderErrorMode;
 use super::analytics::{
     SafeLaneEventSummary, TurnCheckpointProgressStatus as AnalyticsTurnCheckpointProgressStatus,
@@ -149,7 +151,6 @@ use crate::session::repository::{
     SessionRepository, SessionState,
 };
 use support::{
-    ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
     emit_async_delegate_child_queued_event, emit_async_delegate_child_terminal_event,
     emit_discovery_first_event, emit_prompt_frame_event, estimate_tokens_for_messages,
     inject_delegate_workspace_metadata, split_delegate_workspace_cleanup,
@@ -496,6 +497,183 @@ struct SafeLaneRoundExecution {
     report: PlanRunReport,
     tool_outputs: Vec<String>,
     tool_output_stats: SafeLaneToolOutputStats,
+}
+
+#[derive(Debug, Clone)]
+struct ProviderTurnSessionState {
+    messages: Vec<Value>,
+    estimated_tokens: Option<usize>,
+    prompt_frame: PromptFrame,
+}
+
+impl ProviderTurnSessionState {
+    fn from_assembled_context(
+        assembled_context: AssembledConversationContext,
+        user_input: &str,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> Self {
+        let AssembledConversationContext {
+            messages,
+            artifacts,
+            estimated_tokens,
+            prompt_fragments,
+            system_prompt_addition,
+        } = assembled_context;
+        let mut messages = messages;
+        let turn_ephemeral_start_index = messages.len();
+        if let Some(ingress) = ingress.filter(|value| value.has_contextual_hints()) {
+            messages.push(ingress.as_system_message());
+        }
+        messages.push(json!({
+            "role": "user",
+            "content": user_input,
+        }));
+        let prompt_frame = PromptFrame::from_context_parts(
+            prompt_fragments.as_slice(),
+            messages.as_slice(),
+            artifacts.as_slice(),
+            estimated_tokens,
+            Some(turn_ephemeral_start_index),
+        );
+        let assembled_context = AssembledConversationContext {
+            messages,
+            artifacts,
+            estimated_tokens,
+            prompt_fragments,
+            system_prompt_addition,
+        };
+        Self {
+            messages: assembled_context.messages,
+            estimated_tokens,
+            prompt_frame,
+        }
+    }
+
+    fn after_turn_messages(&self, reply: &str) -> Vec<Value> {
+        let mut messages = self.messages.clone();
+        messages.push(json!({
+            "role": "assistant",
+            "content": reply,
+        }));
+        messages
+    }
+
+    fn prompt_frame_summary(&self) -> &PromptFrameSummary {
+        &self.prompt_frame.summary
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProviderTurnReplyTailPhase {
+    reply: String,
+    after_turn_messages: Vec<Value>,
+    estimated_tokens: Option<usize>,
+}
+
+impl ProviderTurnReplyTailPhase {
+    fn from_session(session: &ProviderTurnSessionState, reply: &str) -> Self {
+        Self {
+            reply: reply.to_owned(),
+            after_turn_messages: session.after_turn_messages(reply),
+            estimated_tokens: session.estimated_tokens,
+        }
+    }
+
+    fn reply(&self) -> &str {
+        self.reply.as_str()
+    }
+
+    fn after_turn_messages(&self) -> &[Value] {
+        &self.after_turn_messages
+    }
+
+    fn estimated_tokens(&self) -> Option<usize> {
+        self.estimated_tokens
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ProviderTurnPreparation {
+    session: ProviderTurnSessionState,
+    lane_plan: ProviderTurnLanePlan,
+    raw_tool_output_requested: bool,
+    turn_id: String,
+}
+
+impl ProviderTurnPreparation {
+    #[cfg(test)]
+    fn from_assembled_context(
+        config: &LoongClawConfig,
+        assembled_context: AssembledConversationContext,
+        user_input: &str,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> Self {
+        let turn_id = next_conversation_turn_id();
+        Self::from_assembled_context_with_turn_id(
+            config,
+            assembled_context,
+            user_input,
+            turn_id.as_str(),
+            ingress,
+        )
+    }
+
+    fn from_assembled_context_with_turn_id(
+        config: &LoongClawConfig,
+        assembled_context: AssembledConversationContext,
+        user_input: &str,
+        turn_id: &str,
+        ingress: Option<&ConversationIngressContext>,
+    ) -> Self {
+        Self {
+            session: ProviderTurnSessionState::from_assembled_context(
+                assembled_context,
+                user_input,
+                ingress,
+            ),
+            lane_plan: ProviderTurnLanePlan::from_user_input(config, user_input),
+            raw_tool_output_requested: user_requested_raw_tool_output(user_input),
+            turn_id: turn_id.to_owned(),
+        }
+    }
+
+    fn for_followup_messages(&self, messages: Vec<Value>) -> Self {
+        let default_tail_start_index = self.session.messages.len();
+        let tail_start_index = self
+            .session
+            .prompt_frame
+            .turn_ephemeral_start_index()
+            .unwrap_or(default_tail_start_index);
+        let followup_tail_slice = messages.get(tail_start_index..);
+        let followup_tail_messages = followup_tail_slice.unwrap_or(&[]).to_vec();
+        let prompt_frame = self
+            .session
+            .prompt_frame
+            .with_turn_ephemeral_messages(followup_tail_messages.as_slice(), None);
+        Self {
+            session: ProviderTurnSessionState {
+                messages,
+                estimated_tokens: None,
+                prompt_frame,
+            },
+            lane_plan: self.lane_plan.clone(),
+            raw_tool_output_requested: self.raw_tool_output_requested,
+            turn_id: self.turn_id.clone(),
+        }
+    }
+
+    fn checkpoint(&self) -> TurnPreparationSnapshot {
+        TurnPreparationSnapshot {
+            lane: self.lane_plan.decision.lane,
+            max_tool_steps: self.lane_plan.max_tool_steps,
+            raw_tool_output_requested: self.raw_tool_output_requested,
+            context_message_count: self.session.messages.len(),
+            context_fingerprint_sha256: checkpoint_context_fingerprint_sha256(
+                &self.session.messages,
+            ),
+            estimated_tokens: self.session.estimated_tokens,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -9115,6 +9293,92 @@ mod tests {
         assert!(
             followup_summary.turn_ephemeral_segment_count
                 > initial_summary.turn_ephemeral_segment_count
+        );
+    }
+
+    #[test]
+    fn provider_turn_followup_preparation_retains_original_tail_across_multiple_followups() {
+        let base_fragment = crate::conversation::PromptFragment::new(
+            "base-system",
+            crate::conversation::PromptLane::BaseSystem,
+            "base-system",
+            "base system prompt",
+            crate::conversation::ContextArtifactKind::SystemPrompt,
+        )
+        .with_cacheable(true);
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                serde_json::json!({
+                    "role": "system",
+                    "content": "base system prompt"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "recent assistant turn"
+                }),
+            ],
+            artifacts: vec![
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: crate::conversation::ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: crate::conversation::ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: Some(24),
+            prompt_fragments: vec![base_fragment],
+            system_prompt_addition: None,
+        };
+        let preparation = ProviderTurnPreparation::from_assembled_context(
+            &LoongClawConfig::default(),
+            assembled,
+            "use the recent result",
+            None,
+        );
+        let mut first_followup_messages = preparation.session.messages.clone();
+
+        first_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] compacted tail"
+        }));
+        first_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue"
+        }));
+
+        let first_followup_preparation = preparation.for_followup_messages(first_followup_messages);
+        let mut second_followup_messages = first_followup_preparation.session.messages.clone();
+
+        second_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] second tail"
+        }));
+        second_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue again"
+        }));
+
+        let second_followup_preparation =
+            first_followup_preparation.for_followup_messages(second_followup_messages);
+        let second_summary = second_followup_preparation.session.prompt_frame_summary();
+        let tail_bucket = second_summary
+            .bucket(crate::conversation::PromptFrameLayer::TurnEphemeralTail)
+            .expect("turn-ephemeral bucket should exist");
+
+        assert_eq!(tail_bucket.message_count, 5);
+        assert_eq!(second_summary.turn_ephemeral_segment_count, 5);
+        assert_eq!(
+            second_summary.stable_prefix_hash_sha256,
+            preparation
+                .session
+                .prompt_frame_summary()
+                .stable_prefix_hash_sha256
         );
     }
 

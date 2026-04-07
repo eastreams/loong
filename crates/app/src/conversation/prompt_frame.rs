@@ -275,6 +275,14 @@ impl PromptFrame {
         Self { summary }
     }
 
+    pub fn turn_ephemeral_start_index(&self) -> Option<usize> {
+        self.summary
+            .messages
+            .iter()
+            .find(|message| message.frame_layer == PromptFrameLayer::TurnEphemeralTail)
+            .map(|message| message.message_index)
+    }
+
     pub fn with_turn_ephemeral_messages(
         &self,
         messages: &[Value],
