@@ -55,43 +55,6 @@ fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
-/// Bridges deprecated `LOONGCLAW_*` environment variables to their `LOONG_*`
-/// replacements. Runs once at startup before any config reads.
-///
-/// For each entry: if the old name is set but the new name is not, copy the
-/// value into the new name and emit a deprecation warning. When both are set
-/// the new name wins silently.
-///
-/// Based on the pattern established by rustup (PR #161) for the
-/// `MULTIRUST_*` → `RUSTUP_*` migration.
-fn make_env_compatible() {
-    // (new_name, deprecated_name)
-    const MIGRATIONS: &[(&str, &str)] = &[
-        ("LOONG_HOME", "LOONGCLAW_HOME"),
-        // Future: ("LOONG_CONFIG_PATH", "LOONGCLAW_CONFIG_PATH"), etc.
-    ];
-    for &(new, old) in MIGRATIONS {
-        let old_val = std::env::var_os(old);
-        let new_val = std::env::var_os(new);
-        match (old_val, new_val) {
-            (Some(old_val), None) => {
-                // SAFETY: single-threaded at this point in startup — no other
-                // threads have been spawned yet (tokio runtime runs after main
-                // setup, and this function is called before parse_cli).
-                #[allow(unsafe_code, clippy::disallowed_methods)]
-                unsafe {
-                    std::env::set_var(new, &old_val);
-                }
-                tracing::warn!(
-                    "{old} is deprecated and will be removed in a future release. \
-                     Set {new} instead."
-                );
-            }
-            _ => {}
-        }
-    }
-}
-
 fn check_legacy_home_migration() {
     if std::env::var_os("LOONG_HOME").is_some() {
         return;
@@ -119,7 +82,7 @@ async fn main() {
     let _stdin_guard = StdinGuard;
     init_tracing();
     mvp::config::set_active_cli_command_name(mvp::config::detect_invoked_cli_command_name());
-    make_env_compatible();
+    loongclaw_daemon::make_env_compatible();
     check_legacy_home_migration();
     let cli = parse_cli();
     let command_source = if cli.command.is_some() {
