@@ -7910,7 +7910,7 @@ mod tests {
         assert_eq!(recovered.session.state, SessionState::Failed);
         assert_eq!(recovered.terminal_outcome.status, "error");
 
-        super::delegate_support::finalize_delegate_child_terminal_with_recovery(
+        finalize_delegate_child_terminal_with_recovery(
             &repo,
             "child-session",
             FinalizeSessionTerminalRequest {
@@ -8010,7 +8010,7 @@ mod tests {
         assert_eq!(recovered.session.state, SessionState::Failed);
         assert_eq!(recovered.terminal_outcome.status, "error");
 
-        super::delegate_support::finalize_async_delegate_spawn_failure(
+        finalize_async_delegate_spawn_failure(
             &memory_config,
             "child-session",
             "root-session",
@@ -8070,7 +8070,7 @@ mod tests {
         })
         .expect("create root session");
 
-        let error = super::delegate_support::finalize_delegate_child_terminal_with_recovery(
+        let error = finalize_delegate_child_terminal_with_recovery(
             &repo,
             "child-session",
             FinalizeSessionTerminalRequest {

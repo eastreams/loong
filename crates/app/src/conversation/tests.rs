@@ -304,7 +304,7 @@ impl crate::conversation::AsyncDelegateSpawner for PostPrepareFailingAsyncDelega
             .get()
             .ok_or_else(|| "test_post_prepare_runtime_missing".to_owned())?;
         let binding = request.binding.as_borrowed();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
             &request.parent_session_id,
             &request.child_session_id,
@@ -349,7 +349,7 @@ impl crate::conversation::AsyncDelegateSpawner for LocalChildRuntimeAsyncDelegat
         let parent_session_id_for_spawn = parent_session_id.clone();
         let borrowed_binding = binding.as_borrowed();
         let child_binding = binding.clone();
-        super::turn_coordinator::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+        super::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
             runtime.as_ref(),
             &parent_session_id,
             &child_session_id,
