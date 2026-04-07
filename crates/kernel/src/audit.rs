@@ -387,22 +387,17 @@ pub struct AuditRepairReport {
     pub outcome: AuditRepairOutcome,
 }
 
+/// Repair legacy journal entries that are missing integrity envelopes.
+///
+/// **Must be run while the daemon is stopped.** A running `JsonlAuditSink` holds
+/// an open file handle and cached tail hash that would be invalidated by the
+/// atomic rename.
 pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, AuditError> {
     if !path.exists() {
         return Ok(AuditRepairReport {
             total_events: 0,
             repaired_events: 0,
             already_valid_events: 0,
-            outcome: AuditRepairOutcome::Healthy,
-        });
-    }
-
-    let verify_report = verify_jsonl_audit_journal(path)?;
-    if verify_report.valid {
-        return Ok(AuditRepairReport {
-            total_events: verify_report.total_events,
-            repaired_events: 0,
-            already_valid_events: verify_report.verified_events,
             outcome: AuditRepairOutcome::Healthy,
         });
     }
@@ -454,26 +449,44 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 });
             }
 
-            let expected_hash =
-                compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
-
-            if integrity.prev_hash != previous_hash || integrity.entry_hash != expected_hash {
+            // Check if the entry is internally consistent: does entry_hash
+            // match the event data when computed with the entry's own prev_hash?
+            let self_consistent_hash = compute_audit_event_entry_hash(
+                &event,
+                integrity.prev_hash.as_deref(),
+                path,
+            )?;
+            if integrity.entry_hash != self_consistent_hash {
                 return Ok(AuditRepairReport {
                     total_events,
                     repaired_events,
                     already_valid_events,
                     outcome: AuditRepairOutcome::Refused {
                         line: line_number,
-                        reason: "hash mismatch — journal may be tampered".to_owned(),
+                        reason: "entry_hash mismatch — event data may be tampered".to_owned(),
                     },
                 });
             }
 
-            previous_hash = Some(integrity.entry_hash.clone());
-            already_valid_events += 1;
-            let mut encoded = line.into_bytes();
-            encoded.push(b'\n');
-            repaired_lines.push(encoded);
+            if repaired_events == 0 && integrity.prev_hash == previous_hash {
+                // No prior repairs and chain is continuous — keep as-is.
+                previous_hash = Some(integrity.entry_hash.clone());
+                already_valid_events += 1;
+                let mut encoded = line.into_bytes();
+                encoded.push(b'\n');
+                repaired_lines.push(encoded);
+            } else {
+                // Prior legacy entries were repaired, so the chain position
+                // changed. Re-seal this entry with the rebuilt prev_hash.
+                let entry_hash =
+                    compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
+                let resealed =
+                    event_with_integrity(event, previous_hash.clone(), entry_hash.clone());
+                let encoded = serialize_audit_event_line(&resealed, path)?;
+                repaired_lines.push(encoded);
+                previous_hash = Some(entry_hash);
+                repaired_events += 1;
+            }
         } else {
             let entry_hash =
                 compute_audit_event_entry_hash(&event, previous_hash.as_deref(), path)?;
@@ -495,7 +508,7 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
     }
 
     let temp_path = path.with_extension("jsonl.repair-tmp");
-    {
+    let write_result = (|| {
         let mut temp_file = File::create(&temp_path).map_err(|error| {
             AuditError::Sink(format!(
                 "failed to create repair temp file `{}`: {error}",
@@ -516,14 +529,18 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
                 temp_path.display()
             ))
         })?;
-    }
+        fs::rename(&temp_path, path).map_err(|error| {
+            AuditError::Sink(format!(
+                "failed to replace journal with repaired file `{}`: {error}",
+                path.display()
+            ))
+        })
+    })();
 
-    fs::rename(&temp_path, path).map_err(|error| {
-        AuditError::Sink(format!(
-            "failed to replace journal with repaired file `{}`: {error}",
-            path.display()
-        ))
-    })?;
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    write_result?;
 
     Ok(AuditRepairReport {
         total_events,
