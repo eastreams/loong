@@ -1709,6 +1709,7 @@ mod tests {
 
     fn clear_tool_runtime_env(env: &mut ScopedEnv) {
         for key in [
+            "LOONG_HOME",
             "LOONGCLAW_CONFIG_PATH",
             "LOONGCLAW_FILE_ROOT",
             "LOONGCLAW_SQLITE_PATH",

@@ -56,7 +56,10 @@ fn redacted_command_name(command: &Commands) -> &'static str {
 }
 
 fn check_legacy_home_migration() {
-    if std::env::var_os("LOONG_HOME").is_some() {
+    if std::env::var_os("LOONG_HOME")
+        .as_deref()
+        .is_some_and(|v| !v.is_empty())
+    {
         return;
     }
     let Some(user_home) = std::env::var_os("HOME")
