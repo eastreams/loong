@@ -631,6 +631,15 @@ mod tests {
     use super::*;
     use crate::test_support::unique_temp_dir;
 
+    fn workspace_tool_runtime_config(
+        root: &Path,
+    ) -> super::super::runtime_config::ToolRuntimeConfig {
+        super::super::runtime_config::ToolRuntimeConfig {
+            file_root: Some(root.to_path_buf()),
+            ..super::super::runtime_config::ToolRuntimeConfig::default()
+        }
+    }
+
     #[cfg(all(feature = "tool-file", feature = "memory-sqlite"))]
     #[test]
     fn memory_search_tool_returns_cross_session_canonical_hits_without_workspace_root() {
@@ -763,6 +772,153 @@ mod tests {
         assert!(
             results[0]["score"].as_u64().is_some_and(|value| value > 0),
             "metadata-only matches should keep a stable score: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_search_tool_returns_structured_hits_from_workspace_memory_files() {
+        let root = unique_temp_dir("loongclaw-memory-search");
+        let memory_dir = root.join("memory");
+
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(
+            root.join("MEMORY.md"),
+            "# Durable Notes\nDeploy freeze window is Friday.\n",
+        )
+        .expect("write root memory");
+        std::fs::write(
+            memory_dir.join("2026-03-23.md"),
+            "Customer migration starts tomorrow.\n",
+        )
+        .expect("write daily log");
+
+        let runtime_config = workspace_tool_runtime_config(root.as_path());
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_search".to_owned(),
+                payload: json!({
+                    "query": "deploy freeze window",
+                    "max_results": 4
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory search should succeed");
+
+        assert_eq!(outcome.status, "ok");
+
+        let results = outcome.payload["results"].as_array().expect("results");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|entry| entry["path"] == "MEMORY.md"));
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["start_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["end_line"].as_u64().is_some()),
+            "expected structured line spans: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| {
+                entry["snippet"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            }),
+            "expected non-empty snippets: {results:?}"
+        );
+        assert!(
+            results
+                .iter()
+                .all(|entry| entry["source"] == "workspace_file"),
+            "expected workspace-file results only: {results:?}"
+        );
+        assert!(
+            results.iter().all(|entry| {
+                entry["provenance"]["memory_system_id"] == "builtin"
+                    && entry["provenance"]["source_kind"] == "workspace_document"
+                    && entry["provenance"]["recall_mode"] == "operator_inspection"
+            }),
+            "expected structured operator-inspection provenance: {results:?}"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_returns_bounded_line_window_from_memory_file() {
+        let root = unique_temp_dir("loongclaw-memory-get");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(
+            &memory_path,
+            "line one\nline two\nline three\nline four\nline five\n",
+        )
+        .expect("write root memory");
+
+        let runtime_config = workspace_tool_runtime_config(root.as_path());
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 2,
+                    "lines": 2
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(outcome.status, "ok");
+        assert_eq!(outcome.payload["path"], "MEMORY.md");
+        assert_eq!(outcome.payload["start_line"], 2);
+        assert_eq!(outcome.payload["end_line"], 3);
+        assert_eq!(outcome.payload["text"], "line two\nline three");
+        assert_eq!(outcome.payload["provenance"]["memory_system_id"], "builtin");
+        assert_eq!(
+            outcome.payload["provenance"]["source_kind"],
+            "workspace_document"
+        );
+        assert_eq!(outcome.payload["provenance"]["scope"], "workspace");
+        assert_eq!(
+            outcome.payload["provenance"]["recall_mode"],
+            "operator_inspection"
+        );
+    }
+
+    #[cfg(feature = "tool-file")]
+    #[test]
+    fn memory_get_tool_uses_selected_memory_system_id_in_provenance() {
+        let root = unique_temp_dir("loongclaw-memory-get-selected-system");
+        let memory_path = root.join("MEMORY.md");
+
+        std::fs::create_dir_all(&root).expect("create root dir");
+        std::fs::write(&memory_path, "line one\nline two\n").expect("write root memory");
+
+        let mut runtime_config = workspace_tool_runtime_config(root.as_path());
+        runtime_config.selected_memory_system_id = "workspace_recall".to_owned();
+
+        let outcome = super::super::execute_tool_core_with_config(
+            ToolCoreRequest {
+                tool_name: "memory_get".to_owned(),
+                payload: json!({
+                    "path": "MEMORY.md",
+                    "from": 1,
+                    "lines": 1
+                }),
+            },
+            &runtime_config,
+        )
+        .expect("memory get should succeed");
+
+        assert_eq!(
+            outcome.payload["provenance"]["memory_system_id"],
+            "workspace_recall"
         );
     }
 }
