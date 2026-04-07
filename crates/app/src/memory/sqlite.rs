@@ -119,6 +119,15 @@ const SQLITE_CURRENT_SCHEMA_OBJECT_COUNT: i64 = 18;
 const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 const SQLITE_PREPARED_STATEMENT_CACHE_CAPACITY: usize = 16;
 const SESSION_TOOL_CONSENT_MODE_CHECK_SQL: &str = "CHECK (mode IN ('prompt', 'auto', 'full'))";
+const SESSION_TERMINAL_OUTCOMES_DDL: &str = "
+CREATE TABLE IF NOT EXISTS session_terminal_outcomes(
+  session_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  frozen_result_json TEXT NULL,
+  recorded_at INTEGER NOT NULL
+);
+";
 const SQL_INSERT_TURN: &str = "INSERT INTO turns(session_id, session_turn_index, role, content, ts) VALUES (?1, ?2, ?3, ?4, ?5)";
 const SQL_DELETE_TURNS_FOR_SESSION: &str = "DELETE FROM turns WHERE session_id = ?1";
 const SQL_UPSERT_SESSION_TURN_COUNT: &str =
