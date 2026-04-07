@@ -1775,6 +1775,8 @@ fn ensure_turn_session_index_and_state_metadata(conn: &Connection) -> Result<(),
         ",
     )
     .map_err(|error| format!("backfill session turn index metadata failed: {error}"))?;
+    conn.execute_batch(SESSION_TERMINAL_OUTCOMES_DDL)
+        .map_err(|error| format!("ensure session terminal outcome storage failed: {error}"))?;
 
     conn.execute_batch(SESSION_TERMINAL_OUTCOMES_TABLE_SQL)
         .map_err(|error| format!("backfill session terminal outcome storage failed: {error}"))?;
