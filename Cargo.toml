@@ -50,7 +50,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 which = "8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"
