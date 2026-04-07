@@ -1012,7 +1012,7 @@ mod tests {
         let workspace_root = temp_dir.path();
         let db_path = workspace_root.join("memory.sqlite3");
         let config = MemoryRuntimeConfig {
-            sqlite_path: Some(db_path.clone()),
+            sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         };
         let allowed_payload = json!({
