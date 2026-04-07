@@ -3,16 +3,19 @@ use std::path::Path;
 use std::collections::BTreeSet;
 
 use super::{
-    DerivedMemoryKind, MemoryContextEntry, MemoryContextKind, MemoryContextProvenance,
-    MemoryProvenanceSourceKind, MemoryRecallMode, MemoryRetrievalRequest, MemoryScope,
-    MemoryStageFamily, WindowTurn, builtin_pre_assembly_stage_families, durable_recall,
-    runtime_config::MemoryRuntimeConfig,
+    CanonicalMemoryKind, CanonicalMemorySearchHit, DerivedMemoryKind, MemoryContextEntry,
+    MemoryContextKind, MemoryContextProvenance, MemoryProvenanceSourceKind, MemoryRecallMode,
+    MemoryRetrievalRequest, MemoryScope, MemoryStageFamily, WindowTurn,
+    builtin_pre_assembly_stage_families, durable_recall, runtime_config::MemoryRuntimeConfig,
 };
 
 pub const MEMORY_SYSTEM_API_VERSION: u16 = 1;
 pub const DEFAULT_MEMORY_SYSTEM_ID: &str = "builtin";
 pub const WORKSPACE_RECALL_MEMORY_SYSTEM_ID: &str = "workspace_recall";
 pub const RECALL_FIRST_MEMORY_SYSTEM_ID: &str = "recall_first";
+
+#[cfg(feature = "memory-sqlite")]
+const MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemorySystemCapability {
@@ -274,29 +277,26 @@ fn run_builtin_retrieve_stage(
 
     #[cfg(feature = "memory-sqlite")]
     if let Some(query) = request.query.as_deref() {
+        let search_limit = cross_session_recall_search_limit(request);
         let hits = super::sqlite::search_canonical_records_for_recall(
             query,
-            request.budget_items,
+            search_limit,
             Some(request.session_id.as_str()),
             config,
         )?;
-        if !hits.is_empty() {
-            let content = super::orchestrator::render_cross_session_recall_block(hits.as_slice());
-            let provenance = MemoryContextProvenance::new(
-                memory_system_id,
-                MemoryProvenanceSourceKind::MemorySystem,
-                Some("cross_session_recall".to_owned()),
-                None,
-                Some(MemoryScope::Session),
-                request.recall_mode,
-            );
-            let entry = MemoryContextEntry {
-                kind: MemoryContextKind::RetrievedMemory,
-                role: "system".to_owned(),
-                content,
-                provenance: vec![provenance],
-            };
-            entries.push(entry);
+        let filtered_hits = filter_cross_session_recall_hits(request, hits);
+        let bounded_budget = request.budget_items.max(1);
+        let bounded_filtered_hits = filtered_hits
+            .into_iter()
+            .take(bounded_budget)
+            .collect::<Vec<_>>();
+        let recall_entries = build_cross_session_recall_entries(
+            memory_system_id,
+            request.recall_mode,
+            bounded_filtered_hits.as_slice(),
+        );
+        if !recall_entries.is_empty() {
+            entries.extend(recall_entries);
         }
     }
 
@@ -399,6 +399,117 @@ impl MemorySystem for BuiltinMemorySystem {
     ) -> Result<Option<Vec<MemoryContextEntry>>, String> {
         Ok(Some(entries))
     }
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn cross_session_recall_search_limit(request: &MemoryRetrievalRequest) -> usize {
+    let requested_budget = request.budget_items.max(1);
+    let bounded_budget = requested_budget.min(MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES);
+    let has_scope_filter = !request.scopes.is_empty();
+    let has_kind_filter = !request.allowed_kinds.is_empty();
+    let has_filter = has_scope_filter || has_kind_filter;
+
+    if has_filter {
+        return MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES;
+    }
+
+    bounded_budget
+}
+
+fn filter_cross_session_recall_hits(
+    request: &MemoryRetrievalRequest,
+    hits: Vec<CanonicalMemorySearchHit>,
+) -> Vec<CanonicalMemorySearchHit> {
+    hits.into_iter()
+        .filter(|hit| request.scopes.is_empty() || request.scopes.contains(&hit.record.scope))
+        .filter(|hit| {
+            request.allowed_kinds.is_empty()
+                || request
+                    .allowed_kinds
+                    .contains(&derived_memory_kind_for_canonical_kind(hit.record.kind))
+        })
+        .collect()
+}
+
+fn derived_memory_kind_for_canonical_kind(kind: CanonicalMemoryKind) -> DerivedMemoryKind {
+    match kind {
+        CanonicalMemoryKind::ImportedProfile => DerivedMemoryKind::Profile,
+        CanonicalMemoryKind::ToolDecision | CanonicalMemoryKind::ToolOutcome => {
+            DerivedMemoryKind::Procedure
+        }
+        CanonicalMemoryKind::ConversationEvent
+        | CanonicalMemoryKind::AcpRuntimeEvent
+        | CanonicalMemoryKind::AcpFinalEvent => DerivedMemoryKind::Fact,
+        CanonicalMemoryKind::UserTurn | CanonicalMemoryKind::AssistantTurn => {
+            DerivedMemoryKind::Episode
+        }
+    }
+}
+
+fn build_cross_session_recall_entries(
+    memory_system_id: &str,
+    recall_mode: MemoryRecallMode,
+    hits: &[CanonicalMemorySearchHit],
+) -> Vec<MemoryContextEntry> {
+    let mut entries = Vec::new();
+
+    for hit in hits {
+        let content = render_cross_session_recall_entry(hit);
+        let provenance = build_cross_session_recall_provenance(memory_system_id, recall_mode, hit);
+        let entry = MemoryContextEntry {
+            kind: MemoryContextKind::RetrievedMemory,
+            role: "system".to_owned(),
+            content,
+            provenance: vec![provenance],
+        };
+        entries.push(entry);
+    }
+
+    entries
+}
+
+fn render_cross_session_recall_entry(hit: &CanonicalMemorySearchHit) -> String {
+    let turn_label = hit
+        .session_turn_index
+        .map(|value| format!("turn {value}"))
+        .unwrap_or_else(|| "turn ?".to_owned());
+    let header = "## Advisory Durable Recall".to_owned();
+    let source_line = format!(
+        "Cross-session source: {} · {} · {} · {}",
+        hit.record.session_id,
+        turn_label,
+        hit.record.scope.as_str(),
+        hit.record.kind.as_str()
+    );
+    let content = super::orchestrator::truncate_recall_content(hit.record.content.as_str(), 280);
+    let recall_line = match hit.record.role.as_deref() {
+        Some(role) => format!("{role}: {content}"),
+        None => content,
+    };
+
+    [header, source_line, recall_line].join("\n\n")
+}
+
+fn build_cross_session_recall_provenance(
+    memory_system_id: &str,
+    recall_mode: MemoryRecallMode,
+    hit: &CanonicalMemorySearchHit,
+) -> MemoryContextProvenance {
+    let source_label = Some(format!(
+        "{}:{}:{}",
+        hit.record.session_id,
+        hit.record.scope.as_str(),
+        hit.record.kind.as_str()
+    ));
+
+    MemoryContextProvenance::new(
+        memory_system_id,
+        MemoryProvenanceSourceKind::CanonicalMemoryRecord,
+        source_label,
+        None,
+        Some(hit.record.scope),
+        recall_mode,
+    )
 }
 
 #[derive(Default)]
@@ -546,6 +657,7 @@ impl MemorySystem for RecallFirstMemorySystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     struct StageAwareRegistryMemorySystem;
 
@@ -813,5 +925,83 @@ mod tests {
                 MemoryContextKind::Turn,
             ]
         );
+    }
+
+    #[test]
+    fn filter_cross_session_recall_hits_respects_scopes_and_allowed_kinds() {
+        let profile_hit = CanonicalMemorySearchHit {
+            record: crate::memory::CanonicalMemoryRecord {
+                session_id: "profile-session".to_owned(),
+                scope: MemoryScope::Workspace,
+                kind: CanonicalMemoryKind::ImportedProfile,
+                role: None,
+                content: "release checklist".to_owned(),
+                metadata: json!({}),
+            },
+            session_turn_index: Some(1),
+        };
+        let turn_hit = CanonicalMemorySearchHit {
+            record: crate::memory::CanonicalMemoryRecord {
+                session_id: "turn-session".to_owned(),
+                scope: MemoryScope::Session,
+                kind: CanonicalMemoryKind::AssistantTurn,
+                role: Some("assistant".to_owned()),
+                content: "deployment cutoff is 17:00".to_owned(),
+                metadata: json!({}),
+            },
+            session_turn_index: Some(2),
+        };
+        let request = MemoryRetrievalRequest {
+            session_id: "active-session".to_owned(),
+            memory_system_id: DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
+            query: Some("deployment release".to_owned()),
+            recall_mode: MemoryRecallMode::PromptAssembly,
+            scopes: vec![MemoryScope::Workspace],
+            budget_items: 4,
+            allowed_kinds: vec![DerivedMemoryKind::Profile],
+        };
+
+        let filtered_hits = filter_cross_session_recall_hits(&request, vec![profile_hit, turn_hit]);
+
+        assert_eq!(filtered_hits.len(), 1);
+        assert_eq!(filtered_hits[0].record.session_id, "profile-session");
+        assert_eq!(
+            filtered_hits[0].record.kind,
+            CanonicalMemoryKind::ImportedProfile
+        );
+    }
+
+    #[test]
+    fn build_cross_session_recall_entries_attach_canonical_record_provenance() {
+        let hit = CanonicalMemorySearchHit {
+            record: crate::memory::CanonicalMemoryRecord {
+                session_id: "prior-session".to_owned(),
+                scope: MemoryScope::Session,
+                kind: CanonicalMemoryKind::AssistantTurn,
+                role: Some("assistant".to_owned()),
+                content: "deployment cutoff is 17:00 Beijing time".to_owned(),
+                metadata: json!({}),
+            },
+            session_turn_index: Some(3),
+        };
+
+        let entries = build_cross_session_recall_entries(
+            DEFAULT_MEMORY_SYSTEM_ID,
+            MemoryRecallMode::PromptAssembly,
+            &[hit],
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries[0]
+                .content
+                .contains("Cross-session source: prior-session")
+        );
+        assert_eq!(entries[0].provenance.len(), 1);
+        assert_eq!(
+            entries[0].provenance[0].source_kind,
+            MemoryProvenanceSourceKind::CanonicalMemoryRecord
+        );
+        assert_eq!(entries[0].provenance[0].scope, Some(MemoryScope::Session));
     }
 }

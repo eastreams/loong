@@ -446,42 +446,7 @@ pub(super) fn retrieval_query_from_recent_window(recent_window: &[WindowTurn]) -
 }
 
 #[cfg(feature = "memory-sqlite")]
-pub(super) fn render_cross_session_recall_block(
-    hits: &[super::sqlite::CanonicalMemorySearchHit],
-) -> String {
-    let mut sections = Vec::new();
-    sections.push("## Advisory Cross-Session Recall".to_owned());
-    sections.push(
-        "These snippets were retrieved from prior persisted sessions. Treat them as advisory hints and verify before acting."
-            .to_owned(),
-    );
-
-    for hit in hits {
-        let turn_label = hit
-            .session_turn_index
-            .map(|value| format!("turn {value}"))
-            .unwrap_or_else(|| "turn ?".to_owned());
-        let role_label = hit.record.role.as_deref();
-        let content = truncate_recall_content(hit.record.content.as_str(), 280);
-        sections.push(format!(
-            "### {} · {} · {} · {}",
-            hit.record.session_id,
-            turn_label,
-            hit.record.scope.as_str(),
-            hit.record.kind.as_str()
-        ));
-        let recall_line = match role_label {
-            Some(role_label) => format!("{role_label}: {content}"),
-            None => content,
-        };
-        sections.push(recall_line);
-    }
-
-    sections.join("\n\n")
-}
-
-#[cfg(feature = "memory-sqlite")]
-fn truncate_recall_content(input: &str, max_chars: usize) -> String {
+pub(super) fn truncate_recall_content(input: &str, max_chars: usize) -> String {
     let char_count = input.chars().count();
     if char_count <= max_chars {
         return input.to_owned();
@@ -800,6 +765,15 @@ mod tests {
                 .content
                 .contains("Deployment cutoff is 17:00 Beijing time")
         );
+        assert_eq!(recalled.provenance.len(), 1);
+        assert_eq!(
+            recalled.provenance[0].source_kind,
+            crate::memory::MemoryProvenanceSourceKind::CanonicalMemoryRecord
+        );
+        assert_eq!(
+            recalled.provenance[0].memory_system_id,
+            crate::memory::DEFAULT_MEMORY_SYSTEM_ID
+        );
 
         let _ = std::fs::remove_file(&db_path);
         let _ = std::fs::remove_dir(&tmp);
@@ -1037,8 +1011,8 @@ mod tests {
 
     #[cfg(feature = "memory-sqlite")]
     #[test]
-    fn render_cross_session_recall_block_keeps_roleless_records_neutral() {
-        let hits = vec![crate::memory::CanonicalMemorySearchHit {
+    fn truncate_recall_content_keeps_roleless_records_neutral() {
+        let hit = crate::memory::CanonicalMemorySearchHit {
             record: crate::memory::CanonicalMemoryRecord {
                 session_id: "workspace-session".to_owned(),
                 scope: crate::memory::MemoryScope::Workspace,
@@ -1050,17 +1024,17 @@ mod tests {
                 }),
             },
             session_turn_index: Some(2),
-        }];
+        };
 
-        let rendered = render_cross_session_recall_block(hits.as_slice());
+        let rendered = truncate_recall_content(hit.record.content.as_str(), 280);
 
         assert!(
             rendered.contains("Imported release checklist with smoke tests."),
             "expected rendered recall content: {rendered}"
         );
         assert!(
-            !rendered.contains("assistant: Imported release checklist with smoke tests."),
-            "roleless recall should not fabricate assistant provenance: {rendered}"
+            !rendered.contains("assistant:"),
+            "roleless recall truncation should not fabricate assistant provenance: {rendered}"
         );
     }
 
