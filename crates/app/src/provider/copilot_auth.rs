@@ -41,7 +41,7 @@ fn now_unix() -> i64 {
 }
 
 /// Returns a cached Copilot API key if one exists and has not expired.
-pub fn cached_copilot_api_key() -> Option<String> {
+pub(crate) fn cached_copilot_api_key() -> Option<String> {
     let cache = COPILOT_API_KEY_CACHE.lock().ok()?;
     let key = cache.as_ref()?;
     if key.expires_at > now_unix() + TOKEN_REFRESH_BUFFER_SECS {
@@ -52,7 +52,7 @@ pub fn cached_copilot_api_key() -> Option<String> {
 }
 
 /// Ensures a valid Copilot API key is in the static cache.
-pub async fn ensure_copilot_api_key(github_token: &str) -> CliResult<()> {
+pub(crate) async fn ensure_copilot_api_key(github_token: &str) -> CliResult<()> {
     if cached_copilot_api_key().is_some() {
         return Ok(());
     }
@@ -196,7 +196,7 @@ pub async fn device_code_login() -> CliResult<String> {
 }
 
 #[cfg(test)]
-#[allow(dead_code)] // Used by auth_profile_runtime tests (Task 4).
+#[allow(dead_code)] // Used by auth_profile_runtime tests.
 pub(crate) fn set_cached_key_for_test(token: &str, expires_at: i64) {
     let mut cache = COPILOT_API_KEY_CACHE.lock().unwrap();
     *cache = Some(CachedApiKey {
@@ -206,13 +206,13 @@ pub(crate) fn set_cached_key_for_test(token: &str, expires_at: i64) {
 }
 
 #[cfg(test)]
-#[allow(dead_code)] // Used by auth_profile_runtime tests (Task 4).
+#[allow(dead_code)] // Used by auth_profile_runtime tests.
 pub(crate) fn clear_cache_for_test() {
     clear_cache();
 }
 
 #[cfg(test)]
-#[allow(dead_code)] // Used by auth_profile_runtime tests (Task 4).
+#[allow(dead_code)] // Used by auth_profile_runtime tests.
 pub(crate) fn now_unix_for_test() -> i64 {
     now_unix()
 }
