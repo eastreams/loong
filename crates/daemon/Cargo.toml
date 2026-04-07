@@ -83,7 +83,6 @@ rand.workspace = true
 sha2.workspace = true
 semver.workspace = true
 ed25519-dalek.workspace = true
-futures-util.workspace = true
 dunce = "1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing.workspace = true
