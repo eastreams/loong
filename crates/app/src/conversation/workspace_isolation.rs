@@ -176,9 +176,10 @@ fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), S
 }
 
 fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
+    let repo_root = resolve_delegate_worktree_owner_repo_root(worktree_root)?;
     let args = [
         OsStr::new("-C"),
-        worktree_root.as_os_str(),
+        repo_root.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
@@ -194,6 +195,67 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
     Err(format!(
         "remove delegate worktree `{display_path}` failed: {stderr}"
     ))
+}
+
+fn resolve_delegate_worktree_owner_repo_root(worktree_root: &Path) -> Result<PathBuf, String> {
+    let common_dir = resolve_git_common_dir(worktree_root)?;
+    let common_dir_file_name = common_dir.file_name();
+    let git_dir_name = Some(OsStr::new(".git"));
+
+    if common_dir_file_name != git_dir_name {
+        let display_path = common_dir.display();
+        return Err(format!(
+            "resolve delegate worktree owner repo root failed: common dir `{display_path}` does not end with `.git`"
+        ));
+    }
+
+    let Some(repo_root) = common_dir.parent() else {
+        let display_path = common_dir.display();
+        return Err(format!(
+            "resolve delegate worktree owner repo root failed: common dir `{display_path}` has no parent"
+        ));
+    };
+
+    Ok(repo_root.to_path_buf())
+}
+
+fn resolve_git_common_dir(repo_root: &Path) -> Result<PathBuf, String> {
+    let args = [
+        OsStr::new("-C"),
+        repo_root.as_os_str(),
+        OsStr::new("rev-parse"),
+        OsStr::new("--git-common-dir"),
+    ];
+    let output = run_git_command(&args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let display_path = repo_root.display();
+        return Err(format!(
+            "resolve git common dir from `{display_path}` failed: {stderr}"
+        ));
+    }
+
+    let raw_stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed_stdout = raw_stdout.trim();
+    if trimmed_stdout.is_empty() {
+        let display_path = repo_root.display();
+        return Err(format!(
+            "resolve git common dir from `{display_path}` returned empty output"
+        ));
+    }
+
+    let raw_common_dir = PathBuf::from(trimmed_stdout);
+    let absolute_common_dir = if raw_common_dir.is_absolute() {
+        raw_common_dir
+    } else {
+        repo_root.join(raw_common_dir)
+    };
+    let canonical_common_dir = std::fs::canonicalize(&absolute_common_dir).map_err(|error| {
+        let display_path = absolute_common_dir.display();
+        format!("canonicalize git common dir `{display_path}` failed: {error}")
+    })?;
+
+    Ok(canonical_common_dir)
 }
 
 fn delegate_worktree_is_dirty(workspace_root: &Path) -> Result<bool, String> {
