@@ -1,6 +1,6 @@
 <svg width="1280" height="780" viewBox="0 0 1280 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">LoongClaw positioning map</title>
-  <desc id="desc">A positioning map showing LoongClaw as a Rust-based, governed base for vertical agents.</desc>
+  <title id="title">Loong positioning map</title>
+  <desc id="desc">A positioning map showing Loong as a Rust-based, governed base for vertical agents.</desc>
 
   <defs>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
@@ -11,7 +11,7 @@
   <rect width="1280" height="780" fill="#FCFDFE" />
   <rect x="16" y="16" width="1248" height="748" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
 
-  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">Where LoongClaw sits</text>
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">Where Loong sits</text>
   <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">A Rust-based claw baseline moving toward governed vertical agents.</text>
 
   <rect x="60" y="126" width="1160" height="64" rx="16" fill="#F4F8FC" stroke="#E3EAF2" stroke-width="1.5" />
@@ -59,7 +59,7 @@
   </text>
 
   <rect x="820" y="238" width="328" height="178" rx="20" fill="#FFF7D8" stroke="#D8B54B" stroke-width="2" />
-  <text x="846" y="286" fill="#402B00" font-size="21" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw</text>
+  <text x="846" y="286" fill="#402B00" font-size="21" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong</text>
   <text x="846" y="318" fill="#6C5720" font-size="16" font-family="Arial, Helvetica, sans-serif">
     <tspan x="846" dy="0">Rust-based, governed base</tspan>
     <tspan x="846" dy="24">Policy, audit, and explicit seams</tspan>

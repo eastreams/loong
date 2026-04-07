@@ -1,6 +1,6 @@
 <svg width="1280" height="960" viewBox="0 0 1280 960" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">LoongClaw 基座图</title>
-  <desc id="desc">展示 LoongClaw 如何帮助团队在稳定的 Rust 内核之上塑造垂域智能体。</desc>
+  <title id="title">Loong 基座图</title>
+  <desc id="desc">展示 Loong 如何帮助团队在稳定的 Rust 内核之上塑造垂域智能体。</desc>
 
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
@@ -11,8 +11,8 @@
   <rect width="1280" height="960" fill="#FCFDFE" />
   <rect x="16" y="16" width="1248" height="928" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
 
-  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw 如何成为垂域智能体基座</text>
-  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">从可运行的 Rust Claw 基座出发，塑造领域智能体，无需重写内核。</text>
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong 如何成为垂域智能体基座</text>
+  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">从可运行的 Rust 智能体基座出发，塑造领域智能体，无需重写内核。</text>
 
   <rect x="60" y="160" width="340" height="110" rx="16" fill="#E7F0FF" stroke="#93B5E2" stroke-width="1.5" />
   <text x="84" y="196" fill="#243E63" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">构建者与团队</text>
@@ -75,7 +75,7 @@
   <line x1="640" y1="612" x2="640" y2="646" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
 
   <rect x="60" y="664" width="1160" height="252" rx="18" fill="#F9FBFD" stroke="#D7DFE8" stroke-width="2" />
-  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw 基座</text>
+  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong 基座</text>
 
   <rect x="80" y="726" width="1120" height="38" rx="10" fill="#FFF7D8" />
   <text x="100" y="750" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">治理层：策略、审批、审计与安全态势</text>

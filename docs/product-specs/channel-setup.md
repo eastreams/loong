@@ -239,7 +239,7 @@ surfaces:
   redirects
 - operators who intentionally send through a private bridge, loopback service,
   or self-hosted endpoint should set `[outbound_http] allow_private_hosts = true`
-  at the top level of `loongclaw.toml`
+  at the top level of `loong.toml`
 
 #### Straightforward API Or Webhook Sends
 

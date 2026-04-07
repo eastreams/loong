@@ -1,6 +1,6 @@
 <svg width="1280" height="780" viewBox="0 0 1280 780" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">LoongClaw 产品定位图</title>
-  <desc id="desc">展示 LoongClaw 作为基于 Rust 构建的可治理垂域智能体基座的产品定位。</desc>
+  <title id="title">Loong 产品定位图</title>
+  <desc id="desc">展示 Loong 作为基于 Rust 构建的可治理垂域智能体基座的产品定位。</desc>
 
   <defs>
     <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
@@ -11,8 +11,8 @@
   <rect width="1280" height="780" fill="#FCFDFE" />
   <rect x="16" y="16" width="1248" height="748" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
 
-  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw 产品定位</text>
-  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">基于 Rust 构建的 Claw 基座，迈向可治理的垂域智能体。</text>
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong 产品定位</text>
+  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">基于 Rust 构建的 智能体基座，迈向可治理的垂域智能体。</text>
 
   <rect x="60" y="126" width="1160" height="64" rx="16" fill="#F4F8FC" stroke="#E3EAF2" stroke-width="1.5" />
   <text x="84" y="154" fill="#2B4662" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">如何阅读此图</text>
@@ -38,14 +38,14 @@
   <text x="1160" y="688" text-anchor="end" fill="#61778E" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="700">更偏垂域系统</text>
 
   <rect x="350" y="334" width="300" height="116" rx="18" fill="#E7F0FF" stroke="#93B5E2" stroke-width="1.5" />
-  <text x="372" y="370" fill="#243E63" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">助手优先型 Claw</text>
+  <text x="372" y="370" fill="#243E63" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">助手优先型基座</text>
   <text x="372" y="398" fill="#48617A" font-size="15" font-family="Arial, Helvetica, sans-serif">
     <tspan x="372" dy="0">个人生产力、开箱即用的流程、</tspan>
     <tspan x="372" dy="20">直接的用户价值</tspan>
   </text>
 
   <rect x="390" y="498" width="300" height="116" rx="18" fill="#E8F5EC" stroke="#A8D2B2" stroke-width="1.5" />
-  <text x="412" y="534" fill="#224A36" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">轻量型 Claw</text>
+  <text x="412" y="534" fill="#224A36" font-size="17" font-family="Arial, Helvetica, sans-serif" font-weight="700">轻量型基座</text>
   <text x="412" y="562" fill="#4D6858" font-size="15" font-family="Arial, Helvetica, sans-serif">
     <tspan x="412" dy="0">极小运行时、快速启动、</tspan>
     <tspan x="412" dy="20">随处部署</tspan>
@@ -59,7 +59,7 @@
   </text>
 
   <rect x="820" y="238" width="328" height="178" rx="20" fill="#FFF7D8" stroke="#D8B54B" stroke-width="2" />
-  <text x="846" y="286" fill="#402B00" font-size="21" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw</text>
+  <text x="846" y="286" fill="#402B00" font-size="21" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong</text>
   <text x="846" y="318" fill="#6C5720" font-size="16" font-family="Arial, Helvetica, sans-serif">
     <tspan x="846" dy="0">基于 Rust 的治理基座</tspan>
     <tspan x="846" dy="24">策略、审计与清晰的扩展边界</tspan>

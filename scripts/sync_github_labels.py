@@ -622,7 +622,7 @@ def render_bug_template(taxonomy: dict) -> str:
     options = render_surface_options(taxonomy)
     return f"""\
 {GENERATED_HEADER}name: Bug Report
-description: Report a reproducible defect in LoongClaw's active `dev` branch or latest stable release.
+description: Report a reproducible defect in Loong's active `dev` branch or latest stable release.
 title: "[Bug]: "
 labels:
   - bug
@@ -675,7 +675,7 @@ body:
     attributes:
       label: Summary
       description: What happened?
-      placeholder: After updating provider profiles, LoongClaw selects the wrong active provider for a channel turn.
+      placeholder: After updating provider profiles, Loong selects the wrong active provider for a channel turn.
     validations:
       required: true
 

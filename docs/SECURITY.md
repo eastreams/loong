@@ -143,14 +143,14 @@ inventory.
 - Governance workload aggregation — plugin preflight summary output now also
   emits a deduplicated `operator_action_plan` and counts distinct operator
   actions by surface, kind, and reload requirement
-- Thin operator CLI boundary — `loongclaw plugins preflight` and
-  `loongclaw plugins actions` intentionally consume the existing
+- Thin operator CLI boundary — `loong plugins preflight` and
+  `loong plugins actions` intentionally consume the existing
   `plugin_preflight` spec contract and its structured summary/action-plan
   output instead of embedding a second policy evaluator in the operator layer
 - Bundled compatibility presets — plugin governance now also exposes
   checksum-pinnable bundled bridge support profiles such as
   `native-balanced` and `openclaw-ecosystem-balanced`
-- Discoverable preset surface — `loongclaw plugins bridge-profiles` now
+- Discoverable preset surface — `loong plugins bridge-profiles` now
   exposes those bundled compatibility presets and their exact
   bridge/shim/language support matrix through one bounded operator CLI
 - Machine-readable remediation contract — plugin preflight results now carry
@@ -225,8 +225,8 @@ Provider runtime binding:
 
 - 10 event kinds with atomic sequencing
 - Production app runtimes default to durable JSONL retention via `[audit].mode = "fanout"`
-- Default journal path: `~/.loongclaw/audit/events.jsonl`
-- `LoongClawKernel::new()` and spec/test/demo helpers may still opt into explicit in-memory audit seams when side-effect-free snapshot reporting is required
+- Default journal path: `~/.loong/audit/events.jsonl`
+- `LoongKernel::new()` and spec/test/demo helpers may still opt into explicit in-memory audit seams when side-effect-free snapshot reporting is required
 - Explicit no-audit behavior remains opt-in only and should stay reserved for narrow fixture seams
 - No HMAC chain for tamper evidence (TD-007)
 

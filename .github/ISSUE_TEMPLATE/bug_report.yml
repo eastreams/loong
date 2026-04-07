@@ -70,7 +70,7 @@ body:
     attributes:
       label: Summary
       description: What happened?
-      placeholder: After updating provider profiles, LoongClaw selects the wrong active provider for a channel turn.
+      placeholder: After updating provider profiles, Loong selects the wrong active provider for a channel turn.
     validations:
       required: true
 

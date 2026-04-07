@@ -4,13 +4,13 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPT_UNDER_TEST="$REPO_ROOT/scripts/publish_crates_io.sh"
 PACKAGE_CHAIN=(
-  loongclaw-contracts
-  loongclaw-protocol
-  loongclaw-kernel
-  loongclaw-spec
-  loongclaw-bench
-  loongclaw-app
-  loongclaw
+  loong-contracts
+  loong-protocol
+  loong-kernel
+  loong-spec
+  loong-bench
+  loong-app
+  loong
 )
 
 assert_contains() {
@@ -157,16 +157,16 @@ run_resume_from_test() {
 
   PATH="$stub_dir:$PATH" \
     FAKE_CARGO_INVOCATION_LOG="$invocation_log" \
-    bash "$SCRIPT_UNDER_TEST" --from loongclaw-spec >"$output_file" 2>&1
+    bash "$SCRIPT_UNDER_TEST" --from loong-spec >"$output_file" 2>&1
 
   assert_publish_sequence \
     "$invocation_log" \
     "dry-run" \
-    loongclaw-spec \
-    loongclaw-bench \
-    loongclaw-app \
-    loongclaw
-  assert_contains "$output_file" "starting from: loongclaw-spec"
+    loong-spec \
+    loong-bench \
+    loong-app \
+    loong
+  assert_contains "$output_file" "starting from: loong-spec"
 }
 
 run_default_dry_run_test

@@ -1,6 +1,6 @@
 <svg width="1280" height="960" viewBox="0 0 1280 960" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">LoongClaw foundation diagram</title>
-  <desc id="desc">A foundation diagram showing how LoongClaw helps teams shape vertical agents on top of a stable Rust core.</desc>
+  <title id="title">Loong foundation diagram</title>
+  <desc id="desc">A foundation diagram showing how Loong helps teams shape vertical agents on top of a stable Rust core.</desc>
 
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="5" orient="auto">
@@ -11,8 +11,8 @@
   <rect width="1280" height="960" fill="#FCFDFE" />
   <rect x="16" y="16" width="1248" height="928" rx="24" fill="#FCFDFE" stroke="#DCE5EE" stroke-width="2" />
 
-  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">How LoongClaw becomes a vertical-agent base</text>
-  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">Start from a runnable Rust claw baseline, then shape domain-specific agents without rewriting the kernel.</text>
+  <text x="60" y="74" fill="#122033" font-size="32" font-family="Arial, Helvetica, sans-serif" font-weight="700">How Loong becomes a vertical-agent base</text>
+  <text x="60" y="106" fill="#5A7087" font-size="18" font-family="Arial, Helvetica, sans-serif">Start from a runnable Rust-native baseline, then shape domain-specific agents without rewriting the kernel.</text>
 
   <rect x="60" y="160" width="340" height="110" rx="16" fill="#E7F0FF" stroke="#93B5E2" stroke-width="1.5" />
   <text x="84" y="196" fill="#243E63" font-size="18" font-family="Arial, Helvetica, sans-serif" font-weight="700">Builders and teams</text>
@@ -75,7 +75,7 @@
   <line x1="640" y1="612" x2="640" y2="646" stroke="#9CA9B8" stroke-width="2" marker-end="url(#arrow)" />
 
   <rect x="60" y="664" width="1160" height="252" rx="18" fill="#F9FBFD" stroke="#D7DFE8" stroke-width="2" />
-  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">LoongClaw foundation</text>
+  <text x="84" y="706" fill="#122033" font-size="26" font-family="Arial, Helvetica, sans-serif" font-weight="700">Loong foundation</text>
 
   <rect x="80" y="726" width="1120" height="38" rx="10" fill="#FFF7D8" />
   <text x="100" y="750" fill="#314B67" font-size="16" font-family="Arial, Helvetica, sans-serif" font-weight="600">Governance: policy, approvals, audit, and security posture</text>

@@ -250,7 +250,7 @@ Current baseline already in place:
     intermediate traces, and payload templating
 - dynamic connector caller ACL:
   - `allowed_callers` and `allowed_callers_json` metadata gates
-  - automatic `_loongclaw.caller` provenance injection for programmatic calls
+  - automatic `_loong.caller` provenance injection for programmatic calls
 
 ### Active Runtime Lanes And Foundations
 
@@ -289,11 +289,11 @@ Focus: open ecosystem without sacrificing trust boundaries.
 
 Current baseline already in place:
 
-- `loongclaw plugins init <package_root>` scaffolds a manifest-first plugin
-  package root with a canonical `loongclaw.plugin.json`, current host
+- `loong plugins init <package_root>` scaffolds a manifest-first plugin
+  package root with a canonical `loong.plugin.json`, current host
   compatibility defaults, and a README that routes authors into shared
   package diagnosis instead of internal crate spelunking
-- `loongclaw plugins doctor --root <package_root>` reuses the shared
+- `loong plugins doctor --root <package_root>` reuses the shared
   `plugin_preflight` contract for author-facing package diagnosis, defaulting
   to the `sdk_release` profile while surfacing setup truth, remediation
   classes, and required operator follow-up actions

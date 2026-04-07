@@ -2,13 +2,13 @@
 
 ## User Story
 
-As a LoongClaw operator, I want an optional way to teach the assistant my
+As a Loong operator, I want an optional way to teach the assistant my
 working preferences so that future sessions can adapt to me without slowing
 down the first-run path or mutating runtime identity authority.
 
 ## Acceptance Criteria
 
-- [ ] LoongClaw exposes an optional `loong personalize` command for
+- [ ] Loong exposes an optional `loong personalize` command for
       operator preference capture and review.
 - [ ] Personalization is separate from `loong onboard` setup and does not
       block the primary first-run path of `onboard -> ask -> chat -> doctor`.
@@ -36,7 +36,7 @@ down the first-run path or mutating runtime identity authority.
       preserve stable fields such as `preferred_name`, `response_density`,
       `initiative_level`, `standing_boundaries`, `timezone`, and a versioned
       update timestamp.
-- [ ] If personalization storage fails, LoongClaw fails loud with a repair path
+- [ ] If personalization storage fails, Loong fails loud with a repair path
       and leaves the healthy setup and current runtime identity boundary intact.
 
 ## Out of Scope

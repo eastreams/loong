@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 . "$REPO_ROOT/scripts/release_artifact_lib.sh"
 ERRORS=0
 WARNINGS=0
-PUBLIC_GITHUB_REPO="${LOONGCLAW_PUBLIC_REPO:-loongclaw-ai/loongclaw}"
+PUBLIC_GITHUB_REPO="${LOONG_PUBLIC_REPO:-eastreams/loong}"
 PUBLIC_GITHUB_BASE="https://github.com/${PUBLIC_GITHUB_REPO}"
 
 if [ -n "${LOONGCLAW_RELEASE_DOCS_STRICT:-}" ]; then

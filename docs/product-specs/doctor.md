@@ -36,7 +36,7 @@ can recover a broken setup without reverse-engineering runtime internals.
       readiness, SQLite memory readiness, shipped channel prerequisites, and
       the optional browser preview companion readiness path.
 - [ ] Doctor treats plugin-backed bridge surfaces such as `weixin`, `qqbot`,
-      and `onebot` as first-class channel checks, validating LoongClaw's local
+      and `onebot` as first-class channel checks, validating Loong's local
       bridge contract without falsely failing just because the live runtime is
       owned by an external plugin or gateway.
 - [ ] Durable audit readiness checks exercise the runtime `open + lock + unlock`

@@ -18,14 +18,14 @@ Loong prefers a release-first install path.
 ## Recommended Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.sh | bash -s -- --onboard
+curl -fsSL https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.sh | bash -s -- --onboard
 ```
 
 Windows PowerShell:
 
 ```powershell
 $script = Join-Path $env:TEMP "loong-install.ps1"
-Invoke-WebRequest https://raw.githubusercontent.com/loongclaw-ai/loongclaw/dev/scripts/install.ps1 -OutFile $script
+Invoke-WebRequest https://raw.githubusercontent.com/eastreams/loong/dev/scripts/install.ps1 -OutFile $script
 pwsh $script -Onboard
 ```
 
@@ -33,7 +33,7 @@ pwsh $script -Onboard
 
 - The installer prefers checksum-verified GitHub Release binaries.
 - On Linux x86_64, GNU and musl artifacts are treated separately.
-- `loong` is the primary command and `loongclaw` stays as a compatibility entrypoint.
+- `loong` is the primary command and `loong` stays as a compatibility entrypoint.
 - The install path is meant to hand you directly into first run rather than stop at a raw binary drop.
 
 ## Source Install

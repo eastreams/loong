@@ -47,7 +47,7 @@ run_mode() {
     local log_file="$LOG_DIR/traps-${trap_mode}-mode-${mode}-run-${run_index}.log"
     local cmd=(
       cargo test
-      -p loongclaw
+      -p loong
       --bin loong
       --all-features
     )

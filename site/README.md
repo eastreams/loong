@@ -51,7 +51,7 @@ Validation before publishing:
 cd site
 NODE20_BIN="$(npm exec --yes --package=node@20.20.2 -- node -p 'process.execPath')"
 PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify broken-links
-PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loongclaw-docs-export.zip
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loong-docs-export.zip
 ```
 
 `broken-links` is the quickest structural check. `export` is the stronger proof that the docs can

@@ -20,7 +20,7 @@ if [[ "$BENCH_PROFILE" != "dev" && "$BENCH_PROFILE" != "release" ]]; then
   exit 2
 fi
 
-CARGO_ARGS=(run -p loongclaw)
+CARGO_ARGS=(run -p loong)
 if [[ "$BENCH_PROFILE" == "release" ]]; then
   CARGO_ARGS+=(--release)
 fi

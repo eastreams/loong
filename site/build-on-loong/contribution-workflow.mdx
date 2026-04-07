@@ -47,7 +47,7 @@ in addition to the normal repository bar that still applies to the branch.
 cd site
 NODE20_BIN="$(npm exec --yes --package=node@20.20.2 -- node -p 'process.execPath')"
 PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify broken-links
-PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loongclaw-docs-export.zip
+PATH="$(dirname "$NODE20_BIN"):$PATH" npm exec --yes --package=mintlify@4.2.464 -- mintlify export --output /tmp/loong-docs-export.zip
 ```
 
 That loop belongs to the public contribution workflow because Mintlify docs are
@@ -105,7 +105,7 @@ Open an issue or discussion before deep implementation when:
 
 ## Deep References
 
-- [Contributing](https://github.com/loongclaw-ai/loongclaw/blob/dev/CONTRIBUTING.md)
+- [Contributing](https://github.com/eastreams/loong/blob/dev/CONTRIBUTING.md)
 - [Docs Workflow](/build-on-loong/docs-workflow)
-- [Contribution Areas We Especially Welcome](https://github.com/loongclaw-ai/loongclaw/blob/dev/docs/references/contribution-areas.md)
+- [Contribution Areas We Especially Welcome](https://github.com/eastreams/loong/blob/dev/docs/references/contribution-areas.md)
 - Maintainer-managed GitHub intake details, labels, and automation rules stay repository-native instead of being promoted as primary reader-facing docs.

@@ -12,7 +12,7 @@ or `chat` without reverse-engineering release or source workflows.
       Windows.
 - [x] The bootstrap installer prefers GitHub Release binaries, verifies their
       SHA256 checksums, installs the matching `loong` binary when a release
-      exists for the requested version, and keeps `loongclaw` as a compatible
+      exists for the requested version, and keeps `loong` as a compatible
       entrypoint.
 - [x] Linux x86_64 release artifacts distinguish GNU and musl variants, and the
       Bash installer auto-selects GNU only when the host satisfies the declared
