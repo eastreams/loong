@@ -45,6 +45,11 @@ use super::state::{
 
 type GatewayControlJsonResponse = (StatusCode, Json<Value>);
 
+#[cfg(unix)]
+const GATEWAY_CONTROL_RUNTIME_DIR_MODE: u32 = 0o700;
+#[cfg(unix)]
+const GATEWAY_CONTROL_TOKEN_FILE_MODE: u32 = 0o600;
+
 #[derive(Clone)]
 pub(crate) struct GatewayControlAppState {
     pub(crate) runtime_dir: PathBuf,
