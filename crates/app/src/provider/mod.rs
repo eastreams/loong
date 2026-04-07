@@ -13,6 +13,7 @@ use super::config::LoongClawConfig;
 #[cfg(test)]
 use super::config::{ProviderKind, ProviderProfileHealthModeConfig};
 
+pub mod copilot_auth;
 mod auth_profile_runtime;
 mod capability_profile_runtime;
 mod catalog_executor;
