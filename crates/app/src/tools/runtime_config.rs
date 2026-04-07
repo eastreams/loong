@@ -2252,6 +2252,20 @@ mod tests {
     }
 
     #[test]
+    fn selected_memory_system_id_from_env_falls_back_on_unknown_value() {
+        let mut env = ScopedEnv::new();
+        clear_tool_runtime_env(&mut env);
+        env.set(crate::memory::MEMORY_SYSTEM_ENV, "unknown_memory_system");
+
+        let runtime = ToolRuntimeConfig::from_env();
+
+        assert_eq!(
+            runtime.selected_memory_system_id,
+            crate::memory::DEFAULT_MEMORY_SYSTEM_ID
+        );
+    }
+
+    #[test]
     fn memory_sqlite_path_from_env_falls_back_to_loongclaw_home() {
         let mut env = ScopedEnv::new();
         let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-home");
