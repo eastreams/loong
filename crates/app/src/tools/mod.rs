@@ -2431,6 +2431,14 @@ mod tests {
             tool_search["function"]["parameters"].get("anyOf").is_none(),
             "anyOf removed for OpenAI-compatible provider compatibility"
         );
+        assert!(
+            tool_search["function"]["parameters"].get("oneOf").is_none(),
+            "oneOf removed for OpenAI-compatible provider compatibility"
+        );
+        assert!(
+            tool_search["function"]["parameters"].get("allOf").is_none(),
+            "allOf removed for OpenAI-compatible provider compatibility"
+        );
     }
 
     #[test]
