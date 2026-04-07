@@ -13,7 +13,7 @@ use super::config::LoongClawConfig;
 #[cfg(test)]
 use super::config::{ProviderKind, ProviderProfileHealthModeConfig};
 
-pub mod copilot_auth;
+mod copilot_auth;
 mod auth_profile_runtime;
 mod capability_profile_runtime;
 mod catalog_executor;
@@ -44,6 +44,7 @@ mod shape;
 mod transport;
 
 pub(crate) use failover::parse_provider_failover_snapshot_payload;
+pub use copilot_auth::device_code_login as copilot_device_code_login;
 pub use request_executor::{StreamingCallbackData, StreamingTokenCallback};
 pub use runtime_binding::ProviderRuntimeBinding;
 pub use shape::{
