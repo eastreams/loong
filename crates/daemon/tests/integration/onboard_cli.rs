@@ -176,9 +176,9 @@ impl DetectedEnvironmentGuard {
             })
             .collect::<Vec<_>>();
         let isolated_home = isolated_loongclaw_home("detected-env-home");
-        let saved_loongclaw_home = std::env::var_os("LOONGCLAW_HOME");
+        let saved_loongclaw_home = std::env::var_os("LOONG_HOME");
         unsafe {
-            std::env::set_var("LOONGCLAW_HOME", &isolated_home);
+            std::env::set_var("LOONG_HOME", &isolated_home);
         }
         let isolated_sqlite = isolated_sqlite_path("detected-env-memory");
         let saved_loongclaw_sqlite_path = std::env::var_os("LOONGCLAW_SQLITE_PATH");
@@ -186,7 +186,7 @@ impl DetectedEnvironmentGuard {
             std::env::set_var("LOONGCLAW_SQLITE_PATH", &isolated_sqlite);
         }
         let mut saved = saved;
-        saved.push(("LOONGCLAW_HOME".to_owned(), saved_loongclaw_home));
+        saved.push(("LOONG_HOME".to_owned(), saved_loongclaw_home));
         saved.push((
             "LOONGCLAW_SQLITE_PATH".to_owned(),
             saved_loongclaw_sqlite_path,
