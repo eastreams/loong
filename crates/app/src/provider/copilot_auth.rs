@@ -148,11 +148,6 @@ pub async fn device_code_login() -> CliResult<String> {
         code_response.verification_uri,
         code_response.user_code
     );
-    eprintln!(
-        "\n  Open {} in your browser\n  Enter code: {}\n",
-        code_response.verification_uri, code_response.user_code
-    );
-
     let mut interval = std::time::Duration::from_secs(code_response.interval.max(5));
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(code_response.expires_in);
