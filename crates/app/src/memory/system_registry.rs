@@ -12,7 +12,8 @@ use crate::config::{
 use super::runtime_config::MemoryRuntimeConfig;
 use super::system::{
     BuiltinMemorySystem, DEFAULT_MEMORY_SYSTEM_ID, MemorySystem, MemorySystemMetadata,
-    WORKSPACE_RECALL_MEMORY_SYSTEM_ID, WorkspaceRecallMemorySystem,
+    RECALL_FIRST_MEMORY_SYSTEM_ID, RecallFirstMemorySystem, WORKSPACE_RECALL_MEMORY_SYSTEM_ID,
+    WorkspaceRecallMemorySystem,
 };
 
 pub const MEMORY_SYSTEM_ENV: &str = "LOONGCLAW_MEMORY_SYSTEM";
@@ -93,6 +94,10 @@ fn registry() -> &'static RwLock<BTreeMap<String, MemorySystemFactory>> {
             WORKSPACE_RECALL_MEMORY_SYSTEM_ID.to_owned(),
             Arc::new(|| Box::new(WorkspaceRecallMemorySystem)),
         );
+        map.insert(
+            RECALL_FIRST_MEMORY_SYSTEM_ID.to_owned(),
+            Arc::new(|| Box::new(RecallFirstMemorySystem)),
+        );
         RwLock::new(map)
     })
 }
@@ -111,6 +116,7 @@ where
     let reserved_system_id = match normalized.as_str() {
         DEFAULT_MEMORY_SYSTEM_ID => Some(DEFAULT_MEMORY_SYSTEM_ID),
         WORKSPACE_RECALL_MEMORY_SYSTEM_ID => Some(WORKSPACE_RECALL_MEMORY_SYSTEM_ID),
+        RECALL_FIRST_MEMORY_SYSTEM_ID => Some(RECALL_FIRST_MEMORY_SYSTEM_ID),
         _ => None,
     };
     if let Some(reserved_system_id) = reserved_system_id {
@@ -416,6 +422,15 @@ mod tests {
     }
 
     #[test]
+    fn registry_rejects_recall_first_override() {
+        let error = register_memory_system(RECALL_FIRST_MEMORY_SYSTEM_ID, || {
+            Box::new(MatchingRegistrySystem)
+        })
+        .expect_err("recall_first memory system should stay reserved");
+        assert!(error.contains("reserved"), "error: {error}");
+    }
+
+    #[test]
     fn registry_rejects_registry_id_mismatches() {
         let error = register_memory_system("registry-custom-alias", || {
             Box::new(MismatchedRegistrySystem)
@@ -484,6 +499,17 @@ mod tests {
         assert_eq!(
             workspace_recall.supported_recall_modes,
             vec![MemoryRecallMode::PromptAssembly]
+        );
+
+        let recall_first = metadata
+            .iter()
+            .find(|entry| entry.id == RECALL_FIRST_MEMORY_SYSTEM_ID)
+            .expect("recall_first metadata entry");
+        assert!(
+            recall_first
+                .capabilities
+                .contains(&MemorySystemCapability::RetrievalProvenance),
+            "recall_first metadata should include retrieval provenance capability"
         );
     }
 
