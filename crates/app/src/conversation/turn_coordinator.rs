@@ -4924,7 +4924,6 @@ fn spawn_async_delegate_detached(
                 label.clone(),
                 profile,
                 &execution,
-                error.clone(),
                 max_frozen_bytes,
                 error.clone(),
             );
@@ -8103,6 +8102,14 @@ mod tests {
         repo: &SessionRepository,
         expected_state: SessionState,
     ) -> FinalizeSessionTerminalResult {
+        let frozen_result = crate::session::frozen_result::FrozenResult {
+            content: crate::session::frozen_result::FrozenContent::Text(
+                "delegate_recovered".to_owned(),
+            ),
+            captured_at: std::time::SystemTime::now(),
+            byte_len: "delegate_recovered".len(),
+            truncated: false,
+        };
         repo.finalize_session_terminal_if_current(
             "child-session",
             expected_state,
@@ -8119,7 +8126,7 @@ mod tests {
                 outcome_payload_json: json!({
                     "error": "delegate_recovered"
                 }),
-                frozen_result: None,
+                frozen_result: Some(frozen_result),
             },
         )
         .expect("recover child terminal state")
@@ -8197,6 +8204,13 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(terminal_outcome.status, "error");
         assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+        assert_eq!(
+            terminal_outcome
+                .frozen_result
+                .expect("frozen result")
+                .content,
+            crate::session::frozen_result::FrozenContent::Text("delegate_recovered".to_owned())
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -8282,6 +8296,13 @@ mod tests {
             .expect("terminal outcome row");
         assert_eq!(terminal_outcome.status, "error");
         assert_eq!(terminal_outcome.payload_json["error"], "delegate_recovered");
+        assert_eq!(
+            terminal_outcome
+                .frozen_result
+                .expect("frozen result")
+                .content,
+            crate::session::frozen_result::FrozenContent::Text("delegate_recovered".to_owned())
+        );
     }
 
     #[cfg(feature = "memory-sqlite")]
