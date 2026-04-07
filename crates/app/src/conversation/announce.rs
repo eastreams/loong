@@ -449,8 +449,10 @@ pub(crate) fn reset_delegate_announce_queues_for_tests() {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::OnceLock;
 
     use serde_json::json;
+    use tokio::sync::Mutex as AsyncMutex;
     use tokio::time::{Duration, sleep};
 
     use super::{
@@ -477,6 +479,12 @@ mod tests {
             sqlite_path: Some(db_path),
             ..MemoryRuntimeConfig::default()
         }
+    }
+
+    fn announce_test_lock() -> &'static AsyncMutex<()> {
+        static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+
+        LOCK.get_or_init(|| AsyncMutex::new(()))
     }
 
     fn create_parent_session(repo: &SessionRepository, session_id: &str, state: SessionState) {
@@ -559,6 +567,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_delivers_single_result_to_parent_session_events() {
+        let _guard = announce_test_lock().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("single");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -589,6 +598,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_batches_children_completed_within_debounce_window() {
+        let _guard = announce_test_lock().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("batch");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -638,6 +648,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_summarizes_oldest_results_when_batch_limit_is_exceeded() {
+        let _guard = announce_test_lock().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("overflow");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
@@ -685,6 +696,7 @@ mod tests {
 
     #[tokio::test]
     async fn delegate_announce_queue_drops_delivery_when_parent_is_terminal() {
+        let _guard = announce_test_lock().lock().await;
         reset_delegate_announce_queues_for_tests();
         let memory_config = isolated_memory_config("drop-terminal-parent");
         let repo = SessionRepository::new(&memory_config).expect("session repository");
