@@ -1568,17 +1568,9 @@ pub fn redacted_command_name(command: &Commands) -> &'static str {
     command.command_kind_for_logging()
 }
 
-/// Bridges deprecated `LOONGCLAW_*` environment variables to their `LOONG_*`
-/// replacements. Runs once at startup before any config reads.
-///
-/// For each entry: if the old name is set but the new name is not, copy the
-/// value into the new name and emit a deprecation warning. When both are set
-/// the new name wins silently.
-///
-/// Based on the pattern established by rustup (PR #161) for the
-/// `MULTIRUST_*` → `RUSTUP_*` migration.
+/// Copies deprecated `LOONGCLAW_*` env vars into their `LOONG_*` replacements
+/// and emits a deprecation warning. No-op when the new name is already set.
 pub fn make_env_compatible() {
-    // (new_name, deprecated_name)
     const MIGRATIONS: &[(&str, &str)] = &[
         ("LOONG_HOME", "LOONGCLAW_HOME"),
         // Future: ("LOONG_CONFIG_PATH", "LOONGCLAW_CONFIG_PATH"), etc.
@@ -1586,21 +1578,11 @@ pub fn make_env_compatible() {
     for &(new, old) in MIGRATIONS {
         let old_val = std::env::var_os(old);
         let new_val = std::env::var_os(new);
-        match (old_val, new_val) {
-            (Some(old_val), None) => {
-                // SAFETY: single-threaded at this point in startup — no other
-                // threads have been spawned yet (tokio runtime runs after main
-                // setup, and this function is called before parse_cli).
-                #[allow(unsafe_code, clippy::disallowed_methods)]
-                unsafe {
-                    std::env::set_var(new, &old_val);
-                }
-                tracing::warn!(
-                    "{old} is deprecated and will be removed in a future release. \
-                     Set {new} instead."
-                );
-            }
-            _ => {}
+        if let (Some(old_val), None) = (old_val, new_val) {
+            // SAFETY: single-threaded — called before tokio runtime and parse_cli.
+            #[allow(unsafe_code, clippy::disallowed_methods)]
+            unsafe { std::env::set_var(new, &old_val) }
+            tracing::warn!("{old} is deprecated. Set {new} instead.");
         }
     }
 }
@@ -1653,52 +1635,39 @@ pub fn run_welcome_cli() -> CliResult<()> {
 #[cfg(test)]
 mod env_compat_tests {
     use crate::test_support::ScopedEnv;
+    fn loong_home() -> Option<std::path::PathBuf> {
+        std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from)
+    }
 
     #[test]
     fn migrates_deprecated_env_when_new_is_unset() {
         let mut env = ScopedEnv::new();
-        let value = std::env::temp_dir().join("loong-compat-old-only");
-        env.set("LOONGCLAW_HOME", &value);
+        let val = std::env::temp_dir().join("loong-compat-old-only");
+        env.set("LOONGCLAW_HOME", &val);
         env.remove("LOONG_HOME");
-
         super::make_env_compatible();
-
-        assert_eq!(
-            std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from),
-            Some(value)
-        );
+        assert_eq!(loong_home(), Some(val));
     }
 
     #[test]
     fn does_not_overwrite_new_env_when_both_set() {
         let mut env = ScopedEnv::new();
-        let new_val = std::env::temp_dir().join("loong-compat-new");
-        let old_val = std::env::temp_dir().join("loong-compat-old");
-        env.set("LOONG_HOME", &new_val);
-        env.set("LOONGCLAW_HOME", &old_val);
-
+        let new = std::env::temp_dir().join("loong-compat-new");
+        let old = std::env::temp_dir().join("loong-compat-old");
+        env.set("LOONG_HOME", &new);
+        env.set("LOONGCLAW_HOME", &old);
         super::make_env_compatible();
-
-        assert_eq!(
-            std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from),
-            Some(new_val),
-            "LOONG_HOME must not be overwritten by LOONGCLAW_HOME"
-        );
+        assert_eq!(loong_home(), Some(new));
     }
 
     #[test]
     fn no_op_when_only_new_env_is_set() {
         let mut env = ScopedEnv::new();
-        let value = std::env::temp_dir().join("loong-compat-new-only");
-        env.set("LOONG_HOME", &value);
+        let val = std::env::temp_dir().join("loong-compat-new-only");
+        env.set("LOONG_HOME", &val);
         env.remove("LOONGCLAW_HOME");
-
         super::make_env_compatible();
-
-        assert_eq!(
-            std::env::var_os("LOONG_HOME").map(std::path::PathBuf::from),
-            Some(value)
-        );
+        assert_eq!(loong_home(), Some(val));
     }
 
     #[test]
@@ -1706,13 +1675,8 @@ mod env_compat_tests {
         let mut env = ScopedEnv::new();
         env.remove("LOONG_HOME");
         env.remove("LOONGCLAW_HOME");
-
         super::make_env_compatible();
-
-        assert!(
-            std::env::var_os("LOONG_HOME").is_none(),
-            "LOONG_HOME must remain unset when neither var is provided"
-        );
+        assert!(loong_home().is_none());
     }
 }
 
