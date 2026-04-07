@@ -1474,7 +1474,7 @@ pub async fn run_onboard_cli_with_ui(
 
         if config.provider.kind == mvp::config::ProviderKind::GithubCopilot {
             tracing::warn!("GitHub Copilot uses an undocumented API. It may break without notice.");
-            let token = mvp::provider::copilot_auth::device_code_login().await?;
+            let token = mvp::provider::copilot_device_code_login().await?;
             config.provider.oauth_access_token = Some(SecretRef::Inline(token));
         } else {
             let default_api_key_env = preferred_api_key_env_default(&config);
