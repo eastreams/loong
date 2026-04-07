@@ -7621,6 +7621,11 @@ mod tests {
         config.tools.web_search.perplexity_api_key = Some("${PERPLEXITY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
         env.set("PERPLEXITY_API_KEY", "perplexity-test-token");
 
         let recommendation = recommend_web_search_provider_from_available_credentials(&config)

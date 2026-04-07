@@ -549,6 +549,14 @@ mod tests {
 
     use crate::test_support::ScopedEnv;
 
+    fn clear_web_search_credential_envs(env: &mut ScopedEnv) {
+        for descriptor in mvp::config::web_search_provider_descriptors() {
+            for env_name in descriptor.api_key_env_names {
+                env.remove(*env_name);
+            }
+        }
+    }
+
     fn default_options() -> OnboardCommandOptions {
         OnboardCommandOptions {
             output: None,
@@ -575,6 +583,7 @@ mod tests {
         config.tools.web_search.tavily_api_key = Some("${TAVILY_API_KEY}".to_owned());
 
         let mut env = ScopedEnv::new();
+        clear_web_search_credential_envs(&mut env);
         env.set("TAVILY_API_KEY", "tavily-test-token");
 
         let recommendation = resolve_web_search_provider_recommendation(&options, &config)
