@@ -131,7 +131,8 @@ use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{
     DelegateWorkspaceCleanupResult, cleanup_delegate_workspace_root,
-    cleanup_prepared_delegate_workspace_root, prepare_delegate_workspace_root,
+    cleanup_prepared_delegate_workspace_root, normalize_delegate_workspace_path,
+    prepare_delegate_workspace_root,
 };
 #[cfg(all(feature = "memory-sqlite", test))]
 use crate::session::recovery::RECOVERY_EVENT_KIND;
@@ -3518,7 +3519,8 @@ fn inject_delegate_workspace_metadata(
 
     object.insert("isolation".to_owned(), json!(execution.isolation.as_str()));
     if let Some(workspace_root) = execution.workspace_root.as_ref() {
-        let display_path = workspace_root.display().to_string();
+        let normalized_workspace_root = normalize_delegate_workspace_path(workspace_root);
+        let display_path = normalized_workspace_root.display().to_string();
         object.insert("workspace_root".to_owned(), json!(display_path));
     }
     if let Some(cleanup) = cleanup {
