@@ -1996,10 +1996,6 @@ fn tool_search_definition(descriptor: &ToolDescriptor) -> Value {
                     }
                 },
                 "required": [],
-                "anyOf": [
-                    { "required": ["query"] },
-                    { "required": ["exact_tool_id"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -2475,10 +2471,6 @@ fn external_skills_fetch_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Maximum download size in bytes. Defaults to 5242880 and is capped at 20971520."
                     }
                 },
-                "anyOf": [
-                    { "required": ["reference"] },
-                    { "required": ["url"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -2648,10 +2640,6 @@ fn external_skills_install_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Replace an existing installed skill with the same id. Defaults to false."
                     }
                 },
-                "anyOf": [
-                    { "required": ["path"] },
-                    { "required": ["bundled_skill_id"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3260,10 +3248,6 @@ fn session_status_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Visible session identifiers to inspect in one request."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3385,10 +3369,6 @@ fn session_tool_policy_set_definition(descriptor: &ToolDescriptor) -> Value {
                     },
                     "runtime_narrowing": session_tool_runtime_narrowing_schema()
                 },
-                "anyOf": [
-                    { "required": ["tool_ids"] },
-                    { "required": ["runtime_narrowing"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3441,10 +3421,6 @@ fn session_recover_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are recoverable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3477,10 +3453,6 @@ fn session_archive_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are archivable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3513,10 +3485,6 @@ fn session_cancel_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "When true, preview which targets are cancellable without mutating state."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
@@ -3586,10 +3554,6 @@ fn session_wait_definition(descriptor: &ToolDescriptor) -> Value {
                         "description": "Bounded wait timeout in milliseconds."
                     }
                 },
-                "oneOf": [
-                    { "required": ["session_id"] },
-                    { "required": ["session_ids"] }
-                ],
                 "additionalProperties": false
             }
         }
