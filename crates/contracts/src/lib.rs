@@ -18,6 +18,7 @@ mod secret_value;
 mod task_state;
 mod tool_types;
 mod workflow_types;
+mod work_types;
 
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
 pub use child_process_env::{
@@ -55,6 +56,11 @@ pub use tool_types::{
 pub use workflow_types::{
     GovernedSessionBindingDescriptor, GovernedSessionMode, TaskScopeDescriptor,
     WorkflowOperationKind, WorkflowOperationScope, WorktreeBindingDescriptor,
+};
+pub use work_types::{
+    WorkRuntimeHealthSnapshot, WorkSourceKind, WorkUnitEventRecord, WorkUnitKind,
+    WorkUnitLeaseRecord, WorkUnitPriority, WorkUnitRecord, WorkUnitRetryPolicy, WorkUnitSnapshot,
+    WorkUnitSourceRef, WorkUnitStatus,
 };
 
 #[cfg(test)]

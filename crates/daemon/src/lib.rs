@@ -139,6 +139,7 @@ mod task_execution;
 pub mod tasks_cli;
 mod tlon_cli;
 pub mod trajectory_cli;
+pub mod work_unit_cli;
 
 use channel_bridge_render::{
     push_channel_surface_managed_plugin_bridge_discovery,
@@ -755,6 +756,11 @@ pub enum Commands {
     RuntimeCapability {
         #[command(subcommand)]
         command: runtime_capability_cli::RuntimeCapabilityCommands,
+    },
+    /// Manage durable work units for long-running runtime orchestration
+    WorkUnit {
+        #[command(subcommand)]
+        command: work_unit_cli::WorkUnitCommands,
     },
     /// List available conversation context engines and selected runtime engine
     ListContextEngines {

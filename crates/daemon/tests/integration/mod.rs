@@ -142,6 +142,7 @@ mod spec_runtime_bridge;
 mod tasks_cli;
 pub(crate) use managed_bridge_fixtures::*;
 mod trajectory_export_cli;
+mod work_unit_cli;
 
 #[test]
 fn cli_uses_loong_program_name() {

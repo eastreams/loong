@@ -401,6 +401,7 @@ async fn main() {
         Commands::RuntimeCapability { command } => {
             runtime_capability_cli::run_runtime_capability_cli(command)
         }
+        Commands::WorkUnit { command } => work_unit_cli::run_work_unit_cli(command),
         Commands::ListContextEngines { config, json } => {
             run_list_context_engines_cli(config.as_deref(), json)
         }
