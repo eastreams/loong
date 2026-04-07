@@ -134,8 +134,7 @@ use super::turn_shared::{ReplyResolutionMode, ToolDrivenFollowupKind};
 #[cfg(feature = "memory-sqlite")]
 use crate::conversation::workspace_isolation::{
     DelegateWorkspaceCleanupResult, cleanup_delegate_workspace_root,
-    cleanup_prepared_delegate_workspace_root, normalize_delegate_workspace_path,
-    prepare_delegate_workspace_root,
+    cleanup_prepared_delegate_workspace_root, prepare_delegate_workspace_root,
 };
 #[cfg(all(feature = "memory-sqlite", test))]
 use crate::session::recovery::RECOVERY_EVENT_KIND;
@@ -150,11 +149,46 @@ use crate::session::repository::{
 };
 use support::{
     ProviderTurnPreparation, ProviderTurnReplyTailPhase, ProviderTurnSessionState,
-    emit_async_delegate_child_queued_event, emit_async_delegate_child_terminal_event,
-    emit_discovery_first_event, emit_prompt_frame_event, estimate_tokens_for_messages,
-    inject_delegate_workspace_metadata, split_delegate_workspace_cleanup,
-    summarize_discovery_first_followup_turn,
+    emit_async_delegate_child_queued_event, emit_discovery_first_event, emit_prompt_frame_event,
+    estimate_tokens_for_messages, inject_delegate_workspace_metadata,
+    split_delegate_workspace_cleanup, summarize_discovery_first_followup_turn,
 };
+
+#[cfg(feature = "memory-sqlite")]
+pub(crate) async fn emit_async_delegate_child_terminal_event<R: ConversationRuntime + ?Sized>(
+    runtime: &R,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_label: Option<&str>,
+    profile: Option<crate::conversation::DelegateBuiltinProfile>,
+    phase: &'static str,
+    isolation: crate::conversation::ConstrainedSubagentIsolation,
+    duration_ms: u64,
+    turn_count: Option<usize>,
+    error: Option<&str>,
+    final_output: Option<&str>,
+    workspace_root: Option<&std::path::Path>,
+    workspace_retained: Option<bool>,
+    binding: ConversationRuntimeBinding<'_>,
+) {
+    support::emit_async_delegate_child_terminal_event(
+        runtime,
+        parent_session_id,
+        child_session_id,
+        child_label,
+        profile,
+        phase,
+        isolation,
+        duration_ms,
+        turn_count,
+        error,
+        final_output,
+        workspace_root,
+        workspace_retained,
+        binding,
+    )
+    .await;
+}
 
 #[derive(Default)]
 pub struct ConversationTurnCoordinator;
