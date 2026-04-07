@@ -222,25 +222,32 @@ pub(crate) fn now_unix_for_test() -> i64 {
     now_unix()
 }
 
+/// Serializes tests that mutate the global `COPILOT_API_KEY_CACHE`.
+/// Hold the returned guard for the duration of any test that reads
+/// or writes the cache.
+#[cfg(test)]
+pub(crate) fn acquire_cache_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    CACHE_TEST_LOCK.lock().unwrap()
+}
+
+#[cfg(test)]
+static CACHE_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    /// Serializes tests that mutate the global `COPILOT_API_KEY_CACHE`.
-    static CACHE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     #[test]
     fn cached_copilot_api_key_returns_none_when_empty() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = acquire_cache_test_lock();
         clear_cache();
         assert_eq!(cached_copilot_api_key(), None);
     }
 
     #[test]
     fn cache_hit_returns_token_when_not_expired() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = acquire_cache_test_lock();
         clear_cache();
 
         let mut cache = COPILOT_API_KEY_CACHE.lock().unwrap();
@@ -257,7 +264,7 @@ mod tests {
 
     #[test]
     fn cache_miss_when_token_within_refresh_buffer() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = acquire_cache_test_lock();
         clear_cache();
 
         let mut cache = COPILOT_API_KEY_CACHE.lock().unwrap();
@@ -274,7 +281,7 @@ mod tests {
 
     #[test]
     fn clear_cache_removes_stored_key() {
-        let _guard = CACHE_TEST_LOCK.lock().unwrap();
+        let _guard = acquire_cache_test_lock();
         clear_cache();
 
         let mut cache = COPILOT_API_KEY_CACHE.lock().unwrap();
