@@ -274,6 +274,23 @@ mod tests {
     }
 
     #[test]
+    fn provider_model_probe_failure_preserves_xiaomi_reviewed_model_recovery() {
+        let mut config = mvp::config::LoongClawConfig::default();
+        config.provider.kind = mvp::config::ProviderKind::Xiaomi;
+        config.provider.model = "auto".to_owned();
+
+        let failure = provider_model_probe_failure(&config, "401 Unauthorized");
+
+        assert_eq!(failure.level, ProviderModelProbeFailureLevel::Fail);
+        assert_eq!(
+            failure.kind,
+            ProviderModelProbeFailureKind::RequiresExplicitModel {
+                recommended_onboarding_model: Some("mimo-v2-pro".to_owned()),
+            }
+        );
+    }
+
+    #[test]
     fn provider_model_probe_failure_appends_region_hint_for_auth_failures() {
         let mut config = mvp::config::LoongClawConfig::default();
         config.provider.kind = mvp::config::ProviderKind::Minimax;
