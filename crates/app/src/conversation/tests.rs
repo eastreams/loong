@@ -23807,10 +23807,11 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     assert_eq!(payloads[0]["workspace_retained"], true);
 
     let git_executable = delegate_test_git_executable();
+    let repo_root_string = repo_root.display().to_string();
     let cleanup_status = std::process::Command::new(git_executable)
         .args([
             "-C",
-            workspace_root.as_str(),
+            repo_root_string.as_str(),
             "worktree",
             "remove",
             "--force",

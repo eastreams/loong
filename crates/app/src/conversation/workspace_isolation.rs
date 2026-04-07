@@ -176,9 +176,13 @@ fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), S
 }
 
 fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
+    // Removing a linked worktree from inside that same worktree is fragile on
+    // Windows because Git then tries to delete its own current working
+    // directory. Resolve the owning repo root and run the removal from there.
+    let repo_root = resolve_git_repo_root_for_worktree(worktree_root)?;
     let args = [
         OsStr::new("-C"),
-        worktree_root.as_os_str(),
+        repo_root.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
@@ -194,6 +198,58 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
     Err(format!(
         "remove delegate worktree `{display_path}` failed: {stderr}"
     ))
+}
+
+fn resolve_git_repo_root_for_worktree(worktree_root: &Path) -> Result<PathBuf, String> {
+    let common_dir = resolve_git_common_dir(worktree_root)?;
+    let repo_root = common_dir.parent().ok_or_else(|| {
+        let display_path = common_dir.display();
+        format!("resolve git repo root from common dir `{display_path}` failed: missing parent")
+    })?;
+    let canonical_repo_root = std::fs::canonicalize(repo_root).map_err(|error| {
+        let display_path = repo_root.display();
+        format!("canonicalize git repo root `{display_path}` failed: {error}")
+    })?;
+    Ok(canonical_repo_root)
+}
+
+fn resolve_git_common_dir(worktree_root: &Path) -> Result<PathBuf, String> {
+    let args = [
+        OsStr::new("-C"),
+        worktree_root.as_os_str(),
+        OsStr::new("rev-parse"),
+        OsStr::new("--git-common-dir"),
+    ];
+    let output = run_git_command(&args)?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let display_path = worktree_root.display();
+        return Err(format!(
+            "resolve git common dir from `{display_path}` failed: {stderr}"
+        ));
+    }
+
+    let raw_stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed_stdout = raw_stdout.trim();
+    if trimmed_stdout.is_empty() {
+        let display_path = worktree_root.display();
+        return Err(format!(
+            "resolve git common dir from `{display_path}` returned empty output"
+        ));
+    }
+
+    let raw_path = PathBuf::from(trimmed_stdout);
+    let normalized_path = if raw_path.is_absolute() {
+        raw_path
+    } else {
+        worktree_root.join(raw_path)
+    };
+    let canonical_path = std::fs::canonicalize(&normalized_path).map_err(|error| {
+        let display_path = normalized_path.display();
+        format!("canonicalize git common dir `{display_path}` failed: {error}")
+    })?;
+
+    Ok(canonical_path)
 }
 
 fn delegate_worktree_is_dirty(workspace_root: &Path) -> Result<bool, String> {
