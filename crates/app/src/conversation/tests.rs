@@ -20125,10 +20125,7 @@ async fn handle_turn_with_runtime_delegate_rejects_spawn_when_prepare_subagent_s
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    config.tools.delegate.announce_debounce_ms = 0;
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)
@@ -20208,10 +20205,7 @@ async fn handle_turn_with_runtime_delegate_reports_end_hook_failure_after_child_
     ));
     let _ = std::fs::remove_file(&db_path);
 
-    let mut config = test_config();
-    config.memory.sqlite_path = db_path.display().to_string();
-    config.tools.delegate.announce_debounce_ms = 0;
-    enable_guided_autonomy(&mut config);
+    let mut config = make_delegate_announce_test_config(&db_path);
     preapprove_tool_call(&mut config, "delegate");
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
     let repo = crate::session::repository::SessionRepository::new(&memory_config)

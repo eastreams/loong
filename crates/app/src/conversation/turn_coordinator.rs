@@ -4613,32 +4613,23 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            let frozen_result =
-                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Completed,
+                duration_ms,
+                Some(turn_count),
+                None,
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Completed,
-                    last_error: None,
-                    event_kind: "delegate_completed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Completed,
-                        duration_ms,
-                        Some(turn_count),
-                        None,
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                    frozen_result: Some(frozen_result),
-                },
-            )?;
-            enqueue_delegate_result_announce_for_parent(
-                config,
                 parent_session_id,
-                child_session_id,
-            );
+                &outcome,
+                SessionState::Completed,
+                None,
+                "delegate_completed",
+                event_payload_json,
+            )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4678,32 +4669,23 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            let frozen_result =
-                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Failed,
+                duration_ms,
+                None,
+                Some(error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Failed,
-                    last_error: Some(error.clone()),
-                    event_kind: "delegate_failed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Failed,
-                        duration_ms,
-                        None,
-                        Some(error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                    frozen_result: Some(frozen_result),
-                },
-            )?;
-            enqueue_delegate_result_announce_for_parent(
-                config,
                 parent_session_id,
-                child_session_id,
-            );
+                &outcome,
+                SessionState::Failed,
+                Some(error.clone()),
+                "delegate_failed",
+                event_payload_json,
+            )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4744,32 +4726,23 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            let frozen_result =
-                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::Failed,
+                duration_ms,
+                None,
+                Some(panic_error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::Failed,
-                    last_error: Some(panic_error.clone()),
-                    event_kind: "delegate_failed".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::Failed,
-                        duration_ms,
-                        None,
-                        Some(panic_error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                    frozen_result: Some(frozen_result),
-                },
-            )?;
-            enqueue_delegate_result_announce_for_parent(
-                config,
                 parent_session_id,
-                child_session_id,
-            );
+                &outcome,
+                SessionState::Failed,
+                Some(panic_error.clone()),
+                "delegate_failed",
+                event_payload_json,
+            )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -4809,32 +4782,23 @@ pub(crate) async fn run_started_delegate_child_turn_with_runtime<
                 cleanup_metadata.as_ref(),
                 cleanup_error,
             );
-            let frozen_result =
-                capture_frozen_result(&outcome, config.tools.delegate.max_frozen_bytes);
-            finalize_delegate_child_terminal_with_recovery(
+            let event_payload_json = execution.terminal_payload(
+                ConstrainedSubagentTerminalReason::TimedOut,
+                duration_ms,
+                None,
+                Some(timeout_error.as_str()),
+            );
+            finalize_and_announce_delegate_child_terminal(
+                config,
                 &repo,
                 child_session_id,
-                FinalizeSessionTerminalRequest {
-                    state: SessionState::TimedOut,
-                    last_error: Some(timeout_error.clone()),
-                    event_kind: "delegate_timed_out".to_owned(),
-                    actor_session_id: Some(parent_session_id.to_owned()),
-                    event_payload_json: execution.terminal_payload(
-                        ConstrainedSubagentTerminalReason::TimedOut,
-                        duration_ms,
-                        None,
-                        Some(timeout_error.as_str()),
-                    ),
-                    outcome_status: outcome.status.clone(),
-                    outcome_payload_json: outcome.payload.clone(),
-                    frozen_result: Some(frozen_result),
-                },
-            )?;
-            enqueue_delegate_result_announce_for_parent(
-                config,
                 parent_session_id,
-                child_session_id,
-            );
+                &outcome,
+                SessionState::TimedOut,
+                Some(timeout_error.clone()),
+                "delegate_timed_out",
+                event_payload_json,
+            )?;
             if execution.mode == ConstrainedSubagentMode::Async {
                 emit_async_delegate_child_terminal_event(
                     runtime,
@@ -5128,6 +5092,38 @@ fn finalize_delegate_child_terminal_with_recovery(
         child_session_id,
         request,
     )
+}
+
+#[cfg(feature = "memory-sqlite")]
+fn finalize_and_announce_delegate_child_terminal(
+    config: &LoongClawConfig,
+    repo: &SessionRepository,
+    child_session_id: &str,
+    parent_session_id: &str,
+    outcome: &loongclaw_contracts::ToolCoreOutcome,
+    state: SessionState,
+    last_error: Option<String>,
+    event_kind: &str,
+    event_payload_json: Value,
+) -> Result<(), String> {
+    let max_frozen_bytes = config.tools.delegate.max_frozen_bytes;
+    let frozen_result = capture_frozen_result(outcome, max_frozen_bytes);
+
+    let request = FinalizeSessionTerminalRequest {
+        state,
+        last_error,
+        event_kind: event_kind.to_owned(),
+        actor_session_id: Some(parent_session_id.to_owned()),
+        event_payload_json,
+        outcome_status: outcome.status.clone(),
+        outcome_payload_json: outcome.payload.clone(),
+        frozen_result: Some(frozen_result),
+    };
+
+    finalize_delegate_child_terminal_with_recovery(repo, child_session_id, request)?;
+    enqueue_delegate_result_announce_for_parent(config, parent_session_id, child_session_id);
+
+    Ok(())
 }
 
 #[cfg(feature = "memory-sqlite")]
