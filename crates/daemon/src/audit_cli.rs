@@ -6,8 +6,8 @@ use std::path::Path;
 use clap::Subcommand;
 
 use crate::kernel::{
-    AuditEvent, AuditEventKind, AuditRepairOutcome, PluginTrustTier,
-    repair_jsonl_audit_journal, verify_jsonl_audit_journal,
+    AuditEvent, AuditEventKind, AuditRepairOutcome, PluginTrustTier, repair_jsonl_audit_journal,
+    verify_jsonl_audit_journal,
 };
 use loongclaw_spec::CliResult;
 use serde_json::{Map, Value, json};
