@@ -9119,6 +9119,92 @@ mod tests {
     }
 
     #[test]
+    fn provider_turn_followup_preparation_retains_original_tail_across_multiple_followups() {
+        let base_fragment = crate::conversation::PromptFragment::new(
+            "base-system",
+            crate::conversation::PromptLane::BaseSystem,
+            "base-system",
+            "base system prompt",
+            crate::conversation::ContextArtifactKind::SystemPrompt,
+        )
+        .with_cacheable(true);
+        let assembled = AssembledConversationContext {
+            messages: vec![
+                serde_json::json!({
+                    "role": "system",
+                    "content": "base system prompt"
+                }),
+                serde_json::json!({
+                    "role": "assistant",
+                    "content": "recent assistant turn"
+                }),
+            ],
+            artifacts: vec![
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 0,
+                    artifact_kind: crate::conversation::ContextArtifactKind::SystemPrompt,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+                crate::conversation::ContextArtifactDescriptor {
+                    message_index: 1,
+                    artifact_kind: crate::conversation::ContextArtifactKind::ConversationTurn,
+                    maskable: false,
+                    streaming_policy: crate::conversation::ToolOutputStreamingPolicy::BufferFull,
+                },
+            ],
+            estimated_tokens: Some(24),
+            prompt_fragments: vec![base_fragment],
+            system_prompt_addition: None,
+        };
+        let preparation = ProviderTurnPreparation::from_assembled_context(
+            &LoongClawConfig::default(),
+            assembled,
+            "use the recent result",
+            None,
+        );
+        let mut first_followup_messages = preparation.session.messages.clone();
+
+        first_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] compacted tail"
+        }));
+        first_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue"
+        }));
+
+        let first_followup_preparation = preparation.for_followup_messages(first_followup_messages);
+        let mut second_followup_messages = first_followup_preparation.session.messages.clone();
+
+        second_followup_messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": "[tool_result] second tail"
+        }));
+        second_followup_messages.push(serde_json::json!({
+            "role": "user",
+            "content": "continue again"
+        }));
+
+        let second_followup_preparation =
+            first_followup_preparation.for_followup_messages(second_followup_messages);
+        let second_summary = second_followup_preparation.session.prompt_frame_summary();
+        let tail_bucket = second_summary
+            .bucket(crate::conversation::PromptFrameLayer::TurnEphemeralTail)
+            .expect("turn-ephemeral bucket should exist");
+
+        assert_eq!(tail_bucket.message_count, 5);
+        assert_eq!(second_summary.turn_ephemeral_segment_count, 5);
+        assert_eq!(
+            second_summary.stable_prefix_hash_sha256,
+            preparation
+                .session
+                .prompt_frame_summary()
+                .stable_prefix_hash_sha256
+        );
+    }
+
+    #[test]
     fn provider_turn_lane_plan_hybrid_disabled_forces_fast_lane_limits() {
         let mut config = LoongClawConfig::default();
         config.conversation.hybrid_lane_enabled = false;

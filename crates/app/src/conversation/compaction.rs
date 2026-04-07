@@ -6,11 +6,12 @@ const SUMMARY_MAX_RENDERED_TURNS: usize = 4;
 const SUMMARY_PREFERRED_USER_TURNS: usize = 3;
 const SUMMARY_PREFERRED_ASSISTANT_TURNS: usize = 1;
 const SUMMARY_TURN_EXCERPT_CHARS: usize = 96;
-const COMPACTED_SUMMARY_MAX_CHARS: usize = 480;
+const COMPACTED_SUMMARY_MAX_CHARS: usize = 511;
 const SUMMARY_TOTAL_CHARS_MAX: usize = COMPACTED_SUMMARY_MAX_CHARS;
 const PRIOR_COMPACTED_SUMMARY_PLACEHOLDER: &str = "[prior compacted summary]";
 pub(crate) const COMPACTED_SUMMARY_MARKER: &str = "[session_local_recall_compacted_window]";
-const COMPACTED_SUMMARY_DISCLAIMER: &str = "This compacted checkpoint is session-local recall only. It does not replace Runtime Self Context, Resolved Runtime Identity, Session Profile, or advisory durable recall.";
+const COMPACTED_SUMMARY_DISCLAIMER: &str =
+    "This compacted checkpoint is session-local recall only.";
 const USER_CONTEXT_HEADING: &str = "User context:";
 const ASSISTANT_PROGRESS_HEADING: &str = "Assistant progress:";
 const OMITTED_CONTEXT_PREFIX: &str = "More omitted context:";
@@ -195,29 +196,38 @@ fn render_compacted_summary(compacted_turn_count: usize, turns: &[WindowTurn]) -
 }
 
 fn bound_compacted_summary_body(summary: &str, max_chars: usize) -> String {
-    let omitted_line = summary
-        .lines()
+    let mut summary_lines = summary.lines().collect::<Vec<_>>();
+    let omitted_line = summary_lines
         .last()
-        .filter(|line| line.starts_with("... "))
-        .map(str::to_owned);
+        .copied()
+        .filter(|line| line.starts_with("... ") || line.starts_with(OMITTED_CONTEXT_PREFIX));
 
-    let Some(omitted_line) = omitted_line else {
-        return trim_to_chars(summary, max_chars);
-    };
-
-    let body = summary
-        .strip_suffix(omitted_line.as_str())
-        .unwrap_or(summary)
-        .trim_end_matches('\n');
-    let reserved_chars = omitted_line.chars().count().saturating_add(1);
-    let body_chars = max_chars.saturating_sub(reserved_chars);
-    let bounded_body = trim_to_chars(body, body_chars);
-
-    if bounded_body.is_empty() {
-        return trim_to_chars(omitted_line.as_str(), max_chars);
+    if omitted_line.is_some() {
+        summary_lines.pop();
     }
 
-    format!("{bounded_body}\n{omitted_line}")
+    let reserved_omitted_chars = omitted_line
+        .map(|line| line.chars().count().saturating_add(1))
+        .unwrap_or(0);
+    let body_limit = max_chars.saturating_sub(reserved_omitted_chars);
+    let mut bounded_lines = Vec::new();
+    let mut budget = SummaryCharBudget::new(body_limit);
+
+    for line in summary_lines {
+        if !push_summary_line(&mut bounded_lines, &mut budget, line) {
+            break;
+        }
+    }
+
+    if let Some(omitted_line) = omitted_line {
+        if bounded_lines.is_empty() {
+            return trim_to_chars(omitted_line, max_chars);
+        }
+
+        bounded_lines.push(omitted_line.to_owned());
+    }
+
+    bounded_lines.join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,13 +448,13 @@ fn is_summary_metadata_line(line: &str) -> bool {
     if line == scope_note {
         return true;
     }
-    if line.starts_with(COMPACTED_SUMMARY_PREFIX) {
-        return true;
-    }
     if line == COMPACTED_SUMMARY_MARKER {
         return true;
     }
     if line == COMPACTED_SUMMARY_DISCLAIMER {
+        return true;
+    }
+    if line.starts_with(COMPACTED_SUMMARY_PREFIX) {
         return true;
     }
     if line == USER_CONTEXT_HEADING {

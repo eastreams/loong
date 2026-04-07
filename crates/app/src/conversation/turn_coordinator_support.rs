@@ -141,8 +141,13 @@ impl ProviderTurnPreparation {
     }
 
     pub(super) fn for_followup_messages(&self, messages: Vec<Value>) -> Self {
-        let base_message_count = self.session.messages.len();
-        let followup_tail_slice = messages.get(base_message_count..);
+        let default_tail_start_index = self.session.messages.len();
+        let tail_start_index = self
+            .session
+            .prompt_frame
+            .turn_ephemeral_start_index()
+            .unwrap_or(default_tail_start_index);
+        let followup_tail_slice = messages.get(tail_start_index..);
         let followup_tail_messages = followup_tail_slice.unwrap_or(&[]).to_vec();
         let prompt_frame = self
             .session
