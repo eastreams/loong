@@ -617,6 +617,8 @@ pub enum ProviderKind {
     KimiCoding,
     #[serde(alias = "groq_compatible")]
     Groq,
+    #[serde(alias = "github_copilot", alias = "github-copilot", alias = "copilot")]
+    GithubCopilot,
     #[serde(alias = "fireworks_compatible", alias = "fireworks-ai")]
     Fireworks,
     #[serde(alias = "mistral_compatible")]
@@ -2540,6 +2542,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => "DeepSeek",
             ProviderKind::Fireworks => "Fireworks",
             ProviderKind::Gemini => "Gemini",
+            ProviderKind::GithubCopilot => "GitHub Copilot",
             ProviderKind::Groq => "Groq",
             ProviderKind::Kimi => "Kimi",
             ProviderKind::KimiCoding => "Kimi Coding",
@@ -2592,6 +2595,7 @@ impl ProviderKind {
             deepseek,
             fireworks,
             gemini,
+            github_copilot,
             groq,
             kimi,
             kimi_coding,
@@ -2637,6 +2641,7 @@ impl ProviderKind {
             ProviderKind::Deepseek => deepseek,
             ProviderKind::Fireworks => fireworks,
             ProviderKind::Gemini => gemini,
+            ProviderKind::GithubCopilot => github_copilot,
             ProviderKind::Groq => groq,
             ProviderKind::Kimi => kimi,
             ProviderKind::KimiCoding => kimi_coding,
@@ -2844,6 +2849,7 @@ impl ProviderKind {
             | ProviderKind::Fireworks
             | ProviderKind::Gemini
             | ProviderKind::Groq
+            | ProviderKind::GithubCopilot
             | ProviderKind::KimiCoding
             | ProviderKind::Llamacpp
             | ProviderKind::LmStudio
@@ -3005,7 +3011,7 @@ pub fn parse_provider_kind_id(raw: &str) -> Option<ProviderKind> {
     None
 }
 
-const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
+const PROVIDER_KIND_ORDER: [ProviderKind; 43] = [
     ProviderKind::Anthropic,
     ProviderKind::BailianCoding,
     ProviderKind::Bedrock,
@@ -3018,6 +3024,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
     ProviderKind::Deepseek,
     ProviderKind::Fireworks,
     ProviderKind::Gemini,
+    ProviderKind::GithubCopilot,
     ProviderKind::Groq,
     ProviderKind::Kimi,
     ProviderKind::KimiCoding,
@@ -3050,7 +3057,7 @@ const PROVIDER_KIND_ORDER: [ProviderKind; 42] = [
     ProviderKind::Zhipu,
 ];
 
-const PROVIDER_PROFILES: [ProviderProfile; 42] = [
+const PROVIDER_PROFILES: [ProviderProfile; 43] = [
     ProviderProfile {
         kind: ProviderKind::Anthropic,
         id: "anthropic",
@@ -3261,6 +3268,27 @@ const PROVIDER_PROFILES: [ProviderProfile; 42] = [
         default_api_key_env: Some("GEMINI_API_KEY"),
         api_key_env_aliases: &["GOOGLE_API_KEY"],
         default_user_agent: None,
+        default_oauth_access_token_env: None,
+        oauth_access_token_env_aliases: &[],
+        feature_family: ProviderFeatureFamily::OpenAiCompatible,
+    },
+    ProviderProfile {
+        kind: ProviderKind::GithubCopilot,
+        id: "github-copilot",
+        aliases: &["github_copilot", "copilot"],
+        base_url: "https://api.githubcopilot.com",
+        chat_completions_path: "/chat/completions",
+        models_path: None,
+        protocol_family: ProviderProtocolFamily::OpenAiChatCompletions,
+        auth_scheme: ProviderAuthScheme::Bearer,
+        default_headers: &[
+            ("Editor-Version", "vscode/1.85.1"),
+            ("Editor-Plugin-Version", "copilot/1.155.0"),
+            ("Copilot-Integration-Id", "vscode-chat"),
+        ],
+        default_api_key_env: None,
+        api_key_env_aliases: &[],
+        default_user_agent: Some("GithubCopilot/1.155.0"),
         default_oauth_access_token_env: None,
         oauth_access_token_env_aliases: &[],
         feature_family: ProviderFeatureFamily::OpenAiCompatible,

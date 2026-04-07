@@ -459,6 +459,7 @@ mod tests {
                 "deepseek",
                 "fireworks",
                 "gemini",
+                "github-copilot",
                 "groq",
                 "kimi",
                 "kimi_coding",
