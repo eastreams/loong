@@ -23950,6 +23950,7 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     assert_eq!(payloads[0]["workspace_retained"], true);
 
     let git_executable = delegate_test_git_executable();
+    let cleanup_root = dunce::canonicalize(&worktree_root).unwrap_or(worktree_root);
     let cleanup_status = std::process::Command::new(git_executable)
         .args([
             "-C",
@@ -23957,7 +23958,10 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
             "worktree",
             "remove",
             "--force",
-            workspace_root.as_str(),
+            cleanup_root
+                .as_os_str()
+                .to_str()
+                .expect("cleanup root utf-8"),
         ])
         .status()
         .expect("cleanup retained worktree status");
