@@ -842,8 +842,11 @@ fn extract_manual_compaction_summary_headline(
         return None;
     }
 
-    let headline = content.lines().next()?.trim();
-    Some(headline.to_owned())
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("Compacted "))
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(any(test, feature = "memory-sqlite"))]
