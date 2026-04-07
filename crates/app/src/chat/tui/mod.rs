@@ -18,6 +18,7 @@ pub(super) mod spinner;
 pub(super) mod state;
 pub(super) mod stats;
 pub(super) mod status_bar;
+pub(super) mod surfaces;
 pub(super) mod terminal;
 pub(super) mod theme;
 

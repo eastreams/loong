@@ -3,6 +3,7 @@ pub(crate) enum FocusLayer {
     Composer,
     Transcript,
     Help,
+    ThemePicker,
     SessionPicker,
     StatsOverlay,
     DiffOverlay,
@@ -48,6 +49,10 @@ impl FocusStack {
         }
 
         self.overlays.contains(&layer)
+    }
+
+    pub(crate) fn layers(&self) -> impl Iterator<Item = FocusLayer> + '_ {
+        std::iter::once(self.base).chain(self.overlays.iter().copied())
     }
 
     pub(crate) fn focus_transcript(&mut self) {
@@ -120,5 +125,26 @@ mod tests {
 
         assert_eq!(stack.top(), FocusLayer::Composer);
         assert!(!stack.has(FocusLayer::Transcript));
+    }
+
+    #[test]
+    fn layers_iterate_base_then_overlay_stack_order() {
+        let mut stack = FocusStack::new();
+        stack.focus_transcript();
+        stack.push(FocusLayer::Help);
+        stack.push(FocusLayer::ThemePicker);
+        stack.push(FocusLayer::DiffOverlay);
+
+        let layers: Vec<_> = stack.layers().collect();
+
+        assert_eq!(
+            layers,
+            vec![
+                FocusLayer::Transcript,
+                FocusLayer::Help,
+                FocusLayer::ThemePicker,
+                FocusLayer::DiffOverlay
+            ]
+        );
     }
 }

@@ -116,6 +116,7 @@ pub(super) fn render_input(
         }
         FocusLayer::Composer
         | FocusLayer::Help
+        | FocusLayer::ThemePicker
         | FocusLayer::SessionPicker
         | FocusLayer::StatsOverlay
         | FocusLayer::DiffOverlay

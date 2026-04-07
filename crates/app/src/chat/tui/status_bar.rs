@@ -171,8 +171,6 @@ pub(super) fn render_status_bar(
         ));
     }
 
-    append_activity_spans(&mut spans, pane, palette);
-
     let transcript_selection_line_count = pane.transcript_selection_line_count();
     if focus == FocusLayer::Transcript && transcript_selection_line_count > 0 {
         spans.push(Span::styled(
@@ -193,59 +191,6 @@ pub(super) fn render_status_bar(
     let line = Line::from(spans);
 
     frame.render_widget(Paragraph::new(line), area);
-}
-
-fn append_activity_spans(
-    spans: &mut Vec<Span<'static>>,
-    pane: &impl StatusBarView,
-    palette: &Palette,
-) {
-    let attention_approval_count = pane.attention_approval_count().unwrap_or(0);
-    if attention_approval_count > 0 {
-        let label = format!("APR! {attention_approval_count}");
-        push_activity_span(spans, label, palette.warning, palette);
-    }
-
-    let pending_approval_count = pane.pending_approval_count().unwrap_or(0);
-    let remaining_approval_count = pending_approval_count.saturating_sub(attention_approval_count);
-    if remaining_approval_count > 0 {
-        let label = format!("APR {remaining_approval_count}");
-        push_activity_span(spans, label, palette.info, palette);
-    }
-
-    let overdue_task_count = pane.overdue_task_count().unwrap_or(0);
-    if overdue_task_count > 0 {
-        let label = format!("LATE {overdue_task_count}");
-        push_activity_span(spans, label, palette.error, palette);
-    }
-
-    let running_task_count = pane.running_task_count().unwrap_or(0);
-    if running_task_count > 0 {
-        let label = format!("TASK {running_task_count}");
-        push_activity_span(spans, label, palette.tool_running, palette);
-    }
-
-    let visible_session_count = pane.visible_session_count().unwrap_or(0);
-    if visible_session_count > 1 {
-        let label = format!("SESS {visible_session_count}");
-        push_activity_span(spans, label, palette.brand, palette);
-    }
-}
-
-fn push_activity_span(
-    spans: &mut Vec<Span<'static>>,
-    label: String,
-    color: ratatui::style::Color,
-    palette: &Palette,
-) {
-    spans.push(Span::styled(
-        " · ".to_string(),
-        Style::default().fg(palette.separator),
-    ));
-    spans.push(Span::styled(
-        label,
-        Style::default().fg(color).add_modifier(Modifier::BOLD),
-    ));
 }
 
 fn scroll_state_span(scroll_offset: u16, palette: &Palette) -> Span<'static> {
@@ -270,6 +215,7 @@ fn focus_state_span(focus: FocusLayer, palette: &Palette) -> Span<'static> {
         FocusLayer::Composer => ("COMPOSE", palette.info),
         FocusLayer::Transcript => ("REVIEW", palette.warning),
         FocusLayer::Help => ("HELP", palette.brand),
+        FocusLayer::ThemePicker => ("THEME", palette.brand),
         FocusLayer::SessionPicker => ("PICKER", palette.brand),
         FocusLayer::StatsOverlay => ("STATS", palette.brand),
         FocusLayer::DiffOverlay => ("DIFF", palette.info),
@@ -442,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn status_bar_shows_activity_spans_when_context_has_tasks_and_approvals() {
+    fn status_bar_stays_compact_when_context_has_tasks_and_approvals() {
         let backend = TestBackend::new(120, 1);
         let mut terminal = Terminal::new(backend).expect("terminal");
         let bar = TestBar {
@@ -473,11 +419,11 @@ mod tests {
         let text = buffer_text(&terminal);
 
         assert!(text.contains("PEND 1"));
-        assert!(text.contains("APR! 2"));
-        assert!(text.contains("APR 2"));
-        assert!(text.contains("LATE 1"));
-        assert!(text.contains("TASK 3"));
-        assert!(text.contains("SESS 5"));
+        assert!(!text.contains("APR! 2"));
+        assert!(!text.contains("APR 2"));
+        assert!(!text.contains("LATE 1"));
+        assert!(!text.contains("TASK 3"));
+        assert!(!text.contains("SESS 5"));
     }
 
     #[test]

@@ -1,13 +1,11 @@
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use crossterm::event::{
     Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
@@ -49,8 +47,8 @@ use super::observer::build_tui_observer;
 use super::render::{self, ShellView};
 use super::spinner::SpinnerView;
 use super::state;
-use super::stats;
 use super::status_bar::StatusBarView;
+use super::surfaces;
 use super::theme::Palette;
 
 // ---------------------------------------------------------------------------
@@ -93,6 +91,36 @@ impl SpinnerView for state::Pane {
     }
     fn loop_iteration(&self) -> u32 {
         self.loop_iteration
+    }
+    fn running_tool_call_count(&self) -> usize {
+        self.running_tool_call_count()
+    }
+    fn tool_call_count(&self) -> usize {
+        self.tool_call_count()
+    }
+    fn worktree_dirty(&self) -> bool {
+        self.composer_suggestion_context.worktree_dirty == Some(true)
+    }
+    fn dirty_file_count(&self) -> usize {
+        self.composer_suggestion_context.dirty_files.len()
+    }
+    fn dirty_file_preview(&self) -> &[String] {
+        self.composer_suggestion_context.dirty_files.as_slice()
+    }
+    fn active_subagent_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.active_subagents
+    }
+    fn running_task_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.running_tasks
+    }
+    fn overdue_task_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.overdue_tasks
+    }
+    fn pending_approval_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.pending_approvals
+    }
+    fn attention_approval_count(&self) -> Option<usize> {
+        self.composer_suggestion_context.attention_approvals
     }
     fn status_message(&self) -> Option<(&str, &Instant)> {
         self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
@@ -200,7 +228,7 @@ const COMPOSER_PLACEHOLDER_ROTATION_SECONDS: u64 = 45;
 
 const DIRTY_WORKTREE_COMPOSER_PLACEHOLDERS: &[&str] = &[
     "Review the current worktree and call out the riskiest diff",
-    "Open /diff status before the next edit",
+    "Watch the live edited files rail before the next edit",
     "Compare the transcript story against the actual diff",
 ];
 
@@ -334,9 +362,19 @@ impl ShellView for state::Shell {
         Some(render::DiffOverlayView {
             mode: diff_overlay.mode.as_str(),
             cwd_display: diff_overlay.cwd_display.as_str(),
-            status_output: diff_overlay.status_output.as_str(),
-            diff_output: diff_overlay.diff_output.as_str(),
+            files: diff_overlay.files.as_slice(),
+            selected_file_index: diff_overlay.selected_file_index,
+            detail_output: diff_overlay.detail_output.as_str(),
             scroll_offset: diff_overlay.scroll_offset,
+        })
+    }
+    fn theme_picker(&self) -> Option<render::ThemePickerView<'_>> {
+        let theme_picker = self.theme_picker.as_ref()?;
+
+        Some(render::ThemePickerView {
+            picker: theme_picker,
+            base_palette_hint: self.base_palette_hint,
+            palette_hint_override: self.palette_hint_override,
         })
     }
     fn session_picker(&self) -> Option<render::SessionPickerView<'_>> {
@@ -718,6 +756,13 @@ enum BusyInputModeAction {
     Clear,
 }
 
+enum ThemeAction {
+    Open,
+    Set(super::terminal::PaletteHint),
+    ClearAuto,
+    Toggle,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RenameAction {
     Status,
@@ -747,6 +792,50 @@ fn parse_busy_input_mode_action(args: &str) -> Result<BusyInputModeAction, Strin
         "clear" => Ok(BusyInputModeAction::Clear),
         _ => Err("usage: `/mode [queue|steer|toggle|clear]`".to_owned()),
     }
+}
+
+fn parse_theme_action(args: &str) -> Result<ThemeAction, String> {
+    let trimmed = args.trim().to_ascii_lowercase();
+    if trimmed.is_empty() || trimmed == "status" {
+        return Ok(ThemeAction::Open);
+    }
+    if trimmed == "toggle" {
+        return Ok(ThemeAction::Toggle);
+    }
+    if trimmed == "auto" {
+        return Ok(ThemeAction::ClearAuto);
+    }
+    if trimmed == "dark" {
+        return Ok(ThemeAction::Set(super::terminal::PaletteHint::Dark));
+    }
+    if trimmed == "light" {
+        return Ok(ThemeAction::Set(super::terminal::PaletteHint::Light));
+    }
+    if trimmed == "plain" {
+        return Ok(ThemeAction::Set(super::terminal::PaletteHint::Plain));
+    }
+
+    Err("usage: `/theme [dark|light|plain|auto|toggle]`".to_owned())
+}
+
+fn palette_hint_label(palette_hint: super::terminal::PaletteHint) -> &'static str {
+    match palette_hint {
+        super::terminal::PaletteHint::Dark => "dark",
+        super::terminal::PaletteHint::Light => "light",
+        super::terminal::PaletteHint::Plain => "plain",
+    }
+}
+
+fn theme_picker_effective_label(shell: &state::Shell) -> String {
+    let effective_palette_hint = shell.effective_palette_hint();
+    let effective_label = palette_hint_label(effective_palette_hint);
+    let uses_session_override = shell.palette_hint_override.is_some();
+
+    if uses_session_override {
+        return effective_label.to_owned();
+    }
+
+    format!("auto ({effective_label})")
 }
 
 fn is_async_slash_request(request: &ParsedSlashCommand) -> bool {
@@ -2162,6 +2251,7 @@ fn focus_layer_label(layer: FocusLayer) -> &'static str {
         FocusLayer::Composer => "compose",
         FocusLayer::Transcript => "review",
         FocusLayer::Help => "help",
+        FocusLayer::ThemePicker => "theme",
         FocusLayer::SessionPicker => "session-picker",
         FocusLayer::StatsOverlay => "stats",
         FocusLayer::DiffOverlay => "diff",
@@ -2376,78 +2466,77 @@ fn show_busy_input_mode_surface(shell: &mut state::Shell, args: &str) {
     }
 }
 
-fn open_stats_overlay(shell: &mut state::Shell, args: &str) {
-    let options = match stats::parse_stats_open_options(args) {
-        Ok(options) => options,
-        Err(error) => {
-            shell.pane.add_system_message(&error);
-            return;
-        }
-    };
-    let Some(config) = shell.runtime_config.as_ref() else {
-        shell.pane.add_system_message(
-            "Stats view is unavailable before the chat runtime is initialized.",
-        );
+fn open_theme_picker(shell: &mut state::Shell) {
+    let theme_picker = state::ThemePickerState::new(shell.palette_hint_override);
+
+    shell.theme_picker = Some(theme_picker);
+    if !shell.focus.has(FocusLayer::ThemePicker) {
+        shell.focus.push(FocusLayer::ThemePicker);
+    }
+    shell.pane.set_status("Theme picker opened".to_owned());
+}
+
+fn close_theme_picker(shell: &mut state::Shell, restore_original_palette: bool) {
+    let original_palette_hint_override = shell
+        .theme_picker
+        .as_ref()
+        .map(|theme_picker| theme_picker.original_palette_hint_override);
+
+    if restore_original_palette {
+        shell.palette_hint_override = original_palette_hint_override.unwrap_or(None);
+    }
+
+    shell.theme_picker = None;
+    if shell.focus.top() == FocusLayer::ThemePicker {
+        shell.focus.pop();
+    }
+}
+
+fn preview_selected_theme_picker_option(shell: &mut state::Shell) {
+    let selected_option = shell
+        .theme_picker
+        .as_ref()
+        .map(|theme_picker| theme_picker.selected_option());
+    let Some(selected_option) = selected_option else {
         return;
     };
-    let current_session_id = shell.pane.session_id.clone();
-    let snapshot = match stats::load_stats_snapshot(config, current_session_id.as_str()) {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            shell
-                .pane
-                .add_system_message(&format!("Unable to load stats: {error}"));
-            return;
+
+    let preview_override = selected_option.palette_hint_override();
+    shell.palette_hint_override = preview_override;
+}
+
+fn show_theme_surface(shell: &mut state::Shell, args: &str) {
+    match parse_theme_action(args) {
+        Ok(ThemeAction::Open) => {
+            open_theme_picker(shell);
         }
-    };
-
-    shell.stats_overlay = Some(state::StatsOverlayState::new(
-        snapshot,
-        options.tab,
-        options.date_range,
-    ));
-    if !shell.focus.has(FocusLayer::StatsOverlay) {
-        shell.focus.push(FocusLayer::StatsOverlay);
+        Ok(ThemeAction::Set(palette_hint)) => {
+            close_theme_picker(shell, false);
+            shell.palette_hint_override = Some(palette_hint);
+            let label = palette_hint_label(palette_hint);
+            shell.pane.set_status(format!("Theme: {label}"));
+        }
+        Ok(ThemeAction::ClearAuto) => {
+            close_theme_picker(shell, false);
+            shell.palette_hint_override = None;
+            let label = palette_hint_label(shell.effective_palette_hint());
+            shell.pane.set_status(format!("Theme: auto ({label})"));
+        }
+        Ok(ThemeAction::Toggle) => {
+            close_theme_picker(shell, false);
+            let next_palette_hint = match shell.effective_palette_hint() {
+                super::terminal::PaletteHint::Dark => super::terminal::PaletteHint::Light,
+                super::terminal::PaletteHint::Light => super::terminal::PaletteHint::Plain,
+                super::terminal::PaletteHint::Plain => super::terminal::PaletteHint::Dark,
+            };
+            shell.palette_hint_override = Some(next_palette_hint);
+            let label = palette_hint_label(next_palette_hint);
+            shell.pane.set_status(format!("Theme: {label}"));
+        }
+        Err(error) => {
+            shell.pane.add_system_message(&error);
+        }
     }
-    shell.pane.set_status("Stats overlay opened".to_owned());
-}
-
-fn close_stats_overlay(shell: &mut state::Shell) {
-    shell.stats_overlay = None;
-    if shell.focus.top() == FocusLayer::StatsOverlay {
-        shell.focus.pop();
-    }
-}
-
-fn close_diff_overlay(shell: &mut state::Shell) {
-    shell.diff_overlay = None;
-    if shell.focus.top() == FocusLayer::DiffOverlay {
-        shell.focus.pop();
-    }
-}
-
-fn scroll_diff_overlay_up(shell: &mut state::Shell, amount: u16) {
-    let diff_overlay = match shell.diff_overlay.as_mut() {
-        Some(diff_overlay) => diff_overlay,
-        None => return,
-    };
-    let next_offset = diff_overlay.scroll_offset.saturating_sub(amount);
-
-    diff_overlay.scroll_offset = next_offset;
-}
-
-fn scroll_diff_overlay_down(shell: &mut state::Shell, amount: u16) {
-    let diff_overlay = match shell.diff_overlay.as_mut() {
-        Some(diff_overlay) => diff_overlay,
-        None => return,
-    };
-    let next_offset = diff_overlay.scroll_offset.saturating_add(amount);
-
-    diff_overlay.scroll_offset = next_offset;
-}
-
-fn diff_overlay_scroll_step() -> u16 {
-    10
 }
 
 fn open_resume_picker(shell: &mut state::Shell) {
@@ -2548,23 +2637,6 @@ fn close_session_picker(shell: &mut state::Shell) {
     shell.session_picker = None;
     if shell.focus.top() == FocusLayer::SessionPicker {
         shell.focus.pop();
-    }
-}
-
-fn stats_overlay_entry_count(stats_overlay: &state::StatsOverlayState) -> usize {
-    let range_view = stats_overlay.snapshot.range_view(stats_overlay.date_range);
-    match stats_overlay.active_tab {
-        stats::StatsTab::Overview => 0,
-        stats::StatsTab::Models => range_view.model_totals.len(),
-        stats::StatsTab::Sessions => range_view.session_rows.len(),
-    }
-}
-
-fn clamp_stats_overlay_list_offset(stats_overlay: &mut state::StatsOverlayState) {
-    let entry_count = stats_overlay_entry_count(stats_overlay);
-    let max_offset = entry_count.saturating_sub(1);
-    if stats_overlay.list_scroll_offset > max_offset {
-        stats_overlay.list_scroll_offset = max_offset;
     }
 }
 
@@ -3038,11 +3110,15 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
         .as_ref()
         .map(parse_model_selection_suggestions)
         .unwrap_or_default();
-    let worktree_dirty = worktree_root_for_suggestions(shell).and_then(|root| {
-        git_output(&["status", "--short"], root.as_path())
-            .ok()
-            .map(|status| !status.trim().is_empty())
-    });
+    let (worktree_dirty, dirty_files) = worktree_root_for_suggestions(shell)
+        .and_then(|root| {
+            let status_output =
+                surfaces::git_output(&["status", "--short"], root.as_path()).ok()?;
+            let dirty_files = surfaces::parse_worktree_status_paths(status_output.as_str());
+            let worktree_dirty = !dirty_files.is_empty();
+            Some((Some(worktree_dirty), dirty_files))
+        })
+        .unwrap_or_else(|| (None, Vec::new()));
 
     let visible_session_outcome = execute_shell_app_tool_for_session(
         shell,
@@ -3118,6 +3194,14 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
         approval_request_suggestions.as_slice(),
     );
 
+    let active_subagents = visible_session_suggestions
+        .iter()
+        .filter(|session| {
+            session.kind == "delegate_child"
+                && matches!(session.state.as_str(), "ready" | "running")
+        })
+        .count();
+
     let has_explicit_permission_policy =
         execute_shell_app_tool(shell, "session_tool_policy_status", json!({}))
             .ok()
@@ -3131,7 +3215,9 @@ fn refresh_composer_suggestion_context(shell: &mut state::Shell) {
 
     shell.pane.composer_suggestion_context = state::ComposerSuggestionContext {
         worktree_dirty,
+        dirty_files,
         visible_sessions,
+        active_subagents: (active_subagents > 0).then_some(active_subagents),
         visible_session_suggestions,
         model_selection_suggestions,
         running_tasks,
@@ -4732,109 +4818,6 @@ fn export_transcript(shell: &mut state::Shell, args: &str) {
     }
 }
 
-fn git_output(args: &[&str], cwd: &std::path::Path) -> Result<String, String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .map_err(|error| format!("failed to run `git {}`: {error}", args.join(" ")))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        if stderr.is_empty() {
-            return Err(format!(
-                "`git {}` exited with status {}",
-                args.join(" "),
-                output.status
-            ));
-        }
-        return Err(stderr);
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}
-
-fn normalize_diff_mode(args: &str) -> Result<&str, String> {
-    let trimmed = args.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("status") {
-        return Ok("status");
-    }
-    if trimmed.eq_ignore_ascii_case("full") {
-        return Ok("full");
-    }
-
-    Err(format!(
-        "unsupported diff mode `{trimmed}`; use `status` or `full`"
-    ))
-}
-
-fn show_diff_surface(shell: &mut state::Shell, args: &str) {
-    let mode = match normalize_diff_mode(args) {
-        Ok(mode) => mode,
-        Err(error) => {
-            shell.pane.add_system_message(&error);
-            return;
-        }
-    };
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let status_output = match git_output(&["status", "--short"], cwd.as_path()) {
-        Ok(output) => output,
-        Err(error) => {
-            shell
-                .pane
-                .add_system_message(&format!("Unable to inspect working tree status: {error}"));
-            return;
-        }
-    };
-    let diff_output = if mode == "full" {
-        match git_output(
-            &["diff", "--no-ext-diff", "--stat", "--patch", "--no-color"],
-            cwd.as_path(),
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                shell
-                    .pane
-                    .add_system_message(&format!("Unable to inspect working tree diff: {error}"));
-                return;
-            }
-        }
-    } else {
-        match git_output(
-            &["diff", "--no-ext-diff", "--stat", "--no-color"],
-            cwd.as_path(),
-        ) {
-            Ok(output) => output,
-            Err(error) => {
-                shell
-                    .pane
-                    .add_system_message(&format!("Unable to inspect working tree diff: {error}"));
-                return;
-            }
-        }
-    };
-    let cwd_display = cwd
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| cwd.display().to_string());
-    let diff_overlay = state::DiffOverlayState {
-        mode: mode.to_owned(),
-        cwd_display,
-        status_output,
-        diff_output,
-        scroll_offset: 0,
-    };
-
-    shell.diff_overlay = Some(diff_overlay);
-    if !shell.focus.has(FocusLayer::DiffOverlay) {
-        shell.focus.push(FocusLayer::DiffOverlay);
-    }
-    shell.pane.set_status("Diff overlay opened".to_owned());
-}
-
 enum CopyMode {
     Latest,
     Selection,
@@ -4964,53 +4947,6 @@ fn toggle_transcript_review(shell: &mut state::Shell) {
     open_transcript_review(shell);
 }
 
-fn tool_inspector_scroll_step() -> u16 {
-    let terminal_size = crossterm::terminal::size();
-    let (_, height) = terminal_size.unwrap_or((80, 24));
-    let available_height = height.saturating_sub(8);
-    let scroll_step = available_height / 2;
-
-    scroll_step.max(1)
-}
-
-fn open_tool_inspector(shell: &mut state::Shell) {
-    let opened = shell.pane.open_latest_tool_inspector();
-    if opened {
-        if !shell.focus.has(FocusLayer::ToolInspector) {
-            shell.focus.push(FocusLayer::ToolInspector);
-        }
-    } else {
-        shell.pane.set_status("No tool details available".into());
-    }
-}
-
-fn close_tool_inspector(shell: &mut state::Shell) {
-    shell.pane.close_tool_inspector();
-    if shell.focus.top() == FocusLayer::ToolInspector {
-        shell.focus.pop();
-    }
-}
-
-fn build_osc52_copy_sequence(text: &str) -> String {
-    let encoded_text = BASE64_STANDARD.encode(text.as_bytes());
-
-    format!("\u{1b}]52;c;{encoded_text}\u{7}")
-}
-
-fn copy_text_to_terminal_clipboard(text: &str) -> CliResult<()> {
-    let copy_sequence = build_osc52_copy_sequence(text);
-    let mut stdout = io::stdout();
-
-    stdout
-        .write_all(copy_sequence.as_bytes())
-        .map_err(|error| format!("failed to write clipboard escape sequence: {error}"))?;
-    stdout
-        .flush()
-        .map_err(|error| format!("failed to flush clipboard escape sequence: {error}"))?;
-
-    Ok(())
-}
-
 fn copy_transcript_selection(shell: &mut state::Shell, mode: CopyMode) {
     let plain_lines = transcript_plain_lines(shell);
     let copied_text = match mode {
@@ -5038,7 +4974,7 @@ fn copy_transcript_selection(shell: &mut state::Shell, mode: CopyMode) {
         "lines"
     };
 
-    match copy_text_to_terminal_clipboard(copied_text.as_str()) {
+    match surfaces::copy_text_to_terminal_clipboard(copied_text.as_str()) {
         Ok(()) => {
             let copy_scope = match mode {
                 CopyMode::Latest => "latest output",
@@ -5053,42 +4989,6 @@ fn copy_transcript_selection(shell: &mut state::Shell, mode: CopyMode) {
             shell.pane.set_status(format!("Copy failed: {error}"));
         }
     }
-}
-
-fn scroll_stats_overlay_up(shell: &mut state::Shell, amount: usize) {
-    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
-        return;
-    };
-    let current_offset = stats_overlay.list_scroll_offset;
-    let next_offset = current_offset.saturating_sub(amount);
-    stats_overlay.list_scroll_offset = next_offset;
-}
-
-fn scroll_stats_overlay_down(shell: &mut state::Shell, amount: usize) {
-    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
-        return;
-    };
-    let current_offset = stats_overlay.list_scroll_offset;
-    let next_offset = current_offset.saturating_add(amount);
-    stats_overlay.list_scroll_offset = next_offset;
-    clamp_stats_overlay_list_offset(stats_overlay);
-}
-
-fn jump_stats_overlay_top(shell: &mut state::Shell) {
-    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
-        return;
-    };
-    stats_overlay.list_scroll_offset = 0;
-}
-
-fn jump_stats_overlay_bottom(shell: &mut state::Shell) {
-    let Some(stats_overlay) = shell.stats_overlay.as_mut() else {
-        return;
-    };
-    let entry_count = stats_overlay_entry_count(stats_overlay);
-    let last_index = entry_count.saturating_sub(1);
-    stats_overlay.list_scroll_offset = last_index;
-    clamp_stats_overlay_list_offset(stats_overlay);
 }
 
 fn apply_terminal_event(
@@ -5109,31 +5009,7 @@ fn apply_terminal_event(
 
     match shell.focus.top() {
         FocusLayer::ClarifyDialog => {
-            if let Some(ref mut dialog) = shell.pane.clarify_dialog {
-                #[allow(clippy::wildcard_enum_match_arm)]
-                match key.code {
-                    KeyCode::Enter => {
-                        let response = dialog.response();
-                        shell.pane.clarify_dialog = None;
-                        shell.focus.pop();
-                        let _ = tx.send(UiEvent::Token {
-                            content: format!("\n[user chose: {response}]\n"),
-                            is_thinking: false,
-                        });
-                    }
-                    KeyCode::Esc => {
-                        shell.pane.clarify_dialog = None;
-                        shell.focus.pop();
-                    }
-                    KeyCode::Up => dialog.select_up(),
-                    KeyCode::Down => dialog.select_down(),
-                    KeyCode::Left => dialog.move_cursor_left(),
-                    KeyCode::Right => dialog.move_cursor_right(),
-                    KeyCode::Backspace => dialog.delete_back(),
-                    KeyCode::Char(ch) => dialog.insert_char(ch),
-                    _ => {}
-                }
-            }
+            let _ = surfaces::handle_overlay_key_event(shell, key, tx);
             return;
         }
         FocusLayer::SessionPicker => {
@@ -5263,170 +5139,95 @@ fn apply_terminal_event(
             }
             return;
         }
-        FocusLayer::StatsOverlay => {
-            if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-                close_stats_overlay(shell);
-                return;
+        FocusLayer::ThemePicker => {
+            enum ThemePickerAction {
+                CloseAndRestore,
+                ApplyAndClose,
+                MoveUp,
+                MoveDown,
+                MoveFirst,
+                MoveLast,
+                None,
             }
 
-            if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
-                    let copied_text = stats::render_copy_text(
-                        &stats_overlay.snapshot,
-                        stats_overlay.active_tab,
-                        stats_overlay.date_range,
-                    );
-                    let copy_result = copy_text_to_terminal_clipboard(copied_text.as_str());
-                    match copy_result {
-                        Ok(()) => {
-                            stats_overlay.copy_status = Some("copied".to_owned());
-                            shell.pane.set_status("Stats copied".to_owned());
-                        }
-                        Err(error) => {
-                            stats_overlay.copy_status = Some("copy failed".to_owned());
-                            shell.pane.set_status(format!("Copy failed: {error}"));
-                        }
+            let action = match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => ThemePickerAction::CloseAndRestore,
+                KeyCode::Enter => ThemePickerAction::ApplyAndClose,
+                KeyCode::Up | KeyCode::BackTab => ThemePickerAction::MoveUp,
+                KeyCode::Down | KeyCode::Tab => ThemePickerAction::MoveDown,
+                KeyCode::Home | KeyCode::Left => ThemePickerAction::MoveFirst,
+                KeyCode::End | KeyCode::Right => ThemePickerAction::MoveLast,
+                KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Backspace
+                | KeyCode::Delete
+                | KeyCode::Insert
+                | KeyCode::F(_)
+                | KeyCode::Null
+                | KeyCode::CapsLock
+                | KeyCode::ScrollLock
+                | KeyCode::NumLock
+                | KeyCode::PrintScreen
+                | KeyCode::Pause
+                | KeyCode::Menu
+                | KeyCode::KeypadBegin
+                | KeyCode::Media(_)
+                | KeyCode::Modifier(_)
+                | KeyCode::Char(_) => ThemePickerAction::None,
+            };
+
+            match action {
+                ThemePickerAction::CloseAndRestore => {
+                    close_theme_picker(shell, true);
+                    shell.pane.set_status("Theme picker dismissed".to_owned());
+                }
+                ThemePickerAction::ApplyAndClose => {
+                    let effective_label = theme_picker_effective_label(shell);
+                    close_theme_picker(shell, false);
+                    shell.pane.set_status(format!("Theme: {effective_label}"));
+                }
+                ThemePickerAction::MoveUp => {
+                    if let Some(theme_picker) = shell.theme_picker.as_mut() {
+                        theme_picker.select_previous();
                     }
+                    preview_selected_theme_picker_option(shell);
                 }
-                return;
-            }
-
-            if key.code == KeyCode::Tab || key.code == KeyCode::Right {
-                if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
-                    stats_overlay.active_tab = stats_overlay.active_tab.next();
-                    stats_overlay.list_scroll_offset = 0;
+                ThemePickerAction::MoveDown => {
+                    if let Some(theme_picker) = shell.theme_picker.as_mut() {
+                        theme_picker.select_next();
+                    }
+                    preview_selected_theme_picker_option(shell);
                 }
-                return;
-            }
-
-            if key.code == KeyCode::BackTab || key.code == KeyCode::Left {
-                if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
-                    stats_overlay.active_tab = stats_overlay.active_tab.previous();
-                    stats_overlay.list_scroll_offset = 0;
+                ThemePickerAction::MoveFirst => {
+                    if let Some(theme_picker) = shell.theme_picker.as_mut() {
+                        theme_picker.select_first();
+                    }
+                    preview_selected_theme_picker_option(shell);
                 }
-                return;
-            }
-
-            if key.code == KeyCode::Char('r') && key.modifiers.is_empty() {
-                if let Some(stats_overlay) = shell.stats_overlay.as_mut() {
-                    stats_overlay.date_range = stats_overlay.date_range.next();
-                    stats_overlay.list_scroll_offset = 0;
+                ThemePickerAction::MoveLast => {
+                    if let Some(theme_picker) = shell.theme_picker.as_mut() {
+                        theme_picker.select_last();
+                    }
+                    preview_selected_theme_picker_option(shell);
                 }
-                return;
+                ThemePickerAction::None => {}
             }
-
-            if key.code == KeyCode::Up {
-                scroll_stats_overlay_up(shell, 1);
-                return;
-            }
-
-            if key.code == KeyCode::Down {
-                scroll_stats_overlay_down(shell, 1);
-                return;
-            }
-
-            if key.code == KeyCode::PageUp {
-                scroll_stats_overlay_up(shell, 5);
-                return;
-            }
-
-            if key.code == KeyCode::PageDown {
-                scroll_stats_overlay_down(shell, 5);
-                return;
-            }
-
-            if key.code == KeyCode::Home {
-                jump_stats_overlay_top(shell);
-                return;
-            }
-
-            if key.code == KeyCode::End {
-                jump_stats_overlay_bottom(shell);
-                return;
-            }
-
+            return;
+        }
+        FocusLayer::StatsOverlay => {
+            let _ = surfaces::handle_overlay_key_event(shell, key, tx);
             return;
         }
         FocusLayer::DiffOverlay => {
-            let scroll_step = diff_overlay_scroll_step();
-
-            if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-                close_diff_overlay(shell);
-                return;
-            }
-
-            if key.code == KeyCode::Up {
-                scroll_diff_overlay_up(shell, 1);
-                return;
-            }
-
-            if key.code == KeyCode::Down {
-                scroll_diff_overlay_down(shell, 1);
-                return;
-            }
-
-            if key.code == KeyCode::PageUp {
-                scroll_diff_overlay_up(shell, scroll_step);
-                return;
-            }
-
-            if key.code == KeyCode::PageDown {
-                scroll_diff_overlay_down(shell, scroll_step);
-                return;
-            }
-
-            if key.code == KeyCode::Home
-                && let Some(diff_overlay) = shell.diff_overlay.as_mut()
-            {
-                diff_overlay.scroll_offset = 0;
-            }
+            let _ = surfaces::handle_overlay_key_event(shell, key, tx);
             return;
         }
         FocusLayer::ToolInspector => {
-            let scroll_step = tool_inspector_scroll_step();
-
-            #[allow(clippy::wildcard_enum_match_arm)]
-            #[allow(clippy::wildcard_enum_match_arm)]
-            #[allow(clippy::wildcard_enum_match_arm)]
-            match key.code {
-                KeyCode::Esc => {
-                    close_tool_inspector(shell);
-                }
-                KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let _ = shell.pane.open_latest_tool_inspector();
-                }
-                KeyCode::Up => {
-                    let moved = shell.pane.select_previous_tool_inspector_entry();
-                    if !moved {
-                        shell.pane.scroll_tool_inspector_up(1);
-                    }
-                }
-                KeyCode::Down => {
-                    let moved = shell.pane.select_next_tool_inspector_entry();
-                    if !moved {
-                        shell.pane.scroll_tool_inspector_down(1);
-                    }
-                }
-                KeyCode::PageUp => {
-                    shell.pane.scroll_tool_inspector_up(scroll_step);
-                }
-                KeyCode::PageDown => {
-                    shell.pane.scroll_tool_inspector_down(scroll_step);
-                }
-                KeyCode::Home => {
-                    let _ = shell.pane.select_first_tool_inspector_entry();
-                }
-                KeyCode::End => {
-                    let _ = shell.pane.select_last_tool_inspector_entry();
-                }
-                _ => {}
-            }
+            let _ = surfaces::handle_overlay_key_event(shell, key, tx);
             return;
         }
         FocusLayer::Help => {
-            if key.code == KeyCode::Esc || key.code == KeyCode::Char('q') {
-                shell.focus.pop();
-            }
+            let _ = surfaces::handle_overlay_key_event(shell, key, tx);
             return;
         }
         FocusLayer::Transcript => {
@@ -5467,7 +5268,7 @@ fn apply_terminal_event(
                     return;
                 }
                 KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    open_tool_inspector(shell);
+                    surfaces::open_tool_inspector(shell);
                     return;
                 }
                 KeyCode::Char('v') if key.modifiers.is_empty() => {
@@ -5577,7 +5378,7 @@ fn apply_terminal_event(
             return;
         }
         KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            open_tool_inspector(shell);
+            surfaces::open_tool_inspector(shell);
             return;
         }
         KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -5930,7 +5731,10 @@ fn handle_slash_command(shell: &mut state::Shell, request: ParsedSlashCommand) {
             export_transcript(shell, request.args.as_str());
         }
         SlashCommand::Diff => {
-            show_diff_surface(shell, request.args.as_str());
+            surfaces::show_diff_surface(shell, request.args.as_str());
+        }
+        SlashCommand::Theme => {
+            show_theme_surface(shell, request.args.as_str());
         }
         SlashCommand::Model => {
             show_model_surface(shell, request.args.as_str());
@@ -5939,7 +5743,7 @@ fn handle_slash_command(shell: &mut state::Shell, request: ParsedSlashCommand) {
             show_busy_input_mode_surface(shell, request.args.as_str());
         }
         SlashCommand::Stats => {
-            open_stats_overlay(shell, request.args.as_str());
+            surfaces::open_stats_overlay(shell, request.args.as_str());
         }
         SlashCommand::Session => {
             show_session_surface(shell);
@@ -5958,7 +5762,7 @@ fn handle_slash_command(shell: &mut state::Shell, request: ParsedSlashCommand) {
         }
         SlashCommand::Tools => {
             if request.args.trim().eq_ignore_ascii_case("open") {
-                open_tool_inspector(shell);
+                surfaces::open_tool_inspector(shell);
             } else {
                 show_tools_surface(shell);
             }
@@ -6514,6 +6318,7 @@ async fn run_inner(
         })
         .unwrap_or("default");
     let mut shell = state::Shell::new(session_id);
+    shell.base_palette_hint = palette_hint;
 
     let mut owned_runtime = initial_runtime.map(std::sync::Arc::new);
     if boot_flow.is_none() {
@@ -6525,12 +6330,6 @@ async fn run_inner(
             owned_runtime = Some(std::sync::Arc::new(runtime));
         }
     }
-
-    let palette = match palette_hint {
-        super::terminal::PaletteHint::Dark => Palette::dark(),
-        super::terminal::PaletteHint::Light => Palette::light(),
-        super::terminal::PaletteHint::Plain => Palette::plain(),
-    };
 
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -6553,6 +6352,11 @@ async fn run_inner(
         // Render a deterministic first frame before the async event loop starts
         // so PTY clients observe a stable fullscreen surface immediately.
         shell.pane.tick_animations();
+        let palette = match shell.effective_palette_hint() {
+            super::terminal::PaletteHint::Dark => Palette::dark(),
+            super::terminal::PaletteHint::Light => Palette::light(),
+            super::terminal::PaletteHint::Plain => Palette::plain(),
+        };
         guard.draw(&shell, &textarea, &palette)?;
         shell.dirty = false;
     }
@@ -6656,6 +6460,11 @@ async fn run_inner(
         // ── Phase 2: Render (only when dirty) ─────────────────────────
         if shell.dirty {
             shell.pane.tick_animations();
+            let palette = match shell.effective_palette_hint() {
+                super::terminal::PaletteHint::Dark => Palette::dark(),
+                super::terminal::PaletteHint::Light => Palette::light(),
+                super::terminal::PaletteHint::Plain => Palette::plain(),
+            };
             guard.draw(&shell, &textarea, &palette)?;
             shell.dirty = false;
         }
@@ -6765,12 +6574,15 @@ mod tests {
     use super::*;
     use crate::chat::tui::message::{MessagePart, Role};
     use crate::chat::tui::runtime;
+    use crate::chat::tui::stats;
+    use crate::chat::tui::terminal::PaletteHint;
     #[cfg(feature = "memory-sqlite")]
     use crate::memory::append_turn_direct;
 
     use crossterm::event::{KeyEventKind, KeyEventState};
     use std::fs;
     use std::path::Path;
+    use std::process::Command;
     use tempfile::tempdir;
 
     fn plain_key(code: KeyCode) -> KeyEvent {
@@ -6814,6 +6626,12 @@ mod tests {
         static SHELL_MEMORY_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
             std::sync::OnceLock::new();
         SHELL_MEMORY_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
+    }
+
+    fn shell_current_dir_test_lock() -> &'static std::sync::Mutex<()> {
+        static SHELL_CURRENT_DIR_TEST_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        SHELL_CURRENT_DIR_TEST_LOCK.get_or_init(|| std::sync::Mutex::new(()))
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -7336,7 +7154,7 @@ mod tests {
 
     #[test]
     fn osc52_copy_sequence_encodes_clipboard_payload() {
-        let sequence = build_osc52_copy_sequence("hello");
+        let sequence = surfaces::build_osc52_copy_sequence("hello");
 
         assert!(sequence.starts_with("\u{1b}]52;c;"));
         assert!(sequence.ends_with('\u{7}'));
@@ -9534,6 +9352,151 @@ mod tests {
     }
 
     #[test]
+    fn theme_command_sets_palette_override_for_session() {
+        let mut shell = state::Shell::new("sess-theme");
+        shell.base_palette_hint = PaletteHint::Dark;
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: "light".to_owned(),
+            },
+        );
+
+        assert_eq!(shell.palette_hint_override, Some(PaletteHint::Light));
+        assert_eq!(shell.effective_palette_hint(), PaletteHint::Light);
+    }
+
+    #[test]
+    fn theme_command_auto_clears_palette_override() {
+        let mut shell = state::Shell::new("sess-theme-auto");
+        shell.base_palette_hint = PaletteHint::Dark;
+        shell.palette_hint_override = Some(PaletteHint::Plain);
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: "auto".to_owned(),
+            },
+        );
+
+        assert!(shell.palette_hint_override.is_none());
+        assert_eq!(shell.effective_palette_hint(), PaletteHint::Dark);
+    }
+
+    #[test]
+    fn theme_command_without_args_opens_theme_picker() {
+        let mut shell = state::Shell::new("sess-theme-open");
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: String::new(),
+            },
+        );
+
+        let theme_picker = shell.theme_picker.as_ref().expect("theme picker");
+
+        assert_eq!(shell.focus.top(), FocusLayer::ThemePicker);
+        assert_eq!(
+            theme_picker.selected_option(),
+            state::ThemePickerOption::Auto
+        );
+    }
+
+    #[test]
+    fn theme_picker_preview_is_reverted_on_cancel() {
+        let mut shell = state::Shell::new("sess-theme-cancel");
+        shell.base_palette_hint = PaletteHint::Dark;
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: String::new(),
+            },
+        );
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Down)),
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Down)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert_eq!(shell.palette_hint_override, Some(PaletteHint::Light));
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Esc)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert!(shell.theme_picker.is_none());
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
+        assert!(shell.palette_hint_override.is_none());
+    }
+
+    #[test]
+    fn theme_picker_enter_applies_previewed_palette() {
+        let mut shell = state::Shell::new("sess-theme-apply");
+        shell.base_palette_hint = PaletteHint::Dark;
+        let mut textarea = tui_textarea::TextArea::default();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut submit_text: Option<String> = None;
+
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: String::new(),
+            },
+        );
+
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Down)),
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Down)),
+            &tx,
+            &mut submit_text,
+        );
+        apply_terminal_event(
+            &mut shell,
+            &mut textarea,
+            Event::Key(plain_key(KeyCode::Enter)),
+            &tx,
+            &mut submit_text,
+        );
+
+        assert!(shell.theme_picker.is_none());
+        assert_eq!(shell.focus.top(), FocusLayer::Composer);
+        assert_eq!(shell.palette_hint_override, Some(PaletteHint::Light));
+    }
+
+    #[test]
     fn commands_command_appends_catalog_surface_message() {
         let mut shell = state::Shell::new("sess-cmd");
 
@@ -9558,7 +9521,9 @@ mod tests {
             .unwrap_or("");
 
         assert!(rendered_surface.contains("command catalog"));
-        assert!(rendered_surface.contains("/diff [status|full] [Status]"));
+        assert!(!rendered_surface.contains("/diff [status|full] [Status]"));
+        assert!(rendered_surface.contains("/theme [dark|light|plain|auto|toggle] [View]"));
+        assert!(rendered_surface.contains("/subagents [session-id] [Navigation]"));
         assert!(rendered_surface.contains("/export [latest|transcript] [path] [General]"));
         assert!(rendered_surface.contains("/context [Status]"));
     }
@@ -9610,7 +9575,47 @@ mod tests {
     }
 
     #[test]
+    fn parse_diff_overlay_files_preserves_status_columns_and_normalizes_renames() {
+        let files = surfaces::parse_diff_overlay_files(
+            "R  dir/old.txt -> dir/new.txt\nMM demo.txt\n?? fresh.txt\n",
+            "1\t0\tdemo.txt\n",
+            "0\t0\tdir/{old.txt => new.txt}\n1\t1\tdemo.txt\n",
+        );
+
+        assert_eq!(files.len(), 3);
+
+        let renamed = files
+            .iter()
+            .find(|file| file.path == "dir/new.txt")
+            .expect("renamed file entry");
+        assert_eq!(renamed.index_status, Some('R'));
+        assert_eq!(renamed.worktree_status, None);
+        assert_eq!(renamed.added_lines, Some(0));
+        assert_eq!(renamed.removed_lines, Some(0));
+
+        let modified = files
+            .iter()
+            .find(|file| file.path == "demo.txt")
+            .expect("modified file entry");
+        assert_eq!(modified.index_status, Some('M'));
+        assert_eq!(modified.worktree_status, Some('M'));
+        assert_eq!(modified.added_lines, Some(2));
+        assert_eq!(modified.removed_lines, Some(1));
+
+        let untracked = files
+            .iter()
+            .find(|file| file.path == "fresh.txt")
+            .expect("untracked file entry");
+        assert!(untracked.untracked);
+        assert_eq!(untracked.index_status, Some('?'));
+        assert_eq!(untracked.worktree_status, Some('?'));
+    }
+
+    #[test]
     fn diff_command_appends_working_tree_surface_from_git_repo() {
+        let _guard = shell_current_dir_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let temp_dir = tempdir().expect("tempdir");
         let repo_root = temp_dir.path();
         let _cwd_guard = set_current_dir_for_test(repo_root);
@@ -9650,7 +9655,66 @@ mod tests {
         let diff_overlay = shell.diff_overlay.as_ref().expect("diff overlay");
 
         assert_eq!(shell.focus.top(), FocusLayer::DiffOverlay);
-        assert!(diff_overlay.status_output.contains("demo.txt"));
-        assert!(diff_overlay.diff_output.contains("demo.txt"));
+        assert_eq!(diff_overlay.files.len(), 1);
+        assert_eq!(diff_overlay.files[0].path, "demo.txt");
+        assert_eq!(diff_overlay.files[0].index_status, None);
+        assert_eq!(diff_overlay.files[0].worktree_status, Some('M'));
+        assert!(diff_overlay.detail_output.contains("Unstaged changes"));
+        assert!(diff_overlay.detail_output.contains("demo.txt"));
+    }
+
+    #[test]
+    fn diff_command_shows_staged_detail_for_staged_only_file() {
+        let _guard = shell_current_dir_test_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp_dir = tempdir().expect("tempdir");
+        let repo_root = temp_dir.path();
+        let _cwd_guard = set_current_dir_for_test(repo_root);
+
+        Command::new("git")
+            .args(["init"])
+            .output()
+            .expect("git init");
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .output()
+            .expect("git config email");
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .output()
+            .expect("git config name");
+        fs::write(repo_root.join("demo.txt"), "alpha\n").expect("write initial file");
+        Command::new("git")
+            .args(["add", "demo.txt"])
+            .output()
+            .expect("git add");
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .output()
+            .expect("git commit");
+        fs::write(repo_root.join("demo.txt"), "alpha\nbeta\n").expect("write modified file");
+        Command::new("git")
+            .args(["add", "demo.txt"])
+            .output()
+            .expect("git add modified file");
+
+        let mut shell = state::Shell::new("sess-diff-staged");
+        handle_slash_command(
+            &mut shell,
+            ParsedSlashCommand {
+                command: SlashCommand::Diff,
+                args: "full".to_owned(),
+            },
+        );
+
+        let diff_overlay = shell.diff_overlay.as_ref().expect("diff overlay");
+
+        assert_eq!(shell.focus.top(), FocusLayer::DiffOverlay);
+        assert_eq!(diff_overlay.files.len(), 1);
+        assert_eq!(diff_overlay.files[0].index_status, Some('M'));
+        assert_eq!(diff_overlay.files[0].worktree_status, None);
+        assert!(diff_overlay.detail_output.contains("Staged changes"));
+        assert!(diff_overlay.detail_output.contains("+beta"));
     }
 }

@@ -7,6 +7,7 @@ use super::dialog::ClarifyDialog;
 use super::focus::FocusStack;
 use super::message::{Message, MessagePart, ToolStatus};
 use super::stats;
+use super::terminal::PaletteHint;
 
 const SPINNER_INTERVAL_MS: u128 = 80;
 const DOTS_INTERVAL_MS: u128 = 300;
@@ -28,7 +29,9 @@ pub(super) struct TranscriptReviewState {
 #[derive(Debug, Clone, Default)]
 pub(super) struct ComposerSuggestionContext {
     pub(super) worktree_dirty: Option<bool>,
+    pub(super) dirty_files: Vec<String>,
     pub(super) visible_sessions: Option<usize>,
+    pub(super) active_subagents: Option<usize>,
     pub(super) visible_session_suggestions: Vec<VisibleSessionSuggestion>,
     pub(super) model_selection_suggestions: Vec<ModelSelectionSuggestion>,
     pub(super) running_tasks: Option<usize>,
@@ -120,11 +123,22 @@ impl StatsOverlayState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DiffOverlayFileEntry {
+    pub(super) path: String,
+    pub(super) index_status: Option<char>,
+    pub(super) worktree_status: Option<char>,
+    pub(super) added_lines: Option<usize>,
+    pub(super) removed_lines: Option<usize>,
+    pub(super) untracked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DiffOverlayState {
     pub(super) mode: String,
     pub(super) cwd_display: String,
-    pub(super) status_output: String,
-    pub(super) diff_output: String,
+    pub(super) files: Vec<DiffOverlayFileEntry>,
+    pub(super) selected_file_index: usize,
+    pub(super) detail_output: String,
     pub(super) scroll_offset: u16,
 }
 
@@ -320,6 +334,123 @@ impl SessionPickerState {
         if self.selected_index >= visible_end {
             self.list_scroll_offset = self.selected_index.saturating_add(1) - visible_rows;
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThemePickerOption {
+    Auto,
+    Dark,
+    Light,
+    Plain,
+}
+
+impl ThemePickerOption {
+    const ALL: [Self; 4] = [Self::Auto, Self::Dark, Self::Light, Self::Plain];
+
+    pub(super) fn all() -> &'static [Self] {
+        &Self::ALL
+    }
+
+    pub(super) fn from_override(palette_hint_override: Option<PaletteHint>) -> Self {
+        match palette_hint_override {
+            None => Self::Auto,
+            Some(PaletteHint::Dark) => Self::Dark,
+            Some(PaletteHint::Light) => Self::Light,
+            Some(PaletteHint::Plain) => Self::Plain,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+            Self::Plain => "Plain",
+        }
+    }
+
+    pub(super) fn detail(self) -> &'static str {
+        match self {
+            Self::Auto => "Match the terminal-detected palette",
+            Self::Dark => "Balanced dark contrast for long sessions",
+            Self::Light => "Airy light palette with softer chrome",
+            Self::Plain => "Minimal ANSI-first rendering",
+        }
+    }
+
+    pub(super) fn palette_hint_override(self) -> Option<PaletteHint> {
+        match self {
+            Self::Auto => None,
+            Self::Dark => Some(PaletteHint::Dark),
+            Self::Light => Some(PaletteHint::Light),
+            Self::Plain => Some(PaletteHint::Plain),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ThemePickerState {
+    pub(super) selected_index: usize,
+    pub(super) original_palette_hint_override: Option<PaletteHint>,
+}
+
+impl ThemePickerState {
+    pub(super) fn new(palette_hint_override: Option<PaletteHint>) -> Self {
+        let selected_option = ThemePickerOption::from_override(palette_hint_override);
+        let selected_index = ThemePickerOption::all()
+            .iter()
+            .position(|option| *option == selected_option)
+            .unwrap_or(0);
+
+        Self {
+            selected_index,
+            original_palette_hint_override: palette_hint_override,
+        }
+    }
+
+    pub(super) fn selected_option(&self) -> ThemePickerOption {
+        let options = ThemePickerOption::all();
+        let selected_index = self.selected_index.min(options.len().saturating_sub(1));
+
+        options
+            .get(selected_index)
+            .copied()
+            .unwrap_or(ThemePickerOption::Auto)
+    }
+
+    pub(super) fn select_first(&mut self) {
+        self.selected_index = 0;
+    }
+
+    pub(super) fn select_last(&mut self) {
+        let last_index = ThemePickerOption::all().len().saturating_sub(1);
+        self.selected_index = last_index;
+    }
+
+    pub(super) fn select_previous(&mut self) {
+        let option_count = ThemePickerOption::all().len();
+        if option_count == 0 {
+            self.selected_index = 0;
+            return;
+        }
+        if self.selected_index == 0 {
+            self.selected_index = option_count.saturating_sub(1);
+            return;
+        }
+
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    pub(super) fn select_next(&mut self) {
+        let option_count = ThemePickerOption::all().len();
+        if option_count == 0 {
+            self.selected_index = 0;
+            return;
+        }
+
+        let next_index = self.selected_index.saturating_add(1);
+        self.selected_index = next_index % option_count;
     }
 }
 
@@ -784,7 +915,7 @@ impl Pane {
     }
 
     pub(super) fn needs_periodic_redraw(&self) -> bool {
-        self.agent_running || self.status_message.is_some()
+        self.agent_running || self.status_message.is_some() || self.has_idle_activity_pulse()
     }
 
     /// Advances visible animation state and expires stale transient status
@@ -800,6 +931,13 @@ impl Pane {
             }
             self.last_spinner_tick = Instant::now();
             changed = true;
+        } else if !self.agent_running
+            && self.has_idle_activity_pulse()
+            && elapsed >= DOTS_INTERVAL_MS
+        {
+            self.dots_frame = (self.dots_frame + 1) % DOTS_FRAMES;
+            self.last_spinner_tick = Instant::now();
+            changed = true;
         }
 
         let status_expired = self
@@ -812,6 +950,27 @@ impl Pane {
         }
 
         changed
+    }
+
+    fn has_idle_activity_pulse(&self) -> bool {
+        self.running_tool_call_count() > 0
+            || self
+                .composer_suggestion_context
+                .active_subagents
+                .unwrap_or(0)
+                > 0
+            || self.composer_suggestion_context.running_tasks.unwrap_or(0) > 0
+            || self.composer_suggestion_context.overdue_tasks.unwrap_or(0) > 0
+            || self
+                .composer_suggestion_context
+                .pending_approvals
+                .unwrap_or(0)
+                > 0
+            || self
+                .composer_suggestion_context
+                .attention_approvals
+                .unwrap_or(0)
+                > 0
     }
 
     pub(super) fn set_status(&mut self, msg: String) {
@@ -1093,6 +1252,7 @@ pub(super) struct Shell {
     pub(super) pane: Pane,
     pub(super) runtime_config: Option<crate::config::LoongClawConfig>,
     pub(super) runtime_config_path: Option<std::path::PathBuf>,
+    pub(super) theme_picker: Option<ThemePickerState>,
     pub(super) session_picker: Option<SessionPickerState>,
     pub(super) stats_overlay: Option<StatsOverlayState>,
     pub(super) diff_overlay: Option<DiffOverlayState>,
@@ -1104,6 +1264,8 @@ pub(super) struct Shell {
     pub(super) focus: FocusStack,
     pub(super) dirty: bool,
     pub(super) slash_command_selection: usize,
+    pub(super) base_palette_hint: PaletteHint,
+    pub(super) palette_hint_override: Option<PaletteHint>,
 }
 
 impl Shell {
@@ -1112,6 +1274,7 @@ impl Shell {
             pane: Pane::new(session_id),
             runtime_config: None,
             runtime_config_path: None,
+            theme_picker: None,
             session_picker: None,
             stats_overlay: None,
             diff_overlay: None,
@@ -1123,7 +1286,13 @@ impl Shell {
             focus: FocusStack::new(),
             dirty: true,
             slash_command_selection: 0,
+            base_palette_hint: PaletteHint::Dark,
+            palette_hint_override: None,
         }
+    }
+
+    pub(super) fn effective_palette_hint(&self) -> PaletteHint {
+        self.palette_hint_override.unwrap_or(self.base_palette_hint)
     }
 }
 
@@ -1280,6 +1449,41 @@ mod tests {
         assert!(changed);
         assert!(pane.status_message.is_none());
         assert!(!pane.needs_periodic_redraw());
+    }
+
+    #[test]
+    fn idle_activity_context_keeps_periodic_redraw_for_operation_dock_pulse() {
+        let mut pane = Pane::new("sess-1");
+        pane.composer_suggestion_context.running_tasks = Some(1);
+
+        assert!(pane.needs_periodic_redraw());
+
+        let initial_frame = pane.dots_frame;
+        pane.last_spinner_tick = Instant::now() - std::time::Duration::from_millis(400);
+
+        let changed = pane.tick_animations();
+
+        assert!(changed);
+        assert_ne!(pane.dots_frame, initial_frame);
+    }
+
+    #[test]
+    fn theme_picker_defaults_to_auto_without_override() {
+        let picker = ThemePickerState::new(None);
+
+        assert_eq!(picker.selected_option(), ThemePickerOption::Auto);
+        assert!(picker.original_palette_hint_override.is_none());
+    }
+
+    #[test]
+    fn theme_picker_wraps_when_moving_past_edges() {
+        let mut picker = ThemePickerState::new(None);
+
+        picker.select_previous();
+        assert_eq!(picker.selected_option(), ThemePickerOption::Plain);
+
+        picker.select_next();
+        assert_eq!(picker.selected_option(), ThemePickerOption::Auto);
     }
 
     #[test]

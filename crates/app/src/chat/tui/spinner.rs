@@ -29,6 +29,36 @@ pub(super) trait SpinnerView {
         ""
     }
     fn loop_iteration(&self) -> u32;
+    fn running_tool_call_count(&self) -> usize {
+        0
+    }
+    fn tool_call_count(&self) -> usize {
+        0
+    }
+    fn worktree_dirty(&self) -> bool {
+        false
+    }
+    fn dirty_file_count(&self) -> usize {
+        0
+    }
+    fn dirty_file_preview(&self) -> &[String] {
+        &[]
+    }
+    fn active_subagent_count(&self) -> Option<usize> {
+        None
+    }
+    fn running_task_count(&self) -> Option<usize> {
+        None
+    }
+    fn overdue_task_count(&self) -> Option<usize> {
+        None
+    }
+    fn pending_approval_count(&self) -> Option<usize> {
+        None
+    }
+    fn attention_approval_count(&self) -> Option<usize> {
+        None
+    }
     fn status_message(&self) -> Option<(&str, &Instant)>;
 }
 
@@ -63,17 +93,12 @@ pub(super) fn render_spinner(
         ])
     } else if let Some((msg, when)) = pane.status_message() {
         if when.elapsed().as_secs() < STATUS_FADE_SECS {
-            Line::styled(
-                format!(" {msg}"),
-                Style::default()
-                    .fg(palette.dim)
-                    .add_modifier(Modifier::ITALIC),
-            )
+            idle_line(Some(msg), pane, area.width, palette)
         } else {
-            ready_line(palette)
+            idle_line(None, pane, area.width, palette)
         }
     } else {
-        ready_line(palette)
+        idle_line(None, pane, area.width, palette)
     };
 
     frame.render_widget(Paragraph::new(content), area);
@@ -96,13 +121,262 @@ fn optional_running_segment(raw: &str) -> String {
     format!(" · {trimmed}")
 }
 
-fn ready_line(palette: &Palette) -> Line<'static> {
-    Line::styled(
+fn idle_line(
+    status_message: Option<&str>,
+    pane: &impl SpinnerView,
+    width: u16,
+    palette: &Palette,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled(
         " Ready".to_string(),
         Style::default()
             .fg(palette.dim)
             .add_modifier(Modifier::ITALIC),
-    )
+    ));
+
+    if let Some(msg) = status_message {
+        spans.push(Span::styled(
+            " · ".to_string(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(
+            msg.to_owned(),
+            Style::default()
+                .fg(palette.dim)
+                .add_modifier(Modifier::ITALIC),
+        ));
+    }
+
+    let dock_spans = operation_dock_spans(pane, width, palette);
+    if !dock_spans.is_empty() {
+        spans.push(Span::styled(
+            " · ".to_string(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.extend(dock_spans);
+    }
+
+    Line::from(spans)
+}
+
+fn operation_dock_spans(
+    pane: &impl SpinnerView,
+    width: u16,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    let extra_wide = width >= 160;
+    let wide = width >= 120;
+    let pulse = activity_pulse(pane.dots_frame());
+    let mut items = Vec::new();
+
+    let attention_approvals = pane.attention_approval_count().unwrap_or(0);
+    if attention_approvals > 0 {
+        items.push(operation_item(
+            pulse,
+            if extra_wide {
+                format!(" approvals! {attention_approvals} · /approvals attention")
+            } else if wide {
+                format!(" apr! {attention_approvals} /approvals")
+            } else {
+                format!(" apr! {attention_approvals}")
+            },
+            palette.warning,
+            palette,
+        ));
+    }
+
+    let pending_approvals = pane.pending_approval_count().unwrap_or(0);
+    let passive_approvals = pending_approvals.saturating_sub(attention_approvals);
+    if passive_approvals > 0 {
+        items.push(operation_item(
+            pulse,
+            if extra_wide {
+                format!(" approvals {passive_approvals} · /approvals")
+            } else if wide {
+                format!(" apr {passive_approvals} /approvals")
+            } else {
+                format!(" apr {passive_approvals}")
+            },
+            palette.info,
+            palette,
+        ));
+    }
+
+    let overdue_tasks = pane.overdue_task_count().unwrap_or(0);
+    if overdue_tasks > 0 {
+        items.push(operation_item(
+            pulse,
+            if extra_wide {
+                format!(" overdue {overdue_tasks} · /tasks running")
+            } else if wide {
+                format!(" late {overdue_tasks} /tasks")
+            } else {
+                format!(" late {overdue_tasks}")
+            },
+            palette.error,
+            palette,
+        ));
+    }
+
+    let running_tasks = pane.running_task_count().unwrap_or(0);
+    if running_tasks > 0 {
+        items.push(operation_item(
+            pulse,
+            if extra_wide {
+                format!(" background {running_tasks} · /tasks running")
+            } else if wide {
+                format!(" bg {running_tasks} /tasks")
+            } else {
+                format!(" bg {running_tasks}")
+            },
+            palette.tool_running,
+            palette,
+        ));
+    }
+
+    let active_subagents = pane.active_subagent_count().unwrap_or(0);
+    if active_subagents > 0 {
+        items.push(operation_item(
+            pulse,
+            if extra_wide {
+                format!(" subagents {active_subagents} · /subagents")
+            } else if wide {
+                format!(" sub {active_subagents} /subagents")
+            } else {
+                format!(" sub {active_subagents}")
+            },
+            palette.brand,
+            palette,
+        ));
+    }
+
+    let running_tools = pane.running_tool_call_count();
+    let total_tools = pane.tool_call_count();
+    if running_tools > 0 || total_tools > 0 {
+        let label = if extra_wide {
+            if running_tools > 0 {
+                format!(" tools {running_tools}/{total_tools} · /tools open")
+            } else {
+                format!(" tools {total_tools} · /tools")
+            }
+        } else if wide {
+            if running_tools > 0 {
+                format!(" tool {running_tools}/{total_tools} /tools")
+            } else {
+                format!(" tool {total_tools} /tools")
+            }
+        } else if running_tools > 0 {
+            format!(" tool {running_tools}/{total_tools}")
+        } else {
+            format!(" tool {total_tools}")
+        };
+        let color = if running_tools > 0 {
+            palette.tool_running
+        } else {
+            palette.info
+        };
+        items.push(operation_item(pulse, label, color, palette));
+    }
+
+    let dirty_file_count = pane.dirty_file_count();
+    if pane.worktree_dirty() && dirty_file_count > 0 {
+        let dirty_preview = pane.dirty_file_preview();
+        let dirty_summary =
+            summarize_dirty_files(dirty_preview, dirty_file_count, extra_wide, wide);
+        items.push(operation_item('•', dirty_summary, palette.info, palette));
+    }
+
+    items.push(passive_operation_item(
+        if extra_wide {
+            " commands · /commands".to_owned()
+        } else if wide {
+            " cmds /commands".to_owned()
+        } else {
+            " cmds".to_owned()
+        },
+        palette,
+    ));
+
+    let mut spans = Vec::new();
+    for (index, item) in items.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::styled(
+                " · ".to_string(),
+                Style::default().fg(palette.separator),
+            ));
+        }
+        spans.extend(item);
+    }
+
+    spans
+}
+
+fn activity_pulse(frame: usize) -> char {
+    match frame % 4 {
+        0 => '·',
+        1 => '•',
+        2 => '●',
+        _ => '•',
+    }
+}
+
+fn operation_item(
+    marker: char,
+    label: String,
+    color: ratatui::style::Color,
+    palette: &Palette,
+) -> Vec<Span<'static>> {
+    vec![
+        Span::styled(
+            format!("{marker}"),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(label, Style::default().fg(palette.dim)),
+    ]
+}
+
+fn passive_operation_item(label: String, palette: &Palette) -> Vec<Span<'static>> {
+    vec![Span::styled(label, Style::default().fg(palette.separator))]
+}
+
+fn summarize_dirty_files(
+    dirty_preview: &[String],
+    dirty_file_count: usize,
+    extra_wide: bool,
+    wide: bool,
+) -> String {
+    let first_label = dirty_preview
+        .first()
+        .map(|path| summarize_dirty_file_name(path.as_str()))
+        .unwrap_or_else(|| "edited files".to_owned());
+    let remaining_count = dirty_file_count.saturating_sub(1);
+
+    if extra_wide {
+        if remaining_count > 0 {
+            return format!(" edits {first_label} +{remaining_count}");
+        }
+        return format!(" edits {first_label}");
+    }
+
+    if wide {
+        if remaining_count > 0 {
+            return format!(" edit {first_label} +{remaining_count}");
+        }
+        return format!(" edit {first_label}");
+    }
+
+    if remaining_count > 0 {
+        return format!(" edit +{dirty_file_count}");
+    }
+
+    format!(" edit {first_label}")
+}
+
+fn summarize_dirty_file_name(path: &str) -> String {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+
+    file_name.to_owned()
 }
 
 #[cfg(test)]
@@ -118,6 +392,15 @@ mod tests {
         loop_state: String,
         loop_action: String,
         loop_iteration: u32,
+        running_tool_call_count: usize,
+        tool_call_count: usize,
+        worktree_dirty: bool,
+        dirty_files: Vec<String>,
+        active_subagent_count: Option<usize>,
+        running_task_count: Option<usize>,
+        overdue_task_count: Option<usize>,
+        pending_approval_count: Option<usize>,
+        attention_approval_count: Option<usize>,
         status_message: Option<(String, Instant)>,
     }
 
@@ -130,6 +413,15 @@ mod tests {
                 loop_state: String::new(),
                 loop_action: String::new(),
                 loop_iteration: 0,
+                running_tool_call_count: 0,
+                tool_call_count: 0,
+                worktree_dirty: false,
+                dirty_files: Vec::new(),
+                active_subagent_count: None,
+                running_task_count: None,
+                overdue_task_count: None,
+                pending_approval_count: None,
+                attention_approval_count: None,
                 status_message: None,
             }
         }
@@ -142,6 +434,15 @@ mod tests {
                 loop_state: "requesting provider".into(),
                 loop_action: "10 messages | est. 500 tok".into(),
                 loop_iteration: 2,
+                running_tool_call_count: 0,
+                tool_call_count: 0,
+                worktree_dirty: false,
+                dirty_files: Vec::new(),
+                active_subagent_count: None,
+                running_task_count: None,
+                overdue_task_count: None,
+                pending_approval_count: None,
+                attention_approval_count: None,
                 status_message: None,
             }
         }
@@ -165,6 +466,36 @@ mod tests {
         }
         fn loop_iteration(&self) -> u32 {
             self.loop_iteration
+        }
+        fn running_tool_call_count(&self) -> usize {
+            self.running_tool_call_count
+        }
+        fn tool_call_count(&self) -> usize {
+            self.tool_call_count
+        }
+        fn worktree_dirty(&self) -> bool {
+            self.worktree_dirty
+        }
+        fn dirty_file_count(&self) -> usize {
+            self.dirty_files.len()
+        }
+        fn dirty_file_preview(&self) -> &[String] {
+            self.dirty_files.as_slice()
+        }
+        fn active_subagent_count(&self) -> Option<usize> {
+            self.active_subagent_count
+        }
+        fn running_task_count(&self) -> Option<usize> {
+            self.running_task_count
+        }
+        fn overdue_task_count(&self) -> Option<usize> {
+            self.overdue_task_count
+        }
+        fn pending_approval_count(&self) -> Option<usize> {
+            self.pending_approval_count
+        }
+        fn attention_approval_count(&self) -> Option<usize> {
+            self.attention_approval_count
         }
         fn status_message(&self) -> Option<(&str, &Instant)> {
             self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
@@ -229,6 +560,33 @@ mod tests {
     }
 
     #[test]
+    fn running_spinner_surfaces_live_edited_files() {
+        let backend = TestBackend::new(120, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let pane = TestSpinner {
+            worktree_dirty: true,
+            dirty_files: vec![
+                "crates/app/src/chat/tui/render.rs".to_owned(),
+                "crates/app/src/chat/tui/shell.rs".to_owned(),
+            ],
+            ..TestSpinner::active()
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_spinner(f, f.area(), &pane, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            !text.contains("edit"),
+            "spinner should leave live edits to the dedicated context rail: {text:?}"
+        );
+    }
+
+    #[test]
     fn spinner_frame_cycles() {
         assert_eq!(FRAMES.len(), 4);
         assert_eq!(DOTS.len(), 4);
@@ -260,5 +618,42 @@ mod tests {
             text.contains("Model switched"),
             "recent status message should be visible"
         );
+    }
+
+    #[test]
+    fn idle_operation_dock_surfaces_active_entry_points() {
+        let backend = TestBackend::new(140, 1);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let pane = TestSpinner {
+            dots_frame: 1,
+            running_tool_call_count: 1,
+            tool_call_count: 4,
+            worktree_dirty: true,
+            dirty_files: vec![
+                "crates/app/src/chat/tui/render.rs".to_owned(),
+                "crates/app/src/chat/tui/shell.rs".to_owned(),
+                "crates/app/src/chat/tui/state.rs".to_owned(),
+            ],
+            active_subagent_count: Some(2),
+            running_task_count: Some(1),
+            pending_approval_count: Some(3),
+            attention_approval_count: Some(1),
+            ..TestSpinner::idle()
+        };
+        let palette = Palette::dark();
+
+        terminal
+            .draw(|f| {
+                render_spinner(f, f.area(), &pane, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("apr! 1 /approvals"), "text={text:?}");
+        assert!(text.contains("bg 1 /tasks"), "text={text:?}");
+        assert!(text.contains("/subagents"), "text={text:?}");
+        assert!(text.contains("/tools"), "text={text:?}");
+        assert!(text.contains("edit render.rs +2"), "text={text:?}");
+        assert!(text.contains("cmds"), "text={text:?}");
     }
 }

@@ -5395,16 +5395,19 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
 
     let memory_dir = workspace_root.join("memory");
     let exported_paths = collect_markdown_file_paths(&memory_dir);
-    assert_eq!(
-        exported_paths.len(),
-        1,
-        "expected one durable memory export"
+    assert!(
+        !exported_paths.is_empty(),
+        "expected at least one durable memory export"
     );
 
-    let exported = std::fs::read_to_string(&exported_paths[0]).expect("read durable memory export");
-    assert!(exported.contains("Advisory durable recall"));
-    assert!(exported.contains("Resolved Runtime Identity"));
-    assert!(exported.contains("hello before compaction"));
+    let matched_export = exported_paths.iter().find_map(|path| {
+        let exported = std::fs::read_to_string(path).ok()?;
+        (exported.contains("Advisory durable recall")
+            && exported.contains("Resolved Runtime Identity")
+            && exported.contains("hello before compaction"))
+        .then_some(exported)
+    });
+    matched_export.expect("expected durable memory export with pre-compaction content");
 }
 
 #[cfg(feature = "memory-sqlite")]

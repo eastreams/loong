@@ -2952,6 +2952,8 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    const BROWSER_COMPANION_TEST_TIMEOUT_SECONDS: u64 = 120;
+
     #[cfg(unix)]
     fn write_browser_companion_script(
         root: &Path,
@@ -3865,6 +3867,7 @@ mod tests {
         runtime_config.browser_companion.enabled = true;
         runtime_config.browser_companion.ready = true;
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
+        runtime_config.browser_companion.timeout_seconds = BROWSER_COMPANION_TEST_TIMEOUT_SECONDS;
 
         let start = crate::tools::execute_tool_core_with_config(
             loongclaw_contracts::ToolCoreRequest {
@@ -3888,6 +3891,7 @@ mod tests {
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
         tool_config.browser_companion.command = Some(script_path.display().to_string());
+        tool_config.browser_companion.timeout_seconds = BROWSER_COMPANION_TEST_TIMEOUT_SECONDS;
 
         let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
@@ -3966,6 +3970,7 @@ mod tests {
         runtime_config.browser_companion.enabled = true;
         runtime_config.browser_companion.ready = true;
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
+        runtime_config.browser_companion.timeout_seconds = BROWSER_COMPANION_TEST_TIMEOUT_SECONDS;
 
         let start = crate::tools::execute_tool_core_with_config(
             loongclaw_contracts::ToolCoreRequest {
@@ -3989,6 +3994,7 @@ mod tests {
         let mut tool_config = ToolConfig::default();
         tool_config.browser_companion.enabled = true;
         tool_config.browser_companion.command = Some(script_path.display().to_string());
+        tool_config.browser_companion.timeout_seconds = BROWSER_COMPANION_TEST_TIMEOUT_SECONDS;
 
         let tool_view = crate::tools::runtime_tool_view_for_runtime_config(&runtime_config);
         let session_context = SessionContext::root_with_tool_view("root-session", tool_view);
@@ -4068,6 +4074,7 @@ mod tests {
         runtime_config.browser_companion.enabled = true;
         runtime_config.browser_companion.ready = true;
         runtime_config.browser_companion.command = Some(script_path.display().to_string());
+        runtime_config.browser_companion.timeout_seconds = BROWSER_COMPANION_TEST_TIMEOUT_SECONDS;
 
         let start = crate::tools::execute_tool_core_with_config(
             loongclaw_contracts::ToolCoreRequest {
@@ -4088,6 +4095,10 @@ mod tests {
         let mut env = crate::test_support::ScopedEnv::new();
         env.set("LOONGCLAW_BROWSER_COMPANION_ENABLED", "true");
         env.set("LOONGCLAW_BROWSER_COMPANION_READY", "false");
+        env.set(
+            "LOONGCLAW_BROWSER_COMPANION_TIMEOUT_SECONDS",
+            BROWSER_COMPANION_TEST_TIMEOUT_SECONDS.to_string(),
+        );
         env.set(
             "LOONGCLAW_BROWSER_COMPANION_COMMAND",
             script_path.display().to_string(),

@@ -13,6 +13,7 @@ pub(super) enum SlashCommand {
     Permissions,
     Export,
     Diff,
+    Theme,
     Model,
     Mode,
     Stats,
@@ -143,6 +144,14 @@ const COMMANDS: &[SlashCommandSpec] = &[
         category: "Status",
         aliases: &[],
         argument_hint: Some("[status|full]"),
+        discoverable: false,
+    },
+    SlashCommandSpec {
+        name: "/theme",
+        help: "Switch the active TUI palette for this session",
+        category: "View",
+        aliases: &[],
+        argument_hint: Some("[dark|light|plain|auto|toggle]"),
         discoverable: true,
     },
     SlashCommandSpec {
@@ -338,6 +347,7 @@ pub(super) fn parse(input: &str) -> Option<ParsedSlashCommand> {
         "/permissions" => SlashCommand::Permissions,
         "/export" => SlashCommand::Export,
         "/diff" => SlashCommand::Diff,
+        "/theme" => SlashCommand::Theme,
         "/model" => SlashCommand::Model,
         "/mode" => SlashCommand::Mode,
         "/stats" | "/usage" => SlashCommand::Stats,
@@ -645,13 +655,21 @@ mod tests {
                 args: "full".to_owned(),
             })
         );
+        assert_eq!(
+            parse("/theme: light"),
+            Some(ParsedSlashCommand {
+                command: SlashCommand::Theme,
+                args: "light".to_owned(),
+            })
+        );
     }
 
     #[test]
     fn completions_filter() {
         let results = completions("/th");
-        assert_eq!(results.len(), 1);
+        assert_eq!(results.len(), 2);
         assert!(results.iter().any(|spec| spec.name == "/thinking"));
+        assert!(results.iter().any(|spec| spec.name == "/theme"));
     }
 
     #[test]

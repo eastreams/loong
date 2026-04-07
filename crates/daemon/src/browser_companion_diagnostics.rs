@@ -10,7 +10,7 @@ pub(crate) const BROWSER_COMPANION_INSTALL_CHECK_NAME: &str = "browser companion
 pub(crate) const BROWSER_COMPANION_RUNTIME_GATE_CHECK_NAME: &str = "browser companion runtime gate";
 
 const BROWSER_COMPANION_VERSION_ARG: &str = "--version";
-const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+const BROWSER_COMPANION_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 const BROWSER_COMPANION_PROBE_ATTEMPTS: usize = 2;
 
 // Shared readiness snapshot for doctor/onboard so the companion lane is probed once.

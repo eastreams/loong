@@ -12,6 +12,7 @@ use ratatui::{
         ScrollbarOrientation, ScrollbarState, Wrap, block::Position as TitlePosition,
     },
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::session::presentation::{SessionPresentationLocale, localized_root_thread_label};
 
@@ -62,8 +63,9 @@ pub(super) struct StatsOverlayView<'a> {
 pub(super) struct DiffOverlayView<'a> {
     pub(super) mode: &'a str,
     pub(super) cwd_display: &'a str,
-    pub(super) status_output: &'a str,
-    pub(super) diff_output: &'a str,
+    pub(super) files: &'a [state::DiffOverlayFileEntry],
+    pub(super) selected_file_index: usize,
+    pub(super) detail_output: &'a str,
     pub(super) scroll_offset: u16,
 }
 
@@ -71,6 +73,13 @@ pub(super) struct DiffOverlayView<'a> {
 pub(super) struct SessionPickerView<'a> {
     pub(super) picker: &'a state::SessionPickerState,
     pub(super) current_session_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ThemePickerView<'a> {
+    pub(super) picker: &'a state::ThemePickerState,
+    pub(super) base_palette_hint: super::terminal::PaletteHint,
+    pub(super) palette_hint_override: Option<super::terminal::PaletteHint>,
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +100,7 @@ pub(super) trait ShellView {
     fn stats_overlay(&self) -> Option<StatsOverlayView<'_>>;
     fn diff_overlay(&self) -> Option<DiffOverlayView<'_>>;
     fn session_picker(&self) -> Option<SessionPickerView<'_>>;
+    fn theme_picker(&self) -> Option<ThemePickerView<'_>>;
     fn slash_command_selection(&self) -> usize;
     fn slash_palette_entries(&self, draft_prefix: &str) -> Vec<SlashPaletteEntry>;
 }
@@ -130,8 +140,8 @@ pub(super) fn draw(
     // 3. Spinner / phase line
     spinner::render_spinner(frame, areas.spinner, state.pane(), palette);
 
-    // 4. Second separator
-    render_separator(frame, areas.separator2, palette);
+    // 4. Context rail or separator
+    render_context_rail(frame, areas.separator2, state.pane(), palette);
 
     // 5. Input area
     input::render_input(
@@ -162,39 +172,52 @@ pub(super) fn draw(
         palette,
     );
 
-    // 7. Overlays
-    if let Some(dialog) = state.clarify_dialog()
-        && state.focus().has(FocusLayer::ClarifyDialog)
-    {
-        render_clarify_dialog(dialog, frame, area, palette);
-    }
+    render_active_overlays(frame, state, area, palette);
+}
 
-    if let Some(tool_inspector) = state.tool_inspector()
-        && state.focus().has(FocusLayer::ToolInspector)
-    {
-        render_tool_inspector(tool_inspector, frame, area, palette);
-    }
-
-    if let Some(stats_overlay) = state.stats_overlay()
-        && state.focus().has(FocusLayer::StatsOverlay)
-    {
-        render_stats_overlay(stats_overlay, frame, area, palette);
-    }
-
-    if let Some(diff_overlay) = state.diff_overlay()
-        && state.focus().has(FocusLayer::DiffOverlay)
-    {
-        render_diff_overlay(diff_overlay, frame, area, palette);
-    }
-
-    if let Some(session_picker) = state.session_picker()
-        && state.focus().has(FocusLayer::SessionPicker)
-    {
-        render_session_picker(session_picker, frame, area, palette);
-    }
-
-    if state.focus().has(FocusLayer::Help) {
-        render_help_overlay(frame, area, palette);
+fn render_active_overlays(
+    frame: &mut Frame<'_>,
+    state: &impl ShellView,
+    area: Rect,
+    palette: &Palette,
+) {
+    for layer in state.focus().layers() {
+        match layer {
+            FocusLayer::Composer | FocusLayer::Transcript => {}
+            FocusLayer::ClarifyDialog => {
+                if let Some(dialog) = state.clarify_dialog() {
+                    render_clarify_dialog(dialog, frame, area, palette);
+                }
+            }
+            FocusLayer::ToolInspector => {
+                if let Some(tool_inspector) = state.tool_inspector() {
+                    render_tool_inspector(tool_inspector, frame, area, palette);
+                }
+            }
+            FocusLayer::StatsOverlay => {
+                if let Some(stats_overlay) = state.stats_overlay() {
+                    render_stats_overlay(stats_overlay, frame, area, palette);
+                }
+            }
+            FocusLayer::DiffOverlay => {
+                if let Some(diff_overlay) = state.diff_overlay() {
+                    render_diff_overlay(diff_overlay, frame, area, palette);
+                }
+            }
+            FocusLayer::ThemePicker => {
+                if let Some(theme_picker) = state.theme_picker() {
+                    render_theme_picker(theme_picker, frame, area, palette);
+                }
+            }
+            FocusLayer::SessionPicker => {
+                if let Some(session_picker) = state.session_picker() {
+                    render_session_picker(session_picker, frame, area, palette);
+                }
+            }
+            FocusLayer::Help => {
+                render_help_overlay(frame, area, palette);
+            }
+        }
     }
 }
 
@@ -360,6 +383,7 @@ fn compact_focus_label(focus: FocusLayer) -> &'static str {
         FocusLayer::Composer => "COMPOSE",
         FocusLayer::Transcript => "REVIEW",
         FocusLayer::Help => "HELP",
+        FocusLayer::ThemePicker => "THEME",
         FocusLayer::SessionPicker => "PICKER",
         FocusLayer::StatsOverlay => "STATS",
         FocusLayer::DiffOverlay => "DIFF",
@@ -492,7 +516,7 @@ fn render_diff_overlay(
         ))
         .title_position(TitlePosition::Top)
         .title(Span::styled(
-            " Up/Down scroll · PgUp/PgDn page · Esc close ",
+            " Up/Down file · PgUp/PgDn detail · Home/End jump · Esc close ",
             Style::default()
                 .fg(palette.dim)
                 .add_modifier(Modifier::ITALIC),
@@ -503,65 +527,51 @@ fn render_diff_overlay(
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let mut content_lines: Vec<Line<'static>> = Vec::new();
-    content_lines.push(Line::from(vec![
-        Span::styled(" Workspace: ".to_owned(), Style::default().fg(palette.dim)),
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(8)])
+        .split(inner);
+    let [meta_area, body_area] = sections.as_ref() else {
+        return;
+    };
+    let body_sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(32), Constraint::Min(24)])
+        .split(*body_area);
+    let [files_area, detail_area] = body_sections.as_ref() else {
+        return;
+    };
+
+    let meta_line = Line::from(vec![
+        Span::styled(" Workspace ".to_owned(), Style::default().fg(palette.dim)),
         Span::styled(
             diff_overlay.cwd_display.to_owned(),
             Style::default().fg(palette.text),
         ),
-    ]));
-    content_lines.push(Line::from(vec![
-        Span::styled(" Mode: ".to_owned(), Style::default().fg(palette.dim)),
+        Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+        Span::styled("Mode ".to_owned(), Style::default().fg(palette.dim)),
         Span::styled(
             diff_overlay.mode.to_owned(),
             Style::default()
                 .fg(palette.brand)
                 .add_modifier(Modifier::BOLD),
         ),
-    ]));
+    ]);
+    frame.render_widget(Paragraph::new(meta_line), *meta_area);
 
-    if !diff_overlay.status_output.trim().is_empty() {
-        content_lines.push(Line::default());
-        content_lines.push(Line::styled(
-            " Status",
-            Style::default()
-                .fg(palette.brand)
-                .add_modifier(Modifier::BOLD),
-        ));
-        for status_line in diff_overlay.status_output.lines() {
-            let line = Line::styled(format!(" {status_line}"), Style::default().fg(palette.dim));
-            content_lines.push(line);
-        }
-    }
+    let file_list_lines =
+        render_diff_file_list_lines(diff_overlay, files_area.width, files_area.height, palette);
+    frame.render_widget(Paragraph::new(file_list_lines), *files_area);
 
-    content_lines.push(Line::default());
-    content_lines.push(Line::styled(
-        " Changes",
-        Style::default()
-            .fg(palette.brand)
-            .add_modifier(Modifier::BOLD),
-    ));
-    if diff_overlay.diff_output.trim().is_empty() {
-        content_lines.push(Line::styled(
-            " working tree clean".to_owned(),
-            Style::default().fg(palette.dim),
-        ));
-    } else {
-        let rendered_output_lines = render_tool_output_lines(diff_overlay.diff_output, palette);
-        for rendered_output_line in rendered_output_lines {
-            content_lines.push(rendered_output_line);
-        }
-    }
-
-    let paragraph = Paragraph::new(content_lines).wrap(Wrap { trim: false });
-    let total_lines = paragraph.line_count(inner.width) as u16;
-    let visible_height = inner.height;
+    let detail_lines = render_diff_overlay_detail_lines(diff_overlay, palette);
+    let paragraph = Paragraph::new(detail_lines).wrap(Wrap { trim: false });
+    let total_lines = paragraph.line_count(detail_area.width) as u16;
+    let visible_height = detail_area.height;
     let max_scroll = total_lines.saturating_sub(visible_height);
     let scroll_offset = diff_overlay.scroll_offset.min(max_scroll);
     let paragraph = paragraph.scroll((scroll_offset, 0));
 
-    frame.render_widget(paragraph, inner);
+    frame.render_widget(paragraph, *detail_area);
 
     if total_lines > visible_height {
         let mut scrollbar_state = ScrollbarState::new(total_lines as usize);
@@ -572,13 +582,333 @@ fn render_diff_overlay(
 
         frame.render_stateful_widget(
             scrollbar,
-            inner.inner(Margin {
+            detail_area.inner(Margin {
                 horizontal: 0,
                 vertical: 0,
             }),
             &mut scrollbar_state,
         );
     }
+}
+
+fn render_diff_file_list_lines(
+    diff_overlay: DiffOverlayView<'_>,
+    visible_width: u16,
+    visible_height: u16,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let file_count = diff_overlay.files.len();
+    let file_index_label = if file_count == 0 {
+        " Files".to_owned()
+    } else {
+        let selected = diff_overlay
+            .selected_file_index
+            .min(file_count.saturating_sub(1))
+            + 1;
+        format!(" Files {selected}/{file_count}")
+    };
+    lines.push(Line::styled(
+        file_index_label,
+        Style::default()
+            .fg(palette.brand)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if file_count == 0 {
+        lines.push(Line::styled(
+            "  working tree clean".to_owned(),
+            Style::default().fg(palette.dim),
+        ));
+        return lines;
+    }
+
+    let visible_rows = visible_height.saturating_sub(1) as usize;
+    if visible_rows == 0 {
+        return lines;
+    }
+
+    let max_start = file_count.saturating_sub(visible_rows);
+    let preferred_start = diff_overlay
+        .selected_file_index
+        .saturating_sub(visible_rows / 2);
+    let start_index = preferred_start.min(max_start);
+    let end_index = start_index.saturating_add(visible_rows).min(file_count);
+    let has_more_above = start_index > 0;
+    let has_more_below = end_index < file_count;
+    let above_count = start_index;
+    let below_count = file_count.saturating_sub(end_index);
+    let has_pagination = has_more_above || has_more_below;
+
+    let Some(visible_files) = diff_overlay.files.get(start_index..end_index) else {
+        return lines;
+    };
+
+    if has_pagination {
+        let above_label = if has_more_above {
+            format!("  ↑ {above_count} more")
+        } else {
+            " ".to_owned()
+        };
+        let above_line = Line::styled(above_label, Style::default().fg(palette.dim));
+        lines.push(above_line);
+    }
+
+    let available_path_width = available_diff_file_path_width(visible_width);
+    for (index, file) in visible_files.iter().enumerate() {
+        let file_index = start_index + index;
+        let is_selected = file_index == diff_overlay.selected_file_index;
+        let marker = if is_selected { "› " } else { "  " };
+        let marker_style = if is_selected {
+            Style::default().fg(palette.brand)
+        } else {
+            Style::default().fg(palette.separator)
+        };
+        let file_style = if is_selected {
+            Style::default()
+                .fg(palette.text)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.text)
+        };
+        let display_path = truncate_path_start(file.path.as_str(), available_path_width);
+        let stat_label = format_diff_file_stat_label(file);
+        let stat_style = if is_selected {
+            Style::default().fg(palette.info)
+        } else {
+            Style::default().fg(palette.dim)
+        };
+        let line = Line::from(vec![
+            Span::styled(marker.to_owned(), marker_style),
+            Span::styled(display_path, file_style),
+            Span::styled("  ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled(stat_label, stat_style),
+        ]);
+        lines.push(line);
+    }
+
+    if has_pagination {
+        let below_label = if has_more_below {
+            format!("  ↓ {below_count} more")
+        } else {
+            " ".to_owned()
+        };
+        let below_line = Line::styled(below_label, Style::default().fg(palette.dim));
+        lines.push(below_line);
+    }
+
+    lines
+}
+
+fn available_diff_file_path_width(visible_width: u16) -> usize {
+    let total_width = usize::from(visible_width);
+    let reserved_width = 14usize;
+    let safe_width = total_width.saturating_sub(reserved_width);
+    let minimum_width = 12usize;
+    safe_width.max(minimum_width)
+}
+
+fn truncate_path_start(path: &str, max_width: usize) -> String {
+    let path_width = UnicodeWidthStr::width(path);
+    if path_width <= max_width {
+        return path.to_owned();
+    }
+
+    let ellipsis = "…";
+    let ellipsis_width = UnicodeWidthStr::width(ellipsis);
+    let available_width = max_width.saturating_sub(ellipsis_width);
+    let mut kept_char_indices = Vec::new();
+    let mut running_width = 0usize;
+
+    for (byte_index, character) in path.char_indices().rev() {
+        let character_width = character.width().unwrap_or(0);
+        if running_width.saturating_add(character_width) > available_width {
+            break;
+        }
+        running_width = running_width.saturating_add(character_width);
+        kept_char_indices.push(byte_index);
+    }
+
+    let Some(first_kept_index) = kept_char_indices.last().copied() else {
+        return ellipsis.to_owned();
+    };
+    let tail = path.get(first_kept_index..).unwrap_or(path);
+    format!("{ellipsis}{tail}")
+}
+
+fn format_diff_file_stat_label(file: &state::DiffOverlayFileEntry) -> String {
+    let mut parts = vec![format_diff_file_status(file)];
+    if let Some(added_lines) = file.added_lines {
+        parts.push(format!("+{added_lines}"));
+    }
+    if let Some(removed_lines) = file.removed_lines {
+        parts.push(format!("-{removed_lines}"));
+    }
+    if file.untracked {
+        parts.push("untracked".to_owned());
+    }
+
+    parts.join(" ")
+}
+
+fn format_diff_file_status(file: &state::DiffOverlayFileEntry) -> String {
+    if file.untracked {
+        return "??".to_owned();
+    }
+
+    let index_status = file.index_status.unwrap_or('.');
+    let worktree_status = file.worktree_status.unwrap_or('.');
+    format!("{index_status}{worktree_status}")
+}
+
+fn render_diff_overlay_detail_lines(
+    diff_overlay: DiffOverlayView<'_>,
+    palette: &Palette,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let selected_file = diff_overlay.files.get(diff_overlay.selected_file_index);
+    let title = selected_file
+        .map(|file| file.path.as_str())
+        .unwrap_or("Changes");
+    lines.push(Line::styled(
+        format!(" {title}"),
+        Style::default()
+            .fg(palette.brand)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if diff_overlay.detail_output.trim().is_empty() {
+        lines.push(Line::styled(
+            " no diff detail available".to_owned(),
+            Style::default().fg(palette.dim),
+        ));
+        return lines;
+    }
+
+    let rendered_output_lines = render_tool_output_lines(diff_overlay.detail_output, palette);
+    for rendered_output_line in rendered_output_lines {
+        lines.push(rendered_output_line);
+    }
+
+    lines
+}
+
+fn render_theme_picker(
+    theme_picker: ThemePickerView<'_>,
+    frame: &mut Frame<'_>,
+    area: Rect,
+    palette: &Palette,
+) {
+    if area.width < 52 || area.height < 12 {
+        return;
+    }
+
+    let max_width = area.width.saturating_sub(6);
+    let preferred_width = 60u16;
+    let popup_width = preferred_width.min(max_width).max(52);
+
+    let max_height = area.height.saturating_sub(4);
+    let preferred_height = 12u16;
+    let popup_height = preferred_height.min(max_height).max(12);
+
+    let popup_x = area.x + (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = area.y + (area.height.saturating_sub(popup_height)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    frame.render_widget(Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(palette.separator))
+        .title(Span::styled(
+            " Theme ",
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_position(TitlePosition::Top)
+        .title(Span::styled(
+            " Up/Down preview · Enter apply · Esc cancel ",
+            Style::default()
+                .fg(palette.dim)
+                .add_modifier(Modifier::ITALIC),
+        ))
+        .title_position(TitlePosition::Bottom)
+        .style(Style::default().bg(palette.surface));
+
+    let inner_area = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(4)])
+        .split(inner_area);
+    let [meta_area, list_area] = sections.as_ref() else {
+        return;
+    };
+
+    let source_label = if theme_picker.palette_hint_override.is_some() {
+        "session override"
+    } else {
+        "terminal auto-detect"
+    };
+    let effective_palette_hint = theme_picker
+        .palette_hint_override
+        .unwrap_or(theme_picker.base_palette_hint);
+    let effective_palette_label = match effective_palette_hint {
+        super::terminal::PaletteHint::Dark => "dark",
+        super::terminal::PaletteHint::Light => "light",
+        super::terminal::PaletteHint::Plain => "plain",
+    };
+    let meta_lines = vec![
+        Line::from(vec![
+            Span::styled(" Active ".to_owned(), Style::default().fg(palette.dim)),
+            Span::styled(
+                effective_palette_label.to_owned(),
+                Style::default()
+                    .fg(palette.text)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" · ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled(source_label.to_owned(), Style::default().fg(palette.dim)),
+        ]),
+        Line::styled(
+            " Preview updates this session immediately.".to_owned(),
+            Style::default().fg(palette.dim),
+        ),
+    ];
+    frame.render_widget(Paragraph::new(meta_lines), *meta_area);
+
+    let mut option_lines = Vec::new();
+    for (index, option) in state::ThemePickerOption::all().iter().enumerate() {
+        let is_selected = index == theme_picker.picker.selected_index;
+        let marker = if is_selected { "› " } else { "  " };
+        let marker_style = if is_selected {
+            Style::default().fg(palette.brand)
+        } else {
+            Style::default().fg(palette.separator)
+        };
+        let option_style = if is_selected {
+            Style::default()
+                .fg(palette.text)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.text)
+        };
+        let detail_style = if is_selected {
+            Style::default().fg(palette.info)
+        } else {
+            Style::default().fg(palette.dim)
+        };
+        let option_line = Line::from(vec![
+            Span::styled(marker.to_owned(), marker_style),
+            Span::styled(format!("{:<7}", option.label()), option_style),
+            Span::styled("  ".to_owned(), Style::default().fg(palette.separator)),
+            Span::styled(option.detail().to_owned(), detail_style),
+        ]);
+        option_lines.push(option_line);
+    }
+    frame.render_widget(Paragraph::new(option_lines), *list_area);
 }
 
 fn render_session_picker(
@@ -1555,6 +1885,88 @@ fn render_separator(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
     frame.render_widget(sep, area);
 }
 
+fn render_context_rail(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    pane: &impl SpinnerView,
+    palette: &Palette,
+) {
+    let dirty_file_count = pane.dirty_file_count();
+    let should_render_live_edits = pane.worktree_dirty() && dirty_file_count > 0;
+    if !should_render_live_edits {
+        render_separator(frame, area, palette);
+        return;
+    }
+
+    let dirty_preview = pane.dirty_file_preview();
+    let line = edited_files_rail_line(dirty_preview, dirty_file_count, area.width, palette);
+    let paragraph = Paragraph::new(line);
+    frame.render_widget(paragraph, area);
+}
+
+fn edited_files_rail_line(
+    dirty_preview: &[String],
+    dirty_file_count: usize,
+    width: u16,
+    palette: &Palette,
+) -> Line<'static> {
+    let rail_width = usize::from(width);
+    let first_file_label = dirty_preview
+        .first()
+        .map(|path| file_name_tail(path.as_str()))
+        .unwrap_or_else(|| "edited files".to_owned());
+    let second_file_label = dirty_preview
+        .get(1)
+        .map(|path| file_name_tail(path.as_str()));
+    let shown_file_count = dirty_preview.len().min(2);
+    let remaining_count = dirty_file_count.saturating_sub(shown_file_count);
+    let mut spans = Vec::new();
+
+    spans.push(Span::styled(
+        " edits".to_owned(),
+        Style::default()
+            .fg(palette.info)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        " · ".to_owned(),
+        Style::default().fg(palette.separator),
+    ));
+    spans.push(Span::styled(
+        truncate_path_start(first_file_label.as_str(), rail_width.min(28)),
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
+    ));
+
+    if let Some(second_file_label) = second_file_label {
+        let second_label = truncate_path_start(second_file_label.as_str(), rail_width.min(22));
+        spans.push(Span::styled(
+            " · ".to_owned(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(second_label, Style::default().fg(palette.dim)));
+    }
+
+    if remaining_count > 0 {
+        spans.push(Span::styled(
+            " · ".to_owned(),
+            Style::default().fg(palette.separator),
+        ));
+        spans.push(Span::styled(
+            format!("+{remaining_count} more"),
+            Style::default().fg(palette.dim),
+        ));
+    }
+
+    Line::from(spans)
+}
+
+fn file_name_tail(path: &str) -> String {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    file_name.to_owned()
+}
+
 // ---------------------------------------------------------------------------
 // Clarify dialog overlay
 // ---------------------------------------------------------------------------
@@ -1677,6 +2089,7 @@ fn render_clarify_dialog(
 // ---------------------------------------------------------------------------
 
 fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
+    let compact_help = area.height < 28;
     let mut content_lines: Vec<Line<'_>> = Vec::new();
     content_lines.push(Line::styled(
         " Shortcuts".to_owned(),
@@ -1700,47 +2113,138 @@ fn render_help_overlay(frame: &mut Frame<'_>, area: Rect, palette: &Palette) {
         ]));
     }
 
-    content_lines.push(Line::styled(
-        " Commands".to_owned(),
-        Style::default()
-            .fg(palette.brand)
-            .add_modifier(Modifier::BOLD),
-    ));
-    for spec in commands::discoverable_command_specs() {
-        let command_label = match spec.argument_hint {
-            Some(argument_hint) => format!("{} {}", spec.name, argument_hint),
-            None => spec.name.to_owned(),
-        };
-        content_lines.push(Line::from(vec![
-            Span::styled(
-                format!("  {:<20}", command_label),
-                Style::default().fg(palette.text),
-            ),
-            Span::styled(
-                format!("[{}] ", spec.category),
-                Style::default().fg(palette.info),
-            ),
-            Span::styled(spec.help.to_owned(), Style::default().fg(palette.dim)),
-        ]));
+    if compact_help {
+        content_lines.push(Line::styled(
+            " Quick commands".to_owned(),
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for (command, detail) in [
+            ("/clear", "Clear transcript and draft"),
+            ("/exit", "Leave the TUI cleanly"),
+            ("/theme", "Preview the session palette"),
+        ] {
+            content_lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<20}", command),
+                    Style::default().fg(palette.text),
+                ),
+                Span::styled(detail.to_owned(), Style::default().fg(palette.dim)),
+            ]));
+        }
     }
 
     content_lines.push(Line::styled(
-        " Transcript".to_owned(),
+        " Operations".to_owned(),
         Style::default()
             .fg(palette.brand)
             .add_modifier(Modifier::BOLD),
     ));
-    for (key, desc) in [
-        ("Mouse wheel / drag", "Scroll or update line selection"),
-        ("Enter on tool", "Open selected tool details"),
+    for (command, detail) in [
+        (
+            "/subagents",
+            if compact_help {
+                "Inspect active child threads"
+            } else {
+                "Inspect child threads and jump into active delegate work"
+            },
+        ),
+        (
+            "/tasks running",
+            if compact_help {
+                "Review running and overdue work"
+            } else {
+                "Review background task progress and overdue work"
+            },
+        ),
+        (
+            "/approvals attention",
+            if compact_help {
+                "Resolve urgent approvals"
+            } else {
+                "Resolve urgent approvals before they block the lane"
+            },
+        ),
+        (
+            "/tools open",
+            if compact_help {
+                "Open the latest tool details"
+            } else {
+                "Open the latest tool details with structured output"
+            },
+        ),
+        (
+            "/commands",
+            if compact_help {
+                "Browse the command catalog"
+            } else {
+                "Browse the full command catalog and categories"
+            },
+        ),
     ] {
         content_lines.push(Line::from(vec![
-            Span::styled(format!("  {key:<16}"), Style::default().fg(palette.text)),
-            Span::styled(format!(" {desc}"), Style::default().fg(palette.dim)),
+            Span::styled(
+                format!("  {:<20}", command),
+                Style::default().fg(palette.text),
+            ),
+            Span::styled(detail.to_owned(), Style::default().fg(palette.dim)),
         ]));
     }
+    content_lines.push(Line::from(vec![
+        Span::styled("  live edits".to_owned(), Style::default().fg(palette.text)),
+        Span::styled(
+            " Watch changed files update automatically while you work".to_owned(),
+            Style::default().fg(palette.dim),
+        ),
+    ]));
+    if !compact_help {
+        content_lines.push(Line::default());
 
-    let popup_width = 60u16.min(area.width.saturating_sub(4));
+        content_lines.push(Line::styled(
+            " Commands".to_owned(),
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for spec in commands::discoverable_command_specs() {
+            let command_label = match spec.argument_hint {
+                Some(argument_hint) => format!("{} {}", spec.name, argument_hint),
+                None => spec.name.to_owned(),
+            };
+            content_lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<20}", command_label),
+                    Style::default().fg(palette.text),
+                ),
+                Span::styled(
+                    format!("[{}] ", spec.category),
+                    Style::default().fg(palette.info),
+                ),
+                Span::styled(spec.help.to_owned(), Style::default().fg(palette.dim)),
+            ]));
+        }
+
+        content_lines.push(Line::styled(
+            " Transcript".to_owned(),
+            Style::default()
+                .fg(palette.brand)
+                .add_modifier(Modifier::BOLD),
+        ));
+        for (key, desc) in [
+            ("Mouse wheel / drag", "Scroll or update line selection"),
+            ("Enter on tool", "Open selected tool details"),
+        ] {
+            content_lines.push(Line::from(vec![
+                Span::styled(format!("  {key:<16}"), Style::default().fg(palette.text)),
+                Span::styled(format!(" {desc}"), Style::default().fg(palette.dim)),
+            ]));
+        }
+    }
+
+    let max_width = area.width.saturating_sub(4);
+    let preferred_width = area.width.saturating_mul(4) / 5;
+    let popup_width = preferred_width.max(76).min(max_width);
     let popup_height = (content_lines.len() as u16 + 2).min(area.height.saturating_sub(2));
 
     let x = area.x + (area.width.saturating_sub(popup_width)) / 2;
@@ -2278,6 +2782,7 @@ mod tests {
     use crate::chat::tui::dialog::ClarifyDialog;
     use crate::chat::tui::message::{Message, ToolStatus};
     use crate::chat::tui::state::BusyInputMode;
+    use crate::chat::tui::terminal::PaletteHint;
     use ratatui::{Terminal, backend::TestBackend};
     use std::time::Instant;
 
@@ -2308,6 +2813,8 @@ mod tests {
         output_tokens: u32,
         context_length: u32,
         session_id: String,
+        worktree_dirty: bool,
+        dirty_files: Vec<String>,
     }
 
     impl TestPane {
@@ -2328,6 +2835,8 @@ mod tests {
                 output_tokens: 50,
                 context_length: 10000,
                 session_id: "test-sess".into(),
+                worktree_dirty: false,
+                dirty_files: Vec::new(),
             }
         }
     }
@@ -2365,6 +2874,15 @@ mod tests {
         }
         fn status_message(&self) -> Option<(&str, &Instant)> {
             self.status_message.as_ref().map(|(s, i)| (s.as_str(), i))
+        }
+        fn worktree_dirty(&self) -> bool {
+            self.worktree_dirty
+        }
+        fn dirty_file_count(&self) -> usize {
+            self.dirty_files.len()
+        }
+        fn dirty_file_preview(&self) -> &[String] {
+            self.dirty_files.as_slice()
         }
     }
 
@@ -2408,6 +2926,7 @@ mod tests {
         clarify_dialog: Option<ClarifyDialog>,
         stats_overlay: Option<StatsOverlayView<'static>>,
         diff_overlay: Option<DiffOverlayView<'static>>,
+        theme_picker: Option<state::ThemePickerState>,
         session_picker: Option<state::SessionPickerState>,
         slash_palette_entries_override: Option<Vec<SlashPaletteEntry>>,
         tool_inspector: Option<TestToolInspector>,
@@ -2423,6 +2942,7 @@ mod tests {
                 clarify_dialog: None,
                 stats_overlay: None,
                 diff_overlay: None,
+                theme_picker: None,
                 session_picker: None,
                 slash_palette_entries_override: None,
                 tool_inspector: None,
@@ -2471,6 +2991,15 @@ mod tests {
             Some(SessionPickerView {
                 picker,
                 current_session_id: self.pane.session_id.as_str(),
+            })
+        }
+        fn theme_picker(&self) -> Option<ThemePickerView<'_>> {
+            let picker = self.theme_picker.as_ref()?;
+
+            Some(ThemePickerView {
+                picker,
+                base_palette_hint: PaletteHint::Dark,
+                palette_hint_override: picker.selected_option().palette_hint_override(),
             })
         }
         fn slash_command_selection(&self) -> usize {
@@ -2622,6 +3151,107 @@ mod tests {
             text.contains("Ctrl+R"),
             "help overlay should advertise transcript review shortcut"
         );
+        assert!(
+            text.contains("/subagents"),
+            "help overlay should surface subagent operations"
+        );
+        assert!(
+            text.contains("live edits"),
+            "help overlay should surface automatic edited-file tracking"
+        );
+    }
+
+    #[test]
+    fn draw_with_theme_picker_overlay() {
+        let backend = TestBackend::new(90, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::ThemePicker);
+        let shell = TestShell {
+            focus,
+            theme_picker: Some(state::ThemePickerState::new(Some(PaletteHint::Light))),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("Theme"), "theme picker should be visible");
+        assert!(text.contains("Auto"), "theme picker should list Auto");
+        assert!(text.contains("Light"), "theme picker should list Light");
+        assert!(
+            text.contains("Preview"),
+            "theme picker should explain preview"
+        );
+    }
+
+    #[test]
+    fn draw_compact_help_overlay_surfaces_exit_and_clear_commands() {
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::Help);
+        let shell = TestShell {
+            focus,
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("/clear"), "compact help should show /clear");
+        assert!(text.contains("/exit"), "compact help should show /exit");
+    }
+
+    #[test]
+    fn draw_surfaces_live_edited_files_in_context_rail() {
+        let backend = TestBackend::new(96, 24);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut shell = TestShell::idle();
+        shell.pane.worktree_dirty = true;
+        shell.pane.dirty_files = vec![
+            "crates/app/src/chat/tui/render.rs".to_owned(),
+            "crates/app/src/chat/tui/shell.rs".to_owned(),
+            "crates/app/src/chat/tui/state.rs".to_owned(),
+        ];
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(
+            text.contains("edits"),
+            "context rail should show live edits"
+        );
+        assert!(
+            text.contains("render.rs"),
+            "context rail should show first file"
+        );
+        assert!(
+            text.contains("shell.rs"),
+            "context rail should show second file"
+        );
+        assert!(
+            text.contains("+1 more"),
+            "context rail should show remaining count"
+        );
     }
 
     #[test]
@@ -2666,13 +3296,22 @@ mod tests {
         let mut terminal = Terminal::new(backend).expect("terminal");
         let mut focus = FocusStack::new();
         focus.push(FocusLayer::DiffOverlay);
+        let files = Box::leak(Box::new([state::DiffOverlayFileEntry {
+            path: "crates/app/src/chat/tui/render.rs".to_owned(),
+            index_status: None,
+            worktree_status: Some('M'),
+            added_lines: Some(1),
+            removed_lines: Some(1),
+            untracked: false,
+        }]));
         let shell = TestShell {
             focus,
             diff_overlay: Some(DiffOverlayView {
                 mode: "full",
                 cwd_display: "issue-689-tui-polish-clean",
-                status_output: " M crates/app/src/chat/tui/render.rs",
-                diff_output: "@@ -1,2 +1,2 @@\n-old line\n+new line",
+                files,
+                selected_file_index: 0,
+                detail_output: "@@ -1,2 +1,2 @@\n-old line\n+new line",
                 scroll_offset: 0,
             }),
             ..TestShell::idle()
@@ -2689,13 +3328,72 @@ mod tests {
         let text = buffer_text(&terminal);
         assert!(text.contains("Diff"), "diff overlay should be visible");
         assert!(
-            text.contains("Workspace:"),
+            text.contains("Workspace"),
             "diff overlay should show workspace"
+        );
+        assert!(
+            text.contains("Files 1/1"),
+            "diff overlay should show file count"
         );
         assert!(
             text.contains("new line"),
             "diff overlay should render diff content"
         );
+    }
+
+    #[test]
+    fn truncate_path_start_keeps_tail_when_path_overflows() {
+        let path = "crates/app/src/chat/tui/really/long/component/render.rs";
+        let truncated = truncate_path_start(path, 20);
+
+        assert!(truncated.starts_with('…'));
+        assert!(truncated.ends_with("render.rs"));
+    }
+
+    #[test]
+    fn draw_with_diff_overlay_shows_more_markers_for_long_file_lists() {
+        let backend = TestBackend::new(110, 16);
+        let mut terminal = Terminal::new(backend).expect("terminal");
+        let mut focus = FocusStack::new();
+        focus.push(FocusLayer::DiffOverlay);
+        let files = Box::leak(
+            (0..12)
+                .map(|index| state::DiffOverlayFileEntry {
+                    path: format!("crates/app/src/chat/tui/very/long/path/file-{index}.rs"),
+                    index_status: None,
+                    worktree_status: Some('M'),
+                    added_lines: Some(index + 1),
+                    removed_lines: Some(0),
+                    untracked: false,
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let shell = TestShell {
+            focus,
+            diff_overlay: Some(DiffOverlayView {
+                mode: "status",
+                cwd_display: "issue-689-tui-codex-mature-20260406",
+                files,
+                selected_file_index: 5,
+                detail_output: "modified file summary",
+                scroll_offset: 0,
+            }),
+            ..TestShell::idle()
+        };
+        let palette = Palette::dark();
+        let textarea = tui_textarea::TextArea::default();
+
+        terminal
+            .draw(|f| {
+                draw(f, &shell, &textarea, &palette);
+            })
+            .expect("draw");
+
+        let text = buffer_text(&terminal);
+        assert!(text.contains("↑"), "text={text:?}");
+        assert!(text.contains("Files 6/12"), "text={text:?}");
+        assert!(text.contains("file-5.rs"), "text={text:?}");
     }
 
     #[test]
