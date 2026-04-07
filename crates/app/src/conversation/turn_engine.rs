@@ -1124,7 +1124,7 @@ impl DefaultAppToolDispatcher {
                 let stripped = crate::tools::shell_policy_ext::strip_repairable_tool_input_prefix(
                     reason.as_str(),
                 );
-                return format!("{REPAIRABLE_TOOL_PREFLIGHT_PREFIX}{stripped}");
+                return RepairableToolPreflight::encode(stripped);
             }
             format!("tool_preflight_denied: {reason}")
         })?;
@@ -1728,10 +1728,22 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
-const REPAIRABLE_TOOL_PREFLIGHT_PREFIX: &str = "tool_preflight_repairable: ";
+struct RepairableToolPreflight;
 
-fn render_repairable_tool_preflight_denial(reason: &str) -> String {
-    format!("tool_preflight_denied: tool input needs repair: {reason}")
+impl RepairableToolPreflight {
+    const PREFIX: &str = "tool_preflight_repairable: ";
+
+    fn encode(reason: &str) -> String {
+        format!("{}{reason}", Self::PREFIX)
+    }
+
+    fn parse(encoded: &str) -> Option<&str> {
+        encoded.strip_prefix(Self::PREFIX)
+    }
+
+    fn render(reason: &str) -> String {
+        format!("tool_preflight_denied: tool input needs repair: {reason}")
+    }
 }
 
 fn render_app_tool_denied_reason(reason: &str) -> String {
@@ -3501,11 +3513,10 @@ impl TurnEngine {
                     decision: denial_decision,
                 });
             }
-            Err(reason) if reason.starts_with(REPAIRABLE_TOOL_PREFLIGHT_PREFIX) => {
-                let stripped = reason
-                    .strip_prefix(REPAIRABLE_TOOL_PREFLIGHT_PREFIX)
-                    .unwrap_or(reason.as_str());
-                let human_reason = render_repairable_tool_preflight_denial(stripped);
+            Err(reason) if RepairableToolPreflight::parse(reason.as_str()).is_some() => {
+                let stripped =
+                    RepairableToolPreflight::parse(reason.as_str()).unwrap_or(reason.as_str());
+                let human_reason = RepairableToolPreflight::render(stripped);
                 let turn_result =
                     TurnResult::retryable_tool_error("tool_preflight_denied", human_reason.clone());
                 let denial_decision = ToolDecisionTelemetry::deny(

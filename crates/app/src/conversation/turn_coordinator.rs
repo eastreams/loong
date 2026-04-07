@@ -7044,8 +7044,7 @@ mod tests {
         let (tool_name, args_json) = crate::tools::synthesize_test_provider_tool_call_with_scope(
             "shell.exec",
             json!({
-                "command": "/bin/echo",
-                "args": ["hello"],
+                "command": "\"ls -la\"",
             }),
             Some("root-session"),
             Some("turn-shell-plan-node"),
