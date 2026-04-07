@@ -56,6 +56,9 @@ fn redacted_command_name(command: &Commands) -> &'static str {
 }
 
 fn check_legacy_home_migration() {
+    if std::env::var_os("LOONGCLAW_HOME").is_some() {
+        return;
+    }
     let Some(user_home) = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(std::path::PathBuf::from)
