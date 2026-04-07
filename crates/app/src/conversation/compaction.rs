@@ -438,6 +438,15 @@ fn is_summary_metadata_line(line: &str) -> bool {
     if line == scope_note {
         return true;
     }
+    if line.starts_with(COMPACTED_SUMMARY_PREFIX) {
+        return true;
+    }
+    if line == COMPACTED_SUMMARY_MARKER {
+        return true;
+    }
+    if line == COMPACTED_SUMMARY_DISCLAIMER {
+        return true;
+    }
     if line == USER_CONTEXT_HEADING {
         return true;
     }
