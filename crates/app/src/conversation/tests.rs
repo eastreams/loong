@@ -23869,7 +23869,7 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
     let cleanup_status = std::process::Command::new(git_executable)
         .args([
             "-C",
-            workspace_root.as_str(),
+            repo_root.to_str().expect("repo root path should be utf-8"),
             "worktree",
             "remove",
             "--force",

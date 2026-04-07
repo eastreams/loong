@@ -18,6 +18,21 @@ pub(super) struct DelegateWorkspaceCleanupResult {
     pub dirty: bool,
 }
 
+pub(super) fn normalize_delegate_workspace_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let raw_path = path.as_os_str().to_string_lossy();
+        if let Some(trimmed_path) = raw_path.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{trimmed_path}"));
+        }
+        if let Some(trimmed_path) = raw_path.strip_prefix(r"\\?\") {
+            return PathBuf::from(trimmed_path);
+        }
+    }
+
+    path.to_path_buf()
+}
+
 pub(super) fn prepare_delegate_workspace_root(
     config: &LoongClawConfig,
     child_session_id: &str,
@@ -176,13 +191,15 @@ fn add_detached_worktree(repo_root: &Path, worktree_root: &Path) -> Result<(), S
 }
 
 fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
+    let repo_root = delegate_worktree_repo_root(worktree_root)?;
+    let normalized_worktree_root = normalize_delegate_workspace_path(worktree_root);
     let args = [
         OsStr::new("-C"),
-        worktree_root.as_os_str(),
+        repo_root.as_os_str(),
         OsStr::new("worktree"),
         OsStr::new("remove"),
         OsStr::new("--force"),
-        worktree_root.as_os_str(),
+        normalized_worktree_root.as_os_str(),
     ];
     let output = run_git_command(&args)?;
     if output.status.success() {
@@ -194,6 +211,26 @@ fn remove_delegate_worktree(worktree_root: &Path) -> Result<(), String> {
     Err(format!(
         "remove delegate worktree `{display_path}` failed: {stderr}"
     ))
+}
+
+fn delegate_worktree_repo_root(worktree_root: &Path) -> Result<&Path, String> {
+    let worktrees_root = worktree_root.parent().ok_or_else(|| {
+        let display_path = worktree_root.display();
+        format!("delegate worktree `{display_path}` is missing a parent directory")
+    })?;
+    let marker = worktrees_root.file_name();
+    if marker != Some(OsStr::new(".worktrees")) {
+        let display_path = worktree_root.display();
+        return Err(format!(
+            "delegate worktree `{display_path}` is not rooted under a `.worktrees` directory"
+        ));
+    }
+
+    let repo_root = worktrees_root.parent().ok_or_else(|| {
+        let display_path = worktree_root.display();
+        format!("delegate worktree `{display_path}` is missing its repository root")
+    })?;
+    Ok(repo_root)
 }
 
 fn delegate_worktree_is_dirty(workspace_root: &Path) -> Result<bool, String> {
