@@ -245,6 +245,20 @@ fn memory_context_benchmark_writes_report_with_all_scenarios() {
     assert!(
         report
             .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_rebuild_budget_change"))
+            .and_then(|value| value.get("estimated_session_local_recall_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
+            .and_then(|value| value.get("summary_metadata_realign"))
+            .and_then(|value| value.get("estimated_non_recall_context_chars"))
+            .is_some()
+    );
+    assert!(
+        report
+            .get("prompt_efficiency_signals")
             .and_then(|value| value.get("summary_steady_state"))
             .and_then(|value| value.get("estimated_session_local_recall_chars"))
             .is_some()

@@ -1225,7 +1225,6 @@ pub fn run_memory_context_benchmark_cli_with_suite_runner(
         })?;
 
         report_augmenter(&mut report_value, &suite_runs, &report_augment_context)?;
-
         write_json_file(output_path, &report_value)?;
     } else {
         write_json_file(output_path, &report)?;
@@ -5556,7 +5555,7 @@ mod tests {
         let window_only_signal = &report.prompt_efficiency_signals.window_only;
         let steady_state_signal = &report.prompt_efficiency_signals.summary_steady_state;
         let rebuild_signal = &report.prompt_efficiency_signals.summary_rebuild;
-        let rebuild_budget_change_signal = &report
+        let budget_change_signal = &report
             .prompt_efficiency_signals
             .summary_rebuild_budget_change;
         let metadata_realign_signal = &report.prompt_efficiency_signals.summary_metadata_realign;
@@ -5569,12 +5568,16 @@ mod tests {
         assert_eq!(steady_state_signal.estimated_non_recall_context_chars, 320);
         assert_eq!(rebuild_signal.estimated_session_local_recall_chars, 120);
         assert_eq!(
-            rebuild_budget_change_signal.estimated_session_local_recall_chars,
+            budget_change_signal.estimated_session_local_recall_chars,
             120
         );
         assert_eq!(
             metadata_realign_signal.estimated_session_local_recall_chars,
             120
+        );
+        assert_eq!(
+            metadata_realign_signal.estimated_non_recall_context_chars,
+            400
         );
 
         let rebuild_share_ratio = rebuild_signal
