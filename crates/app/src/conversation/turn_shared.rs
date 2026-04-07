@@ -1699,15 +1699,35 @@ fn render_tool_failure_repair_guidance(
         return None;
     }
 
-    let bare_command = command
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(command)
-        .to_ascii_lowercase();
+    let bare_command = suggested_shell_command_name(command);
     let guidance = format!(
         "Repair guidance for shell.exec:\nUse a bare lowercase executable name in `payload.command`.\nThe failed request used `{command}`; retry with `{bare_command}`."
     );
     Some(guidance)
+}
+
+fn suggested_shell_command_name(command: &str) -> String {
+    let candidate = first_shell_command_segment(command);
+    candidate
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(candidate)
+        .to_ascii_lowercase()
+}
+
+fn first_shell_command_segment(command: &str) -> &str {
+    let trimmed = command.trim();
+    if let Some(rest) = trimmed.strip_prefix('"')
+        && let Some((quoted, _)) = rest.split_once('"')
+    {
+        return quoted;
+    }
+    if let Some(rest) = trimmed.strip_prefix('\'')
+        && let Some((quoted, _)) = rest.split_once('\'')
+    {
+        return quoted;
+    }
+    trimmed.split_whitespace().next().unwrap_or(trimmed)
 }
 
 pub fn build_tool_loop_guard_tail<F>(
@@ -2653,6 +2673,31 @@ mod tests {
         assert!(user_prompt.contains(TOOL_LOOP_GUARD_PROMPT));
         assert!(user_prompt.contains("Loop guard reason:\nstop"));
         assert!(user_prompt.contains("Original request:\nsummarize note.md"));
+    }
+
+    #[test]
+    fn tool_failure_followup_tail_strips_shell_arguments_from_repair_guidance() {
+        let payload = ToolDrivenFollowupPayload::ToolFailure {
+            reason: "tool_preflight_denied: tool input needs repair: shell.exec payload.command must be a bare executable name; move arguments into payload.args.".to_owned(),
+        };
+        let tool_request_summary = r#"{"tool":"shell.exec","request":{"command":"ls -la"}}"#;
+        let tail = build_tool_driven_followup_tail(
+            "preface",
+            &payload,
+            Some(tool_request_summary),
+            "list the current directory",
+            None,
+            |_, text| text.to_owned(),
+        );
+
+        let user_prompt = tail
+            .last()
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("user followup prompt should exist");
+
+        assert!(user_prompt.contains("Repair guidance for shell.exec"));
+        assert!(user_prompt.contains("The failed request used `ls -la`; retry with `ls`"));
     }
 
     #[test]
