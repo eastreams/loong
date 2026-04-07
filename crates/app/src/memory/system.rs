@@ -17,6 +17,9 @@ pub const RECALL_FIRST_MEMORY_SYSTEM_ID: &str = "recall_first";
 #[cfg(feature = "memory-sqlite")]
 const MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES: usize = 16;
 
+#[cfg(feature = "memory-sqlite")]
+const MAX_CROSS_SESSION_RECALL_SEARCH_CANDIDATES: usize = 16;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum MemorySystemCapability {
     CanonicalStore,
@@ -1003,5 +1006,64 @@ mod tests {
             MemoryProvenanceSourceKind::CanonicalMemoryRecord
         );
         assert_eq!(entries[0].provenance[0].scope, Some(MemoryScope::Session));
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn builtin_retrieve_stage_keeps_allowed_hits_when_top_match_is_filtered_out() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let workspace_root = temp_dir.path();
+        let db_path = workspace_root.join("memory.sqlite3");
+        let config = MemoryRuntimeConfig {
+            sqlite_path: Some(db_path.clone()),
+            ..MemoryRuntimeConfig::default()
+        };
+        let allowed_payload = json!({
+            "type": crate::memory::CANONICAL_MEMORY_RECORD_TYPE,
+            "_loongclaw_internal": true,
+            "scope": "workspace",
+            "kind": "imported_profile",
+            "content": "release checklist",
+            "metadata": {
+                "source": "workspace-import"
+            },
+        })
+        .to_string();
+        let recent_window = Vec::new();
+        let request = MemoryRetrievalRequest {
+            session_id: "active-session".to_owned(),
+            memory_system_id: DEFAULT_MEMORY_SYSTEM_ID.to_owned(),
+            query: Some("release checklist".to_owned()),
+            recall_mode: MemoryRecallMode::PromptAssembly,
+            scopes: vec![MemoryScope::Workspace],
+            budget_items: 1,
+            allowed_kinds: vec![DerivedMemoryKind::Profile],
+        };
+
+        crate::memory::append_turn_direct(
+            "workspace-session",
+            "assistant",
+            allowed_payload.as_str(),
+            &config,
+        )
+        .expect("append allowed canonical payload");
+        crate::memory::append_turn_direct(
+            "session-session",
+            "assistant",
+            "release checklist",
+            &config,
+        )
+        .expect("append disallowed session hit");
+
+        let entries = BuiltinMemorySystem
+            .run_retrieve_stage(&request, None, &config, recent_window.as_slice())
+            .expect("retrieve stage should succeed")
+            .expect("retrieve stage should return entries");
+
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].content.contains("workspace-session"));
+        assert!(!entries[0].content.contains("session-session"));
+        assert_eq!(entries[0].provenance.len(), 1);
+        assert_eq!(entries[0].provenance[0].scope, Some(MemoryScope::Workspace));
     }
 }
