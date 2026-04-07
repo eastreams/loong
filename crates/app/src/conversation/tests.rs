@@ -23951,17 +23951,16 @@ async fn handle_turn_with_runtime_delegate_async_worktree_isolation_retains_dirt
 
     let git_executable = delegate_test_git_executable();
     let cleanup_root = dunce::canonicalize(&worktree_root).unwrap_or(worktree_root);
+    let cleanup_root_string = cleanup_root.display().to_string();
+    let repo_root_string = repo_root.display().to_string();
     let cleanup_status = std::process::Command::new(git_executable)
         .args([
             "-C",
-            repo_root.to_str().expect("repo root path should be utf-8"),
+            repo_root_string.as_str(),
             "worktree",
             "remove",
             "--force",
-            cleanup_root
-                .as_os_str()
-                .to_str()
-                .expect("cleanup root utf-8"),
+            cleanup_root_string.as_str(),
         ])
         .status()
         .expect("cleanup retained worktree status");
