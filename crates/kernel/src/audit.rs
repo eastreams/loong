@@ -451,11 +451,8 @@ pub fn repair_jsonl_audit_journal(path: &Path) -> Result<AuditRepairReport, Audi
 
             // Check if the entry is internally consistent: does entry_hash
             // match the event data when computed with the entry's own prev_hash?
-            let self_consistent_hash = compute_audit_event_entry_hash(
-                &event,
-                integrity.prev_hash.as_deref(),
-                path,
-            )?;
+            let self_consistent_hash =
+                compute_audit_event_entry_hash(&event, integrity.prev_hash.as_deref(), path)?;
             if integrity.entry_hash != self_consistent_hash {
                 return Ok(AuditRepairReport {
                     total_events,
