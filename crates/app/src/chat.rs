@@ -4097,6 +4097,7 @@ mod tests {
         cleanup_chat_test_memory(&sqlite_path);
 
         let mut config = LoongClawConfig::default();
+        config.audit.mode = crate::config::AuditMode::InMemory;
         config.memory.sqlite_path = sqlite_path.display().to_string();
         let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
         crate::memory::ensure_memory_db_ready(
@@ -4106,6 +4107,16 @@ mod tests {
         .expect("initialize sqlite memory");
 
         (config, memory_config, sqlite_path)
+    }
+
+    #[cfg(feature = "memory-sqlite")]
+    #[test]
+    fn init_chat_test_memory_uses_in_memory_audit_mode() {
+        let (config, _memory_config, sqlite_path) = init_chat_test_memory("audit-mode");
+
+        assert_eq!(config.audit.mode, crate::config::AuditMode::InMemory);
+
+        cleanup_chat_test_memory(&sqlite_path);
     }
 
     #[cfg(feature = "memory-sqlite")]
