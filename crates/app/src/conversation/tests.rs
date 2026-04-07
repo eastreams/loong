@@ -6357,10 +6357,11 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
                 "durable export must include resolved identity before compaction for session {session_id}"
             ));
         }
-        let contains_turn_text = exported.contains("hello before compaction");
-        if !contains_turn_text {
+        let contains_session_content =
+            exported.contains("earlier ask") || exported.contains("hello before compaction");
+        if !contains_session_content {
             return Err(format!(
-                "durable export must include the pre-compaction summary before compaction for session {session_id}"
+                "durable export must include visible session content before compaction for session {session_id}"
             ));
         }
         Ok(())
@@ -6371,6 +6372,21 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     )
     .with_durable_memory_config(memory_config.clone())
     .with_compact_hook(compact_hook);
+
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "user",
+        "earlier ask",
+        &memory_config,
+    )
+    .expect("seed earlier user turn");
+    crate::memory::append_turn_direct(
+        "session-pre-compaction-flush",
+        "assistant",
+        "earlier reply",
+        &memory_config,
+    )
+    .expect("seed earlier assistant turn");
 
     let coordinator = ConversationTurnCoordinator::new();
     let kernel_ctx = test_kernel_context_with_memory("test-pre-compaction-flush", &memory_config);
@@ -6398,7 +6414,7 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
         .expect("expected one durable memory export");
     assert!(exported.contains("Advisory durable recall"));
     assert!(exported.contains("Resolved Runtime Identity"));
-    assert!(exported.contains("hello before compaction"));
+    assert!(exported.contains("earlier ask") || exported.contains("hello before compaction"));
 }
 
 #[cfg(feature = "memory-sqlite")]

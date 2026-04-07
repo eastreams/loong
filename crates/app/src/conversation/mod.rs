@@ -46,7 +46,7 @@ pub use analytics::{
     summarize_discovery_first_events, summarize_fast_lane_tool_batch_events,
     summarize_prompt_frame_events, summarize_safe_lane_events, summarize_turn_checkpoint_events,
 };
-pub(crate) use compaction::is_compacted_summary_content;
+pub(crate) use compaction::{COMPACTED_SUMMARY_PREFIX, is_compacted_summary_content};
 pub use context_engine::{
     AssembledConversationContext, CONTEXT_ENGINE_API_VERSION, ContextArtifactDescriptor,
     ContextArtifactKind, ContextEngineBootstrapResult, ContextEngineCapability,
