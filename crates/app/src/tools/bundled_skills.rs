@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use include_dir::{Dir, include_dir};
 use serde::Serialize;
 
@@ -41,6 +43,7 @@ pub struct BundledPreinstallTarget {
 }
 
 const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
+    // Standalone bundled skills remain at the top level under `skills/`.
     BundledExternalSkill {
         skill_id: "agent-browser",
         source_path: "bundled://agent-browser",
@@ -57,11 +60,6 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
         relative_dir: "design-md",
     },
     BundledExternalSkill {
-        skill_id: "docx",
-        source_path: "bundled://docx",
-        relative_dir: "docx",
-    },
-    BundledExternalSkill {
         skill_id: "find-skills",
         source_path: "bundled://find-skills",
         relative_dir: "find-skills",
@@ -71,110 +69,117 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
         source_path: "bundled://github-issues",
         relative_dir: "github-issues",
     },
+    // Pack members are grouped under `skills/<pack-id>/` to mirror the
+    // operator-facing pack registry without an extra directory layer.
+    BundledExternalSkill {
+        skill_id: "docx",
+        source_path: "bundled://docx",
+        relative_dir: "anthropic-office/docx",
+    },
     BundledExternalSkill {
         skill_id: "lark-approval",
         source_path: "bundled://lark-approval",
-        relative_dir: "lark-approval",
+        relative_dir: "larksuite-cli/lark-approval",
     },
     BundledExternalSkill {
         skill_id: "lark-base",
         source_path: "bundled://lark-base",
-        relative_dir: "lark-base",
+        relative_dir: "larksuite-cli/lark-base",
     },
     BundledExternalSkill {
         skill_id: "lark-calendar",
         source_path: "bundled://lark-calendar",
-        relative_dir: "lark-calendar",
+        relative_dir: "larksuite-cli/lark-calendar",
     },
     BundledExternalSkill {
         skill_id: "lark-contact",
         source_path: "bundled://lark-contact",
-        relative_dir: "lark-contact",
+        relative_dir: "larksuite-cli/lark-contact",
     },
     BundledExternalSkill {
         skill_id: "lark-doc",
         source_path: "bundled://lark-doc",
-        relative_dir: "lark-doc",
+        relative_dir: "larksuite-cli/lark-doc",
     },
     BundledExternalSkill {
         skill_id: "lark-drive",
         source_path: "bundled://lark-drive",
-        relative_dir: "lark-drive",
+        relative_dir: "larksuite-cli/lark-drive",
     },
     BundledExternalSkill {
         skill_id: "lark-event",
         source_path: "bundled://lark-event",
-        relative_dir: "lark-event",
+        relative_dir: "larksuite-cli/lark-event",
     },
     BundledExternalSkill {
         skill_id: "lark-im",
         source_path: "bundled://lark-im",
-        relative_dir: "lark-im",
+        relative_dir: "larksuite-cli/lark-im",
     },
     BundledExternalSkill {
         skill_id: "lark-mail",
         source_path: "bundled://lark-mail",
-        relative_dir: "lark-mail",
+        relative_dir: "larksuite-cli/lark-mail",
     },
     BundledExternalSkill {
         skill_id: "lark-minutes",
         source_path: "bundled://lark-minutes",
-        relative_dir: "lark-minutes",
+        relative_dir: "larksuite-cli/lark-minutes",
     },
     BundledExternalSkill {
         skill_id: "lark-openapi-explorer",
         source_path: "bundled://lark-openapi-explorer",
-        relative_dir: "lark-openapi-explorer",
+        relative_dir: "larksuite-cli/lark-openapi-explorer",
     },
     BundledExternalSkill {
         skill_id: "lark-shared",
         source_path: "bundled://lark-shared",
-        relative_dir: "lark-shared",
+        relative_dir: "larksuite-cli/lark-shared",
     },
     BundledExternalSkill {
         skill_id: "lark-sheets",
         source_path: "bundled://lark-sheets",
-        relative_dir: "lark-sheets",
+        relative_dir: "larksuite-cli/lark-sheets",
     },
     BundledExternalSkill {
         skill_id: "lark-skill-maker",
         source_path: "bundled://lark-skill-maker",
-        relative_dir: "lark-skill-maker",
+        relative_dir: "larksuite-cli/lark-skill-maker",
     },
     BundledExternalSkill {
         skill_id: "lark-task",
         source_path: "bundled://lark-task",
-        relative_dir: "lark-task",
+        relative_dir: "larksuite-cli/lark-task",
     },
     BundledExternalSkill {
         skill_id: "lark-vc",
         source_path: "bundled://lark-vc",
-        relative_dir: "lark-vc",
+        relative_dir: "larksuite-cli/lark-vc",
     },
     BundledExternalSkill {
         skill_id: "lark-whiteboard",
         source_path: "bundled://lark-whiteboard",
-        relative_dir: "lark-whiteboard",
+        relative_dir: "larksuite-cli/lark-whiteboard",
     },
     BundledExternalSkill {
         skill_id: "lark-wiki",
         source_path: "bundled://lark-wiki",
-        relative_dir: "lark-wiki",
+        relative_dir: "larksuite-cli/lark-wiki",
     },
     BundledExternalSkill {
         skill_id: "lark-workflow-meeting-summary",
         source_path: "bundled://lark-workflow-meeting-summary",
-        relative_dir: "lark-workflow-meeting-summary",
+        relative_dir: "larksuite-cli/lark-workflow-meeting-summary",
     },
     BundledExternalSkill {
         skill_id: "lark-workflow-standup-report",
         source_path: "bundled://lark-workflow-standup-report",
-        relative_dir: "lark-workflow-standup-report",
+        relative_dir: "larksuite-cli/lark-workflow-standup-report",
     },
     BundledExternalSkill {
         skill_id: "pdf",
         source_path: "bundled://pdf",
-        relative_dir: "pdf",
+        relative_dir: "anthropic-office/pdf",
     },
     BundledExternalSkill {
         skill_id: "plan",
@@ -184,7 +189,7 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "pptx",
         source_path: "bundled://pptx",
-        relative_dir: "pptx",
+        relative_dir: "anthropic-office/pptx",
     },
     BundledExternalSkill {
         skill_id: "skill-creator",
@@ -199,7 +204,7 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "xlsx",
         source_path: "bundled://xlsx",
-        relative_dir: "xlsx",
+        relative_dir: "anthropic-office/xlsx",
     },
     BundledExternalSkill {
         skill_id: "mcporter",
@@ -209,17 +214,17 @@ const BUNDLED_EXTERNAL_SKILLS: &[BundledExternalSkill] = &[
     BundledExternalSkill {
         skill_id: "minimax-docx",
         source_path: "bundled://minimax-docx",
-        relative_dir: "minimax-docx",
+        relative_dir: "minimax-office/minimax-docx",
     },
     BundledExternalSkill {
         skill_id: "minimax-pdf",
         source_path: "bundled://minimax-pdf",
-        relative_dir: "minimax-pdf",
+        relative_dir: "minimax-office/minimax-pdf",
     },
     BundledExternalSkill {
         skill_id: "minimax-xlsx",
         source_path: "bundled://minimax-xlsx",
-        relative_dir: "minimax-xlsx",
+        relative_dir: "minimax-office/minimax-xlsx",
     },
     BundledExternalSkill {
         skill_id: "native-mcp",
@@ -398,17 +403,39 @@ pub(crate) fn bundled_external_skill(skill_id: &str) -> Option<BundledExternalSk
         .find(|skill| skill.skill_id == skill_id.trim())
 }
 
+fn bundled_external_skill_expected_relative_dir(
+    skill: &BundledExternalSkill,
+) -> Result<Cow<'static, str>, String> {
+    let memberships = bundled_skill_pack_memberships(skill.skill_id);
+    match memberships.as_slice() {
+        [] => Ok(Cow::Borrowed(skill.skill_id)),
+        [pack] => Ok(Cow::Owned(format!("{}/{}", pack.pack_id, skill.skill_id))),
+        _ => Err(format!(
+            "bundled skill `{}` belongs to multiple packs, so its repository layout is ambiguous",
+            skill.skill_id
+        )),
+    }
+}
+
 pub(crate) fn bundled_external_skill_dir(
     skill: &BundledExternalSkill,
-) -> Option<&'static Dir<'static>> {
-    BUNDLED_SKILLS_DIR.get_dir(skill.relative_dir)
+) -> Result<&'static Dir<'static>, String> {
+    let expected_relative_dir = bundled_external_skill_expected_relative_dir(skill)?;
+    if skill.relative_dir != expected_relative_dir.as_ref() {
+        return Err(format!(
+            "bundled skill `{}` registry path `{}` does not match expected pack layout `{}`",
+            skill.skill_id, skill.relative_dir, expected_relative_dir
+        ));
+    }
+    BUNDLED_SKILLS_DIR
+        .get_dir(skill.relative_dir)
+        .ok_or_else(|| format!("missing bundled skill directory `{}`", skill.relative_dir))
 }
 
 pub(crate) fn bundled_external_skill_markdown(
     skill: &BundledExternalSkill,
 ) -> Result<&'static str, String> {
-    let dir = bundled_external_skill_dir(skill)
-        .ok_or_else(|| format!("missing bundled skill directory `{}`", skill.relative_dir))?;
+    let dir = bundled_external_skill_dir(skill)?;
     let file = dir
         .entries()
         .iter()
@@ -434,10 +461,47 @@ pub(crate) fn bundled_external_skill_markdown(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::{
-        bundled_external_skill, bundled_preinstall_targets, bundled_skill_pack,
-        bundled_skill_pack_memberships,
+        BUNDLED_SKILLS_DIR, bundled_external_skill, bundled_external_skill_dir,
+        bundled_external_skill_markdown, bundled_external_skills, bundled_preinstall_targets,
+        bundled_skill_pack, bundled_skill_pack_memberships,
     };
+
+    fn collect_embedded_skill_dirs(
+        dir: &include_dir::Dir<'static>,
+        relative_dir: &str,
+        discovered: &mut BTreeSet<String>,
+    ) {
+        let has_skill_markdown = dir.entries().iter().any(|entry| {
+            matches!(
+                entry,
+                include_dir::DirEntry::File(file)
+                    if file.path().file_name().is_some_and(|name| name == "SKILL.md")
+            )
+        });
+        if has_skill_markdown && !relative_dir.is_empty() {
+            discovered.insert(relative_dir.to_owned());
+        }
+
+        for entry in dir.entries() {
+            let include_dir::DirEntry::Dir(child) = entry else {
+                continue;
+            };
+            let child_name = child
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("embedded bundled directories should have utf-8 names");
+            let child_relative_dir = if relative_dir.is_empty() {
+                child_name.to_owned()
+            } else {
+                format!("{relative_dir}/{child_name}")
+            };
+            collect_embedded_skill_dirs(child, child_relative_dir.as_str(), discovered);
+        }
+    }
 
     #[test]
     fn curated_bundled_inventory_contains_requested_preinstalls() {
@@ -496,6 +560,53 @@ mod tests {
                 .iter()
                 .any(|target| target.install_id == "minimax-office"),
             "onboarding registry should include the minimax office pack"
+        );
+    }
+
+    #[test]
+    fn bundled_markdown_lookup_supports_nested_pack_directories() {
+        let docx = bundled_external_skill("docx").expect("docx should exist");
+        let markdown =
+            bundled_external_skill_markdown(&docx).expect("docx markdown should load from pack");
+        assert!(
+            !markdown.trim().is_empty(),
+            "docx bundled markdown should stay readable after pack reorganization"
+        );
+    }
+
+    #[test]
+    fn bundled_registry_paths_follow_pack_layout_contract() {
+        for skill in bundled_external_skills() {
+            let dir = bundled_external_skill_dir(skill).unwrap_or_else(|error| {
+                panic!("bundled registry drift for `{}`: {error}", skill.skill_id)
+            });
+            assert!(
+                dir.entries().iter().any(|entry| {
+                    matches!(
+                        entry,
+                        include_dir::DirEntry::File(file)
+                            if file.path().file_name().is_some_and(|name| name == "SKILL.md")
+                    )
+                }),
+                "bundled skill `{}` should keep a top-level SKILL.md in `{}`",
+                skill.skill_id,
+                skill.relative_dir
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_registry_covers_embedded_skill_tree() {
+        let registered_dirs = bundled_external_skills()
+            .iter()
+            .map(|skill| skill.relative_dir.to_owned())
+            .collect::<BTreeSet<_>>();
+        let mut embedded_dirs = BTreeSet::new();
+        collect_embedded_skill_dirs(&BUNDLED_SKILLS_DIR, "", &mut embedded_dirs);
+
+        assert_eq!(
+            registered_dirs, embedded_dirs,
+            "every embedded bundled skill directory should be registered exactly once"
         );
     }
 }

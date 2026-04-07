@@ -735,9 +735,11 @@ pub(super) fn execute_external_skills_install_tool_with_config(
                 })?;
             let bundled_markdown =
                 super::bundled_skills::bundled_external_skill_markdown(&bundled)?;
-            let bundled_dir = super::bundled_skills::bundled_external_skill_dir(&bundled)
-                .ok_or_else(|| {
-                    format!("missing bundled external skill directory for `{bundled_skill_id}`")
+            let bundled_dir =
+                super::bundled_skills::bundled_external_skill_dir(&bundled).map_err(|error| {
+                    format!(
+                        "failed to resolve bundled external skill `{bundled_skill_id}`: {error}"
+                    )
                 })?;
             let skill_id = normalize_skill_id(bundled.skill_id)?;
             let display_name = derive_skill_display_name(bundled_markdown, bundled.skill_id);
@@ -5150,6 +5152,41 @@ mod tests {
                     .join("feature-request.md")
                     .exists(),
                 "bundled install should copy all bundled templates"
+            );
+
+            fs::remove_dir_all(&root).ok();
+        });
+    }
+
+    #[test]
+    fn install_from_bundled_skill_id_copies_packaged_references_for_lark_pack_members() {
+        with_managed_runtime_test(|| {
+            let root = unique_temp_dir("loongclaw-ext-skill-install-bundled-lark-doc");
+            fs::create_dir_all(&root).expect("create fixture root");
+            let config = managed_runtime_config(&root);
+
+            let outcome = crate::tools::execute_tool_core_with_config(
+                ToolCoreRequest {
+                    tool_name: "external_skills.install".to_owned(),
+                    payload: json!({
+                        "bundled_skill_id": "lark-doc"
+                    }),
+                },
+                &config,
+            )
+            .expect("bundled install should succeed");
+
+            assert_eq!(outcome.status, "ok");
+            assert_eq!(outcome.payload["skill_id"], "lark-doc");
+
+            let installed_root = root.join("external-skills-installed").join("lark-doc");
+            assert!(installed_root.join("SKILL.md").exists());
+            assert!(
+                installed_root
+                    .join("references")
+                    .join("lark-doc-create.md")
+                    .exists(),
+                "lark-doc should keep bundled references after pack reorganization"
             );
 
             fs::remove_dir_all(&root).ok();

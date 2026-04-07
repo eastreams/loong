@@ -69,7 +69,7 @@ subtle = "2.6"
 flate2.workspace = true
 tar.workspace = true
 tokio.workspace = true
-lettre = { version = "0.11.20", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
+lettre = { version = "0.11.21", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 futures-util.workspace = true
 base64.workspace = true
 bech32.workspace = true
@@ -88,7 +88,7 @@ tempfile = "3"
 which.workspace = true
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-bash = "0.25"
 starlark = "0.13"
 # Kept unconditional because conversation/turn_shared.rs uses Regex to strip
