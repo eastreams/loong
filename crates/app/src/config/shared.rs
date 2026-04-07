@@ -17,7 +17,7 @@ pub const LEGACY_HOME_DIR_NAME: &str = ".loongclaw";
 pub const PRODUCT_DISPLAY_NAME: &str = "LoongClaw";
 static ACTIVE_CLI_COMMAND_NAME: OnceLock<&'static str> = OnceLock::new();
 pub(super) const DEFAULT_FEISHU_SQLITE_FILE: &str = "feishu.sqlite3";
-pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONGCLAW_HOME";
+pub(crate) const LOONGCLAW_HOME_ENV: &str = "LOONG_HOME";
 
 fn normalize_cli_command_name(raw: &str) -> &'static str {
     if raw.eq_ignore_ascii_case(LEGACY_CLI_COMMAND_NAME) {
