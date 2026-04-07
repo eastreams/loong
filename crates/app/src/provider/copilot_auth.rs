@@ -21,6 +21,10 @@ const EDITOR_HEADERS: [(&str, &str); 3] = [
     ("User-Agent", "GithubCopilot/1.155.0"),
 ];
 
+const GITHUB_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
+
 static COPILOT_API_KEY_CACHE: LazyLock<Mutex<Option<CachedApiKey>>> =
     LazyLock::new(|| Mutex::new(None));
 
@@ -66,6 +70,22 @@ struct CopilotTokenResponse {
     expires_at: i64,
 }
 
+#[derive(Deserialize)]
+struct DeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    interval: u64,
+    #[allow(dead_code)]
+    expires_in: u64,
+}
+
+#[derive(Deserialize)]
+struct TokenPollResponse {
+    access_token: Option<String>,
+    error: Option<String>,
+}
+
 async fn exchange_for_copilot_api_key(github_token: &str) -> CliResult<CachedApiKey> {
     let client = reqwest::Client::new();
     let mut request = client
@@ -106,6 +126,77 @@ async fn exchange_for_copilot_api_key(github_token: &str) -> CliResult<CachedApi
 fn clear_cache() {
     if let Ok(mut cache) = COPILOT_API_KEY_CACHE.lock() {
         *cache = None;
+    }
+}
+
+/// Runs the OAuth Device Code Flow to obtain a GitHub OAuth token.
+pub async fn device_code_login() -> CliResult<String> {
+    let client = reqwest::Client::new();
+    let code_response: DeviceCodeResponse = client
+        .post(GITHUB_DEVICE_CODE_URL)
+        .header("Accept", "application/json")
+        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "read:user")])
+        .send()
+        .await
+        .map_err(|e| format!("Failed to request device code: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse device code response: {e}"))?;
+
+    tracing::warn!(
+        "Open {} and enter code: {}",
+        code_response.verification_uri,
+        code_response.user_code
+    );
+    eprintln!(
+        "\n  Open {} in your browser\n  Enter code: {}\n",
+        code_response.verification_uri, code_response.user_code
+    );
+
+    let mut interval = std::time::Duration::from_secs(code_response.interval.max(5));
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(code_response.expires_in);
+
+    loop {
+        tokio::time::sleep(interval).await;
+        if std::time::Instant::now() > deadline {
+            return Err("Authorization timed out. Please try again.".to_owned());
+        }
+        let response: TokenPollResponse = client
+            .post(GITHUB_TOKEN_URL)
+            .header("Accept", "application/json")
+            .form(&[
+                ("client_id", GITHUB_CLIENT_ID),
+                ("device_code", code_response.device_code.as_str()),
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:device_code",
+                ),
+            ])
+            .send()
+            .await
+            .map_err(|e| format!("Token poll failed: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse token poll response: {e}"))?;
+
+        if let Some(token) = response.access_token {
+            return Ok(token);
+        }
+        match response.error.as_deref() {
+            Some("authorization_pending") => continue,
+            Some("slow_down") => interval += std::time::Duration::from_secs(5),
+            Some("expired_token") => {
+                return Err("Authorization timed out. Please try again.".to_owned());
+            }
+            Some("access_denied") => {
+                return Err("Authorization denied.".to_owned());
+            }
+            Some(other) => {
+                return Err(format!("Unexpected error during authorization: {other}"));
+            }
+            None => continue,
+        }
     }
 }
 
@@ -203,5 +294,35 @@ mod tests {
         let parsed: CopilotTokenResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.token, "tid=abc;exp=123");
         assert_eq!(parsed.expires_at, 1700000000);
+    }
+
+    #[test]
+    fn device_code_response_deserializes() {
+        let json = r#"{
+            "device_code": "abc123",
+            "user_code": "ABCD-1234",
+            "verification_uri": "https://github.com/login/device",
+            "interval": 5,
+            "expires_in": 900
+        }"#;
+        let parsed: DeviceCodeResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.user_code, "ABCD-1234");
+        assert_eq!(parsed.interval, 5);
+    }
+
+    #[test]
+    fn token_poll_response_deserializes_success() {
+        let json = r#"{"access_token":"ghu_xxxx","token_type":"bearer","scope":"read:user"}"#;
+        let parsed: TokenPollResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.access_token.as_deref(), Some("ghu_xxxx"));
+        assert_eq!(parsed.error, None);
+    }
+
+    #[test]
+    fn token_poll_response_deserializes_pending() {
+        let json = r#"{"error":"authorization_pending"}"#;
+        let parsed: TokenPollResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.access_token, None);
+        assert_eq!(parsed.error.as_deref(), Some("authorization_pending"));
     }
 }
