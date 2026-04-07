@@ -364,9 +364,12 @@ fn build_memory_context_prompt_frame_benchmark_signals(
         prompt_frame.with_turn_ephemeral_messages(followup_messages.as_slice(), None);
     let followup_summary = followup_prompt_frame.summary;
 
-    let initial_total_estimated_tokens = initial_summary.total_estimated_tokens.unwrap_or_default();
-    let followup_total_estimated_tokens =
-        followup_summary.total_estimated_tokens.unwrap_or_default();
+    let initial_total_estimated_tokens = initial_summary
+        .total_estimated_tokens
+        .ok_or_else(|| "missing initial prompt-frame total_estimated_tokens".to_owned())?;
+    let followup_total_estimated_tokens = followup_summary
+        .total_estimated_tokens
+        .ok_or_else(|| "missing followup prompt-frame total_estimated_tokens".to_owned())?;
     let stable_prefix_estimated_tokens = initial_summary
         .stable_runtime_estimated_tokens
         .saturating_add(initial_summary.session_latched_estimated_tokens);
@@ -379,12 +382,24 @@ fn build_memory_context_prompt_frame_benchmark_signals(
         followup_turn_ephemeral_estimated_tokens,
         followup_total_estimated_tokens,
     );
-    let stable_prefix_preserved_on_followup =
-        initial_summary.stable_prefix_hash_sha256 == followup_summary.stable_prefix_hash_sha256;
-    let cached_prefix_preserved_on_followup =
-        initial_summary.cached_prefix_sha256 == followup_summary.cached_prefix_sha256;
-    let turn_ephemeral_hash_changed_on_followup =
-        initial_summary.turn_ephemeral_hash_sha256 != followup_summary.turn_ephemeral_hash_sha256;
+    let stable_prefix_preserved_on_followup = matches!(
+        (
+            initial_summary.stable_prefix_hash_sha256.as_deref(),
+            followup_summary.stable_prefix_hash_sha256.as_deref(),
+        ),
+        (Some(initial_hash), Some(followup_hash)) if initial_hash == followup_hash
+    );
+    let cached_prefix_preserved_on_followup = matches!(
+        (
+            initial_summary.cached_prefix_sha256.as_deref(),
+            followup_summary.cached_prefix_sha256.as_deref(),
+        ),
+        (Some(initial_hash), Some(followup_hash)) if initial_hash == followup_hash
+    );
+    let initial_turn_ephemeral_hash = initial_summary.turn_ephemeral_hash_sha256.as_deref();
+    let followup_turn_ephemeral_hash = followup_summary.turn_ephemeral_hash_sha256.as_deref();
+    let turn_ephemeral_hash_changed_on_followup = followup_turn_ephemeral_hash
+        .is_some_and(|followup_hash| initial_turn_ephemeral_hash != Some(followup_hash));
     let layer_estimated_tokens = MemoryContextPromptFrameLayerTokenSignals {
         stable_prefix: stable_prefix_estimated_tokens,
         advisory_profile: advisory_profile_estimated_tokens,

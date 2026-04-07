@@ -1043,6 +1043,7 @@ where
             &mut assembled,
             "delegate-child-profile",
             delegate_profile_contract,
+            PromptFrameAuthority::AdvisoryProfile,
         );
         append_runtime_prompt_fragment(
             &mut assembled,

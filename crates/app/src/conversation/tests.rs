@@ -6330,7 +6330,9 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     config.conversation.compact_trigger_estimated_tokens = Some(1);
 
     let memory_config = MemoryRuntimeConfig::from_memory_config(&config.memory);
+    let exported_capture = Arc::new(Mutex::new(None::<String>));
     let workspace_root_for_hook = workspace_root.clone();
+    let exported_capture_for_hook = Arc::clone(&exported_capture);
     let compact_hook: CompactHook = Arc::new(move |session_id, _messages| {
         let memory_dir = workspace_root_for_hook.join("memory");
         let exported_paths = collect_markdown_file_paths(memory_dir.as_path());
@@ -6338,6 +6340,11 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
             format!("expected durable memory export before compaction for session {session_id}")
         })?;
         let exported = std::fs::read_to_string(exported_path).map_err(|error| error.to_string())?;
+        let mut exported_slot = exported_capture_for_hook
+            .lock()
+            .expect("exported data lock");
+
+        *exported_slot = Some(exported.clone());
         let contains_intro = exported.contains("Advisory durable recall");
         if !contains_intro {
             return Err(format!(
@@ -6384,15 +6391,11 @@ async fn handle_turn_with_runtime_flushes_durable_memory_before_compaction() {
     let compact = runtime.compact_calls.lock().expect("compact lock").clone();
     assert_eq!(compact.len(), 1);
 
-    let memory_dir = workspace_root.join("memory");
-    let exported_paths = collect_markdown_file_paths(&memory_dir);
-    assert_eq!(
-        exported_paths.len(),
-        1,
-        "expected one durable memory export"
-    );
-
-    let exported = std::fs::read_to_string(&exported_paths[0]).expect("read durable memory export");
+    let exported = exported_capture
+        .lock()
+        .expect("exported data lock")
+        .clone()
+        .expect("expected one durable memory export");
     assert!(exported.contains("Advisory durable recall"));
     assert!(exported.contains("Resolved Runtime Identity"));
     assert!(exported.contains("hello before compaction"));

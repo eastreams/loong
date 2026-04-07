@@ -4247,6 +4247,22 @@ fn materialize_initial_summary_checkpoint(
     summary_budget_chars: usize,
     summary_window_size: usize,
 ) -> Result<Option<SummaryCheckpoint>, String> {
+    let visible_limit = summary_window_size.saturating_add(1);
+    let mut visible_rows = query_recent_prompt_turn_rows_with_ids(conn, session_id, visible_limit)?;
+
+    visible_rows.reverse();
+
+    if visible_rows.len() <= summary_window_size {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    }
+
+    let summary_before_turn_id = visible_rows.get(1).map(|(turn_id, _turn)| *turn_id);
+    let Some(summary_before_turn_id) = summary_before_turn_id else {
+        delete_summary_checkpoint(conn, session_id)?;
+        return Ok(None);
+    };
+
     let mut stmt = prepare_cached_sqlite_statement(
         conn,
         SQL_QUERY_INITIAL_SUMMARY_ROWS_BY_SESSION_TURN_INDEX,
@@ -4259,18 +4275,16 @@ fn materialize_initial_summary_checkpoint(
     let mut first_visible_turn_id: Option<i64> = None;
     let mut first_visible_role: Option<String> = None;
     let mut first_visible_content: Option<String> = None;
-    let mut second_visible_turn_id: Option<i64> = None;
 
-    collect_initial_summary_visible_turns(
+    collect_initial_summary_first_visible_turn(
         session_id,
         &mut rows,
         &mut first_visible_turn_id,
         &mut first_visible_role,
         &mut first_visible_content,
-        &mut second_visible_turn_id,
     )?;
 
-    if second_visible_turn_id.is_none() {
+    if first_visible_turn_id.is_none() {
         let mut stmt = prepare_cached_sqlite_statement(
             conn,
             SQL_QUERY_INITIAL_SUMMARY_ROWS_AFTER_SEED_SESSION_INDEX,
@@ -4280,13 +4294,12 @@ fn materialize_initial_summary_checkpoint(
             format!("query initial summary checkpoint fallback rows failed: {error}")
         })?;
 
-        collect_initial_summary_visible_turns(
+        collect_initial_summary_first_visible_turn(
             session_id,
             &mut rows,
             &mut first_visible_turn_id,
             &mut first_visible_role,
             &mut first_visible_content,
-            &mut second_visible_turn_id,
         )?;
     }
 
@@ -4299,10 +4312,6 @@ fn materialize_initial_summary_checkpoint(
         return Ok(None);
     };
     let Some(first_visible_content) = first_visible_content else {
-        delete_summary_checkpoint(conn, session_id)?;
-        return Ok(None);
-    };
-    let Some(summary_before_turn_id) = second_visible_turn_id else {
         delete_summary_checkpoint(conn, session_id)?;
         return Ok(None);
     };
@@ -4332,13 +4341,12 @@ fn materialize_initial_summary_checkpoint(
     Ok(Some(checkpoint))
 }
 
-fn collect_initial_summary_visible_turns(
+fn collect_initial_summary_first_visible_turn(
     session_id: &str,
     rows: &mut rusqlite::Rows<'_>,
     first_visible_turn_id: &mut Option<i64>,
     first_visible_role: &mut Option<String>,
     first_visible_content: &mut Option<String>,
-    second_visible_turn_id: &mut Option<i64>,
 ) -> Result<(), String> {
     while let Some(row) = rows
         .next()
@@ -4371,15 +4379,8 @@ fn collect_initial_summary_visible_turns(
             *first_visible_turn_id = Some(turn_id);
             *first_visible_role = Some(role.to_owned());
             *first_visible_content = Some(content.to_owned());
-            continue;
+            return Ok(());
         }
-
-        if first_visible_turn_id.as_ref() == Some(&turn_id) {
-            continue;
-        }
-
-        *second_visible_turn_id = Some(turn_id);
-        return Ok(());
     }
 
     Ok(())
@@ -6971,6 +6972,103 @@ mod tests {
     }
 
     #[test]
+    fn initial_summary_checkpoint_waits_for_visible_overflow() {
+        use crate::config::{MemoryMode, MemoryProfile};
+
+        let tmp = std::env::temp_dir().join(format!(
+            "loongclaw-initial-summary-visible-overflow-{}",
+            std::process::id()
+        ));
+        let _ = fs::create_dir_all(&tmp);
+        let db_path = tmp.join("initial-summary-visible-overflow.sqlite3");
+        let _ = fs::remove_file(&db_path);
+
+        let config = MemoryRuntimeConfig {
+            profile: MemoryProfile::WindowPlusSummary,
+            mode: MemoryMode::WindowPlusSummary,
+            sqlite_path: Some(db_path.clone()),
+            sliding_window: 2,
+            summary_max_chars: 256,
+            ..MemoryRuntimeConfig::default()
+        };
+        let hidden_turn = crate::memory::build_conversation_event_content(
+            "provider_prompt_frame_snapshot",
+            serde_json::json!({"phase": "initial"}),
+        );
+
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "user",
+            "visible 1",
+            &config,
+        )
+        .expect("append visible turn 1 should succeed");
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "assistant",
+            hidden_turn.as_str(),
+            &config,
+        )
+        .expect("append hidden prompt-frame turn should succeed");
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "assistant",
+            "visible 2",
+            &config,
+        )
+        .expect("append visible turn 2 should succeed");
+
+        assert_eq!(
+            count_summary_checkpoints(&config, "initial-summary-visible-overflow")
+                .expect("count checkpoints after raw overflow"),
+            0,
+            "raw overflow without visible overflow must not materialize a checkpoint",
+        );
+
+        let pre_overflow_snapshot =
+            load_context_snapshot("initial-summary-visible-overflow", &config)
+                .expect("load pre-overflow context snapshot");
+        let pre_overflow_contents = pre_overflow_snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(pre_overflow_contents, vec!["visible 1", "visible 2"]);
+        assert!(pre_overflow_snapshot.summary_body.is_none());
+
+        append_turn_direct(
+            "initial-summary-visible-overflow",
+            "user",
+            "visible 3",
+            &config,
+        )
+        .expect("append visible turn 3 should succeed");
+
+        assert_eq!(
+            count_summary_checkpoints(&config, "initial-summary-visible-overflow")
+                .expect("count checkpoints after visible overflow"),
+            1,
+            "checkpoint should materialize once the visible window actually overflows",
+        );
+
+        let post_overflow_snapshot =
+            load_context_snapshot("initial-summary-visible-overflow", &config)
+                .expect("load post-overflow context snapshot");
+        let post_overflow_contents = post_overflow_snapshot
+            .window_turns
+            .iter()
+            .map(|turn| turn.content.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(post_overflow_contents, vec!["visible 2", "visible 3"]);
+        assert!(post_overflow_snapshot.summary_body.is_some());
+
+        let _ = fs::remove_file(&db_path);
+        let _ = fs::remove_dir(&tmp);
+    }
+
+    #[test]
     fn load_context_snapshot_rebuilds_materialized_summary_when_window_size_changes() {
         use crate::config::{MemoryMode, MemoryProfile};
 
@@ -9296,9 +9394,7 @@ mod test_support {
     }
 
     fn sqlite_runtime_test_support_lock() -> &'static Mutex<()> {
-        static SQLITE_RUNTIME_TEST_SUPPORT_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-        SQLITE_RUNTIME_TEST_SUPPORT_LOCK.get_or_init(|| Mutex::new(()))
+        super::sqlite_runtime_test_lock()
     }
 
     fn bootstrap_counts() -> &'static Mutex<HashMap<PathBuf, usize>> {

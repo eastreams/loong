@@ -390,6 +390,8 @@ struct MemoryContextPromptEfficiencySignals {
     window_only: MemoryContextPromptEfficiencySignal,
     summary_window_cover: MemoryContextPromptEfficiencySignal,
     summary_rebuild: MemoryContextPromptEfficiencySignal,
+    summary_rebuild_budget_change: MemoryContextPromptEfficiencySignal,
+    summary_metadata_realign: MemoryContextPromptEfficiencySignal,
     summary_steady_state: MemoryContextPromptEfficiencySignal,
     window_shrink_catch_up: MemoryContextPromptEfficiencySignal,
 }
@@ -817,6 +819,10 @@ fn build_memory_context_prompt_efficiency_signals(
         memory_context_prompt_efficiency_signal(representative.summary_window_cover_shape);
     let summary_rebuild =
         memory_context_prompt_efficiency_signal(representative.summary_rebuild_shape);
+    let summary_rebuild_budget_change =
+        memory_context_prompt_efficiency_signal(representative.summary_rebuild_budget_change_shape);
+    let summary_metadata_realign =
+        memory_context_prompt_efficiency_signal(representative.summary_metadata_realign_shape);
     let summary_steady_state =
         memory_context_prompt_efficiency_signal(representative.summary_steady_state_shape);
     let window_shrink_catch_up =
@@ -826,6 +832,8 @@ fn build_memory_context_prompt_efficiency_signals(
         window_only,
         summary_window_cover,
         summary_rebuild,
+        summary_rebuild_budget_change,
+        summary_metadata_realign,
         summary_steady_state,
         window_shrink_catch_up,
     }
@@ -1196,8 +1204,6 @@ pub fn run_memory_context_benchmark_cli_with_suite_runner(
         enforce_gate,
         normalized_min_speedup_ratio,
     )?;
-    let mut report_value = serde_json::to_value(&report)
-        .map_err(|error| format!("failed to serialize memory context benchmark report: {error}"))?;
     let report_augment_context = MemoryContextBenchmarkReportAugmentContext {
         output_path: output_path.to_owned(),
         benchmark_temp_root: temp_root.path.clone(),
@@ -1214,10 +1220,16 @@ pub fn run_memory_context_benchmark_cli_with_suite_runner(
         min_steady_state_speedup_ratio: normalized_min_speedup_ratio,
     };
     if let Some(report_augmenter) = report_augmenter {
-        report_augmenter(&mut report_value, &suite_runs, &report_augment_context)?;
-    }
+        let mut report_value = serde_json::to_value(&report).map_err(|error| {
+            format!("failed to serialize memory context benchmark report: {error}")
+        })?;
 
-    write_json_file(output_path, &report_value)?;
+        report_augmenter(&mut report_value, &suite_runs, &report_augment_context)?;
+
+        write_json_file(output_path, &report_value)?;
+    } else {
+        write_json_file(output_path, &report)?;
+    }
     println!("memory context benchmark report written to {output_path}");
     println!(
         "benchmark_temp_root={} source={}",
@@ -5544,6 +5556,10 @@ mod tests {
         let window_only_signal = &report.prompt_efficiency_signals.window_only;
         let steady_state_signal = &report.prompt_efficiency_signals.summary_steady_state;
         let rebuild_signal = &report.prompt_efficiency_signals.summary_rebuild;
+        let rebuild_budget_change_signal = &report
+            .prompt_efficiency_signals
+            .summary_rebuild_budget_change;
+        let metadata_realign_signal = &report.prompt_efficiency_signals.summary_metadata_realign;
 
         assert_eq!(window_only_signal.estimated_session_local_recall_chars, 0);
         assert_eq!(
@@ -5552,6 +5568,14 @@ mod tests {
         );
         assert_eq!(steady_state_signal.estimated_non_recall_context_chars, 320);
         assert_eq!(rebuild_signal.estimated_session_local_recall_chars, 120);
+        assert_eq!(
+            rebuild_budget_change_signal.estimated_session_local_recall_chars,
+            120
+        );
+        assert_eq!(
+            metadata_realign_signal.estimated_session_local_recall_chars,
+            120
+        );
 
         let rebuild_share_ratio = rebuild_signal
             .estimated_session_local_recall_share_ratio
