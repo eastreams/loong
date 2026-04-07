@@ -1571,17 +1571,16 @@ pub fn redacted_command_name(command: &Commands) -> &'static str {
 /// Copies deprecated `LOONGCLAW_*` env vars into their `LOONG_*` replacements
 /// and emits a deprecation warning. No-op when the new name is already set.
 pub fn make_env_compatible() {
-    const MIGRATIONS: &[(&str, &str)] = &[
-        ("LOONG_HOME", "LOONGCLAW_HOME"),
-        // Future: ("LOONG_CONFIG_PATH", "LOONGCLAW_CONFIG_PATH"), etc.
-    ];
+    const MIGRATIONS: &[(&str, &str)] = &[("LOONG_HOME", "LOONGCLAW_HOME")];
     for &(new, old) in MIGRATIONS {
         let old_val = std::env::var_os(old);
         let new_val = std::env::var_os(new);
         if let (Some(old_val), None) = (old_val, new_val) {
             // SAFETY: single-threaded — called before tokio runtime and parse_cli.
             #[allow(unsafe_code, clippy::disallowed_methods)]
-            unsafe { std::env::set_var(new, &old_val) }
+            unsafe {
+                std::env::set_var(new, &old_val);
+            }
             tracing::warn!("{old} is deprecated. Set {new} instead.");
         }
     }
