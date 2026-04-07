@@ -1124,7 +1124,7 @@ impl DefaultAppToolDispatcher {
                 let stripped = crate::tools::shell_policy_ext::strip_repairable_tool_input_prefix(
                     reason.as_str(),
                 );
-                return format!("tool_preflight_denied: tool input needs repair: {stripped}");
+                return format!("{REPAIRABLE_TOOL_PREFLIGHT_PREFIX}{stripped}");
             }
             format!("tool_preflight_denied: {reason}")
         })?;
@@ -1728,8 +1728,10 @@ fn classify_tool_execution_reason(reason: &str) -> KernelFailureClass {
     }
 }
 
-fn is_repairable_tool_preflight_denial(reason: &str) -> bool {
-    reason.starts_with("tool_preflight_denied: tool input needs repair:")
+const REPAIRABLE_TOOL_PREFLIGHT_PREFIX: &str = "tool_preflight_repairable: ";
+
+fn render_repairable_tool_preflight_denial(reason: &str) -> String {
+    format!("tool_preflight_denied: tool input needs repair: {reason}")
 }
 
 fn render_app_tool_denied_reason(reason: &str) -> String {
@@ -3499,12 +3501,27 @@ impl TurnEngine {
                     decision: denial_decision,
                 });
             }
+            Err(reason) if reason.starts_with(REPAIRABLE_TOOL_PREFLIGHT_PREFIX) => {
+                let stripped = reason
+                    .strip_prefix(REPAIRABLE_TOOL_PREFLIGHT_PREFIX)
+                    .unwrap_or(reason.as_str());
+                let human_reason = render_repairable_tool_preflight_denial(stripped);
+                let turn_result =
+                    TurnResult::retryable_tool_error("tool_preflight_denied", human_reason.clone());
+                let denial_decision = ToolDecisionTelemetry::deny(
+                    effective_tool_name.as_str(),
+                    human_reason,
+                    "tool_preflight_denied",
+                );
+                return Err(PreparedToolIntentFailure {
+                    intent: effective_intent,
+                    turn_result,
+                    decision: denial_decision,
+                });
+            }
             Err(reason) if reason.starts_with("tool_preflight_denied:") => {
-                let turn_result = if is_repairable_tool_preflight_denial(reason.as_str()) {
-                    TurnResult::retryable_tool_error("tool_preflight_denied", reason.clone())
-                } else {
-                    TurnResult::policy_denied("tool_preflight_denied", reason.clone())
-                };
+                let turn_result =
+                    TurnResult::policy_denied("tool_preflight_denied", reason.clone());
                 let denial_decision = ToolDecisionTelemetry::deny(
                     effective_tool_name.as_str(),
                     reason,
