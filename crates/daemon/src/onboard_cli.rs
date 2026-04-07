@@ -1472,16 +1472,22 @@ pub async fn run_onboard_cli_with_ui(
         )?;
         config.provider.model = selected_model;
 
-        let default_api_key_env = preferred_api_key_env_default(&config);
-        let selected_api_key_env = resolve_api_key_env_selection(
-            &options,
-            &config,
-            default_api_key_env,
-            guided_prompt_path,
-            ui,
-            context,
-        )?;
-        apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        if config.provider.kind == mvp::config::ProviderKind::GithubCopilot {
+            tracing::warn!("GitHub Copilot uses an undocumented API. It may break without notice.");
+            let token = mvp::provider::copilot_auth::device_code_login().await?;
+            config.provider.oauth_access_token = Some(SecretRef::Inline(token));
+        } else {
+            let default_api_key_env = preferred_api_key_env_default(&config);
+            let selected_api_key_env = resolve_api_key_env_selection(
+                &options,
+                &config,
+                default_api_key_env,
+                guided_prompt_path,
+                ui,
+                context,
+            )?;
+            apply_selected_api_key_env(&mut config.provider, selected_api_key_env);
+        }
 
         match guided_prompt_path {
             GuidedPromptPath::NativePromptPack => {
