@@ -1973,7 +1973,7 @@ mod tests {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let mut env = ScopedEnv::new();
         env.set("HOME", tempdir.path());
-        env.remove("LOONGCLAW_HOME");
+        env.remove("LOONG_HOME");
         let config_path = tempdir.path().join("loongclaw.toml");
 
         let runtime = ToolRuntimeConfig::from_loongclaw_config(
@@ -2270,7 +2270,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-home");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_HOME", &runtime_home);
+        env.set("LOONG_HOME", &runtime_home);
 
         let runtime = ToolRuntimeConfig::from_env();
 
@@ -2285,7 +2285,7 @@ mod tests {
         let mut env = ScopedEnv::new();
         let runtime_home = std::env::temp_dir().join("loongclaw-tool-runtime-empty-sqlite-path");
         clear_tool_runtime_env(&mut env);
-        env.set("LOONGCLAW_HOME", &runtime_home);
+        env.set("LOONG_HOME", &runtime_home);
         env.set("LOONGCLAW_SQLITE_PATH", "");
 
         let runtime = ToolRuntimeConfig::from_env();
