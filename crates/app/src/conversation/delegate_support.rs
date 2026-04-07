@@ -33,7 +33,7 @@ use super::runtime::{
 #[cfg(feature = "memory-sqlite")]
 use super::runtime_binding::ConversationRuntimeBinding;
 #[cfg(feature = "memory-sqlite")]
-use super::subagent::{ConstrainedSubagentExecution, ConstrainedSubagentTerminalReason};
+use super::subagent::ConstrainedSubagentExecution;
 #[cfg(feature = "memory-sqlite")]
 use super::turn_coordinator::emit_async_delegate_child_terminal_event;
 

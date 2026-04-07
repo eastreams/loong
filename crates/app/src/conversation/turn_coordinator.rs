@@ -1,9 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "memory-sqlite")]
+use std::panic::AssertUnwindSafe;
 
 use async_trait::async_trait;
+#[cfg(feature = "memory-sqlite")]
+use futures_util::FutureExt;
 use loongclaw_contracts::{AuditEventKind, ExecutionPlane, PlaneTier};
 use serde::Serialize;
 use serde_json::{Value, json};
+#[cfg(feature = "memory-sqlite")]
+use tokio::runtime::Handle;
 use tokio::sync::Mutex;
 #[cfg(feature = "memory-sqlite")]
 use tokio::time::{Duration, Instant, timeout};
@@ -37,11 +43,8 @@ use super::approval_resolution::CoordinatorApprovalResolutionRuntime;
 use super::context_engine::{AssembledConversationContext, ConversationContextEngine};
 #[cfg(feature = "memory-sqlite")]
 use super::delegate_support::{
-    finalize_and_announce_delegate_child_terminal, finalize_async_delegate_spawn_failure,
-    finalize_async_delegate_spawn_failure_with_recovery,
-    finalize_delegate_child_terminal_with_recovery, format_delegate_child_panic,
+    finalize_and_announce_delegate_child_terminal, format_delegate_child_panic,
     next_delegate_child_depth_for_delegate, spawn_async_delegate_detached,
-    with_prepared_subagent_spawn_cleanup_if_kernel_bound,
 };
 use super::ingress::ConversationIngressContext;
 use super::lane_arbiter::{ExecutionLane, LaneArbiterPolicy, LaneDecision};
@@ -62,8 +65,7 @@ use super::plan_verifier::{
     PlanVerificationReport, verify_output,
 };
 use super::runtime::{
-    AsyncDelegateSpawnRequest, AsyncDelegateSpawner, ConversationRuntime,
-    DefaultConversationRuntime, SessionContext,
+    AsyncDelegateSpawnRequest, ConversationRuntime, DefaultConversationRuntime, SessionContext,
 };
 use super::runtime_binding::{ConversationRuntimeBinding, OwnedConversationRuntimeBinding};
 use super::safe_lane_failure::{
@@ -135,11 +137,13 @@ use crate::conversation::workspace_isolation::{
 #[cfg(all(feature = "memory-sqlite", test))]
 use crate::session::recovery::RECOVERY_EVENT_KIND;
 #[cfg(all(test, feature = "memory-sqlite"))]
+use crate::session::repository::FinalizeSessionTerminalRequest;
+#[cfg(all(test, feature = "memory-sqlite"))]
 use crate::session::repository::TransitionApprovalRequestIfCurrentRequest;
 #[cfg(feature = "memory-sqlite")]
 use crate::session::repository::{
-    ApprovalDecision, ApprovalRequestStatus, FinalizeSessionTerminalRequest, NewSessionEvent,
-    NewSessionRecord, SessionKind, SessionRepository, SessionState,
+    ApprovalDecision, ApprovalRequestStatus, NewSessionEvent, NewSessionRecord, SessionKind,
+    SessionRepository, SessionState,
 };
 
 #[derive(Default)]
@@ -4268,7 +4272,7 @@ pub(super) async fn execute_delegate_tool<R: ConversationRuntime + ?Sized>(
         std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let workspace_cleanup_owned_by_child_for_work =
         std::sync::Arc::clone(&workspace_cleanup_owned_by_child);
-    with_prepared_subagent_spawn_cleanup_if_kernel_bound(
+    super::delegate_support::with_prepared_subagent_spawn_cleanup_if_kernel_bound(
         runtime,
         &session_context.session_id,
         &child_session_id,
@@ -7906,7 +7910,7 @@ mod tests {
         assert_eq!(recovered.session.state, SessionState::Failed);
         assert_eq!(recovered.terminal_outcome.status, "error");
 
-        finalize_delegate_child_terminal_with_recovery(
+        super::delegate_support::finalize_delegate_child_terminal_with_recovery(
             &repo,
             "child-session",
             FinalizeSessionTerminalRequest {
@@ -8006,7 +8010,7 @@ mod tests {
         assert_eq!(recovered.session.state, SessionState::Failed);
         assert_eq!(recovered.terminal_outcome.status, "error");
 
-        finalize_async_delegate_spawn_failure(
+        super::delegate_support::finalize_async_delegate_spawn_failure(
             &memory_config,
             "child-session",
             "root-session",
@@ -8066,7 +8070,7 @@ mod tests {
         })
         .expect("create root session");
 
-        let error = finalize_delegate_child_terminal_with_recovery(
+        let error = super::delegate_support::finalize_delegate_child_terminal_with_recovery(
             &repo,
             "child-session",
             FinalizeSessionTerminalRequest {
